@@ -620,34 +620,48 @@ function escapeHtml(str) {
 }
 
 function renderMarkdown(text) {
-  let html = escapeHtml(text);
+  const codeBlocks = [];
+  const inlineCodes = [];
 
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
-    return `<pre><code class="${lang}">${code.trimEnd()}</code></pre>`;
+  let escaped = escapeHtml(text);
+
+  escaped = escaped.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+    const idx = codeBlocks.length;
+    codeBlocks.push(`<pre><code class="${escapeHtml(lang)}">${code.trimEnd()}</code></pre>`);
+    return `\x00CB${idx}\x00`;
   });
 
-  html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  escaped = escaped.replace(/`([^`\n]+)`/g, (_, code) => {
+    const idx = inlineCodes.length;
+    inlineCodes.push(`<code>${code}</code>`);
+    return `\x00IC${idx}\x00`;
+  });
 
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>');
+  escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  escaped = escaped.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>');
 
-  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  escaped = escaped.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, (_, label, url) => {
+    return `<a href="${url}" target="_blank" rel="noopener">${label}</a>`;
+  });
 
-  html = html.replace(/(^|[\s>])((https?:\/\/)[^\s<"')\]]+)/gm, (match, prefix, url) => {
-    if (match.includes('href="')) return match;
+  escaped = escaped.replace(/(^|[\s>])((https?:\/\/)[^\s<"')\]]+)/gm, (match, prefix, url) => {
+    if (match.includes('href=')) return match;
     return `${prefix}<a href="${url}" target="_blank" rel="noopener">${url}</a>`;
   });
 
-  html = html.replace(/^(\d+)\.\s+(.+)$/gm, '<li class="ol-item"><span class="list-num">$1.</span> $2</li>');
-  html = html.replace(/^[-•]\s+(.+)$/gm, '<li class="ul-item">• $1</li>');
+  escaped = escaped.replace(/^(\d+)\.\s+(.+)$/gm, '<li class="ol-item"><span class="list-num">$1.</span> $2</li>');
+  escaped = escaped.replace(/^[-•]\s+(.+)$/gm, '<li class="ul-item">• $1</li>');
 
-  html = html.replace(/((?:<li class="ol-item">.*<\/li>\n?)+)/g, '<ol class="md-list">$1</ol>');
-  html = html.replace(/((?:<li class="ul-item">.*<\/li>\n?)+)/g, '<ul class="md-list">$1</ul>');
+  escaped = escaped.replace(/((?:<li class="ol-item">.*<\/li>\n?)+)/g, '<ol class="md-list">$1</ol>');
+  escaped = escaped.replace(/((?:<li class="ul-item">.*<\/li>\n?)+)/g, '<ul class="md-list">$1</ul>');
 
-  html = html.replace(/^### (.+)$/gm, '<strong class="md-h3">$1</strong>');
-  html = html.replace(/^## (.+)$/gm, '<strong class="md-h2">$1</strong>');
+  escaped = escaped.replace(/^### (.+)$/gm, '<strong class="md-h3">$1</strong>');
+  escaped = escaped.replace(/^## (.+)$/gm, '<strong class="md-h2">$1</strong>');
 
-  return html;
+  escaped = escaped.replace(/\x00CB(\d+)\x00/g, (_, idx) => codeBlocks[parseInt(idx)]);
+  escaped = escaped.replace(/\x00IC(\d+)\x00/g, (_, idx) => inlineCodes[parseInt(idx)]);
+
+  return escaped;
 }
 
 function formatTime(date) {
