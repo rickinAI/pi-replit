@@ -16,7 +16,8 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **src/obsidian.ts** — Client for the knowledge base REST API (internal module)
 - **src/gmail.ts** — Gmail integration via Replit connector (OAuth, list/read/search emails)
 - **src/conversations.ts** — Conversation persistence module (save/load/list/delete JSON files)
-- **.pi/agent/system-prompt.md** — Agent personality and instructions (auto-loaded by SDK)
+- **.pi/SYSTEM.md** — Agent personality, greeting template, vault structure map, and auto-categorization rules (auto-loaded by SDK from `.pi/SYSTEM.md`)
+- **.pi/agent/system-prompt.md** — Synced copy of SYSTEM.md for reference
 - **public/** — Static frontend (terminal/hacker aesthetic, branded as "RICKIN")
   - History panel (slide-out, lists past conversations, view/delete)
   - Confirmation modal before starting new session

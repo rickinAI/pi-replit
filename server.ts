@@ -313,13 +313,7 @@ app.post("/api/session", async (_req: Request, res: Response) => {
     const authStorage = AuthStorage.create(path.join(AGENT_DIR, "auth.json"));
     authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
 
-    const kbTools = buildKnowledgeBaseTools();
-    const gmailTools = buildGmailTools();
-    const allTools = [...kbTools, ...gmailTools];
-    console.log(`[session] Creating session ${sessionId} with ${allTools.length} custom tools: ${allTools.map(t => t.name).join(", ")}`);
-    console.log(`[session] AGENT_DIR=${AGENT_DIR}`);
-    console.log(`[session] system-prompt.md exists: ${fs.existsSync(path.join(AGENT_DIR, "system-prompt.md"))}`);
-    console.log(`[session] Gmail configured: ${gmail.isConfigured()}, connected: ${gmail.isConnected()}`);
+    const allTools = [...buildKnowledgeBaseTools(), ...buildGmailTools()];
 
     const { session } = await createAgentSession({
       agentDir: AGENT_DIR,
