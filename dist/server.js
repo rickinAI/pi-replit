@@ -285,6 +285,22 @@ process.on("uncaughtException", (err) => {
 process.on("unhandledRejection", (reason) => {
   console.error("Unhandled rejection (server still running):", reason);
 });
+process.on("SIGTERM", () => {
+  console.error("Received SIGTERM \u2014 ignoring to keep server alive");
+});
+process.on("SIGINT", () => {
+  console.error("Received SIGINT \u2014 ignoring to keep server alive");
+});
+process.on("exit", (code) => {
+  console.error(`Process exit with code ${code}`, new Error().stack);
+});
+var _origExit = process.exit;
+process.exit = ((code) => {
+  if (code === 1 && new Error().stack?.includes("EADDRINUSE")) {
+    return _origExit.call(process, code);
+  }
+  console.error(`process.exit(${code}) intercepted:`, new Error().stack);
+});
 function startServer(retried = false) {
   const server = createServer(app);
   server.on("error", (err) => {
