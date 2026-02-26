@@ -16,11 +16,30 @@ Mobile-friendly web UI for the pi coding agent with Obsidian vault integration, 
 - **dist/** — esbuild output (compiled server)
 - **tunnel-setup/** — macOS LaunchAgent setup for running cloudflared as a background service
 
+## Authentication
+
+- Password-protected via `APP_PASSWORD` secret
+- Signed cookie sessions using `cookie-parser` with `SESSION_SECRET`
+- 7-day cookie expiry, httpOnly, secure flag adapts to protocol
+- Login page: `public/login.html` with terminal boot sequence aesthetic
+- Logout: `GET /api/logout` clears cookie and redirects to login
+
+## UI Theme
+
+- Terminal/hacker aesthetic: green (#0f0) monospace text on black, CRT scanlines, glow effects
+- Font: Fira Code from Google Fonts
+- Login page: ASCII art header, simulated boot sequence, blinking cursor
+- Chat: terminal-style prompts (`> ` for user, `$` for input), amber agent text
+- Mobile-friendly with safe-area-inset support
+
 ## API Routes
 
 | Route | Method | Description |
 |-------|--------|-------------|
-| `/` | GET | Chat UI |
+| `/` | GET | Chat UI (requires auth) |
+| `/login.html` | GET | Terminal-style login page |
+| `/api/login` | POST | Authenticate with password |
+| `/api/logout` | GET | Clear session and redirect |
 | `/api/session` | POST | Create new agent session |
 | `/api/session/:id/stream` | GET | SSE event stream |
 | `/api/session/:id/prompt` | POST | Send message to agent |
@@ -71,11 +90,14 @@ The tunnel script auto-notifies the Replit server when the URL changes via `POST
 - `@sinclair/typebox` — JSON schema for tool parameters (transitive via SDK)
 - `express` — HTTP server
 - `cors` — CORS middleware
+- `cookie-parser` — Signed cookie sessions for auth
 - `http-proxy-middleware` — Proxy for interview tool
 
 ## Environment Variables
 
 - `ANTHROPIC_API_KEY` (secret) — Required for agent sessions
+- `APP_PASSWORD` (secret) — Password for web UI access (auth disabled if not set)
+- `SESSION_SECRET` (secret) — Signing key for auth cookies (auto-generated if not set, but should be set for stable sessions across restarts)
 - `OBSIDIAN_API_URL` (env) — Cloudflare Tunnel URL pointing to Obsidian Local REST API
 - `OBSIDIAN_API_KEY` (secret) — API key from the Obsidian Local REST API plugin
 - `PORT` — Server port (default: 5000)

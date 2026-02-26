@@ -5,6 +5,8 @@ import { createServer } from "http";
 import { fileURLToPath } from "url";
 import path from "path";
 import { createProxyMiddleware } from "http-proxy-middleware";
+import cookieParser from "cookie-parser";
+import crypto from "crypto";
 import {
   createAgentSession,
   AuthStorage,
@@ -85,12 +87,17 @@ async function searchNotes(query) {
 var PORT = parseInt(process.env.PORT ?? "5000", 10);
 var INTERVIEW_PORT = parseInt(process.env.INTERVIEW_PORT ?? "19847", 10);
 var ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? "";
+var APP_PASSWORD = process.env.APP_PASSWORD ?? "";
+var SESSION_SECRET = process.env.SESSION_SECRET ?? crypto.randomBytes(32).toString("hex");
 var __dirname = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 if (!ANTHROPIC_KEY) {
-  console.warn("\u26A0\uFE0F  ANTHROPIC_API_KEY is not set \u2014 sessions will fail until you add it to Replit Secrets.");
+  console.warn("ANTHROPIC_API_KEY is not set.");
 }
 if (!isConfigured()) {
-  console.warn("\u26A0\uFE0F  Obsidian integration not configured \u2014 set OBSIDIAN_API_URL and OBSIDIAN_API_KEY in Secrets.");
+  console.warn("Obsidian integration not configured.");
+}
+if (!APP_PASSWORD) {
+  console.warn("APP_PASSWORD is not set \u2014 auth disabled.");
 }
 function buildObsidianTools() {
   if (!isConfigured()) return [];
@@ -168,8 +175,57 @@ setInterval(() => {
   }
 }, 10 * 60 * 1e3);
 var app = express();
+app.set("trust proxy", 1);
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
+app.use(cookieParser(SESSION_SECRET));
+var PUBLIC_PATHS = ["/login.html", "/login.css", "/api/login", "/health"];
+function authMiddleware(req, res, next) {
+  if (!APP_PASSWORD) {
+    next();
+    return;
+  }
+  const reqPath = req.path;
+  if (PUBLIC_PATHS.includes(reqPath)) {
+    next();
+    return;
+  }
+  if (reqPath === "/api/config/tunnel-url") {
+    next();
+    return;
+  }
+  const token = req.signedCookies?.auth;
+  if (token === "authenticated") {
+    next();
+    return;
+  }
+  const acceptsHtml = req.headers.accept?.includes("text/html");
+  if (acceptsHtml || reqPath === "/") {
+    res.redirect("/login.html");
+  } else {
+    res.status(401).json({ error: "Unauthorized" });
+  }
+}
+app.use(authMiddleware);
+app.post("/api/login", (req, res) => {
+  const { password } = req.body;
+  if (!password || password !== APP_PASSWORD) {
+    res.status(401).json({ error: "ACCESS DENIED" });
+    return;
+  }
+  res.cookie("auth", "authenticated", {
+    signed: true,
+    httpOnly: true,
+    secure: req.secure,
+    sameSite: "lax",
+    maxAge: 7 * 24 * 60 * 60 * 1e3
+  });
+  res.json({ ok: true });
+});
+app.get("/api/logout", (_req, res) => {
+  res.clearCookie("auth");
+  res.redirect("/login.html");
+});
 app.use(express.static(path.join(__dirname, "public")));
 app.use(
   "/interview",
@@ -181,7 +237,7 @@ app.use(
         try {
           if ("writeHead" in res && typeof res.status === "function") {
             res.status(502).json({
-              error: "Interview tool is not running. The agent must trigger it first."
+              error: "Interview tool is not running."
             });
           }
         } catch {
@@ -300,8 +356,7 @@ process.on("unhandledRejection", (reason) => {
   console.error("Unhandled rejection (server still running):", reason);
 });
 process.on("exit", (code) => {
-  console.error(`Process exiting with code ${code} at ${(/* @__PURE__ */ new Date()).toISOString()}`);
-  console.error("Stack:", new Error().stack);
+  console.error(`Process exiting with code ${code}`);
 });
 process.on("SIGTERM", () => console.error("Got SIGTERM"));
 process.on("SIGINT", () => console.error("Got SIGINT"));
@@ -312,7 +367,7 @@ server.listen(PORT, "0.0.0.0", () => {
 \u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557
 \u2551  pi-replit server running                        \u2551
 \u2551  http://localhost:${PORT}                           \u2551
-\u2551                                                  \u2551
+\u2551  Auth: ${APP_PASSWORD ? "enabled" : "disabled"}                                    \u2551
 \u2551  Interview proxy \u2192 localhost:${INTERVIEW_PORT}          \u2551
 \u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D
   `);

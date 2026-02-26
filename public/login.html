@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>pi-agent // login</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="login.css" />
+</head>
+<body>
+  <div class="scanlines"></div>
+  <div class="terminal">
+    <div class="boot-sequence" id="boot">
+      <pre class="ascii-art">
+ ██████╗ ██╗      █████╗  ██████╗ ███████╗███╗   ██╗████████╗
+ ██╔══██╗██║     ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝
+ ██████╔╝██║     ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║   
+ ██╔═══╝ ██║     ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║   
+ ██║     ██║     ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   
+ ╚═╝     ╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   
+      </pre>
+      <div class="boot-lines" id="boot-lines"></div>
+    </div>
+
+    <form class="login-form" id="login-form">
+      <div class="prompt-line">
+        <span class="prompt-label">password:</span>
+        <input
+          type="password"
+          id="password"
+          class="prompt-input"
+          autocomplete="current-password"
+          autofocus
+        />
+        <span class="cursor-blink"></span>
+      </div>
+      <div class="error-msg hidden" id="error-msg">ACCESS DENIED</div>
+      <button type="submit" class="submit-btn">[ENTER]</button>
+    </form>
+  </div>
+
+  <script>
+    const bootLines = [
+      "BIOS v3.14.159 ... OK",
+      "Memory check ... 32768 MB OK",
+      "Loading pi-agent kernel ...",
+      "Initializing neural interface ...",
+      "Connecting to knowledge base ...",
+      "System ready.",
+      ""
+    ];
+
+    const bootEl = document.getElementById("boot-lines");
+    const form = document.getElementById("login-form");
+    const errorMsg = document.getElementById("error-msg");
+    const passwordInput = document.getElementById("password");
+
+    let i = 0;
+    function typeLine() {
+      if (i >= bootLines.length) {
+        form.classList.add("visible");
+        passwordInput.focus();
+        return;
+      }
+      const line = document.createElement("div");
+      line.className = "boot-line";
+      line.textContent = "> " + bootLines[i];
+      bootEl.appendChild(line);
+      i++;
+      setTimeout(typeLine, 120 + Math.random() * 180);
+    }
+    typeLine();
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errorMsg.classList.add("hidden");
+
+      try {
+        const res = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: passwordInput.value }),
+        });
+
+        if (res.ok) {
+          window.location.href = "/";
+        } else {
+          errorMsg.classList.remove("hidden");
+          passwordInput.value = "";
+          passwordInput.focus();
+        }
+      } catch {
+        errorMsg.textContent = "CONNECTION FAILED";
+        errorMsg.classList.remove("hidden");
+      }
+    });
+  </script>
+</body>
+</html>

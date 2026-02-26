@@ -1,16 +1,13 @@
 /**
- * pi-replit frontend — mobile-first chat UI
- * Talks to the Express server via REST + SSE
+ * pi-agent terminal — hacker-style chat UI
  */
 
-// ── State ─────────────────────────────────────────────────────────────────
 let sessionId = null;
 let eventSource = null;
-let agentBubble = null;   // currently streaming bubble
-let agentText = "";       // accumulated text for current turn
+let agentBubble = null;
+let agentText = "";
 let isAgentRunning = false;
 
-// ── DOM refs ───────────────────────────────────────────────────────────────
 const messages      = document.getElementById("messages");
 const input         = document.getElementById("input");
 const sendBtn       = document.getElementById("send-btn");
@@ -19,24 +16,31 @@ const statusText    = document.getElementById("status-text");
 const newSessionBtn = document.getElementById("new-session-btn");
 const interviewNotice = document.getElementById("interview-notice");
 
-// ── Init ───────────────────────────────────────────────────────────────────
+function checkAuth(res) {
+  if (res.status === 401) {
+    window.location.href = "/login.html";
+    return false;
+  }
+  return true;
+}
+
 (async () => {
   showEmptyState();
   await startSession();
 })();
 
-// ── Session management ─────────────────────────────────────────────────────
 async function startSession() {
   try {
-    showStatus("Starting session…");
+    showStatus("[INITIALIZING...]");
     const res = await fetch("/api/session", { method: "POST" });
+    if (!checkAuth(res)) return;
     if (!res.ok) throw new Error(await res.text());
     const { sessionId: id } = await res.json();
     sessionId = id;
     openEventStream(id);
     hideStatus();
   } catch (err) {
-    showSystemMsg(`Failed to start session: ${err.message}`);
+    showSystemMsg("ERR: " + err.message);
     hideStatus();
   }
 }
@@ -54,7 +58,6 @@ newSessionBtn.addEventListener("click", async () => {
   await startSession();
 });
 
-// ── SSE event stream ───────────────────────────────────────────────────────
 function openEventStream(id) {
   if (eventSource) eventSource.close();
   eventSource = new EventSource(`/api/session/${id}/stream`);
@@ -67,19 +70,18 @@ function openEventStream(id) {
 
   eventSource.addEventListener("error", () => {
     if (eventSource.readyState === EventSource.CLOSED) {
-      showSystemMsg("Connection lost. Tap + to start a new session.");
+      showSystemMsg("CONNECTION LOST. TAP + TO RECONNECT.");
     }
   });
 }
 
-// ── Agent event handling ───────────────────────────────────────────────────
 function handleAgentEvent(event) {
   switch (event.type) {
     case "agent_start":
       isAgentRunning = true;
       agentBubble = null;
       agentText = "";
-      showStatus("Agent is thinking…");
+      showStatus("[PROCESSING...]");
       break;
 
     case "message_update": {
@@ -100,28 +102,29 @@ function handleAgentEvent(event) {
 
     case "tool_execution_start": {
       const name = event.toolName ?? "tool";
-      showStatus(`Running ${name}…`);
+      showStatus(`[RUNNING ${name.toUpperCase()}...]`);
 
-      // Show interview notice if the interview tool is invoked
       if (name === "interview") {
         interviewNotice.classList.remove("hidden");
         document.getElementById("interview-link").href = "/interview";
       }
 
-      // Show a tool pill under the current agent bubble
       if (agentBubble) {
         const pill = document.createElement("div");
         pill.className = "tool-pill";
-        pill.innerHTML = `<span class="dot"></span><span>${name}</span>`;
+        const dot = document.createElement("span");
+        dot.className = "dot";
+        const label = document.createElement("span");
+        label.textContent = name;
+        pill.appendChild(dot);
+        pill.appendChild(label);
         agentBubble.appendChild(pill);
       }
       break;
     }
 
     case "tool_execution_end": {
-      // Remove spinner dots from pills
       agentBubble?.querySelectorAll(".tool-pill .dot").forEach(d => d.remove());
-      // Hide interview notice once tool finishes
       interviewNotice.classList.add("hidden");
       break;
     }
@@ -136,7 +139,7 @@ function handleAgentEvent(event) {
       break;
 
     case "error":
-      showSystemMsg(`Error: ${event.error}`);
+      showSystemMsg("ERR: " + event.error);
       isAgentRunning = false;
       hideStatus();
       sendBtn.disabled = false;
@@ -144,7 +147,6 @@ function handleAgentEvent(event) {
   }
 }
 
-// ── Send message ───────────────────────────────────────────────────────────
 async function sendMessage() {
   const text = input.value.trim();
   if (!text || !sessionId || isAgentRunning) return;
@@ -162,20 +164,22 @@ async function sendMessage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: text }),
     });
+    if (!checkAuth(res)) return;
     if (res.status === 404) {
-      showSystemMsg("Session expired. Reconnecting…");
+      showSystemMsg("SESSION EXPIRED. RECONNECTING...");
       await startSession();
       const retry = await fetch(`/api/session/${sessionId}/prompt`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text }),
       });
+      if (!checkAuth(retry)) return;
       if (!retry.ok) throw new Error(await retry.text());
       return;
     }
     if (!res.ok) throw new Error(await res.text());
   } catch (err) {
-    showSystemMsg(`Send failed: ${err.message}`);
+    showSystemMsg("ERR: " + err.message);
     sendBtn.disabled = false;
   }
 }
@@ -188,14 +192,12 @@ input.addEventListener("keydown", (e) => {
   }
 });
 
-// ── Textarea auto-resize ───────────────────────────────────────────────────
 function autoResize() {
   input.style.height = "auto";
   input.style.height = Math.min(input.scrollHeight, 160) + "px";
 }
 input.addEventListener("input", autoResize);
 
-// ── UI helpers ─────────────────────────────────────────────────────────────
 function appendBubble(role, text) {
   const msg = document.createElement("div");
   msg.className = `msg ${role}`;
@@ -219,9 +221,9 @@ function showEmptyState() {
   const el = document.createElement("div");
   el.className = "empty-state";
   el.innerHTML = `
-    <div class="pi-logo">π</div>
-    <h2>pi coding agent</h2>
-    <p>Ask me to read, edit, write, or run anything in your project.</p>
+    <div class="pi-logo">&gt;_</div>
+    <h2>[PI-AGENT TERMINAL]</h2>
+    <p>connected to knowledge base. ready for input.</p>
   `;
   messages.appendChild(el);
 }

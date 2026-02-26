@@ -3,12 +3,14 @@
  * Exposes a mobile-friendly web UI with SSE streaming + interview tool proxy
  */
 import express from "express";
-import type { Request, Response } from "express";
+import type { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import { createServer } from "http";
 import { fileURLToPath } from "url";
 import path from "path";
 import { createProxyMiddleware } from "http-proxy-middleware";
+import cookieParser from "cookie-parser";
+import crypto from "crypto";
 
 // ── pi SDK imports ──────────────────────────────────────────────────────────
 import {
@@ -28,14 +30,18 @@ import * as obsidian from "./src/obsidian.js";
 const PORT = parseInt(process.env.PORT ?? "5000", 10);
 const INTERVIEW_PORT = parseInt(process.env.INTERVIEW_PORT ?? "19847", 10);
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? "";
+const APP_PASSWORD = process.env.APP_PASSWORD ?? "";
+const SESSION_SECRET = process.env.SESSION_SECRET ?? crypto.randomBytes(32).toString("hex");
 const __dirname = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 if (!ANTHROPIC_KEY) {
-  console.warn("⚠️  ANTHROPIC_API_KEY is not set — sessions will fail until you add it to Replit Secrets.");
+  console.warn("ANTHROPIC_API_KEY is not set.");
 }
-
 if (!obsidian.isConfigured()) {
-  console.warn("⚠️  Obsidian integration not configured — set OBSIDIAN_API_URL and OBSIDIAN_API_KEY in Secrets.");
+  console.warn("Obsidian integration not configured.");
+}
+if (!APP_PASSWORD) {
+  console.warn("APP_PASSWORD is not set — auth disabled.");
 }
 
 // ── Obsidian tool definitions ───────────────────────────────────────────────
@@ -131,11 +137,60 @@ setInterval(() => {
 
 // ── Express app ─────────────────────────────────────────────────────────────
 const app = express();
+app.set("trust proxy", 1);
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
+app.use(cookieParser(SESSION_SECRET));
+
+// ── Auth middleware ─────────────────────────────────────────────────────────
+const PUBLIC_PATHS = ["/login.html", "/login.css", "/api/login", "/health"];
+
+function authMiddleware(req: Request, res: Response, next: NextFunction) {
+  if (!APP_PASSWORD) { next(); return; }
+
+  const reqPath = req.path;
+  if (PUBLIC_PATHS.includes(reqPath)) { next(); return; }
+  if (reqPath === "/api/config/tunnel-url") { next(); return; }
+
+  const token = req.signedCookies?.auth;
+  if (token === "authenticated") { next(); return; }
+
+  const acceptsHtml = req.headers.accept?.includes("text/html");
+  if (acceptsHtml || reqPath === "/") {
+    res.redirect("/login.html");
+  } else {
+    res.status(401).json({ error: "Unauthorized" });
+  }
+}
+
+app.use(authMiddleware);
+
+// ── Auth routes ─────────────────────────────────────────────────────────────
+app.post("/api/login", (req: Request, res: Response) => {
+  const { password } = req.body as { password?: string };
+  if (!password || password !== APP_PASSWORD) {
+    res.status(401).json({ error: "ACCESS DENIED" });
+    return;
+  }
+  res.cookie("auth", "authenticated", {
+    signed: true,
+    httpOnly: true,
+    secure: req.secure,
+    sameSite: "lax",
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  });
+  res.json({ ok: true });
+});
+
+app.get("/api/logout", (_req: Request, res: Response) => {
+  res.clearCookie("auth");
+  res.redirect("/login.html");
+});
+
+// ── Static files (after auth) ───────────────────────────────────────────────
 app.use(express.static(path.join(__dirname, "public")));
 
-// ── Proxy /interview/* → pi-interview-tool server ───────────────────────────
+// ── Proxy /interview/* ──────────────────────────────────────────────────────
 app.use(
   "/interview",
   createProxyMiddleware({
@@ -146,16 +201,16 @@ app.use(
         try {
           if ("writeHead" in res && typeof (res as any).status === "function") {
             (res as any).status(502).json({
-              error: "Interview tool is not running. The agent must trigger it first.",
+              error: "Interview tool is not running.",
             });
           }
-        } catch { /* response already sent */ }
+        } catch {}
       },
     },
   })
 );
 
-// ── POST /api/session — create a new agent session ─────────────────────────
+// ── POST /api/session ───────────────────────────────────────────────────────
 app.post("/api/session", async (_req: Request, res: Response) => {
   try {
     const sessionId = `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -198,7 +253,7 @@ app.post("/api/session", async (_req: Request, res: Response) => {
   }
 });
 
-// ── GET /api/session/:id/stream — SSE event stream ─────────────────────────
+// ── GET /api/session/:id/stream ─────────────────────────────────────────────
 app.get("/api/session/:id/stream", (req: Request, res: Response) => {
   const entry = sessions.get(req.params["id"] as string);
   if (!entry) {
@@ -224,7 +279,7 @@ app.get("/api/session/:id/stream", (req: Request, res: Response) => {
   });
 });
 
-// ── POST /api/session/:id/prompt — send a message to the agent ─────────────
+// ── POST /api/session/:id/prompt ────────────────────────────────────────────
 app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
   const entry = sessions.get(req.params["id"] as string);
   if (!entry) {
@@ -251,13 +306,13 @@ app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
   }
 });
 
-// ── DELETE /api/session/:id — close a session ───────────────────────────────
+// ── DELETE /api/session/:id ─────────────────────────────────────────────────
 app.delete("/api/session/:id", (req: Request, res: Response) => {
   sessions.delete(req.params["id"] as string);
   res.json({ ok: true });
 });
 
-// ── POST /api/config/tunnel-url — update Obsidian tunnel URL at runtime ─────
+// ── POST /api/config/tunnel-url ─────────────────────────────────────────────
 app.post("/api/config/tunnel-url", (req: Request, res: Response) => {
   const auth = req.headers.authorization;
   if (!auth || auth !== `Bearer ${process.env.OBSIDIAN_API_KEY}`) {
@@ -276,7 +331,7 @@ app.post("/api/config/tunnel-url", (req: Request, res: Response) => {
   res.json({ ok: true, url });
 });
 
-// ── Health check ─────────────────────────────────────────────────────────────
+// ── Health check ────────────────────────────────────────────────────────────
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", sessions: sessions.size, ts: Date.now() });
 });
@@ -289,8 +344,7 @@ process.on("unhandledRejection", (reason) => {
   console.error("Unhandled rejection (server still running):", reason);
 });
 process.on("exit", (code) => {
-  console.error(`Process exiting with code ${code} at ${new Date().toISOString()}`);
-  console.error("Stack:", new Error().stack);
+  console.error(`Process exiting with code ${code}`);
 });
 process.on("SIGTERM", () => console.error("Got SIGTERM"));
 process.on("SIGINT", () => console.error("Got SIGINT"));
@@ -303,7 +357,7 @@ server.listen(PORT, "0.0.0.0", () => {
 ╔══════════════════════════════════════════════════╗
 ║  pi-replit server running                        ║
 ║  http://localhost:${PORT}                           ║
-║                                                  ║
+║  Auth: ${APP_PASSWORD ? "enabled" : "disabled"}                                    ║
 ║  Interview proxy → localhost:${INTERVIEW_PORT}          ║
 ╚══════════════════════════════════════════════════╝
   `);

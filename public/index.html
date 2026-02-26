@@ -5,52 +5,53 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <title>pi — coding agent</title>
+  <title>pi-agent // terminal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <div class="scanlines"></div>
   <div id="app">
-    <!-- Header -->
     <header id="header">
       <div class="header-inner">
-        <span class="logo">π</span>
+        <span class="logo">[PI-AGENT]</span>
         <span class="model-badge" id="model-badge">claude-sonnet-4-6</span>
+        <a href="/api/logout" class="logout-btn">[EXIT]</a>
         <button class="icon-btn" id="new-session-btn" title="New session">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M12 5v14M5 12h14"/>
           </svg>
         </button>
       </div>
     </header>
 
-    <!-- Messages -->
-    <main id="messages" role="log" aria-live="polite" aria-label="Conversation"></main>
+    <main id="messages" role="log" aria-live="polite" aria-label="Terminal"></main>
 
-    <!-- Status bar -->
     <div id="status-bar" class="hidden">
-      <span id="status-text">Agent is thinking…</span>
+      <span id="status-text">[PROCESSING...]</span>
       <div class="spinner"></div>
     </div>
 
-    <!-- Interview notice -->
     <div id="interview-notice" class="hidden">
       <a id="interview-link" href="/interview" target="_blank">
-        🎯 Interview form ready — tap to open
+        [INTERVIEW FORM READY — TAP TO OPEN]
       </a>
     </div>
 
-    <!-- Input area -->
     <footer id="input-area">
       <div class="input-row">
+        <span class="prompt-prefix">$</span>
         <textarea
           id="input"
-          placeholder="Ask pi to do something…"
+          placeholder="enter command..."
           rows="1"
-          aria-label="Message"
+          aria-label="Command"
         ></textarea>
         <button id="send-btn" aria-label="Send">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-            <path d="M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z"/>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M5 12h14M12 5l7 7-7 7"/>
           </svg>
         </button>
       </div>
