@@ -16,3 +16,6 @@ externalPort = 80
 [env]
 PORT = "3000"
 INTERVIEW_PORT = "19847"
+
+[agent]
+expertMode = true
