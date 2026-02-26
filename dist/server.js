@@ -3,8 +3,8 @@ import express from "express";
 import cors from "cors";
 import { createServer } from "http";
 import { fileURLToPath } from "url";
-import path2 from "path";
-import fs2 from "fs";
+import path3 from "path";
+import fs3 from "fs";
 import { createProxyMiddleware } from "http-proxy-middleware";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
@@ -168,43 +168,81 @@ function addMessage(conv, role, text) {
 
 // src/gmail.ts
 import { google } from "googleapis";
-var connectionSettings;
-async function getAccessToken() {
-  if (connectionSettings?.settings?.access_token && connectionSettings.settings.expires_at) {
-    const expiresAt = new Date(connectionSettings.settings.expires_at).getTime();
-    if (expiresAt > Date.now() + 6e4) {
-      return connectionSettings.settings.access_token;
-    }
-  }
-  connectionSettings = null;
-  const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
-  const xReplitToken = process.env.REPL_IDENTITY ? "repl " + process.env.REPL_IDENTITY : process.env.WEB_REPL_RENEWAL ? "depl " + process.env.WEB_REPL_RENEWAL : null;
-  if (!xReplitToken) {
-    throw new Error("X-Replit-Token not found for repl/depl");
-  }
-  connectionSettings = await fetch(
-    "https://" + hostname + "/api/v2/connection?include_secrets=true&connector_names=google-mail",
-    {
-      headers: {
-        Accept: "application/json",
-        "X-Replit-Token": xReplitToken
-      }
-    }
-  ).then((res) => res.json()).then((data) => data.items?.[0]);
-  const accessToken = connectionSettings?.settings?.access_token || connectionSettings.settings?.oauth?.credentials?.access_token;
-  if (!connectionSettings || !accessToken) {
-    throw new Error("Gmail not connected");
-  }
-  return accessToken;
-}
-async function getGmailClient() {
-  const accessToken = await getAccessToken();
-  const oauth2Client = new google.auth.OAuth2();
-  oauth2Client.setCredentials({ access_token: accessToken });
-  return google.gmail({ version: "v1", auth: oauth2Client });
+import fs2 from "fs";
+import path2 from "path";
+var SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
+var tokenFilePath = "";
+var projectRoot = "";
+function init2(root) {
+  projectRoot = root;
+  tokenFilePath = path2.join(root, "data", "gmail-tokens.json");
+  fs2.mkdirSync(path2.dirname(tokenFilePath), { recursive: true });
 }
 function isConfigured2() {
-  return !!(process.env.REPLIT_CONNECTORS_HOSTNAME && (process.env.REPL_IDENTITY || process.env.WEB_REPL_RENEWAL));
+  return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+}
+function isConnected() {
+  if (!isConfigured2()) return false;
+  try {
+    const tokens = loadTokens();
+    return !!(tokens && tokens.refresh_token);
+  } catch {
+    return false;
+  }
+}
+function getOAuth2Client() {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const redirectUri = getRedirectUri();
+  return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+}
+function getRedirectUri() {
+  if (process.env.REPLIT_DEV_DOMAIN) {
+    return `https://${process.env.REPLIT_DEV_DOMAIN}/api/gmail/callback`;
+  }
+  if (process.env.REPLIT_DOMAINS) {
+    const domain = process.env.REPLIT_DOMAINS.split(",")[0];
+    return `https://${domain}/api/gmail/callback`;
+  }
+  const port = process.env.PORT || "3000";
+  return `http://localhost:${port}/api/gmail/callback`;
+}
+function getAuthUrl() {
+  const client = getOAuth2Client();
+  return client.generateAuthUrl({
+    access_type: "offline",
+    scope: SCOPES,
+    prompt: "consent"
+  });
+}
+async function handleCallback(code) {
+  const client = getOAuth2Client();
+  const { tokens } = await client.getToken(code);
+  saveTokens(tokens);
+}
+function saveTokens(tokens) {
+  fs2.writeFileSync(tokenFilePath, JSON.stringify(tokens, null, 2));
+}
+function loadTokens() {
+  if (!fs2.existsSync(tokenFilePath)) return null;
+  try {
+    return JSON.parse(fs2.readFileSync(tokenFilePath, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+async function getGmailClient() {
+  const tokens = loadTokens();
+  if (!tokens || !tokens.refresh_token) {
+    throw new Error("Gmail not connected");
+  }
+  const client = getOAuth2Client();
+  client.setCredentials(tokens);
+  client.on("tokens", (newTokens) => {
+    const merged = { ...tokens, ...newTokens };
+    saveTokens(merged);
+  });
+  return google.gmail({ version: "v1", auth: client });
 }
 function decodeHeader(headers2, name) {
   const h = headers2.find((h2) => h2.name.toLowerCase() === name.toLowerCase());
@@ -281,8 +319,11 @@ ${lines.join("\n\n")}`;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("Gmail listEmails error:", msg);
-    if (msg.includes("not connected") || msg.includes("X-Replit-Token")) {
-      return "Gmail is not connected. Please reconnect your Gmail account.";
+    if (msg.includes("not connected")) {
+      return "Gmail is not connected. Please connect your Gmail account first.";
+    }
+    if (msg.includes("invalid_grant") || msg.includes("Token has been expired")) {
+      return "Gmail authorization has expired. Please reconnect your Gmail account.";
     }
     return "Unable to check emails right now. Please try again shortly.";
   }
@@ -311,8 +352,8 @@ ${truncatedBody}`;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("Gmail readEmail error:", msg);
-    if (msg.includes("not connected") || msg.includes("X-Replit-Token")) {
-      return "Gmail is not connected. Please reconnect your Gmail account.";
+    if (msg.includes("not connected")) {
+      return "Gmail is not connected. Please connect your Gmail account first.";
     }
     if (msg.includes("404") || msg.includes("Not Found")) {
       return "That email could not be found. It may have been deleted.";
@@ -331,19 +372,21 @@ var ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
 var APP_PASSWORD = process.env.APP_PASSWORD || "";
 var SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path2.dirname(__filename);
-var PROJECT_ROOT = __filename.includes("/dist/") ? path2.resolve(__dirname, "..") : __dirname;
-var PUBLIC_DIR = path2.join(PROJECT_ROOT, "public");
-var AGENT_DIR = path2.join(process.env.HOME || "/tmp", ".pi/agent");
-var DATA_DIR = path2.join(PROJECT_ROOT, "data", "conversations");
-fs2.mkdirSync(AGENT_DIR, { recursive: true });
+var __dirname = path3.dirname(__filename);
+var PROJECT_ROOT = __filename.includes("/dist/") ? path3.resolve(__dirname, "..") : __dirname;
+var PUBLIC_DIR = path3.join(PROJECT_ROOT, "public");
+var AGENT_DIR = path3.join(process.env.HOME || "/tmp", ".pi/agent");
+var DATA_DIR = path3.join(PROJECT_ROOT, "data", "conversations");
+fs3.mkdirSync(AGENT_DIR, { recursive: true });
 init(DATA_DIR);
+init2(PROJECT_ROOT);
 if (!ANTHROPIC_KEY) console.warn("ANTHROPIC_API_KEY is not set.");
 if (!isConfigured()) console.warn("Knowledge base integration not configured.");
-if (!isConfigured2()) console.warn("Gmail integration not configured.");
+if (!isConfigured2()) console.warn("Gmail integration not configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET missing).");
+else if (!isConnected()) console.warn("Gmail configured but not yet authorized. Visit /api/gmail/auth to connect.");
 if (!APP_PASSWORD) console.warn("APP_PASSWORD is not set \u2014 auth disabled.");
 console.log(`[boot] PORT=${PORT} PUBLIC_DIR=${PUBLIC_DIR} AGENT_DIR=${AGENT_DIR}`);
-console.log(`[boot] public/ exists: ${fs2.existsSync(PUBLIC_DIR)}`);
+console.log(`[boot] public/ exists: ${fs3.existsSync(PUBLIC_DIR)}`);
 function buildKnowledgeBaseTools() {
   if (!isConfigured()) return [];
   return [
@@ -511,6 +554,10 @@ function authMiddleware(req, res, next) {
     next();
     return;
   }
+  if (req.path === "/api/gmail/callback") {
+    next();
+    return;
+  }
   const token = req.signedCookies?.auth;
   if (token === "authenticated") {
     next();
@@ -561,10 +608,38 @@ app.use(
     }
   })
 );
+app.get("/api/gmail/auth", (_req, res) => {
+  if (!isConfigured2()) {
+    res.status(500).json({ error: "Gmail not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET." });
+    return;
+  }
+  const url = getAuthUrl();
+  res.redirect(url);
+});
+app.get("/api/gmail/callback", async (req, res) => {
+  const code = req.query.code;
+  if (!code) {
+    res.status(400).send("Missing authorization code.");
+    return;
+  }
+  try {
+    await handleCallback(code);
+    res.send(`<html><body style="background:#000;color:#0f0;font-family:monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><div style="text-align:center"><h2>[GMAIL CONNECTED]</h2><p>Authorization successful. You can close this tab.</p><script>setTimeout(()=>window.close(),2000)</script></div></body></html>`);
+  } catch (err) {
+    console.error("Gmail callback error:", err);
+    res.status(500).send("Gmail authorization failed. Please try again.");
+  }
+});
+app.get("/api/gmail/status", (_req, res) => {
+  res.json({
+    configured: isConfigured2(),
+    connected: isConnected()
+  });
+});
 app.post("/api/session", async (_req, res) => {
   try {
     const sessionId = `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const authStorage = AuthStorage.create(path2.join(AGENT_DIR, "auth.json"));
+    const authStorage = AuthStorage.create(path3.join(AGENT_DIR, "auth.json"));
     authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
     const { session } = await createAgentSession({
       agentDir: AGENT_DIR,
