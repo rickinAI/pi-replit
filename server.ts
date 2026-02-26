@@ -16,6 +16,7 @@ import {
   AuthStorage,
   SessionManager,
   SettingsManager,
+  type AgentSessionEvent,
 } from "@mariozechner/pi-coding-agent";
 
 // ── Config ──────────────────────────────────────────────────────────────────
@@ -98,7 +99,7 @@ app.post("/api/session", async (_req: Request, res: Response) => {
     sessions.set(sessionId, entry);
 
     // Forward all agent events to SSE subscribers
-    session.subscribe((event) => {
+    session.subscribe((event: AgentSessionEvent) => {
       const data = JSON.stringify(event);
       for (const sub of entry.subscribers) {
         sub.write(`data: ${data}\n\n`);
