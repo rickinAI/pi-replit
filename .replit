@@ -30,7 +30,7 @@ integrations = ["google-mail:1.0.0"]
 [userenv]
 
 [userenv.shared]
-OBSIDIAN_API_URL = "https://arg-purchases-tiffany-therapy.trycloudflare.com"
+OBSIDIAN_API_URL = "https://serious-see-sisters-voting.trycloudflare.com"
 PORT = ""
 GMAIL_REDIRECT_URI = "https://51b59722-ef80-4e2b-b64d-6dc467d8bb0f-00-17dz1kfqdyzrd.janeway.replit.dev/api/gmail/callback"
 
