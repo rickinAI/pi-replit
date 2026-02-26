@@ -1,0 +1,28 @@
+{
+  "name": "pi-replit",
+  "version": "1.0.0",
+  "description": "Pi coding agent + interview tool web UI for Replit / mobile",
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsx watch server.ts"
+  },
+  "dependencies": {
+    "@mariozechner/pi-coding-agent": "file:../pi-mono/packages/coding-agent",
+    "express": "^4.21.2",
+    "http-proxy-middleware": "^3.0.3",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.1",
+    "@types/cors": "^2.8.17",
+    "@types/node": "^22.13.5",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

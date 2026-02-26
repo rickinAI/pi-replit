@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>pi — coding agent</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header id="header">
+      <div class="header-inner">
+        <span class="logo">π</span>
+        <span class="model-badge" id="model-badge">claude-sonnet-4-6</span>
+        <button class="icon-btn" id="new-session-btn" title="New session">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 5v14M5 12h14"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Messages -->
+    <main id="messages" role="log" aria-live="polite" aria-label="Conversation"></main>
+
+    <!-- Status bar -->
+    <div id="status-bar" class="hidden">
+      <span id="status-text">Agent is thinking…</span>
+      <div class="spinner"></div>
+    </div>
+
+    <!-- Interview notice -->
+    <div id="interview-notice" class="hidden">
+      <a id="interview-link" href="/interview" target="_blank">
+        🎯 Interview form ready — tap to open
+      </a>
+    </div>
+
+    <!-- Input area -->
+    <footer id="input-area">
+      <div class="input-row">
+        <textarea
+          id="input"
+          placeholder="Ask pi to do something…"
+          rows="1"
+          aria-label="Message"
+        ></textarea>
+        <button id="send-btn" aria-label="Send">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z"/>
+          </svg>
+        </button>
+      </div>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
