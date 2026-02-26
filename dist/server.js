@@ -3,8 +3,8 @@ import express from "express";
 import cors from "cors";
 import { createServer } from "http";
 import { fileURLToPath } from "url";
-import path from "path";
-import fs from "fs";
+import path2 from "path";
+import fs2 from "fs";
 import { createProxyMiddleware } from "http-proxy-middleware";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
@@ -84,6 +84,88 @@ async function searchNotes(query) {
   return JSON.stringify(data, null, 2);
 }
 
+// src/conversations.ts
+import fs from "fs";
+import path from "path";
+var dataDir = "";
+function init(dir) {
+  dataDir = dir;
+  fs.mkdirSync(dataDir, { recursive: true });
+}
+function filePath(id) {
+  const safe = id.replace(/[^a-zA-Z0-9_-]/g, "");
+  return path.join(dataDir, `${safe}.json`);
+}
+function save(conv) {
+  conv.updatedAt = Date.now();
+  fs.writeFileSync(filePath(conv.id), JSON.stringify(conv, null, 2));
+}
+function load(id) {
+  const fp = filePath(id);
+  if (!fs.existsSync(fp)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(fp, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+function list() {
+  if (!fs.existsSync(dataDir)) return [];
+  const files = fs.readdirSync(dataDir).filter((f) => f.endsWith(".json"));
+  const summaries = [];
+  for (const file of files) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(path.join(dataDir, file), "utf-8"));
+      summaries.push({
+        id: raw.id,
+        title: raw.title,
+        createdAt: raw.createdAt,
+        updatedAt: raw.updatedAt,
+        messageCount: raw.messages.length
+      });
+    } catch {
+    }
+  }
+  summaries.sort((a, b) => b.updatedAt - a.updatedAt);
+  return summaries;
+}
+function remove(id) {
+  const fp = filePath(id);
+  if (!fs.existsSync(fp)) return false;
+  fs.unlinkSync(fp);
+  return true;
+}
+function getRecentSummary(count = 3) {
+  const recent = list().slice(0, count);
+  if (recent.length === 0) return "";
+  const lines = recent.map((c) => {
+    const date = new Date(c.createdAt).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric"
+    });
+    return `- "${c.title}" (${date}, ${c.messageCount} messages)`;
+  });
+  return `Recent conversations:
+${lines.join("\n")}`;
+}
+function createConversation(sessionId) {
+  return {
+    id: sessionId,
+    title: "New conversation",
+    messages: [],
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+}
+function addMessage(conv, role, text) {
+  conv.messages.push({ role, text, timestamp: Date.now() });
+  if (conv.title === "New conversation" && role === "user" && text.trim()) {
+    conv.title = text.trim().slice(0, 60);
+  }
+  conv.updatedAt = Date.now();
+}
+
 // server.ts
 var PORT = parseInt(process.env.PORT || "3000", 10);
 var INTERVIEW_PORT = parseInt(process.env.INTERVIEW_PORT || "19847", 10);
@@ -91,16 +173,18 @@ var ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
 var APP_PASSWORD = process.env.APP_PASSWORD || "";
 var SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path.dirname(__filename);
-var PROJECT_ROOT = __filename.includes("/dist/") ? path.resolve(__dirname, "..") : __dirname;
-var PUBLIC_DIR = path.join(PROJECT_ROOT, "public");
-var AGENT_DIR = path.join(process.env.HOME || "/tmp", ".pi/agent");
-fs.mkdirSync(AGENT_DIR, { recursive: true });
+var __dirname = path2.dirname(__filename);
+var PROJECT_ROOT = __filename.includes("/dist/") ? path2.resolve(__dirname, "..") : __dirname;
+var PUBLIC_DIR = path2.join(PROJECT_ROOT, "public");
+var AGENT_DIR = path2.join(process.env.HOME || "/tmp", ".pi/agent");
+var DATA_DIR = path2.join(PROJECT_ROOT, "data", "conversations");
+fs2.mkdirSync(AGENT_DIR, { recursive: true });
+init(DATA_DIR);
 if (!ANTHROPIC_KEY) console.warn("ANTHROPIC_API_KEY is not set.");
 if (!isConfigured()) console.warn("Knowledge base integration not configured.");
 if (!APP_PASSWORD) console.warn("APP_PASSWORD is not set \u2014 auth disabled.");
 console.log(`[boot] PORT=${PORT} PUBLIC_DIR=${PUBLIC_DIR} AGENT_DIR=${AGENT_DIR}`);
-console.log(`[boot] public/ exists: ${fs.existsSync(PUBLIC_DIR)}`);
+console.log(`[boot] public/ exists: ${fs2.existsSync(PUBLIC_DIR)}`);
 function buildKnowledgeBaseTools() {
   if (!isConfigured()) return [];
   return [
@@ -169,21 +253,44 @@ function buildKnowledgeBaseTools() {
   ];
 }
 var sessions = /* @__PURE__ */ new Map();
+function saveAndCleanSession(id) {
+  const entry = sessions.get(id);
+  if (!entry) return;
+  if (entry.currentAgentText) {
+    addMessage(entry.conversation, "agent", entry.currentAgentText);
+    entry.currentAgentText = "";
+  }
+  if (entry.conversation.messages.length > 0) {
+    save(entry.conversation);
+  }
+  for (const sub of entry.subscribers) {
+    try {
+      sub.end();
+    } catch {
+    }
+  }
+  entry.subscribers.clear();
+  sessions.delete(id);
+}
 setInterval(() => {
   const cutoff = Date.now() - 2 * 60 * 60 * 1e3;
   for (const [id, entry] of sessions.entries()) {
     if (entry.createdAt < cutoff) {
-      for (const sub of entry.subscribers) {
-        try {
-          sub.end();
-        } catch {
-        }
-      }
-      entry.subscribers.clear();
-      sessions.delete(id);
+      saveAndCleanSession(id);
     }
   }
 }, 10 * 60 * 1e3);
+setInterval(() => {
+  for (const entry of sessions.values()) {
+    if (entry.currentAgentText) {
+      addMessage(entry.conversation, "agent", entry.currentAgentText);
+      entry.currentAgentText = "";
+    }
+    if (entry.conversation.messages.length > 0) {
+      save(entry.conversation);
+    }
+  }
+}, 5 * 60 * 1e3);
 var app = express();
 app.set("trust proxy", 1);
 app.use(cors());
@@ -256,7 +363,7 @@ app.use(
 app.post("/api/session", async (_req, res) => {
   try {
     const sessionId = `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const authStorage = AuthStorage.create(path.join(AGENT_DIR, "auth.json"));
+    const authStorage = AuthStorage.create(path2.join(AGENT_DIR, "auth.json"));
     authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
     const { session } = await createAgentSession({
       agentDir: AGENT_DIR,
@@ -265,7 +372,14 @@ app.post("/api/session", async (_req, res) => {
       settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }),
       customTools: buildKnowledgeBaseTools()
     });
-    const entry = { session, subscribers: /* @__PURE__ */ new Set(), createdAt: Date.now() };
+    const conv = createConversation(sessionId);
+    const entry = {
+      session,
+      subscribers: /* @__PURE__ */ new Set(),
+      createdAt: Date.now(),
+      conversation: conv,
+      currentAgentText: ""
+    };
     sessions.set(sessionId, entry);
     session.subscribe((event) => {
       const data = JSON.stringify(event);
@@ -277,8 +391,21 @@ app.post("/api/session", async (_req, res) => {
         } catch {
         }
       }
+      if (event.type === "message_update") {
+        const ae = event.assistantMessageEvent;
+        if (ae?.type === "text_delta" && ae.delta) {
+          entry.currentAgentText += ae.delta;
+        }
+      }
+      if (event.type === "agent_end") {
+        if (entry.currentAgentText) {
+          addMessage(entry.conversation, "agent", entry.currentAgentText);
+          entry.currentAgentText = "";
+        }
+      }
     });
-    res.json({ sessionId });
+    const recentSummary = getRecentSummary(5);
+    res.json({ sessionId, recentContext: recentSummary || null });
   } catch (err) {
     console.error("Failed to create session:", err);
     res.status(500).json({ error: String(err) });
@@ -315,6 +442,7 @@ app.post("/api/session/:id/prompt", async (req, res) => {
     res.status(400).json({ error: "message is required" });
     return;
   }
+  addMessage(entry.conversation, "user", message.trim());
   res.json({ ok: true });
   try {
     await entry.session.prompt(message);
@@ -332,17 +460,22 @@ app.post("/api/session/:id/prompt", async (req, res) => {
   }
 });
 app.delete("/api/session/:id", (req, res) => {
-  const entry = sessions.get(req.params["id"]);
-  if (entry) {
-    for (const sub of entry.subscribers) {
-      try {
-        sub.end();
-      } catch {
-      }
-    }
-    entry.subscribers.clear();
-    sessions.delete(req.params["id"]);
+  saveAndCleanSession(req.params["id"]);
+  res.json({ ok: true });
+});
+app.get("/api/conversations", (_req, res) => {
+  res.json(list());
+});
+app.get("/api/conversations/:id", (req, res) => {
+  const conv = load(req.params["id"]);
+  if (!conv) {
+    res.status(404).json({ error: "Conversation not found" });
+    return;
   }
+  res.json(conv);
+});
+app.delete("/api/conversations/:id", (req, res) => {
+  remove(req.params["id"]);
   res.json({ ok: true });
 });
 app.post("/api/config/tunnel-url", (req, res) => {
@@ -374,6 +507,9 @@ process.on("unhandledRejection", (reason) => console.error("Unhandled rejection:
 var server = createServer(app);
 function gracefulShutdown(signal) {
   console.error(`Got ${signal} \u2014 closing server...`);
+  for (const [id] of sessions.entries()) {
+    saveAndCleanSession(id);
+  }
   server.close(() => {
     process.exit(0);
   });

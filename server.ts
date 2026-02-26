@@ -20,6 +20,7 @@ import {
 import { Type } from "@sinclair/typebox";
 
 import * as obsidian from "./src/obsidian.js";
+import * as conversations from "./src/conversations.js";
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const INTERVIEW_PORT = parseInt(process.env.INTERVIEW_PORT || "19847", 10);
@@ -32,8 +33,10 @@ const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = __filename.includes("/dist/") ? path.resolve(__dirname, "..") : __dirname;
 const PUBLIC_DIR = path.join(PROJECT_ROOT, "public");
 const AGENT_DIR = path.join(process.env.HOME || "/tmp", ".pi/agent");
+const DATA_DIR = path.join(PROJECT_ROOT, "data", "conversations");
 
 fs.mkdirSync(AGENT_DIR, { recursive: true });
+conversations.init(DATA_DIR);
 
 if (!ANTHROPIC_KEY) console.warn("ANTHROPIC_API_KEY is not set.");
 if (!obsidian.isConfigured()) console.warn("Knowledge base integration not configured.");
@@ -115,21 +118,46 @@ interface SessionEntry {
   session: Awaited<ReturnType<typeof createAgentSession>>["session"];
   subscribers: Set<Response>;
   createdAt: number;
+  conversation: conversations.Conversation;
+  currentAgentText: string;
 }
 const sessions = new Map<string, SessionEntry>();
+
+function saveAndCleanSession(id: string) {
+  const entry = sessions.get(id);
+  if (!entry) return;
+  if (entry.currentAgentText) {
+    conversations.addMessage(entry.conversation, "agent", entry.currentAgentText);
+    entry.currentAgentText = "";
+  }
+  if (entry.conversation.messages.length > 0) {
+    conversations.save(entry.conversation);
+  }
+  for (const sub of entry.subscribers) { try { sub.end(); } catch {} }
+  entry.subscribers.clear();
+  sessions.delete(id);
+}
 
 setInterval(() => {
   const cutoff = Date.now() - 2 * 60 * 60 * 1000;
   for (const [id, entry] of sessions.entries()) {
     if (entry.createdAt < cutoff) {
-      for (const sub of entry.subscribers) {
-        try { sub.end(); } catch {}
-      }
-      entry.subscribers.clear();
-      sessions.delete(id);
+      saveAndCleanSession(id);
     }
   }
 }, 10 * 60 * 1000);
+
+setInterval(() => {
+  for (const entry of sessions.values()) {
+    if (entry.currentAgentText) {
+      conversations.addMessage(entry.conversation, "agent", entry.currentAgentText);
+      entry.currentAgentText = "";
+    }
+    if (entry.conversation.messages.length > 0) {
+      conversations.save(entry.conversation);
+    }
+  }
+}, 5 * 60 * 1000);
 
 const app = express();
 app.set("trust proxy", 1);
@@ -212,7 +240,14 @@ app.post("/api/session", async (_req: Request, res: Response) => {
       customTools: buildKnowledgeBaseTools(),
     });
 
-    const entry: SessionEntry = { session, subscribers: new Set(), createdAt: Date.now() };
+    const conv = conversations.createConversation(sessionId);
+    const entry: SessionEntry = {
+      session,
+      subscribers: new Set(),
+      createdAt: Date.now(),
+      conversation: conv,
+      currentAgentText: "",
+    };
     sessions.set(sessionId, entry);
 
     session.subscribe((event: AgentSessionEvent) => {
@@ -220,9 +255,25 @@ app.post("/api/session", async (_req: Request, res: Response) => {
       for (const sub of entry.subscribers) {
         try { sub.write(`data: ${data}\n\n`); } catch {}
       }
+
+      if (event.type === "message_update") {
+        const ae = (event as any).assistantMessageEvent;
+        if (ae?.type === "text_delta" && ae.delta) {
+          entry.currentAgentText += ae.delta;
+        }
+      }
+
+      if (event.type === "agent_end") {
+        if (entry.currentAgentText) {
+          conversations.addMessage(entry.conversation, "agent", entry.currentAgentText);
+          entry.currentAgentText = "";
+        }
+      }
     });
 
-    res.json({ sessionId });
+    const recentSummary = conversations.getRecentSummary(5);
+
+    res.json({ sessionId, recentContext: recentSummary || null });
   } catch (err) {
     console.error("Failed to create session:", err);
     res.status(500).json({ error: String(err) });
@@ -255,6 +306,8 @@ app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
   const { message } = req.body as { message?: string };
   if (!message?.trim()) { res.status(400).json({ error: "message is required" }); return; }
 
+  conversations.addMessage(entry.conversation, "user", message.trim());
+
   res.json({ ok: true });
 
   try {
@@ -269,12 +322,22 @@ app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
 });
 
 app.delete("/api/session/:id", (req: Request, res: Response) => {
-  const entry = sessions.get(req.params["id"] as string);
-  if (entry) {
-    for (const sub of entry.subscribers) { try { sub.end(); } catch {} }
-    entry.subscribers.clear();
-    sessions.delete(req.params["id"] as string);
-  }
+  saveAndCleanSession(req.params["id"] as string);
+  res.json({ ok: true });
+});
+
+app.get("/api/conversations", (_req: Request, res: Response) => {
+  res.json(conversations.list());
+});
+
+app.get("/api/conversations/:id", (req: Request, res: Response) => {
+  const conv = conversations.load(req.params["id"] as string);
+  if (!conv) { res.status(404).json({ error: "Conversation not found" }); return; }
+  res.json(conv);
+});
+
+app.delete("/api/conversations/:id", (req: Request, res: Response) => {
+  conversations.remove(req.params["id"] as string);
   res.json({ ok: true });
 });
 
@@ -312,6 +375,9 @@ const server = createServer(app);
 
 function gracefulShutdown(signal: string) {
   console.error(`Got ${signal} — closing server...`);
+  for (const [id] of sessions.entries()) {
+    saveAndCleanSession(id);
+  }
   server.close(() => { process.exit(0); });
   setTimeout(() => { process.exit(1); }, 3000);
 }

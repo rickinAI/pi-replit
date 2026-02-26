@@ -1,6 +1,6 @@
 # pi-replit
 
-Mobile-friendly web UI for the pi coding agent with knowledge base integration, deployable on Replit. Acts as a "second brain" interface — chat with an AI agent that can search, read, create, and organize notes in your knowledge base.
+Mobile-friendly web UI for the pi coding agent with knowledge base integration, deployable on Replit. Acts as a personal AI companion — chat with an AI agent that remembers you across sessions, learns about you over time, and can search, read, create, and organize notes in your knowledge base.
 
 ## Architecture
 
@@ -8,12 +8,19 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Creates agent sessions with Anthropic API
   - Registers knowledge base tools (search, read, create, append, list)
   - Streams agent events via SSE (Server-Sent Events)
+  - Tracks conversation messages and persists them to JSON files
+  - Auto-saves conversations every 5 minutes; saves on session close/expiry/shutdown
   - Proxies the pi-interview-tool at `/interview`
-  - Graceful shutdown on SIGHUP/SIGTERM/SIGINT (releases port cleanly)
+  - Graceful shutdown on SIGHUP/SIGTERM/SIGINT (saves all conversations, releases port)
   - Express error-handling middleware for clean JSON error responses
 - **src/obsidian.ts** — Client for the knowledge base REST API (internal module)
+- **src/conversations.ts** — Conversation persistence module (save/load/list/delete JSON files)
+- **.pi/agent/system-prompt.md** — Agent personality and instructions (auto-loaded by SDK)
 - **public/** — Static frontend (terminal/hacker aesthetic, branded as "RICKIN")
+  - History panel (slide-out, lists past conversations, view/delete)
+  - Confirmation modal before starting new session
 - **dist/** — esbuild output (compiled server)
+- **data/conversations/** — Persisted conversation JSON files
 - **tunnel-setup/** — macOS LaunchAgent for running cloudflared tunnel
 
 ## Port Configuration
@@ -51,6 +58,9 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 | `/api/session/:id/stream` | GET | SSE event stream |
 | `/api/session/:id/prompt` | POST | Send message to agent |
 | `/api/session/:id` | DELETE | Close session |
+| `/api/conversations` | GET | List saved conversations |
+| `/api/conversations/:id` | GET | Get full conversation with messages |
+| `/api/conversations/:id` | DELETE | Delete a saved conversation |
 | `/api/config/tunnel-url` | POST | Update tunnel URL at runtime |
 | `/health` | GET | Health check |
 | `/interview/*` | GET | Proxy to pi-interview-tool |
@@ -65,6 +75,15 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - `notes_search` — Full-text search across all notes
 
 Requires Local REST API plugin + Cloudflare Tunnel (see `tunnel-setup/`).
+
+## Conversation Persistence
+
+- Conversations stored as JSON files in `data/conversations/`
+- Each file: `{ id, title, messages: [{role, text, timestamp}], createdAt, updatedAt }`
+- Title auto-derived from first user message (truncated to 60 chars)
+- Auto-save every 5 minutes for crash resilience
+- Saved on session close, 2-hour expiry, and graceful shutdown
+- History panel in UI for browsing/viewing/deleting past conversations
 
 ## Dependencies
 
