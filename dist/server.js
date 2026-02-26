@@ -16,8 +16,7 @@ var INTERVIEW_PORT = parseInt(process.env.INTERVIEW_PORT ?? "19847", 10);
 var ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? "";
 var __dirname = path.dirname(fileURLToPath(import.meta.url));
 if (!ANTHROPIC_KEY) {
-  console.error("\u274C  ANTHROPIC_API_KEY is not set. Exiting.");
-  process.exit(1);
+  console.warn("\u26A0\uFE0F  ANTHROPIC_API_KEY is not set \u2014 sessions will fail until you add it to Replit Secrets.");
 }
 var sessions = /* @__PURE__ */ new Map();
 setInterval(() => {

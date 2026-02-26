@@ -26,8 +26,7 @@ const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? "";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 if (!ANTHROPIC_KEY) {
-  console.error("❌  ANTHROPIC_API_KEY is not set. Exiting.");
-  process.exit(1);
+  console.warn("⚠️  ANTHROPIC_API_KEY is not set — sessions will fail until you add it to Replit Secrets.");
 }
 
 // ── Active sessions map ─────────────────────────────────────────────────────
