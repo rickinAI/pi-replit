@@ -33,7 +33,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = __filename.includes("/dist/") ? path.resolve(__dirname, "..") : __dirname;
 const PUBLIC_DIR = path.join(PROJECT_ROOT, "public");
-const AGENT_DIR = path.join(process.env.HOME || "/tmp", ".pi/agent");
+const AGENT_DIR = path.join(PROJECT_ROOT, ".pi/agent");
 const DATA_DIR = path.join(PROJECT_ROOT, "data", "conversations");
 
 fs.mkdirSync(AGENT_DIR, { recursive: true });

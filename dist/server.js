@@ -375,7 +375,7 @@ var __filename = fileURLToPath(import.meta.url);
 var __dirname = path3.dirname(__filename);
 var PROJECT_ROOT = __filename.includes("/dist/") ? path3.resolve(__dirname, "..") : __dirname;
 var PUBLIC_DIR = path3.join(PROJECT_ROOT, "public");
-var AGENT_DIR = path3.join(process.env.HOME || "/tmp", ".pi/agent");
+var AGENT_DIR = path3.join(PROJECT_ROOT, ".pi/agent");
 var DATA_DIR = path3.join(PROJECT_ROOT, "data", "conversations");
 fs3.mkdirSync(AGENT_DIR, { recursive: true });
 init(DATA_DIR);
