@@ -16,7 +16,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **src/obsidian.ts** — Client for the knowledge base REST API (internal module)
 - **src/gmail.ts** — Gmail integration via custom Google OAuth (list/read/search emails)
 - **src/calendar.ts** — Google Calendar integration (shares OAuth with Gmail)
-- **src/weather.ts** — Weather via wttr.in (free, no API key)
+- **src/weather.ts** — Weather via Open-Meteo (free, no API key)
 - **src/websearch.ts** — Web search via DuckDuckGo HTML (free, no API key)
 - **src/tasks.ts** — Local task manager with JSON storage
 - **src/news.ts** — News headlines via Google News RSS feeds
@@ -100,7 +100,7 @@ Auth via custom OAuth flow using `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`. To
 
 ## Weather
 
-1 custom tool using wttr.in (free, no API key):
+1 custom tool using Open-Meteo API (free, no API key):
 - `weather_get` — Current conditions and 3-day forecast for any location
 
 ## Web Search

@@ -531,60 +531,83 @@ async function createEvent(summary, options) {
 }
 
 // src/weather.ts
+var WMO_CODES = {
+  0: "Clear sky",
+  1: "Mainly clear",
+  2: "Partly cloudy",
+  3: "Overcast",
+  45: "Foggy",
+  48: "Depositing rime fog",
+  51: "Light drizzle",
+  53: "Moderate drizzle",
+  55: "Dense drizzle",
+  56: "Light freezing drizzle",
+  57: "Dense freezing drizzle",
+  61: "Slight rain",
+  63: "Moderate rain",
+  65: "Heavy rain",
+  66: "Light freezing rain",
+  67: "Heavy freezing rain",
+  71: "Slight snow",
+  73: "Moderate snow",
+  75: "Heavy snow",
+  77: "Snow grains",
+  80: "Slight rain showers",
+  81: "Moderate rain showers",
+  82: "Violent rain showers",
+  85: "Slight snow showers",
+  86: "Heavy snow showers",
+  95: "Thunderstorm",
+  96: "Thunderstorm with slight hail",
+  99: "Thunderstorm with heavy hail"
+};
+async function geocode(location) {
+  const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(location)}&count=1&language=en&format=json`;
+  const res = await fetch(url);
+  if (!res.ok) return null;
+  const data = await res.json();
+  const r = data.results?.[0];
+  if (!r) return null;
+  return { name: r.name, lat: r.latitude, lon: r.longitude, country: r.country || "", timezone: r.timezone || "auto" };
+}
 async function getWeather(location) {
   try {
-    const url = `https://wttr.in/${encodeURIComponent(location)}?format=j1`;
-    const res = await fetch(url, {
-      headers: { "User-Agent": "pi-assistant/1.0" }
-    });
+    const geo = await geocode(location);
+    if (!geo) return `Could not find location "${location}". Try a city name like "New York" or "London".`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.lat}&longitude=${geo.lon}&current=temperature_2m,apparent_temperature,weathercode,windspeed_10m,winddirection_10m,relative_humidity_2m,uv_index&daily=temperature_2m_max,temperature_2m_min,weathercode,precipitation_probability_max&temperature_unit=fahrenheit&windspeed_unit=mph&timezone=${encodeURIComponent(geo.timezone)}&forecast_days=3`;
+    const res = await fetch(url);
     if (!res.ok) throw new Error(`Weather API error ${res.status}`);
     const data = await res.json();
-    const current = data.current_condition?.[0];
-    if (!current) return `Could not find weather data for "${location}".`;
-    const area = data.nearest_area?.[0];
-    const locationName = area ? `${area.areaName?.[0]?.value || location}, ${area.country?.[0]?.value || ""}` : location;
-    const temp_f = current.temp_F;
-    const temp_c = current.temp_C;
-    const feels_f = current.FeelsLikeF;
-    const feels_c = current.FeelsLikeC;
-    const desc = current.weatherDesc?.[0]?.value || "Unknown";
-    const humidity = current.humidity;
-    const wind_mph = current.windspeedMiles;
-    const wind_dir = current.winddir16Point;
-    const uv = current.uvIndex;
-    const visibility = current.visibilityMiles;
-    let result = `Current weather for ${locationName}:
+    const c = data.current;
+    if (!c) return `Could not get weather data for "${location}".`;
+    const condition = WMO_CODES[c.weathercode] || "Unknown";
+    const locationLabel = `${geo.name}${geo.country ? `, ${geo.country}` : ""}`;
+    let result = `Current weather for ${locationLabel}:
 `;
-    result += `  Condition: ${desc}
+    result += `  Condition: ${condition}
 `;
-    result += `  Temperature: ${temp_f}\xB0F (${temp_c}\xB0C)
+    result += `  Temperature: ${Math.round(c.temperature_2m)}\xB0F
 `;
-    result += `  Feels like: ${feels_f}\xB0F (${feels_c}\xB0C)
+    result += `  Feels like: ${Math.round(c.apparent_temperature)}\xB0F
 `;
-    result += `  Humidity: ${humidity}%
+    result += `  Humidity: ${c.relative_humidity_2m}%
 `;
-    result += `  Wind: ${wind_mph} mph ${wind_dir}
+    result += `  Wind: ${Math.round(c.windspeed_10m)} mph
 `;
-    result += `  UV Index: ${uv}
+    if (c.uv_index !== void 0) result += `  UV Index: ${c.uv_index}
 `;
-    result += `  Visibility: ${visibility} miles
-`;
-    const forecast = data.weather;
-    if (forecast && forecast.length > 0) {
+    const daily = data.daily;
+    if (daily?.time?.length > 0) {
       result += `
 3-Day Forecast:
 `;
-      for (const day of forecast.slice(0, 3)) {
-        const date = day.date;
-        const maxF = day.maxtempF;
-        const minF = day.mintempF;
-        const maxC = day.maxtempC;
-        const minC = day.mintempC;
-        const hourly = day.hourly;
-        const midday = hourly?.[4] || hourly?.[0];
-        const dayDesc = midday?.weatherDesc?.[0]?.value || "N/A";
-        const chanceRain = midday?.chanceofrain || "0";
-        result += `  ${date}: ${dayDesc}, ${minF}-${maxF}\xB0F (${minC}-${maxC}\xB0C), Rain: ${chanceRain}%
+      for (let i = 0; i < daily.time.length; i++) {
+        const date = daily.time[i];
+        const hi = Math.round(daily.temperature_2m_max[i]);
+        const lo = Math.round(daily.temperature_2m_min[i]);
+        const desc = WMO_CODES[daily.weathercode[i]] || "Unknown";
+        const rain = daily.precipitation_probability_max[i];
+        result += `  ${date}: ${desc}, ${lo}-${hi}\xB0F, Rain: ${rain}%
 `;
       }
     }
