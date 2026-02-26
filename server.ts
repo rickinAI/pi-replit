@@ -36,22 +36,22 @@ const AGENT_DIR = path.join(process.env.HOME || "/tmp", ".pi/agent");
 fs.mkdirSync(AGENT_DIR, { recursive: true });
 
 if (!ANTHROPIC_KEY) console.warn("ANTHROPIC_API_KEY is not set.");
-if (!obsidian.isConfigured()) console.warn("Obsidian integration not configured.");
+if (!obsidian.isConfigured()) console.warn("Knowledge base integration not configured.");
 if (!APP_PASSWORD) console.warn("APP_PASSWORD is not set — auth disabled.");
 
 console.log(`[boot] PORT=${PORT} PUBLIC_DIR=${PUBLIC_DIR} AGENT_DIR=${AGENT_DIR}`);
 console.log(`[boot] public/ exists: ${fs.existsSync(PUBLIC_DIR)}`);
 
-function buildObsidianTools(): ToolDefinition[] {
+function buildKnowledgeBaseTools(): ToolDefinition[] {
   if (!obsidian.isConfigured()) return [];
 
   return [
     {
-      name: "obsidian_list",
-      label: "Obsidian List",
-      description: "List files and folders in the user's Obsidian vault.",
+      name: "notes_list",
+      label: "Notes List",
+      description: "List files and folders in the user's knowledge base.",
       parameters: Type.Object({
-        path: Type.Optional(Type.String({ description: "Directory path inside the vault. Defaults to root." })),
+        path: Type.Optional(Type.String({ description: "Directory path inside the knowledge base. Defaults to root." })),
       }),
       async execute(_toolCallId, params) {
         const result = await obsidian.listNotes(params.path ?? "/");
@@ -59,9 +59,9 @@ function buildObsidianTools(): ToolDefinition[] {
       },
     },
     {
-      name: "obsidian_read",
-      label: "Obsidian Read",
-      description: "Read the markdown content of a note in the user's Obsidian vault.",
+      name: "notes_read",
+      label: "Notes Read",
+      description: "Read the markdown content of a note in the user's knowledge base.",
       parameters: Type.Object({
         path: Type.String({ description: "Path to the note, e.g. 'Daily Notes/2025-01-15.md'" }),
       }),
@@ -71,9 +71,9 @@ function buildObsidianTools(): ToolDefinition[] {
       },
     },
     {
-      name: "obsidian_create",
-      label: "Obsidian Create",
-      description: "Create or overwrite a note in the user's Obsidian vault.",
+      name: "notes_create",
+      label: "Notes Create",
+      description: "Create or overwrite a note in the user's knowledge base.",
       parameters: Type.Object({
         path: Type.String({ description: "Path for the new note, e.g. 'Ideas/new-idea.md'" }),
         content: Type.String({ description: "Markdown content for the note" }),
@@ -84,9 +84,9 @@ function buildObsidianTools(): ToolDefinition[] {
       },
     },
     {
-      name: "obsidian_append",
-      label: "Obsidian Append",
-      description: "Append content to the end of an existing note in the user's Obsidian vault.",
+      name: "notes_append",
+      label: "Notes Append",
+      description: "Append content to the end of an existing note in the user's knowledge base.",
       parameters: Type.Object({
         path: Type.String({ description: "Path to the note to append to" }),
         content: Type.String({ description: "Markdown content to append" }),
@@ -97,9 +97,9 @@ function buildObsidianTools(): ToolDefinition[] {
       },
     },
     {
-      name: "obsidian_search",
-      label: "Obsidian Search",
-      description: "Search for text across all notes in the user's Obsidian vault. Returns matching notes and snippets.",
+      name: "notes_search",
+      label: "Notes Search",
+      description: "Search for text across all notes in the user's knowledge base. Returns matching notes and snippets.",
       parameters: Type.Object({
         query: Type.String({ description: "Search query string" }),
       }),
@@ -209,7 +209,7 @@ app.post("/api/session", async (_req: Request, res: Response) => {
       authStorage,
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }),
-      customTools: buildObsidianTools(),
+      customTools: buildKnowledgeBaseTools(),
     });
 
     const entry: SessionEntry = { session, subscribers: new Set(), createdAt: Date.now() };

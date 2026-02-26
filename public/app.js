@@ -259,7 +259,7 @@ function showEmptyState() {
   el.className = "empty-state";
   el.innerHTML = `
     <div class="pi-logo">&gt;_</div>
-    <h2>[PI-AGENT TERMINAL]</h2>
+    <h2>[RICKIN TERMINAL]</h2>
     <p>connected to knowledge base. ready for input.</p>
   `;
   messages.insertBefore(el, scrollAnchor);
