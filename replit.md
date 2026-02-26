@@ -9,9 +9,12 @@ Mobile-friendly web UI for the pi coding agent with Obsidian vault integration, 
   - Registers Obsidian vault tools (search, read, create, append, list) as custom agent tools
   - Streams agent events via SSE (Server-Sent Events)
   - Proxies the pi-interview-tool at `/interview`
-- **src/obsidian.ts** — Client for the Obsidian Local REST API
+  - Handles runtime tunnel URL updates via `/api/config/tunnel-url`
+  - Handles SIGHUP/SIGTERM/SIGINT signals to prevent unexpected shutdowns
+- **src/obsidian.ts** — Client for the Obsidian Local REST API (supports runtime URL updates)
 - **public/** — Static frontend files (HTML/CSS/JS chat UI)
 - **dist/** — esbuild output (compiled server)
+- **tunnel-setup/** — macOS LaunchAgent setup for running cloudflared as a background service
 
 ## API Routes
 
@@ -22,6 +25,7 @@ Mobile-friendly web UI for the pi coding agent with Obsidian vault integration, 
 | `/api/session/:id/stream` | GET | SSE event stream |
 | `/api/session/:id/prompt` | POST | Send message to agent |
 | `/api/session/:id` | DELETE | Close session |
+| `/api/config/tunnel-url` | POST | Update Obsidian tunnel URL at runtime |
 | `/health` | GET | Health check |
 | `/interview/*` | GET | Proxy to pi-interview-tool |
 
@@ -35,7 +39,12 @@ The agent has 5 custom tools for interacting with the user's Obsidian vault:
 - `obsidian_search` — Full-text search across all notes
 
 These tools are only registered when `OBSIDIAN_API_URL` and `OBSIDIAN_API_KEY` are configured.
-Connection requires the Obsidian Local REST API plugin + a Cloudflare Tunnel (see TUNNEL_SETUP.md).
+Connection requires the Obsidian Local REST API plugin + a Cloudflare Tunnel.
+
+### Tunnel Setup
+
+The tunnel can be run as a macOS background service (see `tunnel-setup/README.md`).
+The tunnel script auto-notifies the Replit server when the URL changes via `POST /api/config/tunnel-url`.
 
 ## Agent Configuration (.pi directory)
 
@@ -50,6 +59,12 @@ Connection requires the Obsidian Local REST API plugin + a Cloudflare Tunnel (se
 - **Dev**: `npm run dev` (tsx watch mode)
 - Server listens on port 5000
 
+## Key Stability Notes
+
+- The server handles SIGHUP signals (sent by the Replit workflow system) to prevent unexpected process termination
+- uncaughtException and unhandledRejection handlers prevent crashes from async errors
+- The process.on("exit") handler logs exit codes for debugging
+
 ## Dependencies
 
 - `@mariozechner/pi-coding-agent` — Pi coding agent SDK
@@ -61,7 +76,7 @@ Connection requires the Obsidian Local REST API plugin + a Cloudflare Tunnel (se
 ## Environment Variables
 
 - `ANTHROPIC_API_KEY` (secret) — Required for agent sessions
-- `OBSIDIAN_API_URL` (secret) — Cloudflare Tunnel URL pointing to Obsidian Local REST API
+- `OBSIDIAN_API_URL` (env) — Cloudflare Tunnel URL pointing to Obsidian Local REST API
 - `OBSIDIAN_API_KEY` (secret) — API key from the Obsidian Local REST API plugin
 - `PORT` — Server port (default: 5000)
 - `INTERVIEW_PORT` — Interview tool proxy target port (default: 19847)

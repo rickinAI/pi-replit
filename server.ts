@@ -28,7 +28,6 @@ import * as obsidian from "./src/obsidian.js";
 const PORT = parseInt(process.env.PORT ?? "5000", 10);
 const INTERVIEW_PORT = parseInt(process.env.INTERVIEW_PORT ?? "19847", 10);
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? "";
-// dist/server.js lives one level below the project root, so go up with ".."
 const __dirname = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 if (!ANTHROPIC_KEY) {
@@ -121,7 +120,6 @@ interface SessionEntry {
 }
 const sessions = new Map<string, SessionEntry>();
 
-// Clean up sessions older than 2 hours
 setInterval(() => {
   const cutoff = Date.now() - 2 * 60 * 60 * 1000;
   for (const [id, entry] of sessions.entries()) {
@@ -186,7 +184,6 @@ app.post("/api/session", async (_req: Request, res: Response) => {
     };
     sessions.set(sessionId, entry);
 
-    // Forward all agent events to SSE subscribers
     session.subscribe((event: AgentSessionEvent) => {
       const data = JSON.stringify(event);
       for (const sub of entry.subscribers) {
@@ -212,10 +209,9 @@ app.get("/api/session/:id/stream", (req: Request, res: Response) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
-  res.setHeader("X-Accel-Buffering", "no"); // disable nginx buffering on Replit
+  res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
 
-  // Send a heartbeat every 15s to keep the connection alive
   const heartbeat = setInterval(() => {
     res.write(": heartbeat\n\n");
   }, 15_000);
@@ -242,12 +238,12 @@ app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
     return;
   }
 
-  // Respond immediately; streaming goes via SSE
   res.json({ ok: true });
 
   try {
     await entry.session.prompt(message);
   } catch (err) {
+    console.error("Prompt error:", err);
     const errEvent = JSON.stringify({ type: "error", error: String(err) });
     for (const sub of entry.subscribers) {
       sub.write(`data: ${errEvent}\n\n`);
@@ -261,43 +257,54 @@ app.delete("/api/session/:id", (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
+// ── POST /api/config/tunnel-url — update Obsidian tunnel URL at runtime ─────
+app.post("/api/config/tunnel-url", (req: Request, res: Response) => {
+  const auth = req.headers.authorization;
+  if (!auth || auth !== `Bearer ${process.env.OBSIDIAN_API_KEY}`) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const { url } = req.body as { url?: string };
+  if (!url?.startsWith("https://")) {
+    res.status(400).json({ error: "url must be an https:// URL" });
+    return;
+  }
+
+  obsidian.setApiUrl(url);
+  console.log(`Tunnel URL updated to: ${url}`);
+  res.json({ ok: true, url });
+});
+
 // ── Health check ─────────────────────────────────────────────────────────────
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", sessions: sessions.size, ts: Date.now() });
 });
 
-// ── Global error handlers (prevent server crash) ────────────────────────────
-process.on("uncaughtException", (err: NodeJS.ErrnoException) => {
+// ── Global error handlers ───────────────────────────────────────────────────
+process.on("uncaughtException", (err) => {
   console.error("Uncaught exception (server still running):", err);
 });
 process.on("unhandledRejection", (reason) => {
   console.error("Unhandled rejection (server still running):", reason);
 });
+process.on("exit", (code) => {
+  console.error(`Process exiting with code ${code} at ${new Date().toISOString()}`);
+  console.error("Stack:", new Error().stack);
+});
+process.on("SIGTERM", () => console.error("Got SIGTERM"));
+process.on("SIGINT", () => console.error("Got SIGINT"));
+process.on("SIGHUP", () => console.error("Got SIGHUP"));
 
 // ── Start ─────────────────────────────────────────────────────────────────────
-import { execSync } from "child_process";
-
-function startServer(retried = false) {
-  const server = createServer(app);
-  server.on("error", (err: NodeJS.ErrnoException) => {
-    if (err.code === "EADDRINUSE" && !retried) {
-      console.log("Port in use, killing old process and retrying...");
-      try { execSync(`fuser -k ${PORT}/tcp`, { stdio: "ignore" }); } catch {}
-      setTimeout(() => startServer(true), 2000);
-    } else {
-      console.error("Server error:", err.message);
-      process.exit(1);
-    }
-  });
-  server.listen(PORT, "0.0.0.0", () => {
-    console.log(`
+const server = createServer(app);
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`
 ╔══════════════════════════════════════════════════╗
 ║  pi-replit server running                        ║
 ║  http://localhost:${PORT}                           ║
 ║                                                  ║
 ║  Interview proxy → localhost:${INTERVIEW_PORT}          ║
 ╚══════════════════════════════════════════════════╝
-    `);
-  });
-}
-startServer();
+  `);
+});

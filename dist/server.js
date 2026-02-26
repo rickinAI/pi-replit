@@ -14,8 +14,11 @@ import {
 import { Type } from "@sinclair/typebox";
 
 // src/obsidian.ts
-var OBSIDIAN_API_URL = process.env.OBSIDIAN_API_URL ?? "";
+var obsidianApiUrl = process.env.OBSIDIAN_API_URL ?? "";
 var OBSIDIAN_API_KEY = process.env.OBSIDIAN_API_KEY ?? "";
+function setApiUrl(url) {
+  obsidianApiUrl = url.replace(/\/+$/, "");
+}
 function headers() {
   return {
     Authorization: `Bearer ${OBSIDIAN_API_KEY}`,
@@ -23,13 +26,13 @@ function headers() {
   };
 }
 function baseUrl() {
-  return OBSIDIAN_API_URL.replace(/\/+$/, "");
+  return obsidianApiUrl.replace(/\/+$/, "");
 }
 function encodePath(p) {
   return p.replace(/^\//, "").split("/").map(encodeURIComponent).join("/");
 }
 function isConfigured() {
-  return !!(OBSIDIAN_API_URL && OBSIDIAN_API_KEY);
+  return !!(obsidianApiUrl && OBSIDIAN_API_KEY);
 }
 async function listNotes(dirPath = "/") {
   const url = `${baseUrl()}/vault/${encodePath(dirPath)}`;
@@ -79,7 +82,6 @@ async function searchNotes(query) {
 }
 
 // server.ts
-import { execSync } from "child_process";
 var PORT = parseInt(process.env.PORT ?? "5000", 10);
 var INTERVIEW_PORT = parseInt(process.env.INTERVIEW_PORT ?? "19847", 10);
 var ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? "";
@@ -260,6 +262,7 @@ app.post("/api/session/:id/prompt", async (req, res) => {
   try {
     await entry.session.prompt(message);
   } catch (err) {
+    console.error("Prompt error:", err);
     const errEvent = JSON.stringify({ type: "error", error: String(err) });
     for (const sub of entry.subscribers) {
       sub.write(`data: ${errEvent}
@@ -272,6 +275,21 @@ app.delete("/api/session/:id", (req, res) => {
   sessions.delete(req.params["id"]);
   res.json({ ok: true });
 });
+app.post("/api/config/tunnel-url", (req, res) => {
+  const auth = req.headers.authorization;
+  if (!auth || auth !== `Bearer ${process.env.OBSIDIAN_API_KEY}`) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const { url } = req.body;
+  if (!url?.startsWith("https://")) {
+    res.status(400).json({ error: "url must be an https:// URL" });
+    return;
+  }
+  setApiUrl(url);
+  console.log(`Tunnel URL updated to: ${url}`);
+  res.json({ ok: true, url });
+});
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", sessions: sessions.size, ts: Date.now() });
 });
@@ -281,30 +299,21 @@ process.on("uncaughtException", (err) => {
 process.on("unhandledRejection", (reason) => {
   console.error("Unhandled rejection (server still running):", reason);
 });
-function startServer(retried = false) {
-  const server = createServer(app);
-  server.on("error", (err) => {
-    if (err.code === "EADDRINUSE" && !retried) {
-      console.log("Port in use, killing old process and retrying...");
-      try {
-        execSync(`fuser -k ${PORT}/tcp`, { stdio: "ignore" });
-      } catch {
-      }
-      setTimeout(() => startServer(true), 2e3);
-    } else {
-      console.error("Server error:", err.message);
-      process.exit(1);
-    }
-  });
-  server.listen(PORT, "0.0.0.0", () => {
-    console.log(`
+process.on("exit", (code) => {
+  console.error(`Process exiting with code ${code} at ${(/* @__PURE__ */ new Date()).toISOString()}`);
+  console.error("Stack:", new Error().stack);
+});
+process.on("SIGTERM", () => console.error("Got SIGTERM"));
+process.on("SIGINT", () => console.error("Got SIGINT"));
+process.on("SIGHUP", () => console.error("Got SIGHUP"));
+var server = createServer(app);
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`
 \u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557
 \u2551  pi-replit server running                        \u2551
 \u2551  http://localhost:${PORT}                           \u2551
 \u2551                                                  \u2551
 \u2551  Interview proxy \u2192 localhost:${INTERVIEW_PORT}          \u2551
 \u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D
-    `);
-  });
-}
-startServer();
+  `);
+});

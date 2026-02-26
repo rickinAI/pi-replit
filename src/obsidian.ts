@@ -1,5 +1,9 @@
-const OBSIDIAN_API_URL = process.env.OBSIDIAN_API_URL ?? "";
+let obsidianApiUrl = process.env.OBSIDIAN_API_URL ?? "";
 const OBSIDIAN_API_KEY = process.env.OBSIDIAN_API_KEY ?? "";
+
+export function setApiUrl(url: string) {
+  obsidianApiUrl = url.replace(/\/+$/, "");
+}
 
 function headers(): Record<string, string> {
   return {
@@ -9,7 +13,7 @@ function headers(): Record<string, string> {
 }
 
 function baseUrl(): string {
-  return OBSIDIAN_API_URL.replace(/\/+$/, "");
+  return obsidianApiUrl.replace(/\/+$/, "");
 }
 
 function encodePath(p: string): string {
@@ -17,7 +21,7 @@ function encodePath(p: string): string {
 }
 
 export function isConfigured(): boolean {
-  return !!(OBSIDIAN_API_URL && OBSIDIAN_API_KEY);
+  return !!(obsidianApiUrl && OBSIDIAN_API_KEY);
 }
 
 export async function listNotes(dirPath = "/"): Promise<string> {
