@@ -14,6 +14,7 @@ import {
   AuthStorage,
   SessionManager,
   SettingsManager,
+  DefaultResourceLoader,
   type AgentSessionEvent,
   type ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
@@ -314,12 +315,24 @@ app.post("/api/session", async (_req: Request, res: Response) => {
     authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
 
     const allTools = [...buildKnowledgeBaseTools(), ...buildGmailTools()];
+    const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false } });
+
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: PROJECT_ROOT,
+      agentDir: AGENT_DIR,
+      settingsManager,
+      noSkills: true,
+      noExtensions: true,
+    });
+    await resourceLoader.reload();
 
     const { session } = await createAgentSession({
       agentDir: AGENT_DIR,
       authStorage,
       sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }),
+      settingsManager,
+      resourceLoader,
+      tools: [],
       customTools: allTools,
     });
 
