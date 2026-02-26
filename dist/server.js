@@ -20,6 +20,10 @@ import { Type } from "@sinclair/typebox";
 // src/obsidian.ts
 var obsidianApiUrl = process.env.OBSIDIAN_API_URL ?? "";
 var OBSIDIAN_API_KEY = process.env.OBSIDIAN_API_KEY ?? "";
+var FETCH_TIMEOUT_MS = 1e4;
+var MAX_RETRIES = 2;
+var RETRY_DELAY_MS = 1e3;
+var RETRYABLE_STATUSES = /* @__PURE__ */ new Set([502, 503, 504]);
 function setApiUrl(url) {
   obsidianApiUrl = url.replace(/\/+$/, "");
 }
@@ -38,16 +42,53 @@ function encodePath(p) {
 function isConfigured() {
   return !!(obsidianApiUrl && OBSIDIAN_API_KEY);
 }
+async function fetchWithRetry(url, options = {}) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(timeout);
+      if (res.ok || !RETRYABLE_STATUSES.has(res.status)) {
+        return res;
+      }
+      lastError = new Error(`Obsidian API error ${res.status}: ${await res.text()}`);
+    } catch (err) {
+      clearTimeout(timeout);
+      if (err.name === "AbortError") {
+        lastError = new Error("Knowledge base request timed out (10s)");
+      } else {
+        lastError = new Error(`Knowledge base connection failed: ${err.message}`);
+      }
+    }
+    if (attempt < MAX_RETRIES) {
+      await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * (attempt + 1)));
+    }
+  }
+  throw lastError;
+}
+async function ping() {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5e3);
+    const res = await fetch(`${baseUrl()}/`, { headers: headers(), signal: controller.signal });
+    clearTimeout(timeout);
+    return res.ok || res.status === 401;
+  } catch {
+    return false;
+  }
+}
 async function listNotes(dirPath = "/") {
   const url = `${baseUrl()}/vault/${encodePath(dirPath)}`;
-  const res = await fetch(url, { headers: headers() });
+  const res = await fetchWithRetry(url, { headers: headers() });
   if (!res.ok) throw new Error(`Obsidian API error ${res.status}: ${await res.text()}`);
   const data = await res.json();
   return JSON.stringify(data, null, 2);
 }
 async function readNote(notePath) {
   const url = `${baseUrl()}/vault/${encodePath(notePath)}`;
-  const res = await fetch(url, {
+  const res = await fetchWithRetry(url, {
     headers: { ...headers(), Accept: "text/markdown" }
   });
   if (!res.ok) throw new Error(`Obsidian API error ${res.status}: ${await res.text()}`);
@@ -55,7 +96,7 @@ async function readNote(notePath) {
 }
 async function createNote(notePath, content) {
   const url = `${baseUrl()}/vault/${encodePath(notePath)}`;
-  const res = await fetch(url, {
+  const res = await fetchWithRetry(url, {
     method: "PUT",
     headers: { ...headers(), "Content-Type": "text/markdown" },
     body: content
@@ -65,21 +106,31 @@ async function createNote(notePath, content) {
 }
 async function appendToNote(notePath, content) {
   const url = `${baseUrl()}/vault/${encodePath(notePath)}`;
-  const res = await fetch(url, {
-    method: "PATCH",
-    headers: {
-      ...headers(),
-      "Content-Type": "text/markdown",
-      "Content-Insertion-Position": "end"
-    },
-    body: content
-  });
-  if (!res.ok) throw new Error(`Obsidian API error ${res.status}: ${await res.text()}`);
-  return `Appended to note: ${notePath}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        ...headers(),
+        "Content-Type": "text/markdown",
+        "Content-Insertion-Position": "end"
+      },
+      body: content,
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    if (!res.ok) throw new Error(`Obsidian API error ${res.status}: ${await res.text()}`);
+    return `Appended to note: ${notePath}`;
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err.name === "AbortError") throw new Error("Knowledge base request timed out (10s)");
+    throw err;
+  }
 }
 async function searchNotes(query) {
   const url = `${baseUrl()}/search/simple/?query=${encodeURIComponent(query)}`;
-  const res = await fetch(url, { headers: headers() });
+  const res = await fetchWithRetry(url, { headers: headers() });
   if (!res.ok) throw new Error(`Obsidian API error ${res.status}: ${await res.text()}`);
   const data = await res.json();
   return JSON.stringify(data, null, 2);
@@ -1243,6 +1294,22 @@ setInterval(() => {
     }
   }
 }, 5 * 60 * 1e3);
+var lastTunnelStatus = true;
+if (isConfigured()) {
+  setInterval(async () => {
+    const alive = await ping();
+    if (alive && !lastTunnelStatus) {
+      console.log("[health] Knowledge base connection recovered");
+    } else if (!alive && lastTunnelStatus) {
+      console.warn("[health] Knowledge base connection DOWN \u2014 tunnel may have changed");
+    }
+    lastTunnelStatus = alive;
+  }, 2 * 60 * 1e3);
+  ping().then((ok) => {
+    console.log(`[health] Knowledge base: ${ok ? "connected" : "offline"}`);
+    lastTunnelStatus = ok;
+  });
+}
 var app = express();
 app.set("trust proxy", 1);
 app.use(cors());
@@ -1552,6 +1619,29 @@ function gracefulShutdown(signal) {
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 process.on("SIGHUP", () => gracefulShutdown("SIGHUP"));
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`[ready] pi-replit listening on http://localhost:${PORT}`);
-});
+function startServer(retried = false) {
+  if (retried) {
+    server = createServer(app);
+  }
+  server.on("error", (err) => {
+    if (err.code === "EADDRINUSE" && !retried) {
+      console.warn(`[boot] Port ${PORT} in use \u2014 killing old process and retrying...`);
+      import("child_process").then(({ execSync }) => {
+        try {
+          execSync(`fuser -k -9 ${PORT}/tcp`, { stdio: "ignore" });
+        } catch {
+        }
+        server.close(() => {
+        });
+        setTimeout(() => startServer(true), 2e3);
+      });
+    } else {
+      console.error(`[boot] Fatal server error:`, err);
+      process.exit(1);
+    }
+  });
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log(`[ready] pi-replit listening on http://localhost:${PORT}`);
+  });
+}
+startServer();

@@ -12,8 +12,10 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Auto-saves conversations every 5 minutes; saves on session close/expiry/shutdown
   - Proxies the pi-interview-tool at `/interview`
   - Graceful shutdown on SIGHUP/SIGTERM/SIGINT (saves all conversations, releases port)
+  - EADDRINUSE auto-recovery: detects port conflict, kills stale process, retries once
+  - Periodic knowledge base health check (every 2 min) with connection status logging
   - Express error-handling middleware for clean JSON error responses
-- **src/obsidian.ts** — Client for the knowledge base REST API (internal module)
+- **src/obsidian.ts** — Client for the knowledge base REST API (10s timeout, 2 retries on transient failures, health ping)
 - **src/gmail.ts** — Gmail integration via custom Google OAuth (list/read/search emails)
 - **src/calendar.ts** — Google Calendar integration (shares OAuth with Gmail)
 - **src/weather.ts** — Weather via Open-Meteo (free, no API key)
@@ -28,7 +30,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Confirmation modal before starting new session
 - **dist/** — esbuild output (compiled server)
 - **data/conversations/** — Persisted conversation JSON files
-- **tunnel-setup/** — macOS LaunchAgent for running cloudflared tunnel
+- **tunnel-setup/** — macOS LaunchAgent for cloudflared tunnel (retry notifications with backoff, log rotation)
 
 ## Port Configuration
 

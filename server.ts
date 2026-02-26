@@ -395,6 +395,24 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000);
 
+let lastTunnelStatus = true;
+if (obsidian.isConfigured()) {
+  setInterval(async () => {
+    const alive = await obsidian.ping();
+    if (alive && !lastTunnelStatus) {
+      console.log("[health] Knowledge base connection recovered");
+    } else if (!alive && lastTunnelStatus) {
+      console.warn("[health] Knowledge base connection DOWN — tunnel may have changed");
+    }
+    lastTunnelStatus = alive;
+  }, 2 * 60 * 1000);
+
+  obsidian.ping().then(ok => {
+    console.log(`[health] Knowledge base: ${ok ? "connected" : "offline"}`);
+    lastTunnelStatus = ok;
+  });
+}
+
 const app = express();
 app.set("trust proxy", 1);
 app.use(cors());
@@ -684,7 +702,7 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 process.on("uncaughtException", (err) => console.error("Uncaught exception:", err));
 process.on("unhandledRejection", (reason) => console.error("Unhandled rejection:", reason));
 
-const server = createServer(app);
+let server = createServer(app);
 
 function gracefulShutdown(signal: string) {
   console.error(`Got ${signal} — closing server...`);
@@ -699,6 +717,30 @@ process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 process.on("SIGHUP", () => gracefulShutdown("SIGHUP"));
 
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`[ready] pi-replit listening on http://localhost:${PORT}`);
-});
+function startServer(retried = false) {
+  if (retried) {
+    server = createServer(app);
+  }
+
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE" && !retried) {
+      console.warn(`[boot] Port ${PORT} in use — killing old process and retrying...`);
+      import("child_process").then(({ execSync }) => {
+        try {
+          execSync(`fuser -k -9 ${PORT}/tcp`, { stdio: "ignore" });
+        } catch {}
+        server.close(() => {});
+        setTimeout(() => startServer(true), 2000);
+      });
+    } else {
+      console.error(`[boot] Fatal server error:`, err);
+      process.exit(1);
+    }
+  });
+
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log(`[ready] pi-replit listening on http://localhost:${PORT}`);
+  });
+}
+
+startServer();
