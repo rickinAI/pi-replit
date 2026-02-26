@@ -3,8 +3,8 @@ import express from "express";
 import cors from "cors";
 import { createServer } from "http";
 import { fileURLToPath } from "url";
-import path3 from "path";
-import fs3 from "fs";
+import path5 from "path";
+import fs5 from "fs";
 import { createProxyMiddleware } from "http-proxy-middleware";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
@@ -171,7 +171,10 @@ function addMessage(conv, role, text) {
 import { google } from "googleapis";
 import fs2 from "fs";
 import path2 from "path";
-var SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
+var SCOPES = [
+  "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/calendar"
+];
 var tokenFilePath = "";
 var projectRoot = "";
 function init2(root) {
@@ -386,6 +389,479 @@ async function searchEmails(query) {
   return listEmails(query, 10);
 }
 
+// src/calendar.ts
+import { google as google2 } from "googleapis";
+import fs3 from "fs";
+import path3 from "path";
+var tokenFilePath2 = "";
+function init3(root) {
+  tokenFilePath2 = path3.join(root, "data", "gmail-tokens.json");
+}
+function getOAuth2Client2() {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const redirectUri = process.env.GMAIL_REDIRECT_URI || "";
+  return new google2.auth.OAuth2(clientId, clientSecret, redirectUri);
+}
+function loadTokens2() {
+  if (!fs3.existsSync(tokenFilePath2)) return null;
+  try {
+    return JSON.parse(fs3.readFileSync(tokenFilePath2, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+function saveTokens2(tokens) {
+  fs3.writeFileSync(tokenFilePath2, JSON.stringify(tokens, null, 2));
+}
+async function getCalendarClient() {
+  const tokens = loadTokens2();
+  if (!tokens || !tokens.refresh_token) {
+    throw new Error("Google not connected \u2014 need to authorize first");
+  }
+  const client = getOAuth2Client2();
+  client.setCredentials(tokens);
+  client.on("tokens", (newTokens) => {
+    const merged = { ...tokens, ...newTokens };
+    saveTokens2(merged);
+  });
+  const isExpired = !tokens.expiry_date || Date.now() >= tokens.expiry_date - 6e4;
+  if (isExpired) {
+    try {
+      const { credentials } = await client.refreshAccessToken();
+      client.setCredentials(credentials);
+      saveTokens2({ ...tokens, ...credentials });
+    } catch (err) {
+      if (err.message?.includes("invalid_grant")) {
+        throw new Error("Google authorization expired \u2014 need to reconnect");
+      }
+      throw err;
+    }
+  }
+  return google2.calendar({ version: "v3", auth: client });
+}
+function isConfigured3() {
+  return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+}
+async function listEvents(options) {
+  try {
+    const calendar = await getCalendarClient();
+    const now = /* @__PURE__ */ new Date();
+    const params = {
+      calendarId: "primary",
+      timeMin: options?.timeMin || now.toISOString(),
+      maxResults: options?.maxResults || 10,
+      singleEvents: true,
+      orderBy: "startTime"
+    };
+    if (options?.timeMax) params.timeMax = options.timeMax;
+    const res = await calendar.events.list(params);
+    const events = res.data.items || [];
+    if (events.length === 0) return "No upcoming events found.";
+    const lines = events.map((event, i) => {
+      const start = event.start?.dateTime ? new Date(event.start.dateTime).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : event.start?.date || "TBD";
+      const end = event.end?.dateTime ? new Date(event.end.dateTime).toLocaleString("en-US", { hour: "numeric", minute: "2-digit" }) : "";
+      const location = event.location ? `
+   Location: ${event.location}` : "";
+      const desc = event.description ? `
+   ${event.description.slice(0, 100).replace(/\n/g, " ")}` : "";
+      return `${i + 1}. ${event.summary || "(No title)"}
+   ${start}${end ? ` - ${end}` : ""}${location}${desc}`;
+    });
+    return `Upcoming events (${events.length}):
+
+${lines.join("\n\n")}`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Calendar listEvents error:", msg);
+    if (msg.includes("authorization expired") || msg.includes("invalid_grant")) {
+      return "Google authorization has expired. Rickin needs to reconnect at /api/gmail/auth.";
+    }
+    if (msg.includes("insufficient")) {
+      return "Calendar access not authorized. Rickin needs to reconnect at /api/gmail/auth to grant calendar permissions.";
+    }
+    return `Unable to fetch calendar events: ${msg}`;
+  }
+}
+async function createEvent(summary, options) {
+  try {
+    const calendar = await getCalendarClient();
+    let start;
+    let end;
+    if (options.allDay) {
+      start = { date: options.startTime.split("T")[0] };
+      const endDate = options.endTime ? options.endTime.split("T")[0] : options.startTime.split("T")[0];
+      const d = new Date(endDate);
+      d.setDate(d.getDate() + 1);
+      end = { date: d.toISOString().split("T")[0] };
+    } else {
+      start = { dateTime: options.startTime, timeZone: "America/New_York" };
+      if (options.endTime) {
+        end = { dateTime: options.endTime, timeZone: "America/New_York" };
+      } else {
+        const endTime = new Date(new Date(options.startTime).getTime() + 60 * 60 * 1e3);
+        end = { dateTime: endTime.toISOString(), timeZone: "America/New_York" };
+      }
+    }
+    const event = {
+      summary,
+      start,
+      end
+    };
+    if (options.description) event.description = options.description;
+    if (options.location) event.location = options.location;
+    const res = await calendar.events.insert({
+      calendarId: "primary",
+      requestBody: event
+    });
+    const created = res.data;
+    const startStr = created.start?.dateTime ? new Date(created.start.dateTime).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : created.start?.date || "";
+    return `Created event: "${summary}" on ${startStr}`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Calendar createEvent error:", msg);
+    if (msg.includes("authorization expired") || msg.includes("invalid_grant")) {
+      return "Google authorization has expired. Rickin needs to reconnect at /api/gmail/auth.";
+    }
+    if (msg.includes("insufficient") || msg.includes("Forbidden")) {
+      return "Calendar write access not authorized. Rickin needs to reconnect at /api/gmail/auth to grant calendar permissions.";
+    }
+    return `Unable to create event: ${msg}`;
+  }
+}
+
+// src/weather.ts
+async function getWeather(location) {
+  try {
+    const url = `https://wttr.in/${encodeURIComponent(location)}?format=j1`;
+    const res = await fetch(url, {
+      headers: { "User-Agent": "pi-assistant/1.0" }
+    });
+    if (!res.ok) throw new Error(`Weather API error ${res.status}`);
+    const data = await res.json();
+    const current = data.current_condition?.[0];
+    if (!current) return `Could not find weather data for "${location}".`;
+    const area = data.nearest_area?.[0];
+    const locationName = area ? `${area.areaName?.[0]?.value || location}, ${area.country?.[0]?.value || ""}` : location;
+    const temp_f = current.temp_F;
+    const temp_c = current.temp_C;
+    const feels_f = current.FeelsLikeF;
+    const feels_c = current.FeelsLikeC;
+    const desc = current.weatherDesc?.[0]?.value || "Unknown";
+    const humidity = current.humidity;
+    const wind_mph = current.windspeedMiles;
+    const wind_dir = current.winddir16Point;
+    const uv = current.uvIndex;
+    const visibility = current.visibilityMiles;
+    let result = `Current weather for ${locationName}:
+`;
+    result += `  Condition: ${desc}
+`;
+    result += `  Temperature: ${temp_f}\xB0F (${temp_c}\xB0C)
+`;
+    result += `  Feels like: ${feels_f}\xB0F (${feels_c}\xB0C)
+`;
+    result += `  Humidity: ${humidity}%
+`;
+    result += `  Wind: ${wind_mph} mph ${wind_dir}
+`;
+    result += `  UV Index: ${uv}
+`;
+    result += `  Visibility: ${visibility} miles
+`;
+    const forecast = data.weather;
+    if (forecast && forecast.length > 0) {
+      result += `
+3-Day Forecast:
+`;
+      for (const day of forecast.slice(0, 3)) {
+        const date = day.date;
+        const maxF = day.maxtempF;
+        const minF = day.mintempF;
+        const maxC = day.maxtempC;
+        const minC = day.mintempC;
+        const hourly = day.hourly;
+        const midday = hourly?.[4] || hourly?.[0];
+        const dayDesc = midday?.weatherDesc?.[0]?.value || "N/A";
+        const chanceRain = midday?.chanceofrain || "0";
+        result += `  ${date}: ${dayDesc}, ${minF}-${maxF}\xB0F (${minC}-${maxC}\xB0C), Rain: ${chanceRain}%
+`;
+      }
+    }
+    return result;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Weather error:", msg);
+    return `Unable to get weather for "${location}": ${msg}`;
+  }
+}
+
+// src/websearch.ts
+async function search(query) {
+  try {
+    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; pi-assistant/1.0)"
+      }
+    });
+    if (!res.ok) throw new Error(`Search error ${res.status}`);
+    const html = await res.text();
+    const results = [];
+    const resultRegex = /<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>.*?<a[^>]*class="result__snippet"[^>]*>(.*?)<\/a>/gs;
+    let match;
+    while ((match = resultRegex.exec(html)) !== null && results.length < 8) {
+      const rawUrl = match[1];
+      const title = match[2].replace(/<[^>]+>/g, "").trim();
+      const snippet = match[3].replace(/<[^>]+>/g, "").trim();
+      let decodedUrl = rawUrl;
+      const uddg = rawUrl.match(/uddg=([^&]+)/);
+      if (uddg) {
+        decodedUrl = decodeURIComponent(uddg[1]);
+      }
+      if (title && snippet) {
+        results.push({ title, url: decodedUrl, snippet });
+      }
+    }
+    if (results.length === 0) {
+      const snippetRegex = /<a[^>]*class="result__snippet"[^>]*>(.*?)<\/a>/gs;
+      const titleRegex = /<a[^>]*class="result__a"[^>]*>(.*?)<\/a>/gs;
+      const titles = [];
+      const snippets = [];
+      let m;
+      while ((m = titleRegex.exec(html)) !== null && titles.length < 8) {
+        titles.push(m[1].replace(/<[^>]+>/g, "").trim());
+      }
+      while ((m = snippetRegex.exec(html)) !== null && snippets.length < 8) {
+        snippets.push(m[1].replace(/<[^>]+>/g, "").trim());
+      }
+      for (let i = 0; i < Math.min(titles.length, snippets.length); i++) {
+        results.push({ title: titles[i], url: "", snippet: snippets[i] });
+      }
+    }
+    if (results.length === 0) {
+      return `No search results found for "${query}".`;
+    }
+    const lines = results.map(
+      (r, i) => `${i + 1}. ${r.title}
+   ${r.snippet}${r.url ? `
+   URL: ${r.url}` : ""}`
+    );
+    return `Search results for "${query}":
+
+${lines.join("\n\n")}`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Web search error:", msg);
+    return `Unable to search for "${query}": ${msg}`;
+  }
+}
+
+// src/tasks.ts
+import fs4 from "fs";
+import path4 from "path";
+var tasksFilePath = "";
+function init4(root) {
+  const dataDir2 = path4.join(root, "data");
+  fs4.mkdirSync(dataDir2, { recursive: true });
+  tasksFilePath = path4.join(dataDir2, "tasks.json");
+}
+function loadTasks() {
+  if (!fs4.existsSync(tasksFilePath)) return [];
+  try {
+    return JSON.parse(fs4.readFileSync(tasksFilePath, "utf-8"));
+  } catch {
+    return [];
+  }
+}
+function saveTasks(tasks) {
+  fs4.writeFileSync(tasksFilePath, JSON.stringify(tasks, null, 2));
+}
+function generateId() {
+  return `t_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+}
+function addTask(title, options) {
+  const tasks = loadTasks();
+  const task = {
+    id: generateId(),
+    title,
+    description: options?.description,
+    dueDate: options?.dueDate,
+    priority: options?.priority || "medium",
+    completed: false,
+    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+    tags: options?.tags
+  };
+  tasks.push(task);
+  saveTasks(tasks);
+  return `Added task: "${title}"${task.dueDate ? ` (due: ${task.dueDate})` : ""}${task.priority !== "medium" ? ` [${task.priority} priority]` : ""}`;
+}
+function listTasks(filter) {
+  const tasks = loadTasks();
+  let filtered = tasks;
+  if (!filter?.showCompleted) {
+    filtered = filtered.filter((t) => !t.completed);
+  }
+  if (filter?.tag) {
+    filtered = filtered.filter((t) => t.tags?.includes(filter.tag));
+  }
+  if (filter?.priority) {
+    filtered = filtered.filter((t) => t.priority === filter.priority);
+  }
+  if (filtered.length === 0) {
+    return filter?.showCompleted ? "No tasks found." : "No open tasks. You're all caught up!";
+  }
+  filtered.sort((a, b) => {
+    const priorityOrder = { high: 0, medium: 1, low: 2 };
+    if (a.completed !== b.completed) return a.completed ? 1 : -1;
+    if (priorityOrder[a.priority] !== priorityOrder[b.priority]) return priorityOrder[a.priority] - priorityOrder[b.priority];
+    if (a.dueDate && b.dueDate) return a.dueDate.localeCompare(b.dueDate);
+    if (a.dueDate) return -1;
+    if (b.dueDate) return 1;
+    return 0;
+  });
+  const lines = filtered.map((t, i) => {
+    const status = t.completed ? "[x]" : "[ ]";
+    const priority = t.priority === "high" ? " !!" : t.priority === "low" ? " ~" : "";
+    const due = t.dueDate ? ` (due: ${t.dueDate})` : "";
+    const tags = t.tags?.length ? ` [${t.tags.join(", ")}]` : "";
+    return `${i + 1}. ${status} ${t.title}${priority}${due}${tags}
+   ID: ${t.id}${t.description ? `
+   ${t.description}` : ""}`;
+  });
+  const openCount = filtered.filter((t) => !t.completed).length;
+  const doneCount = filtered.filter((t) => t.completed).length;
+  let header = `Tasks (${openCount} open`;
+  if (doneCount > 0) header += `, ${doneCount} completed`;
+  header += "):";
+  return `${header}
+
+${lines.join("\n\n")}`;
+}
+function completeTask(taskId) {
+  const tasks = loadTasks();
+  const task = tasks.find((t) => t.id === taskId);
+  if (!task) return `Task not found: ${taskId}`;
+  if (task.completed) return `Task already completed: "${task.title}"`;
+  task.completed = true;
+  task.completedAt = (/* @__PURE__ */ new Date()).toISOString();
+  saveTasks(tasks);
+  return `Completed task: "${task.title}"`;
+}
+function deleteTask(taskId) {
+  const tasks = loadTasks();
+  const idx = tasks.findIndex((t) => t.id === taskId);
+  if (idx === -1) return `Task not found: ${taskId}`;
+  const removed = tasks.splice(idx, 1)[0];
+  saveTasks(tasks);
+  return `Deleted task: "${removed.title}"`;
+}
+function updateTask(taskId, updates) {
+  const tasks = loadTasks();
+  const task = tasks.find((t) => t.id === taskId);
+  if (!task) return `Task not found: ${taskId}`;
+  if (updates.title) task.title = updates.title;
+  if (updates.description !== void 0) task.description = updates.description;
+  if (updates.dueDate !== void 0) task.dueDate = updates.dueDate;
+  if (updates.priority) task.priority = updates.priority;
+  if (updates.tags) task.tags = updates.tags;
+  saveTasks(tasks);
+  return `Updated task: "${task.title}"`;
+}
+
+// src/news.ts
+var RSS_FEEDS = {
+  "top": "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en",
+  "world": "https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNRGx1YlY4U0FtVnVHZ0pWVXlnQVAB?hl=en-US&gl=US&ceid=US:en",
+  "business": "https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNRGx6TVdZU0FtVnVHZ0pWVXlnQVAB?hl=en-US&gl=US&ceid=US:en",
+  "technology": "https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNRGRqTVhZU0FtVnVHZ0pWVXlnQVAB?hl=en-US&gl=US&ceid=US:en",
+  "science": "https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNRFp0Y1RjU0FtVnVHZ0pWVXlnQVAB?hl=en-US&gl=US&ceid=US:en",
+  "health": "https://news.google.com/rss/topics/CAAqIQgKIhtDQkFTRGdvSUwyMHZNR3QwTlRFU0FtVnVLQUFQAQ?hl=en-US&gl=US&ceid=US:en",
+  "sports": "https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNRFp1ZEdvU0FtVnVHZ0pWVXlnQVAB?hl=en-US&gl=US&ceid=US:en",
+  "entertainment": "https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNREpxYW5RU0FtVnVHZ0pWVXlnQVAB?hl=en-US&gl=US&ceid=US:en"
+};
+function parseRssItems(xml) {
+  const items = [];
+  const itemRegex = /<item>([\s\S]*?)<\/item>/g;
+  let match;
+  while ((match = itemRegex.exec(xml)) !== null && items.length < 10) {
+    const block = match[1];
+    const title = block.match(/<title><!\[CDATA\[(.*?)\]\]>|<title>(.*?)<\/title>/)?.[1] || block.match(/<title>(.*?)<\/title>/)?.[1] || "";
+    const link = block.match(/<link>(.*?)<\/link>/)?.[1] || "";
+    const desc = block.match(/<description><!\[CDATA\[(.*?)\]\]>|<description>(.*?)<\/description>/)?.[1] || "";
+    const pubDate = block.match(/<pubDate>(.*?)<\/pubDate>/)?.[1] || "";
+    const source = block.match(/<source[^>]*>(.*?)<\/source>/)?.[1] || "";
+    const cleanDesc = desc.replace(/<[^>]+>/g, "").trim();
+    const cleanTitle = title.replace(/<!\[CDATA\[|\]\]>/g, "").trim();
+    if (cleanTitle) {
+      items.push({
+        title: cleanTitle,
+        link,
+        description: cleanDesc.slice(0, 200),
+        pubDate,
+        source
+      });
+    }
+  }
+  return items;
+}
+async function getNews(category) {
+  try {
+    const cat = (category || "top").toLowerCase();
+    const feedUrl = RSS_FEEDS[cat];
+    if (!feedUrl) {
+      const available = Object.keys(RSS_FEEDS).join(", ");
+      return `Unknown category "${category}". Available categories: ${available}`;
+    }
+    const res = await fetch(feedUrl, {
+      headers: { "User-Agent": "pi-assistant/1.0" }
+    });
+    if (!res.ok) throw new Error(`News feed error ${res.status}`);
+    const xml = await res.text();
+    const items = parseRssItems(xml);
+    if (items.length === 0) return `No news articles found for "${cat}".`;
+    const lines = items.map((item, i) => {
+      const source = item.source ? ` (${item.source})` : "";
+      const date = item.pubDate ? new Date(item.pubDate).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
+      return `${i + 1}. ${item.title}${source}
+   ${date}${item.description ? ` \u2014 ${item.description}` : ""}`;
+    });
+    const catLabel = cat.charAt(0).toUpperCase() + cat.slice(1);
+    return `${catLabel} News Headlines:
+
+${lines.join("\n\n")}`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("News error:", msg);
+    return `Unable to fetch news: ${msg}`;
+  }
+}
+async function searchNews(query) {
+  try {
+    const feedUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`;
+    const res = await fetch(feedUrl, {
+      headers: { "User-Agent": "pi-assistant/1.0" }
+    });
+    if (!res.ok) throw new Error(`News search error ${res.status}`);
+    const xml = await res.text();
+    const items = parseRssItems(xml);
+    if (items.length === 0) return `No news articles found for "${query}".`;
+    const lines = items.map((item, i) => {
+      const source = item.source ? ` (${item.source})` : "";
+      const date = item.pubDate ? new Date(item.pubDate).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
+      return `${i + 1}. ${item.title}${source}
+   ${date}${item.description ? ` \u2014 ${item.description}` : ""}`;
+    });
+    return `News about "${query}":
+
+${lines.join("\n\n")}`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("News search error:", msg);
+    return `Unable to search news for "${query}": ${msg}`;
+  }
+}
+
 // server.ts
 var PORT = parseInt(process.env.PORT || "3000", 10);
 var INTERVIEW_PORT = parseInt(process.env.INTERVIEW_PORT || "19847", 10);
@@ -393,21 +869,23 @@ var ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
 var APP_PASSWORD = process.env.APP_PASSWORD || "";
 var SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path3.dirname(__filename);
-var PROJECT_ROOT = __filename.includes("/dist/") ? path3.resolve(__dirname, "..") : __dirname;
-var PUBLIC_DIR = path3.join(PROJECT_ROOT, "public");
-var AGENT_DIR = path3.join(PROJECT_ROOT, ".pi/agent");
-var DATA_DIR = path3.join(PROJECT_ROOT, "data", "conversations");
-fs3.mkdirSync(AGENT_DIR, { recursive: true });
+var __dirname = path5.dirname(__filename);
+var PROJECT_ROOT = __filename.includes("/dist/") ? path5.resolve(__dirname, "..") : __dirname;
+var PUBLIC_DIR = path5.join(PROJECT_ROOT, "public");
+var AGENT_DIR = path5.join(PROJECT_ROOT, ".pi/agent");
+var DATA_DIR = path5.join(PROJECT_ROOT, "data", "conversations");
+fs5.mkdirSync(AGENT_DIR, { recursive: true });
 init(DATA_DIR);
 init2(PROJECT_ROOT);
+init3(PROJECT_ROOT);
+init4(PROJECT_ROOT);
 if (!ANTHROPIC_KEY) console.warn("ANTHROPIC_API_KEY is not set.");
 if (!isConfigured()) console.warn("Knowledge base integration not configured.");
 if (!isConfigured2()) console.warn("Gmail integration not configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET missing).");
 else if (!isConnected()) console.warn("Gmail configured but not yet authorized. Visit /api/gmail/auth to connect.");
 if (!APP_PASSWORD) console.warn("APP_PASSWORD is not set \u2014 auth disabled.");
 console.log(`[boot] PORT=${PORT} PUBLIC_DIR=${PUBLIC_DIR} AGENT_DIR=${AGENT_DIR}`);
-console.log(`[boot] public/ exists: ${fs3.existsSync(PUBLIC_DIR)}`);
+console.log(`[boot] public/ exists: ${fs5.existsSync(PUBLIC_DIR)}`);
 function buildKnowledgeBaseTools() {
   if (!isConfigured()) return [];
   return [
@@ -512,6 +990,180 @@ function buildGmailTools() {
       }),
       async execute(_toolCallId, params) {
         const result = await searchEmails(params.query);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    }
+  ];
+}
+function buildWeatherTools() {
+  return [
+    {
+      name: "weather_get",
+      label: "Weather",
+      description: "Get current weather conditions and 3-day forecast for a location. Use city names, zip codes, or landmarks.",
+      parameters: Type.Object({
+        location: Type.String({ description: "Location to get weather for (e.g. 'New York', '90210', 'Tokyo')" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await getWeather(params.location);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    }
+  ];
+}
+function buildSearchTools() {
+  return [
+    {
+      name: "web_search",
+      label: "Web Search",
+      description: "Search the web for real-time information. Returns top results with titles, snippets, and URLs.",
+      parameters: Type.Object({
+        query: Type.String({ description: "Search query" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await search(params.query);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    }
+  ];
+}
+function buildCalendarTools() {
+  if (!isConfigured3()) return [];
+  return [
+    {
+      name: "calendar_list",
+      label: "Calendar Events",
+      description: "List upcoming calendar events. Can filter by date range.",
+      parameters: Type.Object({
+        maxResults: Type.Optional(Type.Number({ description: "Maximum number of events to return (default 10)" })),
+        timeMin: Type.Optional(Type.String({ description: "Start of date range in ISO 8601 format (defaults to now)" })),
+        timeMax: Type.Optional(Type.String({ description: "End of date range in ISO 8601 format" }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = await listEvents(params);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "calendar_create",
+      label: "Create Event",
+      description: "Create a new calendar event.",
+      parameters: Type.Object({
+        summary: Type.String({ description: "Event title" }),
+        startTime: Type.String({ description: "Start time in ISO 8601 format (e.g. '2025-03-15T14:00:00')" }),
+        endTime: Type.Optional(Type.String({ description: "End time in ISO 8601 format (defaults to 1 hour after start)" })),
+        description: Type.Optional(Type.String({ description: "Event description" })),
+        location: Type.Optional(Type.String({ description: "Event location" })),
+        allDay: Type.Optional(Type.Boolean({ description: "Whether this is an all-day event" }))
+      }),
+      async execute(_toolCallId, params) {
+        const { summary, ...options } = params;
+        const result = await createEvent(summary, options);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    }
+  ];
+}
+function buildTaskTools() {
+  return [
+    {
+      name: "task_add",
+      label: "Add Task",
+      description: "Add a new task or to-do item with optional due date, priority, and tags.",
+      parameters: Type.Object({
+        title: Type.String({ description: "Task title" }),
+        description: Type.Optional(Type.String({ description: "Task description or details" })),
+        dueDate: Type.Optional(Type.String({ description: "Due date in YYYY-MM-DD format" })),
+        priority: Type.Optional(Type.String({ description: "Priority: 'low', 'medium', or 'high' (default: medium)" })),
+        tags: Type.Optional(Type.Array(Type.String(), { description: "Tags for categorization" }))
+      }),
+      async execute(_toolCallId, params) {
+        const { title, ...options } = params;
+        const result = addTask(title, options);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "task_list",
+      label: "List Tasks",
+      description: "List tasks and to-do items. Shows open tasks by default.",
+      parameters: Type.Object({
+        showCompleted: Type.Optional(Type.Boolean({ description: "Include completed tasks (default: false)" })),
+        tag: Type.Optional(Type.String({ description: "Filter by tag" })),
+        priority: Type.Optional(Type.String({ description: "Filter by priority: 'low', 'medium', 'high'" }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = listTasks(params);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "task_complete",
+      label: "Complete Task",
+      description: "Mark a task as completed.",
+      parameters: Type.Object({
+        taskId: Type.String({ description: "The task ID to complete" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = completeTask(params.taskId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "task_delete",
+      label: "Delete Task",
+      description: "Delete a task permanently.",
+      parameters: Type.Object({
+        taskId: Type.String({ description: "The task ID to delete" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = deleteTask(params.taskId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "task_update",
+      label: "Update Task",
+      description: "Update an existing task's details.",
+      parameters: Type.Object({
+        taskId: Type.String({ description: "The task ID to update" }),
+        title: Type.Optional(Type.String({ description: "New title" })),
+        description: Type.Optional(Type.String({ description: "New description" })),
+        dueDate: Type.Optional(Type.String({ description: "New due date in YYYY-MM-DD format" })),
+        priority: Type.Optional(Type.String({ description: "New priority: 'low', 'medium', 'high'" })),
+        tags: Type.Optional(Type.Array(Type.String(), { description: "New tags" }))
+      }),
+      async execute(_toolCallId, params) {
+        const { taskId, ...updates } = params;
+        const result = updateTask(taskId, updates);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    }
+  ];
+}
+function buildNewsTools() {
+  return [
+    {
+      name: "news_headlines",
+      label: "News Headlines",
+      description: "Get latest news headlines by category. Categories: top, world, business, technology, science, health, sports, entertainment.",
+      parameters: Type.Object({
+        category: Type.Optional(Type.String({ description: "News category (default: 'top'). Options: top, world, business, technology, science, health, sports, entertainment" }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = await getNews(params.category);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "news_search",
+      label: "Search News",
+      description: "Search for news articles about a specific topic.",
+      parameters: Type.Object({
+        query: Type.String({ description: "Search query for news articles" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await searchNews(params.query);
         return { content: [{ type: "text", text: result }], details: {} };
       }
     }
@@ -664,9 +1316,17 @@ app.get("/api/gmail/status", (_req, res) => {
 app.post("/api/session", async (_req, res) => {
   try {
     const sessionId = `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const authStorage = AuthStorage.create(path3.join(AGENT_DIR, "auth.json"));
+    const authStorage = AuthStorage.create(path5.join(AGENT_DIR, "auth.json"));
     authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
-    const allTools = [...buildKnowledgeBaseTools(), ...buildGmailTools()];
+    const allTools = [
+      ...buildKnowledgeBaseTools(),
+      ...buildGmailTools(),
+      ...buildCalendarTools(),
+      ...buildWeatherTools(),
+      ...buildSearchTools(),
+      ...buildTaskTools(),
+      ...buildNewsTools()
+    ];
     const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false } });
     const resourceLoader = new DefaultResourceLoader({
       cwd: PROJECT_ROOT,

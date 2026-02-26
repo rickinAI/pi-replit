@@ -2,7 +2,10 @@ import { google } from "googleapis";
 import fs from "fs";
 import path from "path";
 
-const SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
+const SCOPES = [
+  "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/calendar",
+];
 
 let tokenFilePath = "";
 let projectRoot = "";

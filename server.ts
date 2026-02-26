@@ -23,6 +23,11 @@ import { Type } from "@sinclair/typebox";
 import * as obsidian from "./src/obsidian.js";
 import * as conversations from "./src/conversations.js";
 import * as gmail from "./src/gmail.js";
+import * as calendar from "./src/calendar.js";
+import * as weather from "./src/weather.js";
+import * as websearch from "./src/websearch.js";
+import * as tasks from "./src/tasks.js";
+import * as news from "./src/news.js";
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const INTERVIEW_PORT = parseInt(process.env.INTERVIEW_PORT || "19847", 10);
@@ -40,6 +45,8 @@ const DATA_DIR = path.join(PROJECT_ROOT, "data", "conversations");
 fs.mkdirSync(AGENT_DIR, { recursive: true });
 conversations.init(DATA_DIR);
 gmail.init(PROJECT_ROOT);
+calendar.init(PROJECT_ROOT);
+tasks.init(PROJECT_ROOT);
 
 if (!ANTHROPIC_KEY) console.warn("ANTHROPIC_API_KEY is not set.");
 if (!obsidian.isConfigured()) console.warn("Knowledge base integration not configured.");
@@ -157,6 +164,186 @@ function buildGmailTools(): ToolDefinition[] {
       }),
       async execute(_toolCallId, params) {
         const result = await gmail.searchEmails(params.query);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+  ];
+}
+
+function buildWeatherTools(): ToolDefinition[] {
+  return [
+    {
+      name: "weather_get",
+      label: "Weather",
+      description: "Get current weather conditions and 3-day forecast for a location. Use city names, zip codes, or landmarks.",
+      parameters: Type.Object({
+        location: Type.String({ description: "Location to get weather for (e.g. 'New York', '90210', 'Tokyo')" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await weather.getWeather(params.location);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+  ];
+}
+
+function buildSearchTools(): ToolDefinition[] {
+  return [
+    {
+      name: "web_search",
+      label: "Web Search",
+      description: "Search the web for real-time information. Returns top results with titles, snippets, and URLs.",
+      parameters: Type.Object({
+        query: Type.String({ description: "Search query" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await websearch.search(params.query);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+  ];
+}
+
+function buildCalendarTools(): ToolDefinition[] {
+  if (!calendar.isConfigured()) return [];
+
+  return [
+    {
+      name: "calendar_list",
+      label: "Calendar Events",
+      description: "List upcoming calendar events. Can filter by date range.",
+      parameters: Type.Object({
+        maxResults: Type.Optional(Type.Number({ description: "Maximum number of events to return (default 10)" })),
+        timeMin: Type.Optional(Type.String({ description: "Start of date range in ISO 8601 format (defaults to now)" })),
+        timeMax: Type.Optional(Type.String({ description: "End of date range in ISO 8601 format" })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await calendar.listEvents(params);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "calendar_create",
+      label: "Create Event",
+      description: "Create a new calendar event.",
+      parameters: Type.Object({
+        summary: Type.String({ description: "Event title" }),
+        startTime: Type.String({ description: "Start time in ISO 8601 format (e.g. '2025-03-15T14:00:00')" }),
+        endTime: Type.Optional(Type.String({ description: "End time in ISO 8601 format (defaults to 1 hour after start)" })),
+        description: Type.Optional(Type.String({ description: "Event description" })),
+        location: Type.Optional(Type.String({ description: "Event location" })),
+        allDay: Type.Optional(Type.Boolean({ description: "Whether this is an all-day event" })),
+      }),
+      async execute(_toolCallId, params) {
+        const { summary, ...options } = params;
+        const result = await calendar.createEvent(summary, options);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+  ];
+}
+
+function buildTaskTools(): ToolDefinition[] {
+  return [
+    {
+      name: "task_add",
+      label: "Add Task",
+      description: "Add a new task or to-do item with optional due date, priority, and tags.",
+      parameters: Type.Object({
+        title: Type.String({ description: "Task title" }),
+        description: Type.Optional(Type.String({ description: "Task description or details" })),
+        dueDate: Type.Optional(Type.String({ description: "Due date in YYYY-MM-DD format" })),
+        priority: Type.Optional(Type.String({ description: "Priority: 'low', 'medium', or 'high' (default: medium)" })),
+        tags: Type.Optional(Type.Array(Type.String(), { description: "Tags for categorization" })),
+      }),
+      async execute(_toolCallId, params) {
+        const { title, ...options } = params;
+        const result = tasks.addTask(title, options);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "task_list",
+      label: "List Tasks",
+      description: "List tasks and to-do items. Shows open tasks by default.",
+      parameters: Type.Object({
+        showCompleted: Type.Optional(Type.Boolean({ description: "Include completed tasks (default: false)" })),
+        tag: Type.Optional(Type.String({ description: "Filter by tag" })),
+        priority: Type.Optional(Type.String({ description: "Filter by priority: 'low', 'medium', 'high'" })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = tasks.listTasks(params);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "task_complete",
+      label: "Complete Task",
+      description: "Mark a task as completed.",
+      parameters: Type.Object({
+        taskId: Type.String({ description: "The task ID to complete" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = tasks.completeTask(params.taskId);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "task_delete",
+      label: "Delete Task",
+      description: "Delete a task permanently.",
+      parameters: Type.Object({
+        taskId: Type.String({ description: "The task ID to delete" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = tasks.deleteTask(params.taskId);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "task_update",
+      label: "Update Task",
+      description: "Update an existing task's details.",
+      parameters: Type.Object({
+        taskId: Type.String({ description: "The task ID to update" }),
+        title: Type.Optional(Type.String({ description: "New title" })),
+        description: Type.Optional(Type.String({ description: "New description" })),
+        dueDate: Type.Optional(Type.String({ description: "New due date in YYYY-MM-DD format" })),
+        priority: Type.Optional(Type.String({ description: "New priority: 'low', 'medium', 'high'" })),
+        tags: Type.Optional(Type.Array(Type.String(), { description: "New tags" })),
+      }),
+      async execute(_toolCallId, params) {
+        const { taskId, ...updates } = params;
+        const result = tasks.updateTask(taskId, updates);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+  ];
+}
+
+function buildNewsTools(): ToolDefinition[] {
+  return [
+    {
+      name: "news_headlines",
+      label: "News Headlines",
+      description: "Get latest news headlines by category. Categories: top, world, business, technology, science, health, sports, entertainment.",
+      parameters: Type.Object({
+        category: Type.Optional(Type.String({ description: "News category (default: 'top'). Options: top, world, business, technology, science, health, sports, entertainment" })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await news.getNews(params.category);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "news_search",
+      label: "Search News",
+      description: "Search for news articles about a specific topic.",
+      parameters: Type.Object({
+        query: Type.String({ description: "Search query for news articles" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await news.searchNews(params.query);
         return { content: [{ type: "text" as const, text: result }], details: {} };
       },
     },
@@ -314,7 +501,15 @@ app.post("/api/session", async (_req: Request, res: Response) => {
     const authStorage = AuthStorage.create(path.join(AGENT_DIR, "auth.json"));
     authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
 
-    const allTools = [...buildKnowledgeBaseTools(), ...buildGmailTools()];
+    const allTools = [
+      ...buildKnowledgeBaseTools(),
+      ...buildGmailTools(),
+      ...buildCalendarTools(),
+      ...buildWeatherTools(),
+      ...buildSearchTools(),
+      ...buildTaskTools(),
+      ...buildNewsTools(),
+    ];
     const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false } });
 
     const resourceLoader = new DefaultResourceLoader({

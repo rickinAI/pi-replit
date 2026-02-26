@@ -6,7 +6,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 
 - **server.ts** — Express server wrapping the pi coding agent SDK
   - Creates agent sessions with Anthropic API
-  - Registers knowledge base tools (search, read, create, append, list)
+  - Registers custom tools: knowledge base, email, calendar, weather, web search, tasks, news
   - Streams agent events via SSE (Server-Sent Events)
   - Tracks conversation messages and persists them to JSON files
   - Auto-saves conversations every 5 minutes; saves on session close/expiry/shutdown
@@ -14,7 +14,12 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Graceful shutdown on SIGHUP/SIGTERM/SIGINT (saves all conversations, releases port)
   - Express error-handling middleware for clean JSON error responses
 - **src/obsidian.ts** — Client for the knowledge base REST API (internal module)
-- **src/gmail.ts** — Gmail integration via Replit connector (OAuth, list/read/search emails)
+- **src/gmail.ts** — Gmail integration via custom Google OAuth (list/read/search emails)
+- **src/calendar.ts** — Google Calendar integration (shares OAuth with Gmail)
+- **src/weather.ts** — Weather via wttr.in (free, no API key)
+- **src/websearch.ts** — Web search via DuckDuckGo HTML (free, no API key)
+- **src/tasks.ts** — Local task manager with JSON storage
+- **src/news.ts** — News headlines via Google News RSS feeds
 - **src/conversations.ts** — Conversation persistence module (save/load/list/delete JSON files)
 - **.pi/SYSTEM.md** — Agent personality, greeting template, vault structure map, and auto-categorization rules (auto-loaded by SDK from `.pi/SYSTEM.md`)
 - **.pi/agent/system-prompt.md** — Synced copy of SYSTEM.md for reference
@@ -80,12 +85,43 @@ Requires Local REST API plugin + Cloudflare Tunnel (see `tunnel-setup/`).
 
 ## Gmail Integration
 
-3 custom tools for the agent to check email (uses Replit's Gmail connector for secure OAuth):
+3 custom tools for the agent to check email (custom Google OAuth):
 - `email_list` — List recent emails, optionally filter with Gmail search query
 - `email_read` — Read full email content by message ID
 - `email_search` — Search emails using Gmail search syntax
 
-Auth handled via Replit connector (`google-mail`) — no API keys stored. Tokens refresh automatically.
+Auth via custom OAuth flow using `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`. Tokens stored in `data/gmail-tokens.json`.
+
+## Calendar Integration
+
+2 custom tools using Google Calendar API (shares OAuth tokens with Gmail):
+- `calendar_list` — List upcoming events with date range filtering
+- `calendar_create` — Create new events with time, description, location
+
+## Weather
+
+1 custom tool using wttr.in (free, no API key):
+- `weather_get` — Current conditions and 3-day forecast for any location
+
+## Web Search
+
+1 custom tool using DuckDuckGo HTML search (free, no API key):
+- `web_search` — Search the web for real-time information
+
+## Task Manager
+
+5 custom tools with local JSON storage (`data/tasks.json`):
+- `task_add` — Add task with due date, priority, tags
+- `task_list` — List tasks sorted by priority/due date
+- `task_complete` — Mark task as done
+- `task_delete` — Remove task
+- `task_update` — Modify task details
+
+## News Headlines
+
+2 custom tools using Google News RSS feeds (free, no API key):
+- `news_headlines` — Headlines by category (top, world, business, tech, science, health, sports, entertainment)
+- `news_search` — Search news by topic
 
 ## Conversation Persistence
 
