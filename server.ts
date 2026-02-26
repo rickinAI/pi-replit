@@ -264,6 +264,14 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", sessions: sessions.size, ts: Date.now() });
 });
 
+// ── Global error handlers (prevent server crash) ────────────────────────────
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception (server still running):", err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled rejection (server still running):", reason);
+});
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 const server = createServer(app);
 server.listen(PORT, "0.0.0.0", () => {
