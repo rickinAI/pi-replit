@@ -79,6 +79,7 @@ async function searchNotes(query) {
 }
 
 // server.ts
+import { execSync } from "child_process";
 var PORT = parseInt(process.env.PORT ?? "5000", 10);
 var INTERVIEW_PORT = parseInt(process.env.INTERVIEW_PORT ?? "19847", 10);
 var ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? "";
@@ -275,34 +276,39 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", sessions: sessions.size, ts: Date.now() });
 });
 process.on("uncaughtException", (err) => {
+  if (err.code === "EADDRINUSE") {
+    console.error("Port already in use, exiting:", err.message);
+    process.exit(1);
+  }
   console.error("Uncaught exception (server still running):", err);
 });
 process.on("unhandledRejection", (reason) => {
   console.error("Unhandled rejection (server still running):", reason);
 });
-process.on("exit", (code) => {
-  console.error(`Process exiting with code: ${code}`);
-  console.error(new Error("Exit stack trace").stack);
-});
-process.on("SIGINT", () => {
-  console.error("Received SIGINT \u2014 ignoring to keep server alive");
-});
-process.on("SIGTERM", () => {
-  console.error("Received SIGTERM \u2014 ignoring to keep server alive");
-});
-var originalExit = process.exit;
-process.exit = ((code) => {
-  console.error(`process.exit(${code}) called from:`, new Error().stack);
-  return originalExit.call(process, code);
-});
-var server = createServer(app);
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`
+function startServer(retried = false) {
+  const server = createServer(app);
+  server.on("error", (err) => {
+    if (err.code === "EADDRINUSE" && !retried) {
+      console.log("Port in use, killing old process and retrying...");
+      try {
+        execSync(`fuser -k ${PORT}/tcp`, { stdio: "ignore" });
+      } catch {
+      }
+      setTimeout(() => startServer(true), 2e3);
+    } else {
+      console.error("Server error:", err.message);
+      process.exit(1);
+    }
+  });
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log(`
 \u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557
 \u2551  pi-replit server running                        \u2551
 \u2551  http://localhost:${PORT}                           \u2551
 \u2551                                                  \u2551
 \u2551  Interview proxy \u2192 localhost:${INTERVIEW_PORT}          \u2551
 \u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D
-  `);
-});
+    `);
+  });
+}
+startServer();

@@ -279,14 +279,29 @@ process.on("unhandledRejection", (reason) => {
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────────
-const server = createServer(app);
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`
+import { execSync } from "child_process";
+
+function startServer(retried = false) {
+  const server = createServer(app);
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE" && !retried) {
+      console.log("Port in use, killing old process and retrying...");
+      try { execSync(`fuser -k ${PORT}/tcp`, { stdio: "ignore" }); } catch {}
+      setTimeout(() => startServer(true), 2000);
+    } else {
+      console.error("Server error:", err.message);
+      process.exit(1);
+    }
+  });
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log(`
 ╔══════════════════════════════════════════════════╗
 ║  pi-replit server running                        ║
 ║  http://localhost:${PORT}                           ║
 ║                                                  ║
 ║  Interview proxy → localhost:${INTERVIEW_PORT}          ║
 ╚══════════════════════════════════════════════════╝
-  `);
-});
+    `);
+  });
+}
+startServer();
