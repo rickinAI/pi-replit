@@ -189,7 +189,7 @@ async function viewConversation(id) {
     document.getElementById("history-back-btn").addEventListener("click", exitHistoryView);
 
     for (const msg of conv.messages) {
-      const bubble = appendBubble(msg.role, msg.text);
+      const bubble = appendBubble(msg.role, msg.text, msg.timestamp);
       if (msg.images && msg.images.length > 0) {
         const imgRow = document.createElement("div");
         imgRow.className = "msg-images";
@@ -283,7 +283,9 @@ function handleAgentEvent(event) {
           agentBubble = appendBubble("agent", "");
         }
         agentText += ae.delta;
-        agentBubble.querySelector(".bubble").textContent = agentText;
+        const bbl = agentBubble.querySelector(".bubble");
+        bbl.innerHTML = renderMarkdown(agentText);
+        bbl.dataset.rawText = agentText;
         throttledScroll();
       }
       break;
@@ -319,6 +321,27 @@ function handleAgentEvent(event) {
     }
 
     case "agent_end":
+      if (agentBubble && agentText) {
+        const bbl = agentBubble.querySelector(".bubble");
+        if (bbl) {
+          bbl.innerHTML = renderMarkdown(agentText);
+          bbl.dataset.rawText = agentText;
+        }
+        if (!agentBubble.querySelector(".copy-btn")) {
+          const copyBtn = document.createElement("button");
+          copyBtn.className = "copy-btn";
+          copyBtn.textContent = "COPY";
+          copyBtn.title = "Copy to clipboard";
+          copyBtn.addEventListener("click", () => {
+            const raw = bbl.dataset.rawText || bbl.textContent;
+            navigator.clipboard.writeText(raw).then(() => {
+              copyBtn.textContent = "COPIED";
+              setTimeout(() => { copyBtn.textContent = "COPY"; }, 1500);
+            });
+          });
+          agentBubble.appendChild(copyBtn);
+        }
+      }
       isAgentRunning = false;
       agentBubble = null;
       agentText = "";
@@ -503,15 +526,41 @@ dropZone.addEventListener("drop", (e) => {
   }
 });
 
-function appendBubble(role, text) {
+function appendBubble(role, text, timestamp) {
   const msg = document.createElement("div");
   msg.className = `msg ${role}`;
 
   const bubble = document.createElement("div");
   bubble.className = "bubble";
-  bubble.textContent = text;
+  if (role === "agent") {
+    bubble.innerHTML = renderMarkdown(text);
+    bubble.dataset.rawText = text;
+  } else {
+    bubble.textContent = text;
+  }
 
   msg.appendChild(bubble);
+
+  if (role === "agent" && text) {
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "copy-btn";
+    copyBtn.textContent = "COPY";
+    copyBtn.title = "Copy to clipboard";
+    copyBtn.addEventListener("click", () => {
+      const raw = bubble.dataset.rawText || bubble.textContent;
+      navigator.clipboard.writeText(raw).then(() => {
+        copyBtn.textContent = "COPIED";
+        setTimeout(() => { copyBtn.textContent = "COPY"; }, 1500);
+      });
+    });
+    msg.appendChild(copyBtn);
+  }
+
+  const time = document.createElement("span");
+  time.className = "msg-time";
+  time.textContent = formatTime(timestamp ? new Date(timestamp) : new Date());
+  msg.appendChild(time);
+
   messages.insertBefore(msg, scrollAnchor);
   scrollToBottom();
   return msg;
@@ -568,4 +617,39 @@ function escapeHtml(str) {
   const d = document.createElement("div");
   d.textContent = str;
   return d.innerHTML;
+}
+
+function renderMarkdown(text) {
+  let html = escapeHtml(text);
+
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+    return `<pre><code class="${lang}">${code.trimEnd()}</code></pre>`;
+  });
+
+  html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>');
+
+  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+
+  html = html.replace(/(^|[\s>])((https?:\/\/)[^\s<"')\]]+)/gm, (match, prefix, url) => {
+    if (match.includes('href="')) return match;
+    return `${prefix}<a href="${url}" target="_blank" rel="noopener">${url}</a>`;
+  });
+
+  html = html.replace(/^(\d+)\.\s+(.+)$/gm, '<li class="ol-item"><span class="list-num">$1.</span> $2</li>');
+  html = html.replace(/^[-•]\s+(.+)$/gm, '<li class="ul-item">• $1</li>');
+
+  html = html.replace(/((?:<li class="ol-item">.*<\/li>\n?)+)/g, '<ol class="md-list">$1</ol>');
+  html = html.replace(/((?:<li class="ul-item">.*<\/li>\n?)+)/g, '<ul class="md-list">$1</ul>');
+
+  html = html.replace(/^### (.+)$/gm, '<strong class="md-h3">$1</strong>');
+  html = html.replace(/^## (.+)$/gm, '<strong class="md-h2">$1</strong>');
+
+  return html;
+}
+
+function formatTime(date) {
+  return date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
