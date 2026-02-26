@@ -162,6 +162,17 @@ async function sendMessage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: text }),
     });
+    if (res.status === 404) {
+      showSystemMsg("Session expired. Reconnecting…");
+      await startSession();
+      const retry = await fetch(`/api/session/${sessionId}/prompt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text }),
+      });
+      if (!retry.ok) throw new Error(await retry.text());
+      return;
+    }
     if (!res.ok) throw new Error(await res.text());
   } catch (err) {
     showSystemMsg(`Send failed: ${err.message}`);
