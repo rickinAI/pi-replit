@@ -17,7 +17,12 @@ import {
   SessionManager,
   SettingsManager,
   type AgentSessionEvent,
+  type ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
+
+// ── Obsidian client ─────────────────────────────────────────────────────────
+import * as obsidian from "./src/obsidian.js";
 
 // ── Config ──────────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT ?? "5000", 10);
@@ -28,6 +33,84 @@ const __dirname = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 
 if (!ANTHROPIC_KEY) {
   console.warn("⚠️  ANTHROPIC_API_KEY is not set — sessions will fail until you add it to Replit Secrets.");
+}
+
+if (!obsidian.isConfigured()) {
+  console.warn("⚠️  Obsidian integration not configured — set OBSIDIAN_API_URL and OBSIDIAN_API_KEY in Secrets.");
+}
+
+// ── Obsidian tool definitions ───────────────────────────────────────────────
+function buildObsidianTools(): ToolDefinition[] {
+  if (!obsidian.isConfigured()) return [];
+
+  const obsidianList: ToolDefinition = {
+    name: "obsidian_list",
+    label: "Obsidian List",
+    description: "List files and folders in the user's Obsidian vault. Use this to browse the vault structure.",
+    parameters: Type.Object({
+      path: Type.Optional(Type.String({ description: "Directory path inside the vault. Defaults to root." })),
+    }),
+    async execute(_toolCallId, params) {
+      const result = await obsidian.listNotes(params.path ?? "/");
+      return { content: [{ type: "text" as const, text: result }], details: {} };
+    },
+  };
+
+  const obsidianRead: ToolDefinition = {
+    name: "obsidian_read",
+    label: "Obsidian Read",
+    description: "Read the markdown content of a note in the user's Obsidian vault.",
+    parameters: Type.Object({
+      path: Type.String({ description: "Path to the note, e.g. 'Daily Notes/2025-01-15.md'" }),
+    }),
+    async execute(_toolCallId, params) {
+      const result = await obsidian.readNote(params.path);
+      return { content: [{ type: "text" as const, text: result }], details: {} };
+    },
+  };
+
+  const obsidianCreate: ToolDefinition = {
+    name: "obsidian_create",
+    label: "Obsidian Create",
+    description: "Create or overwrite a note in the user's Obsidian vault.",
+    parameters: Type.Object({
+      path: Type.String({ description: "Path for the new note, e.g. 'Ideas/new-idea.md'" }),
+      content: Type.String({ description: "Markdown content for the note" }),
+    }),
+    async execute(_toolCallId, params) {
+      const result = await obsidian.createNote(params.path, params.content);
+      return { content: [{ type: "text" as const, text: result }], details: {} };
+    },
+  };
+
+  const obsidianAppend: ToolDefinition = {
+    name: "obsidian_append",
+    label: "Obsidian Append",
+    description: "Append content to the end of an existing note in the user's Obsidian vault.",
+    parameters: Type.Object({
+      path: Type.String({ description: "Path to the note to append to" }),
+      content: Type.String({ description: "Markdown content to append" }),
+    }),
+    async execute(_toolCallId, params) {
+      const result = await obsidian.appendToNote(params.path, params.content);
+      return { content: [{ type: "text" as const, text: result }], details: {} };
+    },
+  };
+
+  const obsidianSearch: ToolDefinition = {
+    name: "obsidian_search",
+    label: "Obsidian Search",
+    description: "Search for text across all notes in the user's Obsidian vault. Returns matching notes and snippets.",
+    parameters: Type.Object({
+      query: Type.String({ description: "Search query string" }),
+    }),
+    async execute(_toolCallId, params) {
+      const result = await obsidian.searchNotes(params.query);
+      return { content: [{ type: "text" as const, text: result }], details: {} };
+    },
+  };
+
+  return [obsidianList, obsidianRead, obsidianCreate, obsidianAppend, obsidianSearch];
 }
 
 // ── Active sessions map ─────────────────────────────────────────────────────
@@ -82,6 +165,8 @@ app.post("/api/session", async (_req: Request, res: Response) => {
     );
     authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
 
+    const obsidianTools = buildObsidianTools();
+
     const { session } = await createAgentSession({
       agentDir: path.join(process.env.HOME ?? "/tmp", ".pi/agent"),
       authStorage,
@@ -89,6 +174,7 @@ app.post("/api/session", async (_req: Request, res: Response) => {
       settingsManager: SettingsManager.inMemory({
         compaction: { enabled: false },
       }),
+      customTools: obsidianTools,
     });
 
     const entry: SessionEntry = {

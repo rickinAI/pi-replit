@@ -11,12 +11,149 @@ import {
   SessionManager,
   SettingsManager
 } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
+
+// src/obsidian.ts
+var OBSIDIAN_API_URL = process.env.OBSIDIAN_API_URL ?? "";
+var OBSIDIAN_API_KEY = process.env.OBSIDIAN_API_KEY ?? "";
+function headers() {
+  return {
+    Authorization: `Bearer ${OBSIDIAN_API_KEY}`,
+    Accept: "application/json"
+  };
+}
+function baseUrl() {
+  return OBSIDIAN_API_URL.replace(/\/+$/, "");
+}
+function encodePath(p) {
+  return p.replace(/^\//, "").split("/").map(encodeURIComponent).join("/");
+}
+function isConfigured() {
+  return !!(OBSIDIAN_API_URL && OBSIDIAN_API_KEY);
+}
+async function listNotes(dirPath = "/") {
+  const url = `${baseUrl()}/vault/${encodePath(dirPath)}`;
+  const res = await fetch(url, { headers: headers() });
+  if (!res.ok) throw new Error(`Obsidian API error ${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  return JSON.stringify(data, null, 2);
+}
+async function readNote(notePath) {
+  const url = `${baseUrl()}/vault/${encodePath(notePath)}`;
+  const res = await fetch(url, {
+    headers: { ...headers(), Accept: "text/markdown" }
+  });
+  if (!res.ok) throw new Error(`Obsidian API error ${res.status}: ${await res.text()}`);
+  return await res.text();
+}
+async function createNote(notePath, content) {
+  const url = `${baseUrl()}/vault/${encodePath(notePath)}`;
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: { ...headers(), "Content-Type": "text/markdown" },
+    body: content
+  });
+  if (!res.ok) throw new Error(`Obsidian API error ${res.status}: ${await res.text()}`);
+  return `Created note: ${notePath}`;
+}
+async function appendToNote(notePath, content) {
+  const url = `${baseUrl()}/vault/${encodePath(notePath)}`;
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: {
+      ...headers(),
+      "Content-Type": "text/markdown",
+      "Content-Insertion-Position": "end"
+    },
+    body: content
+  });
+  if (!res.ok) throw new Error(`Obsidian API error ${res.status}: ${await res.text()}`);
+  return `Appended to note: ${notePath}`;
+}
+async function searchNotes(query) {
+  const url = `${baseUrl()}/search/simple/?query=${encodeURIComponent(query)}`;
+  const res = await fetch(url, { headers: headers() });
+  if (!res.ok) throw new Error(`Obsidian API error ${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  return JSON.stringify(data, null, 2);
+}
+
+// server.ts
 var PORT = parseInt(process.env.PORT ?? "5000", 10);
 var INTERVIEW_PORT = parseInt(process.env.INTERVIEW_PORT ?? "19847", 10);
 var ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? "";
 var __dirname = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 if (!ANTHROPIC_KEY) {
   console.warn("\u26A0\uFE0F  ANTHROPIC_API_KEY is not set \u2014 sessions will fail until you add it to Replit Secrets.");
+}
+if (!isConfigured()) {
+  console.warn("\u26A0\uFE0F  Obsidian integration not configured \u2014 set OBSIDIAN_API_URL and OBSIDIAN_API_KEY in Secrets.");
+}
+function buildObsidianTools() {
+  if (!isConfigured()) return [];
+  const obsidianList = {
+    name: "obsidian_list",
+    label: "Obsidian List",
+    description: "List files and folders in the user's Obsidian vault. Use this to browse the vault structure.",
+    parameters: Type.Object({
+      path: Type.Optional(Type.String({ description: "Directory path inside the vault. Defaults to root." }))
+    }),
+    async execute(_toolCallId, params) {
+      const result = await listNotes(params.path ?? "/");
+      return { content: [{ type: "text", text: result }], details: {} };
+    }
+  };
+  const obsidianRead = {
+    name: "obsidian_read",
+    label: "Obsidian Read",
+    description: "Read the markdown content of a note in the user's Obsidian vault.",
+    parameters: Type.Object({
+      path: Type.String({ description: "Path to the note, e.g. 'Daily Notes/2025-01-15.md'" })
+    }),
+    async execute(_toolCallId, params) {
+      const result = await readNote(params.path);
+      return { content: [{ type: "text", text: result }], details: {} };
+    }
+  };
+  const obsidianCreate = {
+    name: "obsidian_create",
+    label: "Obsidian Create",
+    description: "Create or overwrite a note in the user's Obsidian vault.",
+    parameters: Type.Object({
+      path: Type.String({ description: "Path for the new note, e.g. 'Ideas/new-idea.md'" }),
+      content: Type.String({ description: "Markdown content for the note" })
+    }),
+    async execute(_toolCallId, params) {
+      const result = await createNote(params.path, params.content);
+      return { content: [{ type: "text", text: result }], details: {} };
+    }
+  };
+  const obsidianAppend = {
+    name: "obsidian_append",
+    label: "Obsidian Append",
+    description: "Append content to the end of an existing note in the user's Obsidian vault.",
+    parameters: Type.Object({
+      path: Type.String({ description: "Path to the note to append to" }),
+      content: Type.String({ description: "Markdown content to append" })
+    }),
+    async execute(_toolCallId, params) {
+      const result = await appendToNote(params.path, params.content);
+      return { content: [{ type: "text", text: result }], details: {} };
+    }
+  };
+  const obsidianSearch = {
+    name: "obsidian_search",
+    label: "Obsidian Search",
+    description: "Search for text across all notes in the user's Obsidian vault. Returns matching notes and snippets.",
+    parameters: Type.Object({
+      query: Type.String({ description: "Search query string" })
+    }),
+    async execute(_toolCallId, params) {
+      const result = await searchNotes(params.query);
+      return { content: [{ type: "text", text: result }], details: {} };
+    }
+  };
+  return [obsidianList, obsidianRead, obsidianCreate, obsidianAppend, obsidianSearch];
 }
 var sessions = /* @__PURE__ */ new Map();
 setInterval(() => {
@@ -54,13 +191,15 @@ app.post("/api/session", async (_req, res) => {
       path.join(process.env.HOME ?? "/tmp", ".pi/agent/auth.json")
     );
     authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
+    const obsidianTools = buildObsidianTools();
     const { session } = await createAgentSession({
       agentDir: path.join(process.env.HOME ?? "/tmp", ".pi/agent"),
       authStorage,
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory({
         compaction: { enabled: false }
-      })
+      }),
+      customTools: obsidianTools
     });
     const entry = {
       session,
