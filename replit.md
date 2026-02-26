@@ -32,7 +32,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 
 ## UI Theme
 
-- Branding: [RICKIN] header, "RICKINS SECOND BRAIN" login ASCII art
+- Branding: [RICKIN] header, "MISSION CONTROL" login ASCII art
 - Terminal/hacker aesthetic: green (#0f0) monospace text on black, CRT scanlines, glow effects
 - Font: Fira Code from Google Fonts
 - Login page: ASCII art header, simulated boot sequence, blinking cursor
