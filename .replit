@@ -6,9 +6,10 @@ modules = ["nodejs-20"]
 channel = "stable-25_05"
 
 [deployment]
-run = ["node", "dist/server.js"]
+run = ["sh", "-c", "npm start"]
 deploymentTarget = "vm"
 build = ["npm", "run", "build"]
+publicDir = "dist"
 
 [[ports]]
 localPort = 3000
