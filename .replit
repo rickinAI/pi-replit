@@ -29,7 +29,7 @@ expertMode = true
 
 [userenv.shared]
 PORT = "5000"
-OBSIDIAN_API_URL = "https://married-toilet-ongoing-question.trycloudflare.com"
+OBSIDIAN_API_URL = "https://increasingly-dee-lincoln-great.trycloudflare.com"
 
 [workflows]
 runButton = "Project"
