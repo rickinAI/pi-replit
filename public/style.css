@@ -312,7 +312,7 @@ body {
 
 .input-row {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 8px;
   border: 1px solid var(--border);
   border-radius: 2px;
@@ -332,7 +332,10 @@ body {
   font-size: 14px;
   text-shadow: 0 0 3px var(--green-glow);
   flex-shrink: 0;
-  line-height: 1.2;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  height: 36px;
 }
 
 #input {
