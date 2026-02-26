@@ -5,20 +5,22 @@
   "type": "module",
   "main": "dist/server.js",
   "scripts": {
-    "build": "tsc",
+    "build": "esbuild server.ts --bundle --platform=node --target=node20 --outfile=dist/server.js --format=esm --packages=external",
+    "bundle": "esbuild server.ts --bundle --platform=node --target=node20 --outfile=dist/server.bundle.js --format=esm",
     "start": "node dist/server.js",
     "dev": "tsx watch server.ts"
   },
   "dependencies": {
     "@mariozechner/pi-coding-agent": "^0.55.1",
+    "cors": "^2.8.5",
     "express": "^4.21.2",
-    "http-proxy-middleware": "^3.0.3",
-    "cors": "^2.8.5"
+    "http-proxy-middleware": "^3.0.3"
   },
   "devDependencies": {
-    "@types/express": "^5.0.1",
     "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.1",
     "@types/node": "^22.13.5",
+    "esbuild": "^0.27.3",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2"
   },

@@ -1,4 +1,4 @@
-run = "npm install && node dist/server.js"
+run = "bash start.sh"
 entrypoint = "server.ts"
 
 [nix]
