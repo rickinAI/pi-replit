@@ -356,7 +356,7 @@ body {
   padding: 4px 0;
 }
 
-#input::placeholder { color: var(--green-muted); }
+#input::placeholder { color: #0a0; }
 
 #send-btn {
   flex-shrink: 0;
