@@ -1,6 +1,6 @@
 run = "bash start.sh"
 entrypoint = "server.ts"
-modules = ["nodejs-20"]
+modules = ["nodejs-20", "python-3.11"]
 
 [nix]
 channel = "stable-25_05"
@@ -25,6 +25,7 @@ INTERVIEW_PORT = "19847"
 
 [agent]
 expertMode = true
+integrations = ["google-mail:1.0.0"]
 
 [userenv]
 

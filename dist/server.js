@@ -166,6 +166,164 @@ function addMessage(conv, role, text) {
   conv.updatedAt = Date.now();
 }
 
+// src/gmail.ts
+import { google } from "googleapis";
+var connectionSettings;
+async function getAccessToken() {
+  if (connectionSettings?.settings?.access_token && connectionSettings.settings.expires_at) {
+    const expiresAt = new Date(connectionSettings.settings.expires_at).getTime();
+    if (expiresAt > Date.now() + 6e4) {
+      return connectionSettings.settings.access_token;
+    }
+  }
+  connectionSettings = null;
+  const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
+  const xReplitToken = process.env.REPL_IDENTITY ? "repl " + process.env.REPL_IDENTITY : process.env.WEB_REPL_RENEWAL ? "depl " + process.env.WEB_REPL_RENEWAL : null;
+  if (!xReplitToken) {
+    throw new Error("X-Replit-Token not found for repl/depl");
+  }
+  connectionSettings = await fetch(
+    "https://" + hostname + "/api/v2/connection?include_secrets=true&connector_names=google-mail",
+    {
+      headers: {
+        Accept: "application/json",
+        "X-Replit-Token": xReplitToken
+      }
+    }
+  ).then((res) => res.json()).then((data) => data.items?.[0]);
+  const accessToken = connectionSettings?.settings?.access_token || connectionSettings.settings?.oauth?.credentials?.access_token;
+  if (!connectionSettings || !accessToken) {
+    throw new Error("Gmail not connected");
+  }
+  return accessToken;
+}
+async function getGmailClient() {
+  const accessToken = await getAccessToken();
+  const oauth2Client = new google.auth.OAuth2();
+  oauth2Client.setCredentials({ access_token: accessToken });
+  return google.gmail({ version: "v1", auth: oauth2Client });
+}
+function isConfigured2() {
+  return !!(process.env.REPLIT_CONNECTORS_HOSTNAME && (process.env.REPL_IDENTITY || process.env.WEB_REPL_RENEWAL));
+}
+function decodeHeader(headers2, name) {
+  const h = headers2.find((h2) => h2.name.toLowerCase() === name.toLowerCase());
+  return h?.value ?? "";
+}
+function decodeBody(payload) {
+  if (payload.body?.data) {
+    return Buffer.from(payload.body.data, "base64url").toString("utf-8");
+  }
+  if (payload.parts) {
+    for (const part of payload.parts) {
+      if (part.mimeType === "text/plain" && part.body?.data) {
+        return Buffer.from(part.body.data, "base64url").toString("utf-8");
+      }
+    }
+    for (const part of payload.parts) {
+      if (part.mimeType === "text/html" && part.body?.data) {
+        const html = Buffer.from(part.body.data, "base64url").toString("utf-8");
+        return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+      }
+    }
+    for (const part of payload.parts) {
+      const nested = decodeBody(part);
+      if (nested) return nested;
+    }
+  }
+  return "";
+}
+async function listEmails(query, maxResults = 10) {
+  try {
+    const gmail = await getGmailClient();
+    const params = {
+      userId: "me",
+      maxResults: Math.min(maxResults, 20)
+    };
+    if (query) params.q = query;
+    const listRes = await gmail.users.messages.list(params);
+    const messageRefs = listRes.data.messages || [];
+    if (messageRefs.length === 0) {
+      return query ? `No emails found matching "${query}".` : "Inbox is empty.";
+    }
+    const details = await Promise.all(
+      messageRefs.map(async (ref) => {
+        const msg = await gmail.users.messages.get({
+          userId: "me",
+          id: ref.id,
+          format: "metadata",
+          metadataHeaders: ["From", "Subject", "Date"]
+        });
+        const headers2 = msg.data.payload?.headers || [];
+        return {
+          id: ref.id,
+          from: decodeHeader(headers2, "From"),
+          subject: decodeHeader(headers2, "Subject") || "(no subject)",
+          date: decodeHeader(headers2, "Date"),
+          snippet: msg.data.snippet || "",
+          unread: (msg.data.labelIds || []).includes("UNREAD")
+        };
+      })
+    );
+    const lines = details.map((e, i) => {
+      const marker = e.unread ? "*" : " ";
+      return `${marker} ${i + 1}. [${e.id}]
+   From: ${e.from}
+   Subject: ${e.subject}
+   Date: ${e.date}
+   Preview: ${e.snippet}`;
+    });
+    const header = query ? `Emails matching "${query}" (${details.length}):` : `Recent emails (${details.length}):`;
+    return `${header}
+(* = unread)
+
+${lines.join("\n\n")}`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Gmail listEmails error:", msg);
+    if (msg.includes("not connected") || msg.includes("X-Replit-Token")) {
+      return "Gmail is not connected. Please reconnect your Gmail account.";
+    }
+    return "Unable to check emails right now. Please try again shortly.";
+  }
+}
+async function readEmail(messageId) {
+  try {
+    const gmail = await getGmailClient();
+    const msg = await gmail.users.messages.get({
+      userId: "me",
+      id: messageId,
+      format: "full"
+    });
+    const headers2 = msg.data.payload?.headers || [];
+    const from = decodeHeader(headers2, "From");
+    const to = decodeHeader(headers2, "To");
+    const subject = decodeHeader(headers2, "Subject") || "(no subject)";
+    const date = decodeHeader(headers2, "Date");
+    const body = decodeBody(msg.data.payload) || "(no readable content)";
+    const truncatedBody = body.length > 3e3 ? body.slice(0, 3e3) + "\n\n[...truncated]" : body;
+    return `From: ${from}
+To: ${to}
+Subject: ${subject}
+Date: ${date}
+
+${truncatedBody}`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Gmail readEmail error:", msg);
+    if (msg.includes("not connected") || msg.includes("X-Replit-Token")) {
+      return "Gmail is not connected. Please reconnect your Gmail account.";
+    }
+    if (msg.includes("404") || msg.includes("Not Found")) {
+      return "That email could not be found. It may have been deleted.";
+    }
+    return "Unable to read this email right now. Please try again shortly.";
+  }
+}
+async function searchEmails(query) {
+  return listEmails(query, 10);
+}
+
 // server.ts
 var PORT = parseInt(process.env.PORT || "3000", 10);
 var INTERVIEW_PORT = parseInt(process.env.INTERVIEW_PORT || "19847", 10);
@@ -182,6 +340,7 @@ fs2.mkdirSync(AGENT_DIR, { recursive: true });
 init(DATA_DIR);
 if (!ANTHROPIC_KEY) console.warn("ANTHROPIC_API_KEY is not set.");
 if (!isConfigured()) console.warn("Knowledge base integration not configured.");
+if (!isConfigured2()) console.warn("Gmail integration not configured.");
 if (!APP_PASSWORD) console.warn("APP_PASSWORD is not set \u2014 auth disabled.");
 console.log(`[boot] PORT=${PORT} PUBLIC_DIR=${PUBLIC_DIR} AGENT_DIR=${AGENT_DIR}`);
 console.log(`[boot] public/ exists: ${fs2.existsSync(PUBLIC_DIR)}`);
@@ -247,6 +406,48 @@ function buildKnowledgeBaseTools() {
       }),
       async execute(_toolCallId, params) {
         const result = await searchNotes(params.query);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    }
+  ];
+}
+function buildGmailTools() {
+  if (!isConfigured2()) return [];
+  return [
+    {
+      name: "email_list",
+      label: "Email List",
+      description: "List recent emails from the user's inbox. Optionally filter with a Gmail search query (e.g. 'is:unread', 'from:someone@example.com', 'subject:meeting').",
+      parameters: Type.Object({
+        query: Type.Optional(Type.String({ description: "Gmail search query to filter emails. Uses Gmail search syntax." })),
+        maxResults: Type.Optional(Type.Number({ description: "Maximum number of emails to return (default 10, max 20)." }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = await listEmails(params.query, params.maxResults ?? 10);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "email_read",
+      label: "Email Read",
+      description: "Read the full content of a specific email by its message ID. Use email_list first to find the ID.",
+      parameters: Type.Object({
+        messageId: Type.String({ description: "The Gmail message ID to read (from email_list results)." })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await readEmail(params.messageId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "email_search",
+      label: "Email Search",
+      description: "Search emails using Gmail search syntax. Supports queries like 'from:name subject:topic after:2025/01/01 has:attachment'.",
+      parameters: Type.Object({
+        query: Type.String({ description: "Gmail search query string." })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await searchEmails(params.query);
         return { content: [{ type: "text", text: result }], details: {} };
       }
     }
@@ -370,7 +571,7 @@ app.post("/api/session", async (_req, res) => {
       authStorage,
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }),
-      customTools: buildKnowledgeBaseTools()
+      customTools: [...buildKnowledgeBaseTools(), ...buildGmailTools()]
     });
     const conv = createConversation(sessionId);
     const entry = {

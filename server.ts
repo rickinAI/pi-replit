@@ -21,6 +21,7 @@ import { Type } from "@sinclair/typebox";
 
 import * as obsidian from "./src/obsidian.js";
 import * as conversations from "./src/conversations.js";
+import * as gmail from "./src/gmail.js";
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const INTERVIEW_PORT = parseInt(process.env.INTERVIEW_PORT || "19847", 10);
@@ -40,6 +41,7 @@ conversations.init(DATA_DIR);
 
 if (!ANTHROPIC_KEY) console.warn("ANTHROPIC_API_KEY is not set.");
 if (!obsidian.isConfigured()) console.warn("Knowledge base integration not configured.");
+if (!gmail.isConfigured()) console.warn("Gmail integration not configured.");
 if (!APP_PASSWORD) console.warn("APP_PASSWORD is not set — auth disabled.");
 
 console.log(`[boot] PORT=${PORT} PUBLIC_DIR=${PUBLIC_DIR} AGENT_DIR=${AGENT_DIR}`);
@@ -108,6 +110,50 @@ function buildKnowledgeBaseTools(): ToolDefinition[] {
       }),
       async execute(_toolCallId, params) {
         const result = await obsidian.searchNotes(params.query);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+  ];
+}
+
+function buildGmailTools(): ToolDefinition[] {
+  if (!gmail.isConfigured()) return [];
+
+  return [
+    {
+      name: "email_list",
+      label: "Email List",
+      description: "List recent emails from the user's inbox. Optionally filter with a Gmail search query (e.g. 'is:unread', 'from:someone@example.com', 'subject:meeting').",
+      parameters: Type.Object({
+        query: Type.Optional(Type.String({ description: "Gmail search query to filter emails. Uses Gmail search syntax." })),
+        maxResults: Type.Optional(Type.Number({ description: "Maximum number of emails to return (default 10, max 20)." })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gmail.listEmails(params.query, params.maxResults ?? 10);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "email_read",
+      label: "Email Read",
+      description: "Read the full content of a specific email by its message ID. Use email_list first to find the ID.",
+      parameters: Type.Object({
+        messageId: Type.String({ description: "The Gmail message ID to read (from email_list results)." }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gmail.readEmail(params.messageId);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "email_search",
+      label: "Email Search",
+      description: "Search emails using Gmail search syntax. Supports queries like 'from:name subject:topic after:2025/01/01 has:attachment'.",
+      parameters: Type.Object({
+        query: Type.String({ description: "Gmail search query string." }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gmail.searchEmails(params.query);
         return { content: [{ type: "text" as const, text: result }], details: {} };
       },
     },
@@ -237,7 +283,7 @@ app.post("/api/session", async (_req: Request, res: Response) => {
       authStorage,
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }),
-      customTools: buildKnowledgeBaseTools(),
+      customTools: [...buildKnowledgeBaseTools(), ...buildGmailTools()],
     });
 
     const conv = conversations.createConversation(sessionId);

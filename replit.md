@@ -14,6 +14,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Graceful shutdown on SIGHUP/SIGTERM/SIGINT (saves all conversations, releases port)
   - Express error-handling middleware for clean JSON error responses
 - **src/obsidian.ts** — Client for the knowledge base REST API (internal module)
+- **src/gmail.ts** — Gmail integration via Replit connector (OAuth, list/read/search emails)
 - **src/conversations.ts** — Conversation persistence module (save/load/list/delete JSON files)
 - **.pi/agent/system-prompt.md** — Agent personality and instructions (auto-loaded by SDK)
 - **public/** — Static frontend (terminal/hacker aesthetic, branded as "RICKIN")
@@ -76,6 +77,15 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 
 Requires Local REST API plugin + Cloudflare Tunnel (see `tunnel-setup/`).
 
+## Gmail Integration
+
+3 custom tools for the agent to check email (uses Replit's Gmail connector for secure OAuth):
+- `email_list` — List recent emails, optionally filter with Gmail search query
+- `email_read` — Read full email content by message ID
+- `email_search` — Search emails using Gmail search syntax
+
+Auth handled via Replit connector (`google-mail`) — no API keys stored. Tokens refresh automatically.
+
 ## Conversation Persistence
 
 - Conversations stored as JSON files in `data/conversations/`
@@ -89,6 +99,7 @@ Requires Local REST API plugin + Cloudflare Tunnel (see `tunnel-setup/`).
 
 - `@mariozechner/pi-coding-agent` — Pi coding agent SDK
 - `@sinclair/typebox` — JSON schema for tool parameters
+- `googleapis` — Google APIs client (Gmail)
 - `express`, `cors`, `cookie-parser`, `http-proxy-middleware`
 
 ## Environment Variables
