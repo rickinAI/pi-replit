@@ -175,10 +175,13 @@ app.use(
     changeOrigin: true,
     on: {
       error: (_err, _req, res) => {
-        if (res instanceof Response || res.writeHead) {
-          res.status?.(502)?.json?.({
-            error: "Interview tool is not running. The agent must trigger it first."
-          });
+        try {
+          if ("writeHead" in res && typeof res.status === "function") {
+            res.status(502).json({
+              error: "Interview tool is not running. The agent must trigger it first."
+            });
+          }
+        } catch {
         }
       }
     }

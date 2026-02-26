@@ -37,6 +37,12 @@ The agent has 5 custom tools for interacting with the user's Obsidian vault:
 These tools are only registered when `OBSIDIAN_API_URL` and `OBSIDIAN_API_KEY` are configured.
 Connection requires the Obsidian Local REST API plugin + a Cloudflare Tunnel (see TUNNEL_SETUP.md).
 
+## Agent Configuration (.pi directory)
+
+- `.pi/APPEND_SYSTEM.md` — Appended to the agent's system prompt; tells the agent about Obsidian vault access
+- `.pi/skills/obsidian.md` — Skill file with detailed Obsidian tool usage instructions
+- The pi SDK auto-loads these files at session creation time
+
 ## Running
 
 - **Build**: `npm run build` (esbuild bundles server.ts + src/ → dist/server.js)
