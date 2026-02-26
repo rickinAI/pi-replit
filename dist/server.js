@@ -358,10 +358,21 @@ process.on("unhandledRejection", (reason) => {
 process.on("exit", (code) => {
   console.error(`Process exiting with code ${code}`);
 });
-process.on("SIGTERM", () => console.error("Got SIGTERM"));
-process.on("SIGINT", () => console.error("Got SIGINT"));
-process.on("SIGHUP", () => console.error("Got SIGHUP"));
 var server = createServer(app);
+function gracefulShutdown(signal) {
+  console.error(`Got ${signal} \u2014 closing server...`);
+  server.close(() => {
+    console.error("Server closed, exiting.");
+    process.exit(0);
+  });
+  setTimeout(() => {
+    console.error("Forced exit after timeout.");
+    process.exit(1);
+  }, 3e3);
+}
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+process.on("SIGHUP", () => gracefulShutdown("SIGHUP"));
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`
 \u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557
