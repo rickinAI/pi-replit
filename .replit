@@ -17,7 +17,7 @@ externalPort = 80
 
 [[ports]]
 localPort = 5000
-externalPort = 80
+externalPort = 5000
 
 [env]
 PORT = "3000"
@@ -53,5 +53,5 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "PORT=5000 npm run build && PORT=5000 npm start"
-waitForPort = 5000
+args = "PORT=3000 npm run build && PORT=3000 npm start"
+waitForPort = 3000

@@ -27,7 +27,7 @@ import { Type } from "@sinclair/typebox";
 import * as obsidian from "./src/obsidian.js";
 
 // ── Config ──────────────────────────────────────────────────────────────────
-const PORT = parseInt(process.env.PORT ?? "5000", 10);
+const PORT = parseInt(process.env.PORT ?? "3000", 10);
 const INTERVIEW_PORT = parseInt(process.env.INTERVIEW_PORT ?? "19847", 10);
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? "";
 const APP_PASSWORD = process.env.APP_PASSWORD ?? "";

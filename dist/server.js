@@ -84,7 +84,7 @@ async function searchNotes(query) {
 }
 
 // server.ts
-var PORT = parseInt(process.env.PORT ?? "5000", 10);
+var PORT = parseInt(process.env.PORT ?? "3000", 10);
 var INTERVIEW_PORT = parseInt(process.env.INTERVIEW_PORT ?? "19847", 10);
 var ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? "";
 var APP_PASSWORD = process.env.APP_PASSWORD ?? "";
