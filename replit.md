@@ -132,6 +132,18 @@ Auth via custom OAuth flow using `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`. To
 - `x_read_tweet` — Read specific tweet by URL or ID via fxtwitter API
 - `x_user_timeline` — User's recent tweets via Twitter syndication API
 
+## Stock & Crypto Tracker
+
+2 custom tools using free APIs (no API key):
+- `stock_quote` — Real-time stock price via Yahoo Finance (price, change, volume, day range)
+- `crypto_price` — Crypto price via CoinGecko (price, 24h/7d change, market cap, volume, ATH)
+
+## Maps & Directions
+
+2 custom tools using free APIs (no API key):
+- `maps_directions` — Driving/walking/cycling directions via Nominatim geocoding + OSRM routing
+- `maps_search_places` — Place/business search via Nominatim, optionally near a location
+
 ## Image / Screenshot Support
 
 - Users can paste images (Cmd+V), drag-and-drop, or use the upload button
@@ -160,6 +172,8 @@ Auth via custom OAuth flow using `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`. To
 
 ## src/ Modules
 - **src/twitter.ts** — X/Twitter reader (fxtwitter for profiles/tweets, syndication API for timelines)
+- **src/stocks.ts** — Stock quotes (Yahoo Finance) and crypto prices (CoinGecko)
+- **src/maps.ts** — Directions (Nominatim + OSRM) and place search (Nominatim)
 
 ## Environment Variables
 

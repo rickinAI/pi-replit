@@ -29,6 +29,8 @@ import * as websearch from "./src/websearch.js";
 import * as tasks from "./src/tasks.js";
 import * as news from "./src/news.js";
 import * as twitter from "./src/twitter.js";
+import * as stocks from "./src/stocks.js";
+import * as maps from "./src/maps.js";
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const INTERVIEW_PORT = parseInt(process.env.INTERVIEW_PORT || "19847", 10);
@@ -393,6 +395,67 @@ function buildTwitterTools(): ToolDefinition[] {
   ];
 }
 
+function buildStockTools(): ToolDefinition[] {
+  return [
+    {
+      name: "stock_quote",
+      label: "Stock Quote",
+      description: "Get real-time stock price, change, and stats for a ticker symbol. Use standard stock symbols (e.g. AAPL, TSLA, MSFT, GOOGL, AMZN).",
+      parameters: Type.Object({
+        symbol: Type.String({ description: "Stock ticker symbol (e.g. 'AAPL', 'TSLA', 'MSFT')" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await stocks.getStockQuote(params.symbol);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "crypto_price",
+      label: "Crypto Price",
+      description: "Get real-time cryptocurrency price, 24h/7d change, market cap, and volume. Supports common tickers (BTC, ETH, SOL, etc.) and full names (bitcoin, ethereum, etc.).",
+      parameters: Type.Object({
+        coin: Type.String({ description: "Cryptocurrency name or ticker (e.g. 'bitcoin', 'BTC', 'ethereum', 'ETH', 'solana')" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await stocks.getCryptoPrice(params.coin);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+  ];
+}
+
+function buildMapsTools(): ToolDefinition[] {
+  return [
+    {
+      name: "maps_directions",
+      label: "Directions",
+      description: "Get directions between two locations with distance, estimated time, and turn-by-turn steps. Supports driving, walking, and cycling.",
+      parameters: Type.Object({
+        from: Type.String({ description: "Starting location (address, place name, or landmark)" }),
+        to: Type.String({ description: "Destination location (address, place name, or landmark)" }),
+        mode: Type.Optional(Type.String({ description: "Travel mode: 'driving' (default), 'walking', or 'cycling'" })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await maps.getDirections(params.from, params.to, params.mode);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "maps_search_places",
+      label: "Search Places",
+      description: "Search for places, businesses, or addresses. Optionally search near a specific location.",
+      parameters: Type.Object({
+        query: Type.String({ description: "What to search for (e.g. 'coffee shops', 'gas stations', 'Central Park')" }),
+        near: Type.Optional(Type.String({ description: "Search near this location (e.g. 'Manhattan, NY', 'San Francisco')" })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await maps.searchPlaces(params.query, params.near);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+  ];
+}
+
 interface SessionEntry {
   session: Awaited<ReturnType<typeof createAgentSession>>["session"];
   subscribers: Set<Response>;
@@ -571,6 +634,8 @@ app.post("/api/session", async (_req: Request, res: Response) => {
       ...buildTaskTools(),
       ...buildNewsTools(),
       ...buildTwitterTools(),
+      ...buildStockTools(),
+      ...buildMapsTools(),
     ];
     console.log(`[session] ${allTools.length} tools registered`);
     const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false } });

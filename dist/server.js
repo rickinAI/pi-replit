@@ -1097,6 +1097,319 @@ ${lines.join("\n\n")}`;
   }
 }
 
+// src/stocks.ts
+var TIMEOUT_MS2 = 1e4;
+var CRYPTO_ALIASES = {
+  btc: "bitcoin",
+  bitcoin: "bitcoin",
+  eth: "ethereum",
+  ethereum: "ethereum",
+  sol: "solana",
+  solana: "solana",
+  doge: "dogecoin",
+  dogecoin: "dogecoin",
+  ada: "cardano",
+  cardano: "cardano",
+  xrp: "ripple",
+  ripple: "ripple",
+  dot: "polkadot",
+  polkadot: "polkadot",
+  matic: "matic-network",
+  polygon: "matic-network",
+  avax: "avalanche-2",
+  avalanche: "avalanche-2",
+  link: "chainlink",
+  chainlink: "chainlink",
+  bnb: "binancecoin",
+  binancecoin: "binancecoin",
+  ltc: "litecoin",
+  litecoin: "litecoin",
+  shib: "shiba-inu",
+  uni: "uniswap",
+  uniswap: "uniswap",
+  atom: "cosmos",
+  cosmos: "cosmos",
+  near: "near",
+  apt: "aptos",
+  aptos: "aptos",
+  arb: "arbitrum",
+  arbitrum: "arbitrum",
+  op: "optimism",
+  optimism: "optimism",
+  sui: "sui",
+  pepe: "pepe"
+};
+async function fetchWithTimeout2(url, headers2 = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS2);
+  try {
+    const res = await fetch(url, {
+      headers: { "User-Agent": "pi-assistant/1.0", ...headers2 },
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    return res;
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err.name === "AbortError") throw new Error("Request timed out");
+    throw err;
+  }
+}
+function formatNum(n) {
+  if (n >= 1e12) return `$${(n / 1e12).toFixed(2)}T`;
+  if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
+  if (n >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
+  return `$${n.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+}
+function formatPrice(n) {
+  if (n >= 1) return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `$${n.toFixed(6)}`;
+}
+async function getStockQuote(symbol) {
+  try {
+    const ticker = symbol.toUpperCase().trim();
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=5d&interval=1d&includePrePost=false`;
+    const res = await fetchWithTimeout2(url);
+    if (!res.ok) {
+      if (res.status === 404) return `Could not find stock symbol "${ticker}". Try using the ticker symbol (e.g. AAPL, TSLA, MSFT).`;
+      throw new Error(`Yahoo Finance error ${res.status}`);
+    }
+    const data = await res.json();
+    const result = data?.chart?.result?.[0];
+    if (!result) return `No data found for "${ticker}".`;
+    const meta = result.meta;
+    const price = meta.regularMarketPrice;
+    if (price == null) return `No price data available for "${ticker}". The market may be closed or the symbol may be invalid.`;
+    const prevClose = meta.chartPreviousClose || meta.previousClose;
+    const currency = meta.currency || "USD";
+    const exchange = meta.exchangeName || "";
+    const name = meta.shortName || meta.longName || ticker;
+    const change = prevClose ? price - prevClose : 0;
+    const changePct = prevClose ? change / prevClose * 100 : 0;
+    const arrow = change >= 0 ? "\u25B2" : "\u25BC";
+    const sign = change >= 0 ? "+" : "";
+    const indicators = result.indicators?.quote?.[0];
+    const volumes = indicators?.volume || [];
+    const lastVolume = volumes.filter((v) => v != null).pop();
+    const lines = [
+      `${name} (${ticker}) \u2014 ${exchange}`,
+      `Price: ${formatPrice(price)} ${currency}`,
+      `Change: ${sign}${change.toFixed(2)} (${sign}${changePct.toFixed(2)}%) ${arrow}`
+    ];
+    if (prevClose) lines.push(`Prev Close: ${formatPrice(prevClose)}`);
+    const timestamps = result.timestamp || [];
+    const closes = indicators?.close || [];
+    if (timestamps.length > 0 && closes.length > 0) {
+      const highs = indicators?.high || [];
+      const lows = indicators?.low || [];
+      const lastIdx = closes.length - 1;
+      if (highs[lastIdx] != null && lows[lastIdx] != null) lines.push(`Day Range: ${formatPrice(lows[lastIdx])} \u2013 ${formatPrice(highs[lastIdx])}`);
+    }
+    if (lastVolume) lines.push(`Volume: ${lastVolume.toLocaleString("en-US")}`);
+    const marketState = meta.marketState || "";
+    if (marketState && marketState !== "REGULAR") {
+      lines.push(`Market: ${marketState.replace(/_/g, " ").toLowerCase()}`);
+    }
+    return lines.join("\n");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Stock quote error:", msg);
+    return `Unable to get stock quote for "${symbol}": ${msg}`;
+  }
+}
+async function getCryptoPrice(coin) {
+  try {
+    const input = coin.toLowerCase().trim();
+    const coinId = CRYPTO_ALIASES[input] || input;
+    const url = `https://api.coingecko.com/api/v3/coins/${encodeURIComponent(coinId)}?localization=false&tickers=false&community_data=false&developer_data=false&sparkline=false`;
+    const res = await fetchWithTimeout2(url);
+    if (!res.ok) {
+      if (res.status === 404) {
+        const searchUrl = `https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(input)}`;
+        const searchRes = await fetchWithTimeout2(searchUrl);
+        if (searchRes.ok) {
+          const searchData = await searchRes.json();
+          const coins = searchData.coins?.slice(0, 5);
+          if (coins?.length > 0) {
+            const suggestions = coins.map((c) => `${c.name} (${c.symbol.toUpperCase()})`).join(", ");
+            return `Could not find "${coin}". Did you mean: ${suggestions}?`;
+          }
+        }
+        return `Could not find cryptocurrency "${coin}". Try using the full name (e.g. "bitcoin") or ticker (e.g. "BTC").`;
+      }
+      throw new Error(`CoinGecko error ${res.status}`);
+    }
+    const data = await res.json();
+    const market = data.market_data;
+    if (!market) return `No market data for "${coin}".`;
+    const price = market.current_price?.usd;
+    if (price == null) return `No price data available for "${coin}".`;
+    const change24h = market.price_change_percentage_24h;
+    const change7d = market.price_change_percentage_7d;
+    const marketCap = market.market_cap?.usd;
+    const volume24h = market.total_volume?.usd;
+    const high24h = market.high_24h?.usd;
+    const low24h = market.low_24h?.usd;
+    const ath = market.ath?.usd;
+    const athChange = market.ath_change_percentage?.usd;
+    const rank = data.market_cap_rank;
+    const lines = [
+      `${data.name} (${data.symbol.toUpperCase()})${rank ? ` \u2014 Rank #${rank}` : ""}`,
+      `Price: ${formatPrice(price)}`
+    ];
+    if (change24h != null) {
+      const arrow24 = change24h >= 0 ? "\u25B2" : "\u25BC";
+      const sign24 = change24h >= 0 ? "+" : "";
+      lines.push(`24h Change: ${sign24}${change24h.toFixed(2)}% ${arrow24}`);
+    }
+    if (change7d != null) {
+      const sign7 = change7d >= 0 ? "+" : "";
+      lines.push(`7d Change: ${sign7}${change7d.toFixed(2)}%`);
+    }
+    if (high24h != null && low24h != null) lines.push(`24h Range: ${formatPrice(low24h)} \u2013 ${formatPrice(high24h)}`);
+    if (marketCap) lines.push(`Market Cap: ${formatNum(marketCap)}`);
+    if (volume24h) lines.push(`24h Volume: ${formatNum(volume24h)}`);
+    if (ath != null && athChange != null) lines.push(`ATH: ${formatPrice(ath)} (${athChange.toFixed(1)}% from ATH)`);
+    return lines.join("\n");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Crypto price error:", msg);
+    return `Unable to get crypto price for "${coin}": ${msg}`;
+  }
+}
+
+// src/maps.ts
+var TIMEOUT_MS3 = 1e4;
+var NOMINATIM_BASE = "https://nominatim.openstreetmap.org";
+var OSRM_BASE = "https://router.project-osrm.org";
+var UA = "pi-assistant/1.0 (personal-project)";
+async function fetchWithTimeout3(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS3);
+  try {
+    const res = await fetch(url, {
+      headers: { "User-Agent": UA, Accept: "application/json" },
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    return res;
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err.name === "AbortError") throw new Error("Request timed out");
+    throw err;
+  }
+}
+async function geocode2(query) {
+  const url = `${NOMINATIM_BASE}/search?q=${encodeURIComponent(query)}&format=json&limit=1&addressdetails=1`;
+  const res = await fetchWithTimeout3(url);
+  if (!res.ok) return null;
+  const data = await res.json();
+  if (!data.length) return null;
+  const r = data[0];
+  return {
+    name: r.name || r.display_name.split(",")[0],
+    lat: parseFloat(r.lat),
+    lon: parseFloat(r.lon),
+    displayName: r.display_name
+  };
+}
+function formatDuration(seconds) {
+  const hrs = Math.floor(seconds / 3600);
+  const mins = Math.round(seconds % 3600 / 60);
+  if (hrs > 0) return `${hrs}h ${mins}m`;
+  return `${mins} min`;
+}
+function formatDistance(meters) {
+  const miles = meters / 1609.34;
+  if (miles >= 1) return `${miles.toFixed(1)} miles`;
+  const feet = meters * 3.281;
+  return `${Math.round(feet)} ft`;
+}
+function cleanInstruction(html) {
+  return html.replace(/<[^>]+>/g, "").trim();
+}
+async function getDirections(from, to, mode) {
+  try {
+    const travelMode = (mode || "driving").toLowerCase();
+    const osrmProfile = travelMode === "walking" || travelMode === "walk" ? "foot" : travelMode === "cycling" || travelMode === "bike" || travelMode === "bicycle" ? "bike" : "car";
+    const [originGeo, destGeo] = await Promise.all([geocode2(from), geocode2(to)]);
+    if (!originGeo) return `Could not find location "${from}". Try being more specific (e.g. include city/state).`;
+    if (!destGeo) return `Could not find location "${to}". Try being more specific (e.g. include city/state).`;
+    const url = `${OSRM_BASE}/route/v1/${osrmProfile === "car" ? "driving" : osrmProfile}/${originGeo.lon},${originGeo.lat};${destGeo.lon},${destGeo.lat}?overview=false&steps=true&geometries=geojson`;
+    const res = await fetchWithTimeout3(url);
+    if (!res.ok) throw new Error(`Routing error ${res.status}`);
+    const data = await res.json();
+    if (data.code !== "Ok" || !data.routes?.length) {
+      return `No route found from "${from}" to "${to}" by ${travelMode}. The locations may be on different continents or unreachable.`;
+    }
+    const route = data.routes[0];
+    const totalDist = formatDistance(route.distance);
+    const totalTime = formatDuration(route.duration);
+    const lines = [
+      `Directions from ${originGeo.name} to ${destGeo.name}`,
+      `Mode: ${travelMode.charAt(0).toUpperCase() + travelMode.slice(1)}`,
+      `Distance: ${totalDist}`,
+      `Estimated time: ${totalTime}`,
+      ""
+    ];
+    const steps = route.legs?.[0]?.steps || [];
+    const significantSteps = steps.filter((s) => s.distance > 30 && s.maneuver?.type !== "arrive" && s.maneuver?.type !== "depart");
+    const displaySteps = significantSteps.slice(0, 15);
+    if (displaySteps.length > 0) {
+      lines.push("Route:");
+      displaySteps.forEach((step, i) => {
+        const instruction = cleanInstruction(step.name || step.maneuver?.type || "Continue");
+        const dist = formatDistance(step.distance);
+        const modifier = step.maneuver?.modifier ? ` ${step.maneuver.modifier}` : "";
+        const type = step.maneuver?.type || "";
+        const action = type === "turn" ? `Turn${modifier}` : type === "merge" ? `Merge${modifier}` : type === "fork" ? `Take${modifier} fork` : type === "roundabout" ? "Enter roundabout" : type === "new name" ? "Continue" : type.charAt(0).toUpperCase() + type.slice(1);
+        lines.push(`  ${i + 1}. ${action} onto ${instruction} (${dist})`);
+      });
+      if (significantSteps.length > 15) {
+        lines.push(`  ... and ${significantSteps.length - 15} more steps`);
+      }
+    }
+    lines.push("", `From: ${originGeo.displayName}`);
+    lines.push(`To: ${destGeo.displayName}`);
+    return lines.join("\n");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Directions error:", msg);
+    return `Unable to get directions: ${msg}`;
+  }
+}
+async function searchPlaces(query, near) {
+  try {
+    let url = `${NOMINATIM_BASE}/search?q=${encodeURIComponent(query)}&format=json&limit=8&addressdetails=1`;
+    if (near) {
+      const geo = await geocode2(near);
+      if (geo) {
+        const viewbox = `${geo.lon - 0.1},${geo.lat + 0.1},${geo.lon + 0.1},${geo.lat - 0.1}`;
+        url += `&viewbox=${viewbox}&bounded=0`;
+      }
+    }
+    const res = await fetchWithTimeout3(url);
+    if (!res.ok) throw new Error(`Places search error ${res.status}`);
+    const data = await res.json();
+    if (!data.length) return `No places found for "${query}"${near ? ` near ${near}` : ""}.`;
+    const lines = data.map((place, i) => {
+      const name = place.name || place.display_name.split(",")[0];
+      const type = place.type ? place.type.replace(/_/g, " ") : "";
+      const address = place.display_name;
+      return `${i + 1}. ${name}${type ? ` (${type})` : ""}
+   ${address}`;
+    });
+    const header = near ? `Places matching "${query}" near ${near}:` : `Places matching "${query}":`;
+    return `${header}
+
+${lines.join("\n\n")}`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Places search error:", msg);
+    return `Unable to search places: ${msg}`;
+  }
+}
+
 // server.ts
 var PORT = parseInt(process.env.PORT || "3000", 10);
 var INTERVIEW_PORT = parseInt(process.env.INTERVIEW_PORT || "19847", 10);
@@ -1445,6 +1758,65 @@ function buildTwitterTools() {
     }
   ];
 }
+function buildStockTools() {
+  return [
+    {
+      name: "stock_quote",
+      label: "Stock Quote",
+      description: "Get real-time stock price, change, and stats for a ticker symbol. Use standard stock symbols (e.g. AAPL, TSLA, MSFT, GOOGL, AMZN).",
+      parameters: Type.Object({
+        symbol: Type.String({ description: "Stock ticker symbol (e.g. 'AAPL', 'TSLA', 'MSFT')" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await getStockQuote(params.symbol);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "crypto_price",
+      label: "Crypto Price",
+      description: "Get real-time cryptocurrency price, 24h/7d change, market cap, and volume. Supports common tickers (BTC, ETH, SOL, etc.) and full names (bitcoin, ethereum, etc.).",
+      parameters: Type.Object({
+        coin: Type.String({ description: "Cryptocurrency name or ticker (e.g. 'bitcoin', 'BTC', 'ethereum', 'ETH', 'solana')" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await getCryptoPrice(params.coin);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    }
+  ];
+}
+function buildMapsTools() {
+  return [
+    {
+      name: "maps_directions",
+      label: "Directions",
+      description: "Get directions between two locations with distance, estimated time, and turn-by-turn steps. Supports driving, walking, and cycling.",
+      parameters: Type.Object({
+        from: Type.String({ description: "Starting location (address, place name, or landmark)" }),
+        to: Type.String({ description: "Destination location (address, place name, or landmark)" }),
+        mode: Type.Optional(Type.String({ description: "Travel mode: 'driving' (default), 'walking', or 'cycling'" }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = await getDirections(params.from, params.to, params.mode);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "maps_search_places",
+      label: "Search Places",
+      description: "Search for places, businesses, or addresses. Optionally search near a specific location.",
+      parameters: Type.Object({
+        query: Type.String({ description: "What to search for (e.g. 'coffee shops', 'gas stations', 'Central Park')" }),
+        near: Type.Optional(Type.String({ description: "Search near this location (e.g. 'Manhattan, NY', 'San Francisco')" }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = await searchPlaces(params.query, params.near);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    }
+  ];
+}
 var sessions = /* @__PURE__ */ new Map();
 function saveAndCleanSession(id) {
   const entry = sessions.get(id);
@@ -1618,7 +1990,9 @@ app.post("/api/session", async (_req, res) => {
       ...buildSearchTools(),
       ...buildTaskTools(),
       ...buildNewsTools(),
-      ...buildTwitterTools()
+      ...buildTwitterTools(),
+      ...buildStockTools(),
+      ...buildMapsTools()
     ];
     console.log(`[session] ${allTools.length} tools registered`);
     const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false } });
