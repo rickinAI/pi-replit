@@ -23,7 +23,8 @@ import {
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 const INTERVIEW_PORT = parseInt(process.env.INTERVIEW_PORT ?? "19847", 10);
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? "";
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// dist/server.js lives one level below the project root, so go up with ".."
+const __dirname = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 if (!ANTHROPIC_KEY) {
   console.warn("⚠️  ANTHROPIC_API_KEY is not set — sessions will fail until you add it to Replit Secrets.");
