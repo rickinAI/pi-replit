@@ -1,20 +1,21 @@
-/**
- * pi-agent terminal — hacker-style chat UI
- */
-
 let sessionId = null;
 let eventSource = null;
 let agentBubble = null;
 let agentText = "";
 let isAgentRunning = false;
+let scrollThrottleTimer = null;
+let userHasScrolledUp = false;
 
 const messages      = document.getElementById("messages");
+const scrollAnchor  = document.getElementById("scroll-anchor");
 const input         = document.getElementById("input");
 const sendBtn       = document.getElementById("send-btn");
 const statusBar     = document.getElementById("status-bar");
 const statusText    = document.getElementById("status-text");
 const newSessionBtn = document.getElementById("new-session-btn");
 const interviewNotice = document.getElementById("interview-notice");
+const statusDot     = document.getElementById("status-dot");
+const appEl         = document.getElementById("app");
 
 function checkAuth(res) {
   if (res.status === 401) {
@@ -22,6 +23,23 @@ function checkAuth(res) {
     return false;
   }
   return true;
+}
+
+messages.addEventListener("scroll", () => {
+  const threshold = 80;
+  const atBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < threshold;
+  userHasScrolledUp = !atBottom;
+});
+
+if (window.visualViewport) {
+  const vv = window.visualViewport;
+  function onViewportResize() {
+    appEl.style.height = vv.height + "px";
+    requestAnimationFrame(() => {
+      if (!userHasScrolledUp) scrollToBottom();
+    });
+  }
+  vv.addEventListener("resize", onViewportResize);
 }
 
 (async () => {
@@ -52,15 +70,18 @@ newSessionBtn.addEventListener("click", async () => {
   agentBubble = null;
   agentText = "";
   isAgentRunning = false;
-  messages.innerHTML = "";
+  messages.querySelectorAll(".msg, .empty-state").forEach(el => el.remove());
   showEmptyState();
   interviewNotice.classList.add("hidden");
+  setConnected(false);
   await startSession();
 });
 
 function openEventStream(id) {
   if (eventSource) eventSource.close();
   eventSource = new EventSource(`/api/session/${id}/stream`);
+
+  eventSource.addEventListener("open", () => setConnected(true));
 
   eventSource.addEventListener("message", (e) => {
     let event;
@@ -69,10 +90,21 @@ function openEventStream(id) {
   });
 
   eventSource.addEventListener("error", () => {
+    setConnected(false);
     if (eventSource.readyState === EventSource.CLOSED) {
       showSystemMsg("CONNECTION LOST. TAP + TO RECONNECT.");
     }
   });
+}
+
+function setConnected(connected) {
+  if (connected) {
+    statusDot.classList.remove("disconnected");
+    statusDot.title = "Connected";
+  } else {
+    statusDot.classList.add("disconnected");
+    statusDot.title = "Disconnected";
+  }
 }
 
 function handleAgentEvent(event) {
@@ -95,7 +127,7 @@ function handleAgentEvent(event) {
         }
         agentText += ae.delta;
         agentBubble.querySelector(".bubble").textContent = agentText;
-        scrollToBottom();
+        throttledScroll();
       }
       break;
     }
@@ -136,6 +168,7 @@ function handleAgentEvent(event) {
       hideStatus();
       sendBtn.disabled = false;
       input.focus();
+      scrollToBottom();
       break;
 
     case "error":
@@ -194,9 +227,13 @@ input.addEventListener("keydown", (e) => {
 
 function autoResize() {
   input.style.height = "auto";
-  input.style.height = Math.min(input.scrollHeight, 160) + "px";
+  input.style.height = Math.min(input.scrollHeight, 120) + "px";
 }
 input.addEventListener("input", autoResize);
+
+input.addEventListener("focus", () => {
+  setTimeout(() => scrollToBottom(), 300);
+});
 
 function appendBubble(role, text) {
   const msg = document.createElement("div");
@@ -207,7 +244,7 @@ function appendBubble(role, text) {
   bubble.textContent = text;
 
   msg.appendChild(bubble);
-  messages.appendChild(msg);
+  messages.insertBefore(msg, scrollAnchor);
   scrollToBottom();
   return msg;
 }
@@ -225,7 +262,7 @@ function showEmptyState() {
     <h2>[PI-AGENT TERMINAL]</h2>
     <p>connected to knowledge base. ready for input.</p>
   `;
-  messages.appendChild(el);
+  messages.insertBefore(el, scrollAnchor);
 }
 
 function removeEmptyState() {
@@ -242,5 +279,15 @@ function hideStatus() {
 }
 
 function scrollToBottom() {
-  messages.scrollTop = messages.scrollHeight;
+  userHasScrolledUp = false;
+  scrollAnchor.scrollIntoView({ behavior: "auto", block: "end" });
+}
+
+function throttledScroll() {
+  if (userHasScrolledUp) return;
+  if (scrollThrottleTimer) return;
+  scrollThrottleTimer = setTimeout(() => {
+    if (!userHasScrolledUp) scrollToBottom();
+    scrollThrottleTimer = null;
+  }, 100);
 }

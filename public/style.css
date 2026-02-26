@@ -14,11 +14,18 @@
   --border: #0a3a0a;
   --font: 'Fira Code', 'SF Mono', 'Courier New', monospace;
   --header-h: 48px;
-  --footer-h: 64px;
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-top: env(safe-area-inset-top, 0px);
+  --keyboard-h: 0px;
 }
 
-html, body {
+html {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body {
   height: 100%;
   background: var(--bg);
   color: var(--green);
@@ -26,6 +33,10 @@ html, body {
   font-size: 14px;
   line-height: 1.5;
   overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  touch-action: manipulation;
 }
 
 .scanlines {
@@ -43,15 +54,21 @@ html, body {
   z-index: 1000;
 }
 
-#app { display: flex; flex-direction: column; height: 100dvh; }
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  height: calc(100dvh - var(--keyboard-h));
+  position: relative;
+}
 
-/* ── Header ──────────────────────────────────────────────────────────────── */
 #header {
   flex-shrink: 0;
   height: var(--header-h);
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   padding: 0 12px;
+  padding-top: var(--safe-top);
 }
 
 .header-inner {
@@ -62,7 +79,7 @@ html, body {
 }
 
 .logo {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--green);
   text-shadow: 0 0 5px var(--green-glow);
@@ -78,21 +95,44 @@ html, body {
   font-family: var(--font);
 }
 
-.icon-btn {
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 4px var(--green-glow);
+  transition: background 0.3s, box-shadow 0.3s;
+}
+
+.status-dot.disconnected {
+  background: var(--red);
+  box-shadow: 0 0 4px rgba(255, 0, 0, 0.4);
+}
+
+.header-actions {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.icon-btn {
   background: none;
   border: 1px solid var(--border);
   border-radius: 2px;
   color: var(--green-dim);
   cursor: pointer;
   padding: 5px;
+  min-width: 36px;
+  min-height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: all 0.15s;
+  touch-action: manipulation;
 }
 
-.icon-btn:hover {
+.icon-btn:hover, .icon-btn:active {
   background: var(--green-subtle);
   color: var(--green);
   box-shadow: 0 0 8px var(--green-glow);
@@ -104,27 +144,31 @@ html, body {
   border-radius: 2px;
   color: var(--green-dim);
   cursor: pointer;
-  padding: 4px 8px;
+  padding: 4px 10px;
+  min-height: 36px;
   font-family: var(--font);
   font-size: 10px;
   transition: all 0.15s;
+  touch-action: manipulation;
+  display: flex;
+  align-items: center;
 }
 
-.logout-btn:hover {
+.logout-btn:hover, .logout-btn:active {
   color: var(--red);
   border-color: var(--red);
 }
 
-/* ── Messages ────────────────────────────────────────────────────────────── */
 #messages {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  scroll-behavior: smooth;
+  gap: 10px;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
 }
 
 .msg {
@@ -141,9 +185,11 @@ html, body {
 .bubble {
   padding: 6px 0;
   word-break: break-word;
+  overflow-wrap: break-word;
   white-space: pre-wrap;
   font-family: var(--font);
   font-size: 13px;
+  line-height: 1.6;
 }
 
 .msg.user .bubble {
@@ -175,7 +221,8 @@ html, body {
   padding: 8px;
   overflow-x: auto;
   font-size: 12px;
-  margin: 4px 0;
+  margin: 6px 0;
+  -webkit-overflow-scrolling: touch;
 }
 
 .bubble code {
@@ -183,7 +230,6 @@ html, body {
   font-size: 12px;
 }
 
-/* ── Tool pill ───────────────────────────────────────────────────────────── */
 .tool-pill {
   display: inline-flex;
   align-items: center;
@@ -192,8 +238,8 @@ html, body {
   color: var(--green-dim);
   border: 1px solid var(--border);
   border-radius: 2px;
-  padding: 1px 8px;
-  margin-top: 4px;
+  padding: 2px 8px;
+  margin-top: 6px;
   font-family: var(--font);
 }
 
@@ -208,20 +254,27 @@ html, body {
   animation: pulse 1.2s infinite;
 }
 
-/* ── Status bar ──────────────────────────────────────────────────────────── */
 #status-bar {
   flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 12px;
+  padding: 6px 12px;
   background: var(--surface);
   border-top: 1px solid var(--border);
   font-size: 11px;
   color: var(--green-dim);
+  transform: translateY(0);
+  transition: transform 0.2s ease, opacity 0.2s ease;
 }
 
-#status-bar.hidden { display: none; }
+#status-bar.hidden {
+  transform: translateY(100%);
+  opacity: 0;
+  pointer-events: none;
+  position: absolute;
+  bottom: 0;
+}
 
 .spinner {
   width: 12px;
@@ -232,12 +285,11 @@ html, body {
   animation: spin 0.7s linear infinite;
 }
 
-/* ── Interview notice ────────────────────────────────────────────────────── */
 #interview-notice {
   flex-shrink: 0;
   background: var(--surface);
   border-top: 1px solid var(--green-muted);
-  padding: 8px 12px;
+  padding: 10px 12px;
   text-align: center;
 }
 
@@ -251,7 +303,6 @@ html, body {
   text-shadow: 0 0 3px var(--green-glow);
 }
 
-/* ── Input area ──────────────────────────────────────────────────────────── */
 #input-area {
   flex-shrink: 0;
   background: var(--surface);
@@ -267,7 +318,7 @@ html, body {
   border-radius: 2px;
   padding: 8px 10px;
   background: rgba(0, 255, 0, 0.02);
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .input-row:focus-within {
@@ -278,7 +329,7 @@ html, body {
 .prompt-prefix {
   color: var(--green);
   font-family: var(--font);
-  font-size: 14px;
+  font-size: 16px;
   text-shadow: 0 0 3px var(--green-glow);
   flex-shrink: 0;
   line-height: 1.4;
@@ -290,10 +341,10 @@ html, body {
   border: none;
   outline: none;
   color: var(--green);
-  font-size: 14px;
+  font-size: 16px;
   font-family: var(--font);
   resize: none;
-  max-height: 160px;
+  max-height: 120px;
   overflow-y: auto;
   line-height: 1.4;
   caret-color: var(--green);
@@ -309,11 +360,14 @@ html, body {
   border-radius: 2px;
   color: var(--green);
   cursor: pointer;
-  padding: 6px;
+  padding: 8px;
+  min-width: 44px;
+  min-height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: all 0.15s;
+  touch-action: manipulation;
 }
 
 #send-btn:hover {
@@ -321,7 +375,10 @@ html, body {
   box-shadow: 0 0 8px var(--green-glow);
 }
 
-#send-btn:active { transform: scale(0.95); }
+#send-btn:active {
+  transform: scale(0.9);
+  background: var(--green-subtle);
+}
 
 #send-btn:disabled {
   border-color: var(--border);
@@ -329,17 +386,16 @@ html, body {
   cursor: not-allowed;
 }
 
-#send-btn:disabled:hover {
+#send-btn:disabled:hover, #send-btn:disabled:active {
   background: none;
   box-shadow: none;
+  transform: none;
 }
 
-/* ── Animations ──────────────────────────────────────────────────────────── */
 @keyframes fadeUp { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
-/* ── Empty state ─────────────────────────────────────────────────────────── */
 .empty-state {
   flex: 1;
   display: flex;
@@ -373,7 +429,11 @@ html, body {
   color: var(--green-muted);
 }
 
-/* ── Responsive ──────────────────────────────────────────────────────────── */
+.scroll-anchor {
+  height: 1px;
+  flex-shrink: 0;
+}
+
 @media (min-width: 640px) {
   #messages { padding: 16px; }
   .msg { max-width: 80%; }

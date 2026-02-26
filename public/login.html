@@ -2,9 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#000000" />
   <title>pi-agent // login</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -13,7 +14,7 @@
 </head>
 <body>
   <div class="scanlines"></div>
-  <div class="terminal">
+  <div class="terminal" id="terminal">
     <div class="boot-sequence" id="boot">
       <pre class="ascii-art">
  ██████╗ ██╗      █████╗  ██████╗ ███████╗███╗   ██╗████████╗
@@ -34,12 +35,13 @@
           id="password"
           class="prompt-input"
           autocomplete="current-password"
+          enterkeyhint="go"
           autofocus
         />
         <span class="cursor-blink"></span>
       </div>
       <div class="error-msg hidden" id="error-msg">ACCESS DENIED</div>
-      <button type="submit" class="submit-btn">[ENTER]</button>
+      <button type="submit" class="submit-btn" id="submit-btn">[ENTER]</button>
     </form>
   </div>
 
@@ -48,8 +50,6 @@
       "BIOS v3.14.159 ... OK",
       "Memory check ... 32768 MB OK",
       "Loading pi-agent kernel ...",
-      "Initializing neural interface ...",
-      "Connecting to knowledge base ...",
       "System ready.",
       ""
     ];
@@ -58,6 +58,16 @@
     const form = document.getElementById("login-form");
     const errorMsg = document.getElementById("error-msg");
     const passwordInput = document.getElementById("password");
+    const submitBtn = document.getElementById("submit-btn");
+    const terminal = document.getElementById("terminal");
+
+    if (window.visualViewport) {
+      const vv = window.visualViewport;
+      vv.addEventListener("resize", () => {
+        const keyboardH = window.innerHeight - vv.height;
+        terminal.style.height = vv.height + "px";
+      });
+    }
 
     let i = 0;
     function typeLine() {
@@ -71,13 +81,15 @@
       line.textContent = "> " + bootLines[i];
       bootEl.appendChild(line);
       i++;
-      setTimeout(typeLine, 120 + Math.random() * 180);
+      setTimeout(typeLine, 80 + Math.random() * 80);
     }
     typeLine();
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       errorMsg.classList.add("hidden");
+      submitBtn.textContent = "[...]";
+      submitBtn.disabled = true;
 
       try {
         const res = await fetch("/api/login", {
@@ -87,15 +99,20 @@
         });
 
         if (res.ok) {
+          submitBtn.textContent = "[OK]";
           window.location.href = "/";
         } else {
           errorMsg.classList.remove("hidden");
           passwordInput.value = "";
           passwordInput.focus();
+          submitBtn.textContent = "[ENTER]";
+          submitBtn.disabled = false;
         }
       } catch {
         errorMsg.textContent = "CONNECTION FAILED";
         errorMsg.classList.remove("hidden");
+        submitBtn.textContent = "[ENTER]";
+        submitBtn.disabled = false;
       }
     });
   </script>
