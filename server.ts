@@ -268,31 +268,11 @@ app.get("/health", (_req, res) => {
 
 // ── Global error handlers (prevent server crash) ────────────────────────────
 process.on("uncaughtException", (err: NodeJS.ErrnoException) => {
-  if (err.code === "EADDRINUSE") {
-    console.error("Port already in use, exiting:", err.message);
-    process.exit(1);
-  }
   console.error("Uncaught exception (server still running):", err);
 });
 process.on("unhandledRejection", (reason) => {
   console.error("Unhandled rejection (server still running):", reason);
 });
-process.on("SIGTERM", () => {
-  console.error("Received SIGTERM — ignoring to keep server alive");
-});
-process.on("SIGINT", () => {
-  console.error("Received SIGINT — ignoring to keep server alive");
-});
-process.on("exit", (code) => {
-  console.error(`Process exit with code ${code}`, new Error().stack);
-});
-const _origExit = process.exit;
-process.exit = ((code?: number) => {
-  if (code === 1 && new Error().stack?.includes("EADDRINUSE")) {
-    return _origExit.call(process, code);
-  }
-  console.error(`process.exit(${code}) intercepted:`, new Error().stack);
-}) as never;
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 import { execSync } from "child_process";

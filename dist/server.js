@@ -276,30 +276,10 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", sessions: sessions.size, ts: Date.now() });
 });
 process.on("uncaughtException", (err) => {
-  if (err.code === "EADDRINUSE") {
-    console.error("Port already in use, exiting:", err.message);
-    process.exit(1);
-  }
   console.error("Uncaught exception (server still running):", err);
 });
 process.on("unhandledRejection", (reason) => {
   console.error("Unhandled rejection (server still running):", reason);
-});
-process.on("SIGTERM", () => {
-  console.error("Received SIGTERM \u2014 ignoring to keep server alive");
-});
-process.on("SIGINT", () => {
-  console.error("Received SIGINT \u2014 ignoring to keep server alive");
-});
-process.on("exit", (code) => {
-  console.error(`Process exit with code ${code}`, new Error().stack);
-});
-var _origExit = process.exit;
-process.exit = ((code) => {
-  if (code === 1 && new Error().stack?.includes("EADDRINUSE")) {
-    return _origExit.call(process, code);
-  }
-  console.error(`process.exit(${code}) intercepted:`, new Error().stack);
 });
 function startServer(retried = false) {
   const server = createServer(app);
