@@ -88,6 +88,21 @@ async function getGmailClient() {
     saveTokens(merged);
   });
 
+  const isExpired = !tokens.expiry_date || Date.now() >= tokens.expiry_date - 60000;
+  if (isExpired) {
+    try {
+      const { credentials } = await client.refreshAccessToken();
+      client.setCredentials(credentials);
+      const merged = { ...tokens, ...credentials };
+      saveTokens(merged);
+    } catch (err: any) {
+      if (err.message?.includes("invalid_grant")) {
+        throw new Error("Gmail authorization expired — need to reconnect");
+      }
+      throw err;
+    }
+  }
+
   return google.gmail({ version: "v1", auth: client });
 }
 
@@ -171,10 +186,10 @@ export async function listEmails(query?: string, maxResults: number = 10): Promi
     if (msg.includes("not connected")) {
       return "Gmail is not connected. Please connect your Gmail account first.";
     }
-    if (msg.includes("invalid_grant") || msg.includes("Token has been expired")) {
-      return "Gmail authorization has expired. Please reconnect your Gmail account.";
+    if (msg.includes("invalid_grant") || msg.includes("Token has been expired") || msg.includes("authorization expired")) {
+      return "Gmail authorization has expired. Rickin needs to visit /api/gmail/auth in the browser to reconnect.";
     }
-    return "Unable to check emails right now. Please try again shortly.";
+    return `Unable to check emails right now: ${msg}`;
   }
 }
 
@@ -206,7 +221,10 @@ export async function readEmail(messageId: string): Promise<string> {
     if (msg.includes("404") || msg.includes("Not Found")) {
       return "That email could not be found. It may have been deleted.";
     }
-    return "Unable to read this email right now. Please try again shortly.";
+    if (msg.includes("invalid_grant") || msg.includes("authorization expired")) {
+      return "Gmail authorization has expired. Rickin needs to visit /api/gmail/auth in the browser to reconnect.";
+    }
+    return `Unable to read this email right now: ${msg}`;
   }
 }
 
