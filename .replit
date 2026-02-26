@@ -6,7 +6,7 @@ modules = ["nodejs-20"]
 channel = "stable-25_05"
 
 [deployment]
-run = ["npm", "start"]
+run = ["node", "dist/server.js"]
 deploymentTarget = "vm"
 build = ["npm", "run", "build"]
 
