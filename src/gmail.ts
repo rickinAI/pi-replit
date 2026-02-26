@@ -35,6 +35,9 @@ function getOAuth2Client() {
 }
 
 function getRedirectUri(): string {
+  if (process.env.GMAIL_REDIRECT_URI) {
+    return process.env.GMAIL_REDIRECT_URI;
+  }
   if (process.env.REPLIT_DEV_DOMAIN) {
     return `https://${process.env.REPLIT_DEV_DOMAIN}/api/gmail/callback`;
   }

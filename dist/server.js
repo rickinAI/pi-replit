@@ -198,6 +198,9 @@ function getOAuth2Client() {
   return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 }
 function getRedirectUri() {
+  if (process.env.GMAIL_REDIRECT_URI) {
+    return process.env.GMAIL_REDIRECT_URI;
+  }
   if (process.env.REPLIT_DEV_DOMAIN) {
     return `https://${process.env.REPLIT_DEV_DOMAIN}/api/gmail/callback`;
   }

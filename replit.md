@@ -110,6 +110,7 @@ Auth handled via Replit connector (`google-mail`) — no API keys stored. Tokens
 - `SESSION_SECRET` (secret) — Cookie signing key
 - `OBSIDIAN_API_URL` (env) — Cloudflare Tunnel URL to knowledge base REST API
 - `OBSIDIAN_API_KEY` (secret) — API key from knowledge base REST API plugin
+- `GMAIL_REDIRECT_URI` (env) — OAuth redirect URI for Gmail (overrides auto-detected Replit domain). Must match what's registered in Google Cloud Console.
 - `PORT` — Server port (default: 3000)
 - `INTERVIEW_PORT` — Interview tool port (default: 19847)
 
