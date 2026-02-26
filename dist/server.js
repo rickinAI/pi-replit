@@ -1350,6 +1350,7 @@ app.post("/api/session", async (_req, res) => {
       ...buildTaskTools(),
       ...buildNewsTools()
     ];
+    console.log(`[session] ${allTools.length} tools registered`);
     const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false } });
     const resourceLoader = new DefaultResourceLoader({
       cwd: PROJECT_ROOT,

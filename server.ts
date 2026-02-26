@@ -510,6 +510,7 @@ app.post("/api/session", async (_req: Request, res: Response) => {
       ...buildTaskTools(),
       ...buildNewsTools(),
     ];
+    console.log(`[session] ${allTools.length} tools registered`);
     const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false } });
 
     const resourceLoader = new DefaultResourceLoader({
@@ -520,7 +521,6 @@ app.post("/api/session", async (_req: Request, res: Response) => {
       noExtensions: true,
     });
     await resourceLoader.reload();
-
     const { session } = await createAgentSession({
       agentDir: AGENT_DIR,
       authStorage,
