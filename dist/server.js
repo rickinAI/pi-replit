@@ -11,7 +11,7 @@ import {
   SessionManager,
   SettingsManager
 } from "@mariozechner/pi-coding-agent";
-var PORT = parseInt(process.env.PORT ?? "3000", 10);
+var PORT = parseInt(process.env.PORT ?? "5000", 10);
 var INTERVIEW_PORT = parseInt(process.env.INTERVIEW_PORT ?? "19847", 10);
 var ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? "";
 var __dirname = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
