@@ -6,11 +6,11 @@
   "main": "dist/server.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/server.js",
+    "start": "npm run build && node dist/server.js",
     "dev": "tsx watch server.ts"
   },
   "dependencies": {
-    "@mariozechner/pi-coding-agent": "file:../pi-mono/packages/coding-agent",
+    "@mariozechner/pi-coding-agent": "^0.55.1",
     "express": "^4.21.2",
     "http-proxy-middleware": "^3.0.3",
     "cors": "^2.8.5"
