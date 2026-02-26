@@ -273,6 +273,21 @@ process.on("uncaughtException", (err) => {
 process.on("unhandledRejection", (reason) => {
   console.error("Unhandled rejection (server still running):", reason);
 });
+process.on("exit", (code) => {
+  console.error(`Process exiting with code: ${code}`);
+  console.error(new Error("Exit stack trace").stack);
+});
+process.on("SIGINT", () => {
+  console.error("Received SIGINT — ignoring to keep server alive");
+});
+process.on("SIGTERM", () => {
+  console.error("Received SIGTERM — ignoring to keep server alive");
+});
+const originalExit = process.exit;
+process.exit = ((code?: number) => {
+  console.error(`process.exit(${code}) called from:`, new Error().stack);
+  return originalExit.call(process, code);
+}) as never;
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 const server = createServer(app);
