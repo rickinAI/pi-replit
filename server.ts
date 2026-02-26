@@ -220,6 +220,7 @@ function authMiddleware(req: Request, res: Response, next: NextFunction) {
   if (AUTH_PUBLIC_PATHS.has(req.path)) { next(); return; }
   if (req.path === "/api/config/tunnel-url") { next(); return; }
   if (req.path === "/api/gmail/callback") { next(); return; }
+  if (req.path === "/api/gmail/auth") { next(); return; }
 
   const token = req.signedCookies?.auth;
   if (token === "authenticated") { next(); return; }

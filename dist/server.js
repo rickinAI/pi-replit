@@ -558,6 +558,10 @@ function authMiddleware(req, res, next) {
     next();
     return;
   }
+  if (req.path === "/api/gmail/auth") {
+    next();
+    return;
+  }
   const token = req.signedCookies?.auth;
   if (token === "authenticated") {
     next();
