@@ -267,27 +267,16 @@ app.get("/health", (_req, res) => {
 });
 
 // ── Global error handlers (prevent server crash) ────────────────────────────
-process.on("uncaughtException", (err) => {
+process.on("uncaughtException", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    console.error("Port already in use, exiting:", err.message);
+    process.exit(1);
+  }
   console.error("Uncaught exception (server still running):", err);
 });
 process.on("unhandledRejection", (reason) => {
   console.error("Unhandled rejection (server still running):", reason);
 });
-process.on("exit", (code) => {
-  console.error(`Process exiting with code: ${code}`);
-  console.error(new Error("Exit stack trace").stack);
-});
-process.on("SIGINT", () => {
-  console.error("Received SIGINT — ignoring to keep server alive");
-});
-process.on("SIGTERM", () => {
-  console.error("Received SIGTERM — ignoring to keep server alive");
-});
-const originalExit = process.exit;
-process.exit = ((code?: number) => {
-  console.error(`process.exit(${code}) called from:`, new Error().stack);
-  return originalExit.call(process, code);
-}) as never;
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 const server = createServer(app);
