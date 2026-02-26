@@ -56,16 +56,16 @@ body {
 
 .ascii-art {
   color: var(--green);
-  font-size: 7px;
-  line-height: 1.1;
+  font-size: 6px;
+  line-height: 1.0;
   text-shadow: 0 0 5px var(--green-glow), 0 0 10px var(--green-glow);
   margin-bottom: 20px;
   white-space: pre;
-  overflow: hidden;
+  overflow: visible;
 }
 
 @media (min-width: 640px) {
-  .ascii-art { font-size: 12px; }
+  .ascii-art { font-size: 10px; }
 }
 
 .boot-sequence {
