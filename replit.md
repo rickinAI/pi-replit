@@ -125,6 +125,13 @@ Auth via custom OAuth flow using `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`. To
 - `news_headlines` — Headlines by category (top, world, business, tech, science, health, sports, entertainment)
 - `news_search` — Search news by topic
 
+## X (Twitter) Reader
+
+3 custom tools using public APIs (free, no API key):
+- `x_user_profile` — User profile info via fxtwitter API
+- `x_read_tweet` — Read specific tweet by URL or ID via fxtwitter API
+- `x_user_timeline` — User's recent tweets via Twitter syndication API
+
 ## Image / Screenshot Support
 
 - Users can paste images (Cmd+V), drag-and-drop, or use the upload button
@@ -148,8 +155,11 @@ Auth via custom OAuth flow using `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`. To
 
 - `@mariozechner/pi-coding-agent` — Pi coding agent SDK
 - `@sinclair/typebox` — JSON schema for tool parameters
-- `googleapis` — Google APIs client (Gmail)
+- `googleapis` — Google APIs client (Gmail, Calendar)
 - `express`, `cors`, `cookie-parser`, `http-proxy-middleware`
+
+## src/ Modules
+- **src/twitter.ts** — X/Twitter reader (fxtwitter for profiles/tweets, syndication API for timelines)
 
 ## Environment Variables
 

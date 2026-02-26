@@ -28,6 +28,7 @@ import * as weather from "./src/weather.js";
 import * as websearch from "./src/websearch.js";
 import * as tasks from "./src/tasks.js";
 import * as news from "./src/news.js";
+import * as twitter from "./src/twitter.js";
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const INTERVIEW_PORT = parseInt(process.env.INTERVIEW_PORT || "19847", 10);
@@ -350,6 +351,48 @@ function buildNewsTools(): ToolDefinition[] {
   ];
 }
 
+function buildTwitterTools(): ToolDefinition[] {
+  return [
+    {
+      name: "x_user_profile",
+      label: "X User Profile",
+      description: "Get an X (Twitter) user's profile info including bio, follower count, and stats. Accepts a username or profile URL.",
+      parameters: Type.Object({
+        username: Type.String({ description: "X username (e.g. 'elonmusk') or profile URL" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await twitter.getUserProfile(params.username);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "x_read_tweet",
+      label: "Read Tweet",
+      description: "Read the full content of a specific tweet/post. Accepts a tweet URL (x.com or twitter.com) or tweet ID.",
+      parameters: Type.Object({
+        tweet: Type.String({ description: "Tweet URL (e.g. 'https://x.com/user/status/123') or tweet ID" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await twitter.getTweet(params.tweet);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "x_user_timeline",
+      label: "X Timeline",
+      description: "Read recent tweets/posts from an X (Twitter) user's timeline. Returns their latest public posts.",
+      parameters: Type.Object({
+        username: Type.String({ description: "X username (e.g. 'elonmusk') or profile URL" }),
+        count: Type.Optional(Type.Number({ description: "Number of tweets to fetch (default 10, max 20)" })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await twitter.getUserTimeline(params.username, params.count ?? 10);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+  ];
+}
+
 interface SessionEntry {
   session: Awaited<ReturnType<typeof createAgentSession>>["session"];
   subscribers: Set<Response>;
@@ -527,6 +570,7 @@ app.post("/api/session", async (_req: Request, res: Response) => {
       ...buildSearchTools(),
       ...buildTaskTools(),
       ...buildNewsTools(),
+      ...buildTwitterTools(),
     ];
     console.log(`[session] ${allTools.length} tools registered`);
     const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false } });
