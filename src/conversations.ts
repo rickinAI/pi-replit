@@ -1,10 +1,16 @@
 import fs from "fs";
 import path from "path";
 
+export interface ImageAttachment {
+  mimeType: string;
+  data: string;
+}
+
 export interface ConversationMessage {
   role: "user" | "agent" | "system";
   text: string;
   timestamp: number;
+  images?: ImageAttachment[];
 }
 
 export interface Conversation {
@@ -105,8 +111,12 @@ export function createConversation(sessionId: string): Conversation {
   };
 }
 
-export function addMessage(conv: Conversation, role: "user" | "agent" | "system", text: string): void {
-  conv.messages.push({ role, text, timestamp: Date.now() });
+export function addMessage(conv: Conversation, role: "user" | "agent" | "system", text: string, images?: ImageAttachment[]): void {
+  const msg: ConversationMessage = { role, text, timestamp: Date.now() };
+  if (images && images.length > 0) {
+    msg.images = images;
+  }
+  conv.messages.push(msg);
   if (conv.title === "New conversation" && role === "user" && text.trim()) {
     conv.title = text.trim().slice(0, 60);
   }

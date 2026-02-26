@@ -159,8 +159,12 @@ function createConversation(sessionId) {
     updatedAt: Date.now()
   };
 }
-function addMessage(conv, role, text) {
-  conv.messages.push({ role, text, timestamp: Date.now() });
+function addMessage(conv, role, text, images) {
+  const msg = { role, text, timestamp: Date.now() };
+  if (images && images.length > 0) {
+    msg.images = images;
+  }
+  conv.messages.push(msg);
   if (conv.title === "New conversation" && role === "user" && text.trim()) {
     conv.title = text.trim().slice(0, 60);
   }
@@ -1242,7 +1246,7 @@ setInterval(() => {
 var app = express();
 app.set("trust proxy", 1);
 app.use(cors());
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "50mb" }));
 app.use(cookieParser(SESSION_SECRET));
 var AUTH_PUBLIC_PATHS = /* @__PURE__ */ new Set(["/login.html", "/login.css", "/api/login", "/health"]);
 function authMiddleware(req, res, next) {
@@ -1442,15 +1446,38 @@ app.post("/api/session/:id/prompt", async (req, res) => {
     res.status(404).json({ error: "Session not found" });
     return;
   }
-  const { message } = req.body;
-  if (!message?.trim()) {
-    res.status(400).json({ error: "message is required" });
+  const { message, images } = req.body;
+  if (!message?.trim() && (!images || images.length === 0)) {
+    res.status(400).json({ error: "message or images required" });
     return;
   }
-  addMessage(entry.conversation, "user", message.trim());
+  const ALLOWED_MIME = /* @__PURE__ */ new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+  const MAX_IMAGES = 5;
+  const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+  if (images && images.length > MAX_IMAGES) {
+    res.status(400).json({ error: `Maximum ${MAX_IMAGES} images allowed` });
+    return;
+  }
+  if (images) {
+    for (const img of images) {
+      if (!ALLOWED_MIME.has(img.mimeType)) {
+        res.status(400).json({ error: `Unsupported image type: ${img.mimeType}` });
+        return;
+      }
+      const sizeBytes = Math.ceil(img.data.length * 3 / 4);
+      if (sizeBytes > MAX_IMAGE_BYTES) {
+        res.status(400).json({ error: "Image too large (max 10MB)" });
+        return;
+      }
+    }
+  }
+  const text = message?.trim() || "(image attached)";
+  const imgAttachments = images?.map((i) => ({ mimeType: i.mimeType, data: i.data }));
+  addMessage(entry.conversation, "user", text, imgAttachments);
   res.json({ ok: true });
   try {
-    await entry.session.prompt(message);
+    const promptImages = images?.map((i) => ({ type: "image", data: i.data, mimeType: i.mimeType }));
+    await entry.session.prompt(text, promptImages ? { images: promptImages } : void 0);
   } catch (err) {
     console.error("Prompt error:", err);
     const errEvent = JSON.stringify({ type: "error", error: String(err) });

@@ -123,10 +123,20 @@ Auth via custom OAuth flow using `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`. To
 - `news_headlines` — Headlines by category (top, world, business, tech, science, health, sports, entertainment)
 - `news_search` — Search news by topic
 
+## Image / Screenshot Support
+
+- Users can paste images (Cmd+V), drag-and-drop, or use the upload button
+- Images sent as base64 in the prompt request body alongside text
+- Server validates: max 5 images, max 10MB each, allowed types (png/jpeg/gif/webp)
+- Images forwarded to Anthropic via `session.prompt()` with `PromptOptions.images`
+- Images stored in conversation messages as `images: [{mimeType, data}]`
+- Image thumbnails displayed in chat bubbles and conversation history view
+- Express JSON body limit set to 50MB to accommodate base64 payloads
+
 ## Conversation Persistence
 
 - Conversations stored as JSON files in `data/conversations/`
-- Each file: `{ id, title, messages: [{role, text, timestamp}], createdAt, updatedAt }`
+- Each file: `{ id, title, messages: [{role, text, timestamp, images?}], createdAt, updatedAt }`
 - Title auto-derived from first user message (truncated to 60 chars)
 - Auto-save every 5 minutes for crash resilience
 - Saved on session close, 2-hour expiry, and graceful shutdown

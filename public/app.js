@@ -8,6 +8,7 @@ let userHasScrolledUp = false;
 let hasMessages = false;
 let viewingHistory = false;
 let savedSessionNodes = null;
+let pendingImages = [];
 
 const messages      = document.getElementById("messages");
 const scrollAnchor  = document.getElementById("scroll-anchor");
@@ -188,7 +189,17 @@ async function viewConversation(id) {
     document.getElementById("history-back-btn").addEventListener("click", exitHistoryView);
 
     for (const msg of conv.messages) {
-      appendBubble(msg.role, msg.text);
+      const bubble = appendBubble(msg.role, msg.text);
+      if (msg.images && msg.images.length > 0) {
+        const imgRow = document.createElement("div");
+        imgRow.className = "msg-images";
+        for (const img of msg.images) {
+          const el = document.createElement("img");
+          el.src = `data:${img.mimeType};base64,${img.data}`;
+          imgRow.appendChild(el);
+        }
+        bubble.querySelector(".bubble").prepend(imgRow);
+      }
     }
     scrollToBottom();
   } catch (err) {
@@ -326,23 +337,96 @@ function handleAgentEvent(event) {
   }
 }
 
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      const base64 = dataUrl.split(",")[1];
+      resolve({ mimeType: file.type, data: base64 });
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function addPendingImage(file) {
+  if (!file.type.startsWith("image/")) return;
+  if (pendingImages.length >= 5) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const dataUrl = reader.result;
+    const base64 = dataUrl.split(",")[1];
+    pendingImages.push({ mimeType: file.type, data: base64, preview: dataUrl });
+    renderImagePreviews();
+  };
+  reader.readAsDataURL(file);
+}
+
+function renderImagePreviews() {
+  let container = document.getElementById("image-preview-bar");
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "image-preview-bar";
+    const inputArea = document.getElementById("input-area");
+    inputArea.insertBefore(container, inputArea.firstChild);
+  }
+  container.innerHTML = "";
+  if (pendingImages.length === 0) {
+    container.remove();
+    return;
+  }
+  pendingImages.forEach((img, i) => {
+    const wrap = document.createElement("div");
+    wrap.className = "image-preview-item";
+    const thumb = document.createElement("img");
+    thumb.src = img.preview;
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "image-preview-remove";
+    removeBtn.textContent = "×";
+    removeBtn.addEventListener("click", () => {
+      pendingImages.splice(i, 1);
+      renderImagePreviews();
+    });
+    wrap.appendChild(thumb);
+    wrap.appendChild(removeBtn);
+    container.appendChild(wrap);
+  });
+}
+
 async function sendMessage() {
   const text = input.value.trim();
-  if (!text || !sessionId || isAgentRunning || viewingHistory) return;
+  const images = pendingImages.map(i => ({ mimeType: i.mimeType, data: i.data }));
+  if ((!text && images.length === 0) || !sessionId || isAgentRunning || viewingHistory) return;
 
   removeEmptyState();
   hasMessages = true;
-  appendBubble("user", text);
+  const bubble = appendBubble("user", text || "(image attached)");
+  if (images.length > 0) {
+    const imgRow = document.createElement("div");
+    imgRow.className = "msg-images";
+    pendingImages.forEach(img => {
+      const el = document.createElement("img");
+      el.src = img.preview;
+      imgRow.appendChild(el);
+    });
+    bubble.querySelector(".bubble").prepend(imgRow);
+  }
   input.value = "";
+  pendingImages = [];
+  renderImagePreviews();
   autoResize();
   sendBtn.disabled = true;
   scrollToBottom();
+
+  const body = { message: text || undefined };
+  if (images.length > 0) body.images = images;
 
   try {
     const res = await fetch(`/api/session/${sessionId}/prompt`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text }),
+      body: JSON.stringify(body),
     });
     if (!checkAuth(res)) return;
     if (res.status === 404) {
@@ -351,7 +435,7 @@ async function sendMessage() {
       const retry = await fetch(`/api/session/${sessionId}/prompt`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify(body),
       });
       if (!checkAuth(retry)) return;
       if (!retry.ok) throw new Error(await retry.text());
@@ -365,6 +449,16 @@ async function sendMessage() {
 }
 
 sendBtn.addEventListener("click", sendMessage);
+
+const uploadBtn = document.getElementById("upload-btn");
+const imageUpload = document.getElementById("image-upload");
+uploadBtn.addEventListener("click", () => imageUpload.click());
+imageUpload.addEventListener("change", () => {
+  for (const file of imageUpload.files) {
+    addPendingImage(file);
+  }
+  imageUpload.value = "";
+});
 input.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
@@ -380,6 +474,33 @@ input.addEventListener("input", autoResize);
 
 input.addEventListener("focus", () => {
   setTimeout(() => scrollToBottom(), 300);
+});
+
+input.addEventListener("paste", (e) => {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.type.startsWith("image/")) {
+      e.preventDefault();
+      const file = item.getAsFile();
+      if (file) addPendingImage(file);
+      return;
+    }
+  }
+});
+
+const dropZone = document.getElementById("app");
+dropZone.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "copy";
+});
+dropZone.addEventListener("drop", (e) => {
+  e.preventDefault();
+  const files = e.dataTransfer?.files;
+  if (!files) return;
+  for (const file of files) {
+    if (file.type.startsWith("image/")) addPendingImage(file);
+  }
 });
 
 function appendBubble(role, text) {
