@@ -38,10 +38,12 @@ const DATA_DIR = path.join(PROJECT_ROOT, "data", "conversations");
 
 fs.mkdirSync(AGENT_DIR, { recursive: true });
 conversations.init(DATA_DIR);
+gmail.init(PROJECT_ROOT);
 
 if (!ANTHROPIC_KEY) console.warn("ANTHROPIC_API_KEY is not set.");
 if (!obsidian.isConfigured()) console.warn("Knowledge base integration not configured.");
-if (!gmail.isConfigured()) console.warn("Gmail integration not configured.");
+if (!gmail.isConfigured()) console.warn("Gmail integration not configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET missing).");
+else if (!gmail.isConnected()) console.warn("Gmail configured but not yet authorized. Visit /api/gmail/auth to connect.");
 if (!APP_PASSWORD) console.warn("APP_PASSWORD is not set — auth disabled.");
 
 console.log(`[boot] PORT=${PORT} PUBLIC_DIR=${PUBLIC_DIR} AGENT_DIR=${AGENT_DIR}`);
@@ -217,6 +219,7 @@ function authMiddleware(req: Request, res: Response, next: NextFunction) {
   if (!APP_PASSWORD) { next(); return; }
   if (AUTH_PUBLIC_PATHS.has(req.path)) { next(); return; }
   if (req.path === "/api/config/tunnel-url") { next(); return; }
+  if (req.path === "/api/gmail/callback") { next(); return; }
 
   const token = req.signedCookies?.auth;
   if (token === "authenticated") { next(); return; }
@@ -270,6 +273,37 @@ app.use(
     },
   })
 );
+
+app.get("/api/gmail/auth", (_req: Request, res: Response) => {
+  if (!gmail.isConfigured()) {
+    res.status(500).json({ error: "Gmail not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET." });
+    return;
+  }
+  const url = gmail.getAuthUrl();
+  res.redirect(url);
+});
+
+app.get("/api/gmail/callback", async (req: Request, res: Response) => {
+  const code = req.query.code as string;
+  if (!code) {
+    res.status(400).send("Missing authorization code.");
+    return;
+  }
+  try {
+    await gmail.handleCallback(code);
+    res.send(`<html><body style="background:#000;color:#0f0;font-family:monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><div style="text-align:center"><h2>[GMAIL CONNECTED]</h2><p>Authorization successful. You can close this tab.</p><script>setTimeout(()=>window.close(),2000)</script></div></body></html>`);
+  } catch (err) {
+    console.error("Gmail callback error:", err);
+    res.status(500).send("Gmail authorization failed. Please try again.");
+  }
+});
+
+app.get("/api/gmail/status", (_req: Request, res: Response) => {
+  res.json({
+    configured: gmail.isConfigured(),
+    connected: gmail.isConnected(),
+  });
+});
 
 app.post("/api/session", async (_req: Request, res: Response) => {
   try {

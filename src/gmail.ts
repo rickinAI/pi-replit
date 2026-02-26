@@ -1,54 +1,94 @@
 import { google } from "googleapis";
+import fs from "fs";
+import path from "path";
 
-let connectionSettings: any;
+const SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
 
-async function getAccessToken() {
-  if (connectionSettings?.settings?.access_token && connectionSettings.settings.expires_at) {
-    const expiresAt = new Date(connectionSettings.settings.expires_at).getTime();
-    if (expiresAt > Date.now() + 60_000) {
-      return connectionSettings.settings.access_token;
-    }
-  }
-  connectionSettings = null;
+let tokenFilePath = "";
+let projectRoot = "";
 
-  const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
-  const xReplitToken = process.env.REPL_IDENTITY
-    ? "repl " + process.env.REPL_IDENTITY
-    : process.env.WEB_REPL_RENEWAL
-    ? "depl " + process.env.WEB_REPL_RENEWAL
-    : null;
-
-  if (!xReplitToken) {
-    throw new Error("X-Replit-Token not found for repl/depl");
-  }
-
-  connectionSettings = await fetch(
-    "https://" + hostname + "/api/v2/connection?include_secrets=true&connector_names=google-mail",
-    {
-      headers: {
-        Accept: "application/json",
-        "X-Replit-Token": xReplitToken,
-      },
-    }
-  ).then(res => res.json()).then(data => data.items?.[0]);
-
-  const accessToken = connectionSettings?.settings?.access_token || connectionSettings.settings?.oauth?.credentials?.access_token;
-
-  if (!connectionSettings || !accessToken) {
-    throw new Error("Gmail not connected");
-  }
-  return accessToken;
-}
-
-async function getGmailClient() {
-  const accessToken = await getAccessToken();
-  const oauth2Client = new google.auth.OAuth2();
-  oauth2Client.setCredentials({ access_token: accessToken });
-  return google.gmail({ version: "v1", auth: oauth2Client });
+export function init(root: string) {
+  projectRoot = root;
+  tokenFilePath = path.join(root, "data", "gmail-tokens.json");
+  fs.mkdirSync(path.dirname(tokenFilePath), { recursive: true });
 }
 
 export function isConfigured(): boolean {
-  return !!(process.env.REPLIT_CONNECTORS_HOSTNAME && (process.env.REPL_IDENTITY || process.env.WEB_REPL_RENEWAL));
+  return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+}
+
+export function isConnected(): boolean {
+  if (!isConfigured()) return false;
+  try {
+    const tokens = loadTokens();
+    return !!(tokens && tokens.refresh_token);
+  } catch {
+    return false;
+  }
+}
+
+function getOAuth2Client() {
+  const clientId = process.env.GOOGLE_CLIENT_ID!;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET!;
+  const redirectUri = getRedirectUri();
+  return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+}
+
+function getRedirectUri(): string {
+  if (process.env.REPLIT_DEV_DOMAIN) {
+    return `https://${process.env.REPLIT_DEV_DOMAIN}/api/gmail/callback`;
+  }
+  if (process.env.REPLIT_DOMAINS) {
+    const domain = process.env.REPLIT_DOMAINS.split(",")[0];
+    return `https://${domain}/api/gmail/callback`;
+  }
+  const port = process.env.PORT || "3000";
+  return `http://localhost:${port}/api/gmail/callback`;
+}
+
+export function getAuthUrl(): string {
+  const client = getOAuth2Client();
+  return client.generateAuthUrl({
+    access_type: "offline",
+    scope: SCOPES,
+    prompt: "consent",
+  });
+}
+
+export async function handleCallback(code: string): Promise<void> {
+  const client = getOAuth2Client();
+  const { tokens } = await client.getToken(code);
+  saveTokens(tokens);
+}
+
+function saveTokens(tokens: any): void {
+  fs.writeFileSync(tokenFilePath, JSON.stringify(tokens, null, 2));
+}
+
+function loadTokens(): any | null {
+  if (!fs.existsSync(tokenFilePath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(tokenFilePath, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+async function getGmailClient() {
+  const tokens = loadTokens();
+  if (!tokens || !tokens.refresh_token) {
+    throw new Error("Gmail not connected");
+  }
+
+  const client = getOAuth2Client();
+  client.setCredentials(tokens);
+
+  client.on("tokens", (newTokens: any) => {
+    const merged = { ...tokens, ...newTokens };
+    saveTokens(merged);
+  });
+
+  return google.gmail({ version: "v1", auth: client });
 }
 
 function decodeHeader(headers: Array<{ name: string; value: string }>, name: string): string {
@@ -128,8 +168,11 @@ export async function listEmails(query?: string, maxResults: number = 10): Promi
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("Gmail listEmails error:", msg);
-    if (msg.includes("not connected") || msg.includes("X-Replit-Token")) {
-      return "Gmail is not connected. Please reconnect your Gmail account.";
+    if (msg.includes("not connected")) {
+      return "Gmail is not connected. Please connect your Gmail account first.";
+    }
+    if (msg.includes("invalid_grant") || msg.includes("Token has been expired")) {
+      return "Gmail authorization has expired. Please reconnect your Gmail account.";
     }
     return "Unable to check emails right now. Please try again shortly.";
   }
@@ -157,8 +200,8 @@ export async function readEmail(messageId: string): Promise<string> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("Gmail readEmail error:", msg);
-    if (msg.includes("not connected") || msg.includes("X-Replit-Token")) {
-      return "Gmail is not connected. Please reconnect your Gmail account.";
+    if (msg.includes("not connected")) {
+      return "Gmail is not connected. Please connect your Gmail account first.";
     }
     if (msg.includes("404") || msg.includes("Not Found")) {
       return "That email could not be found. It may have been deleted.";
