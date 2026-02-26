@@ -307,7 +307,7 @@ body {
   flex-shrink: 0;
   background: var(--surface);
   border-top: 1px solid var(--border);
-  padding: 4px 12px calc(4px + var(--safe-bottom));
+  padding: 2px 12px calc(2px + var(--safe-bottom));
 }
 
 .input-row {
@@ -316,7 +316,7 @@ body {
   gap: 8px;
   border: 1px solid var(--border);
   border-radius: 2px;
-  padding: 2px 10px;
+  padding: 0px 8px;
   background: rgba(0, 255, 0, 0.02);
   transition: border-color 0.2s, box-shadow 0.2s;
 }
@@ -329,10 +329,10 @@ body {
 .prompt-prefix {
   color: var(--green);
   font-family: var(--font);
-  font-size: 16px;
+  font-size: 14px;
   text-shadow: 0 0 3px var(--green-glow);
   flex-shrink: 0;
-  line-height: 1.4;
+  line-height: 1.2;
 }
 
 #input {
@@ -341,14 +341,15 @@ body {
   border: none;
   outline: none;
   color: var(--green);
-  font-size: 16px;
+  font-size: 14px;
   font-family: var(--font);
   resize: none;
-  max-height: 120px;
+  max-height: 100px;
   overflow-y: auto;
-  line-height: 1.4;
+  line-height: 1.2;
   caret-color: var(--green);
   text-shadow: 0 0 2px var(--green-glow);
+  padding: 4px 0;
 }
 
 #input::placeholder { color: var(--green-muted); }
@@ -360,9 +361,9 @@ body {
   border-radius: 2px;
   color: var(--green);
   cursor: pointer;
-  padding: 8px;
-  min-width: 44px;
-  min-height: 44px;
+  padding: 4px;
+  min-width: 36px;
+  min-height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
