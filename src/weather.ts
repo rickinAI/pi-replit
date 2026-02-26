@@ -11,6 +11,14 @@ const WMO_CODES: Record<number, string> = {
   95: "Thunderstorm", 96: "Thunderstorm with slight hail", 99: "Thunderstorm with heavy hail",
 };
 
+function cToF(c: number): number {
+  return Math.round(c * 9 / 5 + 32);
+}
+
+function tempStr(c: number): string {
+  return `${Math.round(c)}°C (${cToF(c)}°F)`;
+}
+
 async function geocode(location: string): Promise<{ name: string; lat: number; lon: number; country: string; timezone: string } | null> {
   const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(location)}&count=1&language=en&format=json`;
   const res = await fetch(url);
@@ -29,7 +37,7 @@ export async function getWeather(location: string): Promise<string> {
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.lat}&longitude=${geo.lon}`
       + `&current=temperature_2m,apparent_temperature,weathercode,windspeed_10m,winddirection_10m,relative_humidity_2m,uv_index`
       + `&daily=temperature_2m_max,temperature_2m_min,weathercode,precipitation_probability_max`
-      + `&temperature_unit=fahrenheit&windspeed_unit=mph&timezone=${encodeURIComponent(geo.timezone)}&forecast_days=3`;
+      + `&temperature_unit=celsius&windspeed_unit=mph&timezone=${encodeURIComponent(geo.timezone)}&forecast_days=3`;
 
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Weather API error ${res.status}`);
@@ -43,8 +51,8 @@ export async function getWeather(location: string): Promise<string> {
 
     let result = `Current weather for ${locationLabel}:\n`;
     result += `  Condition: ${condition}\n`;
-    result += `  Temperature: ${Math.round(c.temperature_2m)}°F\n`;
-    result += `  Feels like: ${Math.round(c.apparent_temperature)}°F\n`;
+    result += `  Temperature: ${tempStr(c.temperature_2m)}\n`;
+    result += `  Feels like: ${tempStr(c.apparent_temperature)}\n`;
     result += `  Humidity: ${c.relative_humidity_2m}%\n`;
     result += `  Wind: ${Math.round(c.windspeed_10m)} mph\n`;
     if (c.uv_index !== undefined) result += `  UV Index: ${c.uv_index}\n`;
@@ -56,9 +64,11 @@ export async function getWeather(location: string): Promise<string> {
         const date = daily.time[i];
         const hi = Math.round(daily.temperature_2m_max[i]);
         const lo = Math.round(daily.temperature_2m_min[i]);
+        const hiF = cToF(daily.temperature_2m_max[i]);
+        const loF = cToF(daily.temperature_2m_min[i]);
         const desc = WMO_CODES[daily.weathercode[i]] || "Unknown";
         const rain = daily.precipitation_probability_max[i];
-        result += `  ${date}: ${desc}, ${lo}-${hi}°F, Rain: ${rain}%\n`;
+        result += `  ${date}: ${desc}, ${lo}-${hi}°C (${loF}-${hiF}°F), Rain: ${rain}%\n`;
       }
     }
 

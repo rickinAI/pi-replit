@@ -561,6 +561,12 @@ var WMO_CODES = {
   96: "Thunderstorm with slight hail",
   99: "Thunderstorm with heavy hail"
 };
+function cToF(c) {
+  return Math.round(c * 9 / 5 + 32);
+}
+function tempStr(c) {
+  return `${Math.round(c)}\xB0C (${cToF(c)}\xB0F)`;
+}
 async function geocode(location) {
   const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(location)}&count=1&language=en&format=json`;
   const res = await fetch(url);
@@ -574,7 +580,7 @@ async function getWeather(location) {
   try {
     const geo = await geocode(location);
     if (!geo) return `Could not find location "${location}". Try a city name like "New York" or "London".`;
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.lat}&longitude=${geo.lon}&current=temperature_2m,apparent_temperature,weathercode,windspeed_10m,winddirection_10m,relative_humidity_2m,uv_index&daily=temperature_2m_max,temperature_2m_min,weathercode,precipitation_probability_max&temperature_unit=fahrenheit&windspeed_unit=mph&timezone=${encodeURIComponent(geo.timezone)}&forecast_days=3`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.lat}&longitude=${geo.lon}&current=temperature_2m,apparent_temperature,weathercode,windspeed_10m,winddirection_10m,relative_humidity_2m,uv_index&daily=temperature_2m_max,temperature_2m_min,weathercode,precipitation_probability_max&temperature_unit=celsius&windspeed_unit=mph&timezone=${encodeURIComponent(geo.timezone)}&forecast_days=3`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Weather API error ${res.status}`);
     const data = await res.json();
@@ -586,9 +592,9 @@ async function getWeather(location) {
 `;
     result += `  Condition: ${condition}
 `;
-    result += `  Temperature: ${Math.round(c.temperature_2m)}\xB0F
+    result += `  Temperature: ${tempStr(c.temperature_2m)}
 `;
-    result += `  Feels like: ${Math.round(c.apparent_temperature)}\xB0F
+    result += `  Feels like: ${tempStr(c.apparent_temperature)}
 `;
     result += `  Humidity: ${c.relative_humidity_2m}%
 `;
@@ -605,9 +611,11 @@ async function getWeather(location) {
         const date = daily.time[i];
         const hi = Math.round(daily.temperature_2m_max[i]);
         const lo = Math.round(daily.temperature_2m_min[i]);
+        const hiF = cToF(daily.temperature_2m_max[i]);
+        const loF = cToF(daily.temperature_2m_min[i]);
         const desc = WMO_CODES[daily.weathercode[i]] || "Unknown";
         const rain = daily.precipitation_probability_max[i];
-        result += `  ${date}: ${desc}, ${lo}-${hi}\xB0F, Rain: ${rain}%
+        result += `  ${date}: ${desc}, ${lo}-${hi}\xB0C (${loF}-${hiF}\xB0F), Rain: ${rain}%
 `;
       }
     }
