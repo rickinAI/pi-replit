@@ -322,23 +322,10 @@ function handleAgentEvent(event) {
     case "tool_execution_start": {
       const name = event.toolName ?? "tool";
       showStatus(`[RUNNING ${name.toUpperCase()}...]`);
-
-      if (agentBubble && name !== "interview") {
-        const pill = document.createElement("div");
-        pill.className = "tool-pill";
-        const dot = document.createElement("span");
-        dot.className = "dot";
-        const label = document.createElement("span");
-        label.textContent = name;
-        pill.appendChild(dot);
-        pill.appendChild(label);
-        agentBubble.appendChild(pill);
-      }
       break;
     }
 
     case "tool_execution_end": {
-      agentBubble?.querySelectorAll(".tool-pill .dot").forEach(d => d.remove());
       break;
     }
 
