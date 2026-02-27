@@ -103,6 +103,7 @@ body {
 }
 
 .model-badge {
+  flex: 1;
   font-size: 10px;
   color: var(--green-dim);
   border: 1px solid var(--border);
@@ -168,12 +169,14 @@ body {
 }
 
 .kb-badge {
+  flex: 1;
   font-size: 10px;
   color: var(--green-dim);
   border: 1px solid var(--border);
   border-radius: 2px;
   padding: 1px 8px;
   font-family: var(--font);
+  background: none;
   display: flex;
   align-items: center;
   transition: all 0.3s;
