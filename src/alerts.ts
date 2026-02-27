@@ -6,6 +6,7 @@ import * as weather from "./weather.js";
 import * as stocks from "./stocks.js";
 import * as news from "./news.js";
 import * as gmail from "./gmail.js";
+import * as obsidian from "./obsidian.js";
 
 interface WatchlistItem {
   symbol: string;
@@ -190,8 +191,29 @@ async function gatherSection(name: string): Promise<string> {
         return `**Tomorrow's Calendar:**\n${result}`;
       }
       case "tasks": {
-        const result = tasks.listTasks();
-        return `**Tasks:**\n${result}`;
+        const localTasks = tasks.listTasks();
+        let vaultTasks = "";
+        if (obsidian.isConfigured()) {
+          try {
+            const listing = await obsidian.listNotes("Tasks & TODOs/");
+            const parsed = JSON.parse(listing);
+            const files: string[] = (parsed.files || [])
+              .filter((f: string) => f.endsWith(".md"))
+              .slice(0, 10);
+            const reads: string[] = [];
+            for (const file of files) {
+              try {
+                const content = await obsidian.readNote(`Tasks & TODOs/${file}`);
+                const label = file.replace(/\.md$/i, "");
+                reads.push(`**${label}:**\n${content.slice(0, 500)}`);
+              } catch {}
+            }
+            if (reads.length > 0) vaultTasks = reads.join("\n\n");
+          } catch {}
+        }
+        const parts = [`**Local Tasks:**\n${localTasks}`];
+        if (vaultTasks) parts.push(`**Vault Tasks:**\n${vaultTasks}`);
+        return parts.join("\n\n");
       }
       case "weather": {
         const result = await weather.getWeather(config.location);
