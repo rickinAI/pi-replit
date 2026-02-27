@@ -1239,7 +1239,10 @@ let glanceRefreshInterval = null;
 let glanceClockInterval = null;
 
 function getETTimeString() {
-  return new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" });
+  const now = new Date();
+  const time = now.toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" });
+  const date = now.toLocaleDateString("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric" });
+  return `${time} · ${date}`;
 }
 
 function updateGlanceClock() {
