@@ -1526,6 +1526,8 @@ body.light-theme #mic-btn.recording {
   }
 
   #app {
+    height: calc(100dvh + var(--safe-bottom));
+    height: calc(100dvh + var(--safe-bottom) - var(--keyboard-h));
     padding-left: env(safe-area-inset-left, 0px);
     padding-right: env(safe-area-inset-right, 0px);
     padding-bottom: var(--safe-bottom);
