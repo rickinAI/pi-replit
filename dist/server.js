@@ -3042,6 +3042,9 @@ app.get("/api/glance", async (_req, res) => {
     res.status(500).json({ error: "Failed to fetch glance data" });
   }
 });
+app.get("/api/kb-status", (_req, res) => {
+  res.json({ online: lastTunnelStatus });
+});
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", sessions: sessions.size, ts: Date.now() });
 });

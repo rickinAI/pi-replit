@@ -19,6 +19,7 @@ const statusText    = document.getElementById("status-text");
 const newSessionBtn = document.getElementById("new-session-btn");
 const historyBtn    = document.getElementById("history-btn");
 const statusDot     = document.getElementById("status-dot");
+const kbDot         = document.getElementById("kb-dot");
 const appEl         = document.getElementById("app");
 const historyPanel  = document.getElementById("history-panel");
 const historyList   = document.getElementById("history-list");
@@ -280,12 +281,32 @@ function openEventStream(id) {
 function setConnected(connected) {
   if (connected) {
     statusDot.classList.remove("disconnected");
-    statusDot.title = "Connected";
+    statusDot.title = "Server: connected";
   } else {
     statusDot.classList.add("disconnected");
-    statusDot.title = "Disconnected";
+    statusDot.title = "Server: disconnected";
   }
 }
+
+async function pollKbStatus() {
+  try {
+    const res = await fetch("/api/kb-status");
+    if (!res.ok) throw new Error("not ok");
+    const { online } = await res.json();
+    if (online) {
+      kbDot.classList.remove("disconnected");
+      kbDot.title = "Obsidian: connected";
+    } else {
+      kbDot.classList.add("disconnected");
+      kbDot.title = "Obsidian: offline";
+    }
+  } catch {
+    kbDot.classList.add("disconnected");
+    kbDot.title = "Obsidian: unknown";
+  }
+}
+pollKbStatus();
+setInterval(pollKbStatus, 2 * 60 * 1000);
 
 function handleAgentEvent(event) {
   switch (event.type) {

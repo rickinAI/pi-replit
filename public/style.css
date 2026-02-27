@@ -151,6 +151,10 @@ body {
   box-shadow: 0 0 4px rgba(255, 0, 0, 0.4);
 }
 
+.kb-dot {
+  margin-left: -2px;
+}
+
 .header-actions {
   margin-left: auto;
   display: flex;
