@@ -565,6 +565,12 @@ body {
   justify-content: center;
   transition: color 0.15s;
   touch-action: manipulation;
+  margin-right: 4px;
+}
+
+#upload-btn svg {
+  width: 20px;
+  height: 20px;
 }
 
 #upload-btn:hover {
