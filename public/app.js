@@ -1166,7 +1166,7 @@ async function fetchGlance() {
 
     const e = escapeHtml;
     const parts = [];
-    if (d.weather) parts.push(`${e(d.weather.icon)} ${e(String(d.weather.tempF))}°F`);
+    if (d.weather) parts.push(`${e(d.weather.icon)} ${e(String(d.weather.tempC))}°C`);
     if (d.emails && d.emails.unread > 0) parts.push(`${d.emails.unread} unread`);
     if (d.tasks && d.tasks.active > 0) parts.push(`${d.tasks.active} task${d.tasks.active !== 1 ? "s" : ""}`);
     if (d.nextEvent) {
@@ -1182,7 +1182,7 @@ async function fetchGlance() {
 
     const detailRows = [];
     if (d.time) detailRows.push(row("time", e(d.time)));
-    if (d.weather) detailRows.push(row("weather", `${e(d.weather.icon)} ${e(String(d.weather.tempF))}°F — ${e(d.weather.condition)}`));
+    if (d.weather) detailRows.push(row("weather", `${e(d.weather.icon)} ${e(String(d.weather.tempC))}°C — ${e(d.weather.condition)}`));
     if (d.emails) detailRows.push(row("email", d.emails.unread === 0 ? "Inbox clear" : `${d.emails.unread} unread`));
     if (d.tasks) detailRows.push(row("tasks", d.tasks.active === 0 ? "All clear" : `${d.tasks.active} open`));
     if (d.upcomingEvents && d.upcomingEvents.length > 0) {

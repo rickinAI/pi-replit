@@ -2804,7 +2804,7 @@ app.get("/api/glance", async (_req, res) => {
     }
     const cfg = getConfig();
     const tz = cfg.timezone || "America/New_York";
-    const loc = cfg.location || "New York";
+    const loc = cfg.location || "10016";
     const now = /* @__PURE__ */ new Date();
     let timeStr;
     try {
@@ -2830,7 +2830,7 @@ app.get("/api/glance", async (_req, res) => {
           else if (cl.includes("snow")) icon = "\u2744\uFE0F";
           else if (cl.includes("thunder")) icon = "\u26C8\uFE0F";
           else if (cl.includes("fog")) icon = "\u{1F32B}\uFE0F";
-          result.weather = { tempF: parseInt(tempMatch[2]), condition, icon };
+          result.weather = { tempC: Math.round(parseFloat(tempMatch[1])), condition, icon };
         }
       } catch {
       }
