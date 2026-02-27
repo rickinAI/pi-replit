@@ -187,27 +187,34 @@ body {
 
 .settings-exit-section {
   text-align: center;
-  padding-top: 12px;
+  padding: 24px 0 8px;
   border-top: 1px solid var(--border);
 }
 
 .settings-exit-btn {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
   background: none;
-  border: 1px solid var(--border);
-  border-radius: 2px;
   color: var(--green-dim);
   cursor: pointer;
-  padding: 6px 24px;
-  font-family: var(--font);
-  font-size: 11px;
   text-decoration: none;
-  transition: all 0.15s;
+  transition: all 0.25s;
 }
 
 .settings-exit-btn:hover {
   color: var(--red);
   border-color: var(--red);
+  box-shadow: 0 0 20px rgba(255, 60, 60, 0.3), inset 0 0 20px rgba(255, 60, 60, 0.05);
+}
+
+.settings-exit-btn:active {
+  transform: scale(0.92);
+  box-shadow: 0 0 30px rgba(255, 60, 60, 0.5), inset 0 0 30px rgba(255, 60, 60, 0.1);
 }
 
 #messages {
