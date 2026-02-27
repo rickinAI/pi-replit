@@ -798,6 +798,90 @@ async function sendMessage() {
 
 sendBtn.addEventListener("click", sendMessage);
 
+const micBtn = document.getElementById("mic-btn");
+let speechRecognition = null;
+let isRecording = false;
+
+function initSpeechRecognition() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return null;
+  const rec = new SR();
+  rec.continuous = true;
+  rec.interimResults = true;
+  rec.lang = "en-US";
+
+  let finalTranscript = "";
+  let userStopped = false;
+
+  rec.onresult = (e) => {
+    let interim = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) {
+        finalTranscript += e.results[i][0].transcript;
+      } else {
+        interim += e.results[i][0].transcript;
+      }
+    }
+    input.value = finalTranscript + interim;
+    input.style.height = "auto";
+    input.style.height = input.scrollHeight + "px";
+  };
+
+  rec.onend = () => {
+    isRecording = false;
+    micBtn.classList.remove("recording");
+    if (userStopped && finalTranscript.trim()) {
+      sendMessage();
+    } else if (!finalTranscript.trim()) {
+      input.value = "";
+    }
+    finalTranscript = "";
+    userStopped = false;
+  };
+
+  rec.onerror = (e) => {
+    isRecording = false;
+    micBtn.classList.remove("recording");
+    finalTranscript = "";
+    userStopped = false;
+    if (e.error === "not-allowed") {
+      appendBubble("system", "Microphone access denied. Please allow microphone permission.");
+    }
+  };
+
+  rec._resetTranscript = () => { finalTranscript = ""; userStopped = false; };
+  rec._userStop = () => { userStopped = true; };
+  return rec;
+}
+
+if (micBtn) {
+  micBtn.addEventListener("click", () => {
+    if (input.disabled || sendBtn.disabled) return;
+    if (isRecording && speechRecognition) {
+      speechRecognition._userStop();
+      speechRecognition.stop();
+      return;
+    }
+    if (!speechRecognition) {
+      speechRecognition = initSpeechRecognition();
+    }
+    if (!speechRecognition) {
+      appendBubble("system", "Voice input is not supported in this browser.");
+      return;
+    }
+    speechRecognition._resetTranscript();
+    input.value = "";
+    try {
+      speechRecognition.start();
+      isRecording = true;
+      micBtn.classList.add("recording");
+    } catch (e) {
+      isRecording = false;
+      micBtn.classList.remove("recording");
+    }
+  });
+}
+
 let settingsPanel = null;
 let settingsDebounce = null;
 

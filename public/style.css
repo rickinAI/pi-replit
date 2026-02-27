@@ -667,6 +667,72 @@ input[type="checkbox"]:checked ~ .interview-check::after {
   padding-bottom: 2px;
 }
 
+.mic-row {
+  display: flex;
+  justify-content: center;
+  padding: 6px 0 4px;
+}
+
+#mic-btn {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: 1.5px solid var(--green-dim);
+  background: rgba(0, 255, 65, 0.04);
+  color: var(--green-dim);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+#mic-btn:hover {
+  border-color: var(--green);
+  color: var(--green);
+  box-shadow: 0 0 12px rgba(0, 255, 65, 0.15);
+}
+
+#mic-btn:active {
+  transform: scale(0.95);
+}
+
+#mic-btn.recording {
+  border-color: #ff3333;
+  color: #ff3333;
+  background: rgba(255, 51, 51, 0.08);
+  box-shadow: 0 0 16px rgba(255, 51, 51, 0.25);
+  animation: micPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes micPulse {
+  0%, 100% { box-shadow: 0 0 16px rgba(255, 51, 51, 0.25); }
+  50% { box-shadow: 0 0 28px rgba(255, 51, 51, 0.45); }
+}
+
+.keyboard-open .mic-row {
+  display: none;
+}
+
+body.light-theme #mic-btn {
+  border-color: #c8bfb4;
+  color: #9a8e82;
+  background: rgba(90, 138, 122, 0.04);
+}
+
+body.light-theme #mic-btn:hover {
+  border-color: #5a8a7a;
+  color: #5a8a7a;
+  box-shadow: 0 0 12px rgba(90, 138, 122, 0.15);
+}
+
+body.light-theme #mic-btn.recording {
+  border-color: #e04040;
+  color: #e04040;
+  background: rgba(224, 64, 64, 0.06);
+  box-shadow: 0 0 16px rgba(224, 64, 64, 0.2);
+}
+
 .input-row {
   display: flex;
   align-items: center;
