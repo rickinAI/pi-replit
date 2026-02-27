@@ -1236,6 +1236,16 @@ function escapeHtml(str) {
 let glanceTimer = null;
 let glanceCollapseTimer = null;
 let glanceRefreshInterval = null;
+let glanceClockInterval = null;
+
+function getETTimeString() {
+  return new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" });
+}
+
+function updateGlanceClock() {
+  const el = document.getElementById("glance-clock");
+  if (el) el.textContent = getETTimeString();
+}
 
 async function fetchGlance() {
   const bar = document.getElementById("glance-bar");
@@ -1263,7 +1273,8 @@ async function fetchGlance() {
     if (parts.length === 0) parts.push("—");
 
     const sep = '<span class="glance-sep">·</span>';
-    collapsed.innerHTML = parts.join(sep);
+    const clockHtml = `<span id="glance-clock" class="glance-clock">${getETTimeString()}</span>`;
+    collapsed.innerHTML = clockHtml + sep + parts.join(sep);
 
     const detailRows = [];
     if (d.time) detailRows.push(row("time", e(d.time)));
@@ -1283,7 +1294,7 @@ async function fetchGlance() {
 
     bar.style.display = "";
   } catch {
-    collapsed.innerHTML = '<span style="opacity:0.3">—</span>';
+    collapsed.innerHTML = `<span id="glance-clock" class="glance-clock">${getETTimeString()}</span><span class="glance-sep">·</span><span style="opacity:0.3">—</span>`;
   }
   bar.classList.remove("loading");
 }
@@ -1304,6 +1315,7 @@ function initGlance() {
   });
   fetchGlance();
   glanceRefreshInterval = setInterval(fetchGlance, 5 * 60 * 1000);
+  glanceClockInterval = setInterval(updateGlanceClock, 30000);
 }
 
 initGlance();

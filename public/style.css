@@ -1698,6 +1698,17 @@ body.light-theme .copy-btn:hover {
   gap: 4px;
 }
 
+.glance-clock {
+  color: rgba(0, 255, 65, 0.7);
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+body.light-theme .glance-clock {
+  color: #6e6358;
+  font-weight: 600;
+}
+
 .glance-collapsed .glance-sep {
   color: rgba(0, 255, 65, 0.18);
   margin: 0 2px;
