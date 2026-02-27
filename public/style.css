@@ -1448,3 +1448,185 @@ input[type="checkbox"]:checked ~ .interview-check::after {
     width: 100vw;
   }
 }
+
+body.light-theme {
+  --green: #5a8a7a;
+  --green-dim: #4a7a6a;
+  --green-muted: #a8bfb6;
+  --green-glow: rgba(90, 138, 122, 0.12);
+  --green-subtle: rgba(90, 138, 122, 0.06);
+  --amber: #9a6d4e;
+  --amber-glow: rgba(154, 109, 78, 0.12);
+  --red: #c44;
+  --bg: #f7f5f2;
+  --surface: #ffffff;
+  --border: #e5e0da;
+  color: #2d2a26;
+}
+
+body.light-theme .scanlines {
+  display: none;
+}
+
+body.light-theme .logo {
+  text-shadow: none;
+}
+
+body.light-theme .status-dot {
+  box-shadow: none;
+}
+
+body.light-theme #header {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+body.light-theme .msg.user .bubble {
+  color: #2d2a26;
+  text-shadow: none;
+}
+
+body.light-theme .msg.user .bubble::before {
+  color: var(--green);
+}
+
+body.light-theme .msg.agent .bubble {
+  color: var(--amber);
+  text-shadow: none;
+}
+
+body.light-theme .msg.system .bubble {
+  color: #8a8580;
+}
+
+body.light-theme .bubble pre {
+  background: rgba(90, 138, 122, 0.05);
+}
+
+body.light-theme .bubble code {
+  background: rgba(154, 109, 78, 0.08);
+}
+
+body.light-theme .prompt-prefix {
+  text-shadow: none;
+}
+
+body.light-theme #input {
+  color: #2d2a26;
+  caret-color: var(--green);
+  text-shadow: none;
+}
+
+body.light-theme #input::placeholder {
+  color: #a8a098;
+}
+
+body.light-theme .input-row {
+  background: rgba(90, 138, 122, 0.02);
+}
+
+body.light-theme .input-row:focus-within {
+  box-shadow: 0 0 0 2px rgba(90, 138, 122, 0.15);
+}
+
+body.light-theme .model-badge {
+  background: var(--surface);
+}
+
+body.light-theme .model-badge[data-mode="fast"] .model-mode {
+  background: rgba(90, 138, 122, 0.12);
+  color: var(--green);
+}
+
+body.light-theme .model-badge[data-mode="full"] .model-mode {
+  background: rgba(154, 109, 78, 0.12);
+  color: var(--amber);
+}
+
+body.light-theme .icon-btn:hover,
+body.light-theme .icon-btn:active {
+  box-shadow: 0 0 0 2px rgba(90, 138, 122, 0.15);
+}
+
+body.light-theme .panel {
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.08);
+}
+
+body.light-theme .modal-box {
+  border-color: var(--border);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+}
+
+body.light-theme .modal {
+  background: rgba(247, 245, 242, 0.85);
+}
+
+body.light-theme .settings-close:hover {
+  color: #fff;
+}
+
+body.light-theme .settings-exit-btn:hover {
+  box-shadow: 0 0 12px rgba(204, 68, 68, 0.2);
+}
+
+body.light-theme .empty-state .pi-logo {
+  text-shadow: none;
+  color: var(--green);
+}
+
+body.light-theme .empty-state h2 {
+  text-shadow: none;
+}
+
+body.light-theme .brief-msg {
+  background: rgba(90, 138, 122, 0.03);
+}
+
+body.light-theme .alert-banner {
+  background: var(--surface);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+body.light-theme .interview-card {
+  background: var(--surface);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+body.light-theme .interview-text {
+  background: var(--bg);
+}
+
+body.light-theme .interview-submit:hover {
+  color: #fff;
+}
+
+body.light-theme .interview-option:hover {
+  background: rgba(90, 138, 122, 0.04);
+}
+
+body.light-theme .image-preview-remove {
+  background: rgba(255, 255, 255, 0.85);
+}
+
+body.light-theme .image-preview-remove:hover {
+  background: rgba(90, 138, 122, 0.15);
+}
+
+body.light-theme .alerts-settings-panel {
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.08);
+}
+
+body.light-theme .tool-pill {
+  color: #8a8580;
+}
+
+body.light-theme .msg-time {
+  color: #a8a098;
+}
+
+body.light-theme .copy-btn {
+  color: #a8a098;
+}
+
+body.light-theme .copy-btn:hover {
+  color: var(--green);
+}

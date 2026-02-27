@@ -714,12 +714,31 @@ sendBtn.addEventListener("click", sendMessage);
 let settingsPanel = null;
 let settingsDebounce = null;
 
+function applyTheme(theme) {
+  if (theme === "light") {
+    document.body.classList.add("light-theme");
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", "#f7f5f2");
+  } else {
+    document.body.classList.remove("light-theme");
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", "#000000");
+  }
+}
+
+(function initTheme() {
+  const saved = localStorage.getItem("theme");
+  if (saved) applyTheme(saved);
+})();
+
 function createSettingsPanel() {
   if (settingsPanel) return settingsPanel;
   const panel = document.createElement("div");
   panel.className = "alerts-settings-panel";
   panel.innerHTML = `
     <button class="settings-close">\u2715</button>
+    <div class="settings-section">
+      <h3>// APPEARANCE</h3>
+      <div class="settings-row"><label>Light Mode</label><input type="checkbox" class="settings-toggle" id="theme-toggle"></div>
+    </div>
     <div class="settings-section">
       <h3>// SCHEDULED BRIEFS</h3>
       <div class="settings-row"><label>Morning Brief</label><input type="checkbox" class="settings-toggle" data-brief="morning"></div>
@@ -772,7 +791,16 @@ function createSettingsPanel() {
 
   panel.querySelector(".settings-close").addEventListener("click", toggleSettings);
 
-  panel.querySelectorAll(".settings-toggle, .settings-select, .settings-input").forEach(el => {
+  const themeToggle = panel.querySelector("#theme-toggle");
+  themeToggle.checked = localStorage.getItem("theme") === "light";
+  themeToggle.addEventListener("change", () => {
+    const theme = themeToggle.checked ? "light" : "dark";
+    localStorage.setItem("theme", theme);
+    applyTheme(theme);
+    debounceSaveSettings();
+  });
+
+  panel.querySelectorAll(".settings-toggle:not(#theme-toggle), .settings-select, .settings-input").forEach(el => {
     el.addEventListener("change", () => debounceSaveSettings());
   });
 
@@ -822,6 +850,13 @@ async function loadSettingsConfig() {
     if (thInput && cfg.alerts?.stockMove) thInput.value = cfg.alerts.stockMove.thresholdPercent || 3;
 
     renderWatchlist(cfg.watchlist || []);
+
+    if (cfg.theme && !localStorage.getItem("theme")) {
+      localStorage.setItem("theme", cfg.theme);
+      applyTheme(cfg.theme);
+    }
+    const themeToggle = panel.querySelector("#theme-toggle");
+    if (themeToggle) themeToggle.checked = (localStorage.getItem("theme") || cfg.theme) === "light";
   } catch {}
 }
 
@@ -887,7 +922,7 @@ async function saveSettings() {
   if (!settingsPanel) return;
   const panel = settingsPanel;
 
-  const config = { briefs: {}, alerts: {}, watchlist: getCurrentWatchlist() };
+  const config = { briefs: {}, alerts: {}, watchlist: getCurrentWatchlist(), theme: localStorage.getItem("theme") || "dark" };
 
   for (const type of ["morning", "afternoon", "evening"]) {
     const toggle = panel.querySelector(`[data-brief="${type}"]`);

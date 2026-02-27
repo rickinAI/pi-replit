@@ -196,3 +196,61 @@ body {
   75% { transform: translateX(1px); }
   100% { transform: translateX(0); }
 }
+
+body.light-theme {
+  --green: #5a8a7a;
+  --green-dim: #4a7a6a;
+  --green-glow: rgba(90, 138, 122, 0.12);
+  --red: #c44;
+  --bg: #f7f5f2;
+  color: #2d2a26;
+}
+
+body.light-theme .scanlines {
+  display: none;
+}
+
+body.light-theme .ascii-art {
+  text-shadow: none;
+  color: #5a8a7a;
+}
+
+body.light-theme .boot-line {
+  text-shadow: none;
+  color: #8a8580;
+}
+
+body.light-theme .prompt-line {
+  background: rgba(90, 138, 122, 0.04);
+}
+
+body.light-theme .prompt-label {
+  text-shadow: none;
+}
+
+body.light-theme .prompt-input {
+  color: #2d2a26;
+  caret-color: var(--green);
+  text-shadow: none;
+}
+
+body.light-theme .prompt-input::placeholder {
+  color: #a8a098;
+}
+
+body.light-theme .cursor-blink {
+  background: var(--green);
+}
+
+body.light-theme .submit-btn {
+  text-shadow: none;
+}
+
+body.light-theme .submit-btn:hover {
+  background: rgba(90, 138, 122, 0.08);
+  box-shadow: 0 0 0 2px rgba(90, 138, 122, 0.15);
+}
+
+body.light-theme .error-msg {
+  text-shadow: none;
+}

@@ -11,6 +11,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="login.css" />
+  <script>if(localStorage.getItem("theme")==="light"){document.documentElement.style.background="#f7f5f2"}</script>
 </head>
 <body>
   <div class="scanlines"></div>
@@ -53,6 +54,11 @@
   </div>
 
   <script>
+    if (localStorage.getItem("theme") === "light") {
+      document.body.classList.add("light-theme");
+      document.querySelector('meta[name="theme-color"]')?.setAttribute("content", "#f7f5f2");
+    }
+
     const bootLines = [
       "BIOS v3.14.159 ... OK",
       "Memory check ... 32768 MB OK",

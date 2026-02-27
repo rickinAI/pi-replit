@@ -1433,6 +1433,7 @@ var DEFAULT_CONFIG = {
     { symbol: "bitcoin", type: "crypto", displaySymbol: "BTCUSD" },
     { symbol: "MSTR", type: "stock" }
   ],
+  theme: "dark",
   lastPrices: {},
   lastBriefRun: {}
 };
@@ -1494,6 +1495,7 @@ function updateConfig(partial) {
     }
   }
   if (partial.watchlist) config.watchlist = partial.watchlist;
+  if (partial.theme === "dark" || partial.theme === "light") config.theme = partial.theme;
   saveConfig();
   return getConfig();
 }

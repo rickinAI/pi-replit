@@ -42,6 +42,7 @@ interface AlertConfig {
     importantEmail: AlertToggle;
   };
   watchlist: WatchlistItem[];
+  theme: "dark" | "light";
   lastPrices: Record<string, number>;
   lastBriefRun: Record<string, string>;
 }
@@ -83,6 +84,7 @@ const DEFAULT_CONFIG: AlertConfig = {
     { symbol: "bitcoin", type: "crypto", displaySymbol: "BTCUSD" },
     { symbol: "MSTR", type: "stock" },
   ],
+  theme: "dark",
   lastPrices: {},
   lastBriefRun: {},
 };
@@ -150,6 +152,7 @@ export function updateConfig(partial: any): Omit<AlertConfig, "lastPrices" | "la
     }
   }
   if (partial.watchlist) config.watchlist = partial.watchlist;
+  if (partial.theme === "dark" || partial.theme === "light") config.theme = partial.theme;
   saveConfig();
   return getConfig();
 }
