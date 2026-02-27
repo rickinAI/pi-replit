@@ -61,6 +61,8 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - Login page: ASCII art header, simulated boot sequence, blinking cursor
 - Chat: terminal-style prompts, amber agent text
 - Mobile-friendly: visualViewport keyboard handling, 16px input fonts, 44px touch targets, smart auto-scroll
+- **PWA standalone mode**: `manifest.json` with icons, `display: standalone`, iOS safe area insets for notch/Dynamic Island/home indicator, `@media (display-mode: standalone)` CSS block, `viewport-fit=cover`
+- Auth-public paths: `/manifest.json`, `/icons/*` bypassed for PWA install
 
 ## API Routes
 

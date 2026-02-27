@@ -57,6 +57,9 @@ if (window.visualViewport) {
     });
   }
   vv.addEventListener("resize", onViewportResize);
+  if (window.navigator.standalone || window.matchMedia("(display-mode: standalone)").matches) {
+    onViewportResize();
+  }
 }
 
 (async () => {
