@@ -18,7 +18,6 @@ const statusBar     = document.getElementById("status-bar");
 const statusText    = document.getElementById("status-text");
 const newSessionBtn = document.getElementById("new-session-btn");
 const historyBtn    = document.getElementById("history-btn");
-const interviewNotice = document.getElementById("interview-notice");
 const statusDot     = document.getElementById("status-dot");
 const appEl         = document.getElementById("app");
 const historyPanel  = document.getElementById("history-panel");
@@ -122,7 +121,6 @@ async function doNewSession() {
   viewingHistory = false;
   clearMessages();
   showEmptyState();
-  interviewNotice.classList.add("hidden");
   setConnected(false);
   input.disabled = false;
   sendBtn.disabled = false;
@@ -313,12 +311,7 @@ function handleAgentEvent(event) {
       const name = event.toolName ?? "tool";
       showStatus(`[RUNNING ${name.toUpperCase()}...]`);
 
-      if (name === "interview") {
-        interviewNotice.classList.remove("hidden");
-        document.getElementById("interview-link").href = "/interview";
-      }
-
-      if (agentBubble) {
+      if (agentBubble && name !== "interview") {
         const pill = document.createElement("div");
         pill.className = "tool-pill";
         const dot = document.createElement("span");
@@ -334,7 +327,22 @@ function handleAgentEvent(event) {
 
     case "tool_execution_end": {
       agentBubble?.querySelectorAll(".tool-pill .dot").forEach(d => d.remove());
-      interviewNotice.classList.add("hidden");
+      break;
+    }
+
+    case "interview_form":
+      renderInterviewForm(event);
+      break;
+
+    case "interview_timeout": {
+      const activeCard = messages.querySelector(".interview-card:not(.interview-submitted)");
+      if (activeCard) {
+        activeCard.classList.add("interview-submitted");
+        activeCard.querySelectorAll("input, textarea").forEach(el => el.disabled = true);
+        const btn = activeCard.querySelector(".interview-submit");
+        if (btn) { btn.textContent = "TIMED OUT"; btn.disabled = true; }
+      }
+      hideStatus();
       break;
     }
 
@@ -388,6 +396,120 @@ function handleAgentEvent(event) {
       handleAlert(event);
       break;
   }
+}
+
+function renderInterviewForm(event) {
+  removeEmptyState();
+  showStatus("[WAITING FOR YOUR INPUT...]");
+
+  const card = document.createElement("div");
+  card.className = "msg interview-card";
+
+  let html = '<div class="interview-header">';
+  if (event.title) {
+    html += `<div class="interview-title">${escapeHtml(event.title)}</div>`;
+  }
+  if (event.description) {
+    html += `<div class="interview-desc">${escapeHtml(event.description)}</div>`;
+  }
+  html += '</div><div class="interview-questions">';
+
+  for (const q of event.questions) {
+    html += `<div class="interview-q" data-qid="${escapeHtml(q.id)}" data-qtype="${q.type}">`;
+    if (q.type === "info") {
+      html += `<div class="interview-q-text interview-info">${escapeHtml(q.question)}</div>`;
+      if (q.context) html += `<div class="interview-context">${escapeHtml(q.context)}</div>`;
+    } else {
+      html += `<div class="interview-q-text">${escapeHtml(q.question)}</div>`;
+      if (q.context) html += `<div class="interview-context">${escapeHtml(q.context)}</div>`;
+
+      if (q.type === "single" && q.options) {
+        const recs = q.recommended ? (Array.isArray(q.recommended) ? q.recommended : [q.recommended]) : [];
+        for (const opt of q.options) {
+          const isRec = recs.includes(opt);
+          html += `<label class="interview-option">
+            <input type="radio" name="iv_${escapeHtml(q.id)}" value="${escapeHtml(opt)}"${isRec ? ' checked' : ''}>
+            <span class="interview-radio"></span>
+            <span class="interview-opt-label">${escapeHtml(opt)}</span>
+            ${isRec ? '<span class="interview-rec">REC</span>' : ''}
+          </label>`;
+        }
+      } else if (q.type === "multi" && q.options) {
+        const recs = q.recommended ? (Array.isArray(q.recommended) ? q.recommended : [q.recommended]) : [];
+        for (const opt of q.options) {
+          const isRec = recs.includes(opt);
+          html += `<label class="interview-option">
+            <input type="checkbox" name="iv_${escapeHtml(q.id)}" value="${escapeHtml(opt)}"${isRec ? ' checked' : ''}>
+            <span class="interview-check"></span>
+            <span class="interview-opt-label">${escapeHtml(opt)}</span>
+            ${isRec ? '<span class="interview-rec">REC</span>' : ''}
+          </label>`;
+        }
+      } else if (q.type === "text") {
+        html += `<textarea class="interview-text" name="iv_${escapeHtml(q.id)}" rows="3" placeholder="Type your response..."></textarea>`;
+      }
+    }
+    html += '</div>';
+  }
+
+  html += '</div>';
+  html += '<div class="interview-actions"><button class="interview-submit">SUBMIT</button></div>';
+
+  card.innerHTML = html;
+  messages.insertBefore(card, scrollAnchor);
+  scrollToBottom();
+
+  const submitBtn2 = card.querySelector(".interview-submit");
+  submitBtn2.addEventListener("click", async () => {
+    if (!sessionId) {
+      submitBtn2.textContent = "NO ACTIVE SESSION";
+      return;
+    }
+
+    const responses = [];
+    for (const q of event.questions) {
+      if (q.type === "info") continue;
+      const qid = CSS.escape(q.id);
+      const qEl = card.querySelector(`[data-qid="${qid}"]`);
+      if (!qEl) continue;
+
+      if (q.type === "single") {
+        const checked = qEl.querySelector(`input[name="iv_${qid}"]:checked`);
+        if (checked) responses.push({ id: q.id, value: checked.value });
+      } else if (q.type === "multi") {
+        const checked = qEl.querySelectorAll(`input[name="iv_${qid}"]:checked`);
+        const vals = Array.from(checked).map(c => c.value);
+        if (vals.length > 0) responses.push({ id: q.id, value: vals });
+      } else if (q.type === "text") {
+        const textarea = qEl.querySelector("textarea");
+        if (textarea && textarea.value.trim()) {
+          responses.push({ id: q.id, value: textarea.value.trim() });
+        }
+      }
+    }
+
+    submitBtn2.disabled = true;
+    submitBtn2.textContent = "SUBMITTING...";
+
+    try {
+      const resp = await fetch(`/api/session/${sessionId}/interview-response`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ responses }),
+      });
+      if (!resp.ok) throw new Error("Server error");
+      submitBtn2.textContent = "SUBMITTED";
+      card.classList.add("interview-submitted");
+      card.querySelectorAll("input, textarea").forEach(el => el.disabled = true);
+      hideStatus();
+    } catch (err) {
+      submitBtn2.textContent = "ERROR — TAP TO RETRY";
+      submitBtn2.disabled = false;
+    }
+  });
+
+  const firstTextarea = card.querySelector(".interview-text");
+  if (firstTextarea) firstTextarea.focus();
 }
 
 function handleBrief(event) {

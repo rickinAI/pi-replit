@@ -10,7 +10,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Streams agent events via SSE (Server-Sent Events)
   - Tracks conversation messages and persists them to JSON files
   - Auto-saves conversations every 5 minutes; saves on session close/expiry/shutdown
-  - Proxies the pi-interview-tool at `/interview`
+  - Inline interview tool: AI sends structured question forms to user, waits for responses via Promise/SSE
   - Graceful shutdown on SIGHUP/SIGTERM/SIGINT (saves all conversations, releases port)
   - EADDRINUSE auto-recovery: detects port conflict, kills stale process, retries once
   - Periodic knowledge base health check (every 2 min) with connection status logging
@@ -77,7 +77,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 | `/api/alerts/config` | PUT | Update alert/brief configuration |
 | `/api/alerts/trigger/:type` | POST | Manually trigger a brief (morning/afternoon/evening) |
 | `/health` | GET | Health check |
-| `/interview/*` | GET | Proxy to pi-interview-tool |
+| `/api/session/:id/interview-response` | POST | Submit interview form responses |
 
 ## Knowledge Base Integration
 
@@ -199,13 +199,21 @@ Proactive background scheduler that pushes briefings and alerts via SSE to all c
 - `@mariozechner/pi-coding-agent` — Pi coding agent SDK
 - `@sinclair/typebox` — JSON schema for tool parameters
 - `googleapis` — Google APIs client (Gmail, Calendar)
-- `express`, `cors`, `cookie-parser`, `http-proxy-middleware`
+- `express`, `cors`, `cookie-parser`
 
 ## src/ Modules
 - **src/twitter.ts** — X/Twitter reader (fxtwitter for profiles/tweets, syndication API for timelines)
 - **src/stocks.ts** — Stock quotes (Yahoo Finance) and crypto prices (CoinGecko)
 - **src/maps.ts** — Directions (Nominatim + OSRM) and place search (Nominatim)
 - **src/alerts.ts** — Alert & briefing scheduler (background checks, brief generation, SSE broadcast)
+
+## Interview / Clarification Forms
+
+1 custom tool for structured user input:
+- `interview` — Sends an interactive form (single-select, multi-select, text, info) inline in the chat
+- Server holds a Promise that resolves when user POSTs responses to `/api/session/:id/interview-response`
+- 5-minute timeout; form grays out after submission
+- System prompt instructs the AI to use it for ambiguous requests, multi-option choices, and project setup
 
 ## Two-Tier Model System
 
@@ -228,7 +236,6 @@ Automatic model routing to optimize cost and speed:
 - `OBSIDIAN_API_KEY` (secret) — API key from knowledge base REST API plugin
 - `GMAIL_REDIRECT_URI` (env) — OAuth redirect URI for Gmail (overrides auto-detected Replit domain). Must match what's registered in Google Cloud Console.
 - `PORT` — Server port (default: 3000)
-- `INTERVIEW_PORT` — Interview tool port (default: 19847)
 
 ## Deployment
 

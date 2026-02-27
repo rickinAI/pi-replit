@@ -439,22 +439,221 @@ body {
   animation: spin 0.7s linear infinite;
 }
 
-#interview-notice {
-  flex-shrink: 0;
-  background: var(--surface);
-  border-top: 1px solid var(--green-muted);
-  padding: 10px 12px;
-  text-align: center;
+.interview-card {
+  max-width: 100% !important;
+  border: 1px solid var(--green-dim);
+  border-radius: 2px;
+  background: rgba(0, 255, 0, 0.02);
+  padding: 16px;
+  animation: fadeUp 0.3s ease;
 }
 
-#interview-notice.hidden { display: none; }
+.interview-submitted {
+  opacity: 0.6;
+  border-color: var(--border);
+}
 
-#interview-link {
+.interview-header {
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.interview-title {
+  font-size: 13px;
+  font-weight: 700;
   color: var(--green);
+  text-shadow: 0 0 5px var(--green-glow);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.interview-desc {
+  font-size: 11px;
+  color: var(--green-dim);
+}
+
+.interview-questions {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.interview-q {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.interview-q-text {
   font-size: 12px;
-  text-decoration: none;
+  color: var(--amber);
+  font-weight: 600;
+}
+
+.interview-q-text.interview-info {
+  color: var(--green-dim);
+  font-weight: 400;
+  font-style: italic;
+  border-left: 2px solid var(--border);
+  padding-left: 8px;
+}
+
+.interview-context {
+  font-size: 10px;
+  color: var(--green-muted);
+  margin-bottom: 2px;
+}
+
+.interview-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-size: 12px;
+}
+
+.interview-option:hover {
+  border-color: var(--green-dim);
+  background: rgba(0, 255, 0, 0.03);
+}
+
+.interview-option input[type="radio"],
+.interview-option input[type="checkbox"] {
+  display: none;
+}
+
+.interview-radio {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid var(--green-dim);
+  flex-shrink: 0;
+  position: relative;
+  transition: all 0.15s;
+}
+
+input[type="radio"]:checked ~ .interview-radio {
+  border-color: var(--green);
+  box-shadow: 0 0 6px var(--green-glow);
+}
+
+input[type="radio"]:checked ~ .interview-radio::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+}
+
+.interview-check {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  border: 1.5px solid var(--green-dim);
+  flex-shrink: 0;
+  position: relative;
+  transition: all 0.15s;
+}
+
+input[type="checkbox"]:checked ~ .interview-check {
+  border-color: var(--green);
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green-glow);
+}
+
+input[type="checkbox"]:checked ~ .interview-check::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 4px;
+  width: 4px;
+  height: 8px;
+  border: solid #000;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.interview-opt-label {
+  color: var(--green);
+  flex: 1;
+}
+
+.interview-rec {
+  font-size: 9px;
+  color: var(--amber);
+  border: 1px solid var(--amber);
+  border-radius: 2px;
+  padding: 0 4px;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+
+.interview-text {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--green);
   font-family: var(--font);
-  text-shadow: 0 0 3px var(--green-glow);
+  font-size: 12px;
+  padding: 8px;
+  resize: vertical;
+  outline: none;
+  caret-color: var(--green);
+  transition: border-color 0.15s;
+}
+
+.interview-text:focus {
+  border-color: var(--green-dim);
+  box-shadow: 0 0 6px rgba(0, 255, 0, 0.1);
+}
+
+.interview-text::placeholder {
+  color: var(--green-muted);
+}
+
+.interview-actions {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.interview-submit {
+  background: none;
+  border: 1px solid var(--green-dim);
+  border-radius: 2px;
+  color: var(--green);
+  font-family: var(--font);
+  font-size: 12px;
+  padding: 8px 24px;
+  cursor: pointer;
+  letter-spacing: 1px;
+  transition: all 0.15s;
+}
+
+.interview-submit:hover {
+  background: var(--green);
+  color: #000;
+  box-shadow: 0 0 12px var(--green-glow);
+}
+
+.interview-submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.interview-submit:disabled:hover {
+  background: none;
+  color: var(--green);
+  box-shadow: none;
 }
 
 #input-area {

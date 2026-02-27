@@ -5,7 +5,6 @@ import { createServer } from "http";
 import { fileURLToPath } from "url";
 import path from "path";
 import fs from "fs";
-import { createProxyMiddleware } from "http-proxy-middleware";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
 
@@ -35,7 +34,6 @@ import * as maps from "./src/maps.js";
 import * as alerts from "./src/alerts.js";
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
-const INTERVIEW_PORT = parseInt(process.env.INTERVIEW_PORT || "19847", 10);
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
 const APP_PASSWORD = process.env.APP_PASSWORD || "";
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
@@ -459,7 +457,96 @@ function buildMapsTools(): ToolDefinition[] {
   ];
 }
 
+function buildInterviewTool(sessionId: string): ToolDefinition[] {
+  return [
+    {
+      name: "interview",
+      label: "Interview",
+      description:
+        "Ask the user structured clarification questions via an interactive form. Use this when you need specific choices, preferences, or detailed context from the user before proceeding. Supports single-select (pick one), multi-select (pick many), text (free input), and info (display-only context). The form appears inline in the chat. Returns the user's responses as key-value pairs.",
+      parameters: Type.Object({
+        title: Type.Optional(Type.String({ description: "Title shown at the top of the form" })),
+        description: Type.Optional(Type.String({ description: "Brief description or context for the form" })),
+        questions: Type.Array(
+          Type.Object({
+            id: Type.String({ description: "Unique identifier for this question" }),
+            type: Type.Union([
+              Type.Literal("single"),
+              Type.Literal("multi"),
+              Type.Literal("text"),
+              Type.Literal("info"),
+            ], { description: "Question type: single (radio), multi (checkbox), text (free input), info (display only)" }),
+            question: Type.String({ description: "The question text to display" }),
+            options: Type.Optional(Type.Array(Type.String(), { description: "Options for single/multi select questions" })),
+            recommended: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: "Recommended option(s) shown with a badge" })),
+            context: Type.Optional(Type.String({ description: "Additional helper text shown below the question" })),
+          }),
+          { description: "Array of questions to ask the user" }
+        ),
+      }),
+      async execute(toolCallId, params) {
+        const entry = sessions.get(sessionId);
+        if (!entry) {
+          return { content: [{ type: "text" as const, text: "Session expired." }], details: {} };
+        }
+
+        if (entry.interviewWaiter) {
+          return { content: [{ type: "text" as const, text: "An interview form is already active. Wait for the user to respond before sending another." }], details: {} };
+        }
+
+        const interviewEvent = JSON.stringify({
+          type: "interview_form",
+          toolCallId,
+          title: params.title,
+          description: params.description,
+          questions: params.questions,
+        });
+        for (const sub of entry.subscribers) {
+          try { sub.write(`data: ${interviewEvent}\n\n`); } catch {}
+        }
+
+        const responses = await new Promise<any[]>((resolve) => {
+          const timer = setTimeout(() => {
+            if (entry.interviewWaiter) {
+              entry.interviewWaiter = undefined;
+              const timeoutEvent = JSON.stringify({ type: "interview_timeout" });
+              for (const sub of entry.subscribers) {
+                try { sub.write(`data: ${timeoutEvent}\n\n`); } catch {}
+              }
+              resolve([]);
+            }
+          }, 5 * 60 * 1000);
+
+          entry.interviewWaiter = { resolve, reject: () => {}, timer };
+        });
+
+        if (responses.length === 0) {
+          return {
+            content: [{ type: "text" as const, text: "The user did not respond to the interview form (timed out after 5 minutes). You can ask them directly in chat instead." }],
+            details: { timedOut: true },
+          };
+        }
+
+        const formatted = responses
+          .map(r => `**${r.id}**: ${Array.isArray(r.value) ? r.value.join(", ") : r.value}`)
+          .join("\n");
+
+        return {
+          content: [{ type: "text" as const, text: formatted }],
+          details: { responses },
+        };
+      },
+    },
+  ];
+}
+
 type ModelMode = "auto" | "fast" | "full";
+
+interface InterviewWaiter {
+  resolve: (responses: any[]) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
 
 interface SessionEntry {
   session: Awaited<ReturnType<typeof createAgentSession>>["session"];
@@ -469,6 +556,7 @@ interface SessionEntry {
   currentAgentText: string;
   modelMode: ModelMode;
   activeModelName: string;
+  interviewWaiter?: InterviewWaiter;
 }
 const sessions = new Map<string, SessionEntry>();
 
@@ -600,22 +688,6 @@ app.get("/api/logout", (_req: Request, res: Response) => {
 
 app.use(express.static(PUBLIC_DIR));
 
-app.use(
-  "/interview",
-  createProxyMiddleware({
-    target: `http://localhost:${INTERVIEW_PORT}`,
-    changeOrigin: true,
-    on: {
-      error: (_err, _req, res) => {
-        try {
-          if ("writeHead" in res && typeof (res as any).status === "function") {
-            (res as any).status(502).json({ error: "Interview tool is not running." });
-          }
-        } catch {}
-      },
-    },
-  })
-);
 
 app.get("/api/gmail/auth", (_req: Request, res: Response) => {
   if (!gmail.isConfigured()) {
@@ -670,6 +742,7 @@ app.post("/api/session", async (_req: Request, res: Response) => {
       ...buildTwitterTools(),
       ...buildStockTools(),
       ...buildMapsTools(),
+      ...buildInterviewTool(sessionId),
     ];
     console.log(`[session] ${allTools.length} tools registered`);
     const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false } });
@@ -847,6 +920,25 @@ app.get("/api/session/:id/model-mode", (req: Request, res: Response) => {
   const entry = sessions.get(req.params["id"] as string);
   if (!entry) { res.status(404).json({ error: "Session not found" }); return; }
   res.json({ mode: entry.modelMode, activeModel: entry.activeModelName });
+});
+
+app.post("/api/session/:id/interview-response", (req: Request, res: Response) => {
+  const entry = sessions.get(req.params["id"] as string);
+  if (!entry) { res.status(404).json({ error: "Session not found" }); return; }
+
+  const { responses } = req.body as { responses?: any[] };
+  if (!responses || !Array.isArray(responses)) {
+    res.status(400).json({ error: "responses array required" }); return;
+  }
+
+  if (entry.interviewWaiter) {
+    clearTimeout(entry.interviewWaiter.timer);
+    entry.interviewWaiter.resolve(responses);
+    entry.interviewWaiter = undefined;
+    console.log(`[interview] Received ${responses.length} responses for session ${req.params["id"]}`);
+  }
+
+  res.json({ ok: true });
 });
 
 app.delete("/api/session/:id", (req: Request, res: Response) => {
