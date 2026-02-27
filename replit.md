@@ -62,6 +62,8 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - Chat: terminal-style prompts, amber agent text
 - Mobile-friendly: visualViewport keyboard handling, 16px input fonts, 44px touch targets, smart auto-scroll
 - **Glance bar**: Slim strip pinned below header showing day-at-a-glance (weather, unread emails, task count, next calendar event). Tap to expand 3-line detail card (auto-collapses after 8s). Fetches from `/api/glance` every 5 min. Both dark/light mode styled. Graceful degradation when data sources unavailable.
+- **Suggestion chips**: After each AI response, 2-3 contextual follow-up prompts appear as tappable pill buttons below the message. AI generates them via `[suggestions: "...", "..."]` tag (stripped from display). Tapping a chip sends it as the next prompt. Chips cleared on new message or new AI response.
+- **Dynamic profile learning**: AI maintains a structured profile in the vault (`About Me/My Profile.md`) with sections for preferences, routines, active projects, goals, key people, interests, decision patterns, and frequent requests. Also updates `About Me/About Me.md` and `About Me/My Style Guide.md` directly when learning relevant info. All three loaded at session start.
 - **PWA standalone mode**: `manifest.json` with icons, `display: standalone`, iOS safe area insets for notch/Dynamic Island/home indicator, `@media (display-mode: standalone)` CSS block, `viewport-fit=cover`
 - Auth-public paths: `/manifest.json`, `/icons/*` bypassed for PWA install
 

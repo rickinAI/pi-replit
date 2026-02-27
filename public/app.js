@@ -293,6 +293,7 @@ function handleAgentEvent(event) {
       isAgentRunning = true;
       agentBubble = null;
       agentText = "";
+      removeSuggestionChips();
       showStatus("[PROCESSING...]");
       break;
 
@@ -363,6 +364,10 @@ function handleAgentEvent(event) {
 
     case "agent_end":
       if (agentBubble && agentText) {
+        const suggestions = parseSuggestions(agentText);
+        if (suggestions.length > 0) {
+          agentText = agentText.replace(/\[suggestions:[\s\S]*?\]\s*$/, "").trimEnd();
+        }
         const bbl = agentBubble.querySelector(".bubble");
         if (bbl) {
           bbl.innerHTML = renderMarkdown(agentText);
@@ -381,6 +386,24 @@ function handleAgentEvent(event) {
             });
           });
           agentBubble.appendChild(copyBtn);
+        }
+        if (suggestions.length > 0) {
+          removeSuggestionChips();
+          const chips = document.createElement("div");
+          chips.className = "suggestion-chips";
+          suggestions.forEach(text => {
+            const chip = document.createElement("button");
+            chip.className = "suggestion-chip";
+            chip.textContent = text;
+            chip.addEventListener("click", () => {
+              input.value = text;
+              removeSuggestionChips();
+              sendMessage();
+            });
+            chips.appendChild(chip);
+          });
+          messages.insertBefore(chips, scrollAnchor);
+          scrollToBottom();
         }
       }
       isAgentRunning = false;
@@ -666,7 +689,30 @@ function renderImagePreviews() {
   });
 }
 
+function removeSuggestionChips() {
+  document.querySelectorAll(".suggestion-chips").forEach(el => el.remove());
+}
+
+function parseSuggestions(text) {
+  const match = text.match(/\[suggestions:\s*([\s\S]*?)\]\s*$/);
+  if (!match) return [];
+  const inner = match[1];
+  const suggestions = [];
+  const re = /"([^"]*?)"/g;
+  let m;
+  while ((m = re.exec(inner)) !== null) {
+    const s = m[1].trim();
+    if (s) suggestions.push(s);
+  }
+  return suggestions;
+}
+
+function stripSuggestionTag(text) {
+  return text.replace(/\[suggestions:[\s\S]*?\]\s*$/, "").trimEnd();
+}
+
 async function sendMessage() {
+  removeSuggestionChips();
   const text = input.value.trim();
   const images = pendingImages.map(i => ({ mimeType: i.mimeType, data: i.data }));
   if ((!text && images.length === 0) || !sessionId || isAgentRunning || viewingHistory) return;
@@ -1067,11 +1113,12 @@ function appendBubble(role, text, timestamp) {
   const msg = document.createElement("div");
   msg.className = `msg ${role}`;
 
+  const cleanText = (role === "agent") ? stripSuggestionTag(text) : text;
   const bubble = document.createElement("div");
   bubble.className = "bubble";
   if (role === "agent") {
-    bubble.innerHTML = renderMarkdown(text);
-    bubble.dataset.rawText = text;
+    bubble.innerHTML = renderMarkdown(cleanText);
+    bubble.dataset.rawText = cleanText;
   } else {
     bubble.textContent = text;
   }

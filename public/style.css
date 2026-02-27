@@ -1768,3 +1768,51 @@ body.light-theme .glance-expanded .glance-detail-label {
 body.light-theme .glance-expanded .glance-detail-value {
   color: #6e6358;
 }
+
+.suggestion-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 16px 10px;
+  animation: chipFadeIn 0.3s ease;
+}
+
+@keyframes chipFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.suggestion-chip {
+  background: transparent;
+  border: 1px solid rgba(0, 255, 65, 0.2);
+  color: rgba(0, 255, 65, 0.55);
+  font-family: var(--font);
+  font-size: 11px;
+  padding: 5px 14px;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s, box-shadow 0.2s;
+  min-height: 28px;
+  white-space: nowrap;
+}
+
+.suggestion-chip:hover {
+  border-color: rgba(0, 255, 65, 0.45);
+  color: rgba(0, 255, 65, 0.8);
+  box-shadow: 0 0 6px rgba(0, 255, 65, 0.1);
+}
+
+.suggestion-chip:active {
+  transform: scale(0.96);
+}
+
+body.light-theme .suggestion-chip {
+  border-color: rgba(90, 138, 122, 0.25);
+  color: #8a7e72;
+}
+
+body.light-theme .suggestion-chip:hover {
+  border-color: rgba(90, 138, 122, 0.5);
+  color: #5a8a7a;
+  box-shadow: none;
+}
