@@ -1533,31 +1533,8 @@ ${result}`;
       }
       case "tasks": {
         const localTasks = listTasks();
-        let vaultTasks = "";
-        if (isConfigured()) {
-          try {
-            const listing = await listNotes("Tasks & TODOs/");
-            const parsed = JSON.parse(listing);
-            const files = (parsed.files || []).filter((f) => f.endsWith(".md")).slice(0, 10);
-            const reads = [];
-            for (const file of files) {
-              try {
-                const content = await readNote(`Tasks & TODOs/${file}`);
-                const label = file.replace(/\.md$/i, "");
-                reads.push(`**${label}:**
-${content.slice(0, 500)}`);
-              } catch {
-              }
-            }
-            if (reads.length > 0) vaultTasks = reads.join("\n\n");
-          } catch {
-          }
-        }
-        const parts = [`**Local Tasks:**
-${localTasks}`];
-        if (vaultTasks) parts.push(`**Vault Tasks:**
-${vaultTasks}`);
-        return parts.join("\n\n");
+        return `**Tasks:**
+${localTasks}`;
       }
       case "weather": {
         const result = await getWeather(config.location);

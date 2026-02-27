@@ -550,7 +550,7 @@ function handleBrief(event) {
   wrapper.appendChild(body);
 
   messages.insertBefore(wrapper, scrollAnchor);
-  throttledScroll();
+  wrapper.scrollIntoView({ behavior: "auto", block: "start" });
 
   if (document.hidden) {
     playAlertSound();

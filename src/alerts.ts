@@ -196,28 +196,7 @@ async function gatherSection(name: string): Promise<string> {
       }
       case "tasks": {
         const localTasks = tasks.listTasks();
-        let vaultTasks = "";
-        if (obsidian.isConfigured()) {
-          try {
-            const listing = await obsidian.listNotes("Tasks & TODOs/");
-            const parsed = JSON.parse(listing);
-            const files: string[] = (parsed.files || [])
-              .filter((f: string) => f.endsWith(".md"))
-              .slice(0, 10);
-            const reads: string[] = [];
-            for (const file of files) {
-              try {
-                const content = await obsidian.readNote(`Tasks & TODOs/${file}`);
-                const label = file.replace(/\.md$/i, "");
-                reads.push(`**${label}:**\n${content.slice(0, 500)}`);
-              } catch {}
-            }
-            if (reads.length > 0) vaultTasks = reads.join("\n\n");
-          } catch {}
-        }
-        const parts = [`**Local Tasks:**\n${localTasks}`];
-        if (vaultTasks) parts.push(`**Vault Tasks:**\n${vaultTasks}`);
-        return parts.join("\n\n");
+        return `**Tasks:**\n${localTasks}`;
       }
       case "weather": {
         const result = await weather.getWeather(config.location);
