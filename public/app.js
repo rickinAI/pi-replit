@@ -28,6 +28,7 @@ const confirmModal  = document.getElementById("confirm-modal");
 const modalConfirm  = document.getElementById("modal-confirm");
 const modalCancel   = document.getElementById("modal-cancel");
 const alertsSettingsBtn = document.getElementById("alerts-settings-btn");
+const generateBriefBtn = document.getElementById("generate-brief-btn");
 
 function checkAuth(res) {
   if (res.status === 401) {
@@ -603,16 +604,8 @@ function createSettingsPanel() {
       <div class="settings-row"><label>Task Deadline Alerts</label><input type="checkbox" class="settings-toggle" data-alert="taskDeadline"></div>
       <div class="settings-row"><label>Important Email Alerts</label><input type="checkbox" class="settings-toggle" data-alert="importantEmail"></div>
     </div>
-    <div class="settings-section">
-      <h3>// TEST</h3>
-      <div class="trigger-row">
-        <select class="settings-select" id="trigger-type">
-          <option value="morning">Morning</option>
-          <option value="afternoon">Afternoon</option>
-          <option value="evening">Evening</option>
-        </select>
-        <button class="settings-btn trigger-btn" id="trigger-btn">TRIGGER BRIEF</button>
-      </div>
+    <div class="settings-section settings-exit-section">
+      <a href="/api/logout" class="settings-exit-btn">[EXIT]</a>
     </div>
   `;
   document.body.appendChild(panel);
@@ -639,18 +632,6 @@ function createSettingsPanel() {
   panel.querySelector("#watchlist-add-btn").addEventListener("click", addWatchlistItem);
   panel.querySelector("#watchlist-input").addEventListener("keydown", e => {
     if (e.key === "Enter") addWatchlistItem();
-  });
-
-  panel.querySelector("#trigger-btn").addEventListener("click", async () => {
-    const type = panel.querySelector("#trigger-type").value;
-    const btn = panel.querySelector("#trigger-btn");
-    btn.textContent = "LOADING...";
-    btn.disabled = true;
-    try {
-      await fetch(`/api/alerts/trigger/${type}`, { method: "POST" });
-    } catch {}
-    btn.textContent = "TRIGGER BRIEF";
-    btn.disabled = false;
   });
 
   return panel;
@@ -792,6 +773,18 @@ async function saveSettings() {
 }
 
 alertsSettingsBtn.addEventListener("click", toggleSettings);
+
+generateBriefBtn.addEventListener("click", async () => {
+  const hour = new Date().getHours();
+  const type = hour < 12 ? "morning" : hour < 17 ? "afternoon" : "evening";
+  generateBriefBtn.disabled = true;
+  generateBriefBtn.classList.add("loading");
+  try {
+    await fetch(`/api/alerts/trigger/${type}`, { method: "POST" });
+  } catch {}
+  generateBriefBtn.disabled = false;
+  generateBriefBtn.classList.remove("loading");
+});
 
 const uploadBtn = document.getElementById("upload-btn");
 const imageUpload = document.getElementById("image-upload");

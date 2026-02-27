@@ -138,23 +138,32 @@ body {
   box-shadow: 0 0 8px var(--green-glow);
 }
 
-.logout-btn {
+.icon-btn.loading {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.settings-exit-section {
+  text-align: center;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.settings-exit-btn {
+  display: inline-block;
   background: none;
   border: 1px solid var(--border);
   border-radius: 2px;
   color: var(--green-dim);
   cursor: pointer;
-  padding: 4px 10px;
-  min-height: 36px;
+  padding: 6px 24px;
   font-family: var(--font);
-  font-size: 10px;
+  font-size: 11px;
+  text-decoration: none;
   transition: all 0.15s;
-  touch-action: manipulation;
-  display: flex;
-  align-items: center;
 }
 
-.logout-btn:hover, .logout-btn:active {
+.settings-exit-btn:hover {
   color: var(--red);
   border-color: var(--red);
 }
@@ -1156,12 +1165,6 @@ body {
   color: var(--green);
 }
 
-.settings-btn.trigger-btn {
-  width: 100%;
-  margin-top: 4px;
-  padding: 6px 12px;
-}
-
 .settings-close {
   position: absolute;
   top: 16px;
@@ -1176,16 +1179,6 @@ body {
 
 .settings-close:hover {
   color: var(--green);
-}
-
-.trigger-row {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-
-.trigger-row select {
-  flex: 1;
 }
 
 @media (max-width: 600px) {
