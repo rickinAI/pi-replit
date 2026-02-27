@@ -101,7 +101,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - `notes_append` — Append content to an existing note
 - `notes_search` — Full-text search across all notes
 
-Requires Local REST API plugin + Named Cloudflare Tunnel with a permanent hostname (see `tunnel-setup/`). The URL is set once in `OBSIDIAN_API_URL` and never changes. A fallback `/api/config/tunnel-url` endpoint exists for manual URL overrides.
+Requires Local REST API plugin + Cloudflare Quick Tunnel (see `tunnel-setup/`). Tunnel URL is pushed from the Mac via `/api/config/tunnel-url` and persisted to `data/tunnel-url.txt` so it survives server restarts and redeployments.
 
 ## Gmail Integration
 

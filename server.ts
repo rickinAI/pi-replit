@@ -1033,6 +1033,25 @@ app.delete("/api/conversations/:id", (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
+const TUNNEL_URL_FILE = path.join(PROJECT_ROOT, "data", "tunnel-url.txt");
+
+function persistTunnelUrl(url: string) {
+  try { fs.writeFileSync(TUNNEL_URL_FILE, url, "utf-8"); } catch {}
+}
+
+function loadPersistedTunnelUrl(): string | null {
+  try { return fs.readFileSync(TUNNEL_URL_FILE, "utf-8").trim() || null; } catch { return null; }
+}
+
+(function initTunnelUrl() {
+  const envUrl = process.env.OBSIDIAN_API_URL || "";
+  const savedUrl = loadPersistedTunnelUrl();
+  if (savedUrl && savedUrl !== envUrl) {
+    obsidian.setApiUrl(savedUrl);
+    console.log(`[boot] Loaded persisted tunnel URL: ${savedUrl}`);
+  }
+})();
+
 app.post("/api/config/tunnel-url", (req: Request, res: Response) => {
   const auth = req.headers.authorization;
   if (!auth || auth !== `Bearer ${process.env.OBSIDIAN_API_KEY}`) {
@@ -1045,6 +1064,7 @@ app.post("/api/config/tunnel-url", (req: Request, res: Response) => {
     return;
   }
   obsidian.setApiUrl(url);
+  persistTunnelUrl(url);
   console.log(`Tunnel URL updated to: ${url}`);
   res.json({ ok: true, url });
 });
