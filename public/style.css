@@ -92,6 +92,16 @@ body {
   gap: 2px;
 }
 
+.badge-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.badge-row .status-dot {
+  flex-shrink: 0;
+}
+
 .model-badge {
   font-size: 10px;
   color: var(--green-dim);
@@ -166,20 +176,15 @@ body {
   font-family: var(--font);
   display: flex;
   align-items: center;
-  gap: 5px;
   transition: all 0.3s;
 }
 
-.kb-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--green);
-  box-shadow: 0 0 4px var(--green-glow);
-  transition: background 0.3s, box-shadow 0.3s;
+.kb-badge.offline {
+  border-color: rgba(255, 0, 0, 0.3);
+  color: var(--red);
 }
 
-.kb-badge.offline .kb-dot {
+.kb-dot.offline {
   background: var(--red);
   box-shadow: 0 0 4px rgba(255, 0, 0, 0.4);
 }

@@ -20,6 +20,7 @@ const newSessionBtn = document.getElementById("new-session-btn");
 const historyBtn    = document.getElementById("history-btn");
 const statusDot     = document.getElementById("status-dot");
 const kbBadge       = document.getElementById("kb-badge");
+const kbDot         = document.getElementById("kb-dot");
 const appEl         = document.getElementById("app");
 const historyPanel  = document.getElementById("history-panel");
 const historyList   = document.getElementById("history-list");
@@ -294,15 +295,18 @@ async function pollKbStatus() {
     if (!res.ok) throw new Error("not ok");
     const { online } = await res.json();
     if (online) {
+      kbDot.classList.remove("offline");
+      kbDot.title = "Knowledge Vault: connected";
       kbBadge.classList.remove("offline");
-      kbBadge.title = "Knowledge Vault: connected";
     } else {
+      kbDot.classList.add("offline");
+      kbDot.title = "Knowledge Vault: offline";
       kbBadge.classList.add("offline");
-      kbBadge.title = "Knowledge Vault: offline";
     }
   } catch {
+    kbDot.classList.add("offline");
+    kbDot.title = "Knowledge Vault: unknown";
     kbBadge.classList.add("offline");
-    kbBadge.title = "Knowledge Vault: unknown";
   }
 }
 pollKbStatus();
