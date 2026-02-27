@@ -979,6 +979,7 @@ body.light-theme #mic-btn.recording {
   align-items: center;
   justify-content: space-between;
   padding: 12px;
+  padding-top: calc(12px + var(--safe-top));
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
