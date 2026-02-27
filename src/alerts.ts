@@ -96,6 +96,7 @@ let briefInterval: ReturnType<typeof setInterval> | null = null;
 let alertInterval: ReturnType<typeof setInterval> | null = null;
 let alertedCalendarEvents = new Set<string>();
 let alertedEmailIds = new Set<string>();
+let initialAlertCheckDone = false;
 let briefRunning = false;
 let alertRunning = false;
 let lastDedupeReset = "";
@@ -476,17 +477,19 @@ async function doCheckAlerts() {
           const emailId = match[1];
           if (!alertedEmailIds.has(emailId)) {
             alertedEmailIds.add(emailId);
-            const lineIdx = result.indexOf(`[${emailId}]`);
-            const lineStart = result.lastIndexOf("\n", lineIdx) + 1;
-            const lineEnd = result.indexOf("\n", lineIdx);
-            const emailLine = result.slice(lineStart, lineEnd === -1 ? undefined : lineEnd).trim();
-            broadcastFn?.({
-              type: "alert",
-              alertType: "email",
-              title: "Important Email",
-              content: emailLine.replace(/^\d+\.\s*\*?\s*/, ""),
-              timestamp: now.toISOString(),
-            });
+            if (initialAlertCheckDone) {
+              const lineIdx = result.indexOf(`[${emailId}]`);
+              const lineStart = result.lastIndexOf("\n", lineIdx) + 1;
+              const lineEnd = result.indexOf("\n", lineIdx);
+              const emailLine = result.slice(lineStart, lineEnd === -1 ? undefined : lineEnd).trim();
+              broadcastFn?.({
+                type: "alert",
+                alertType: "email",
+                title: "Important Email",
+                content: emailLine.replace(/^\d+\.\s*\*?\s*/, ""),
+                timestamp: now.toISOString(),
+              });
+            }
           }
         }
       }
@@ -512,9 +515,15 @@ export function startAlertSystem(broadcast: BroadcastFn) {
 
   alertedCalendarEvents.clear();
   alertedEmailIds.clear();
+  initialAlertCheckDone = false;
 
-  setTimeout(() => {
-    checkAlerts().catch(err => console.error("[alerts] Initial alert check error:", err));
+  setTimeout(async () => {
+    try {
+      await checkAlerts();
+    } catch (err) {
+      console.error("[alerts] Initial alert check error:", err);
+    }
+    initialAlertCheckDone = true;
   }, 30_000);
 }
 

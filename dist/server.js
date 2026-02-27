@@ -1444,6 +1444,7 @@ var briefInterval = null;
 var alertInterval = null;
 var alertedCalendarEvents = /* @__PURE__ */ new Set();
 var alertedEmailIds = /* @__PURE__ */ new Set();
+var initialAlertCheckDone = false;
 var briefRunning = false;
 var alertRunning = false;
 var lastDedupeReset = "";
@@ -1798,17 +1799,19 @@ async function doCheckAlerts() {
           const emailId = match[1];
           if (!alertedEmailIds.has(emailId)) {
             alertedEmailIds.add(emailId);
-            const lineIdx = result.indexOf(`[${emailId}]`);
-            const lineStart = result.lastIndexOf("\n", lineIdx) + 1;
-            const lineEnd = result.indexOf("\n", lineIdx);
-            const emailLine = result.slice(lineStart, lineEnd === -1 ? void 0 : lineEnd).trim();
-            broadcastFn?.({
-              type: "alert",
-              alertType: "email",
-              title: "Important Email",
-              content: emailLine.replace(/^\d+\.\s*\*?\s*/, ""),
-              timestamp: now.toISOString()
-            });
+            if (initialAlertCheckDone) {
+              const lineIdx = result.indexOf(`[${emailId}]`);
+              const lineStart = result.lastIndexOf("\n", lineIdx) + 1;
+              const lineEnd = result.indexOf("\n", lineIdx);
+              const emailLine = result.slice(lineStart, lineEnd === -1 ? void 0 : lineEnd).trim();
+              broadcastFn?.({
+                type: "alert",
+                alertType: "email",
+                title: "Important Email",
+                content: emailLine.replace(/^\d+\.\s*\*?\s*/, ""),
+                timestamp: now.toISOString()
+              });
+            }
           }
         }
       }
@@ -1829,8 +1832,14 @@ function startAlertSystem(broadcast) {
   console.log(`[alerts] Watchlist: ${config.watchlist.map((w) => w.displaySymbol || w.symbol).join(", ")}`);
   alertedCalendarEvents.clear();
   alertedEmailIds.clear();
-  setTimeout(() => {
-    checkAlerts().catch((err) => console.error("[alerts] Initial alert check error:", err));
+  initialAlertCheckDone = false;
+  setTimeout(async () => {
+    try {
+      await checkAlerts();
+    } catch (err) {
+      console.error("[alerts] Initial alert check error:", err);
+    }
+    initialAlertCheckDone = true;
   }, 3e4);
 }
 async function triggerBrief(type) {
