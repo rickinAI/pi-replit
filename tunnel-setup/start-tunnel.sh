@@ -28,7 +28,7 @@ notify_server() {
   return 1
 }
 
-cloudflared tunnel --url https://localhost:27124 --no-tls-verify 2>&1 | while IFS= read -r line; do
+/opt/homebrew/bin/cloudflared tunnel --url https://localhost:27124 --no-tls-verify 2>&1 | while IFS= read -r line; do
   LOG_SIZE=$(stat -f%z "$LOG_FILE" 2>/dev/null || stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)
   if [ "$LOG_SIZE" -gt "$MAX_LOG_SIZE" ]; then
     tail -100 "$LOG_FILE" > "${LOG_FILE}.tmp" && mv "${LOG_FILE}.tmp" "$LOG_FILE"
