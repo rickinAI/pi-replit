@@ -390,7 +390,7 @@ function handleAgentEvent(event) {
             chips.appendChild(chip);
           });
           messages.insertBefore(chips, scrollAnchor);
-          scrollToBottom();
+          throttledScroll();
         }
       }
       isAgentRunning = false;
@@ -399,7 +399,7 @@ function handleAgentEvent(event) {
       hideStatus();
       sendBtn.disabled = false;
       input.focus();
-      scrollToBottom();
+      throttledScroll();
       break;
 
     case "error":
@@ -478,7 +478,7 @@ function renderInterviewForm(event) {
 
   card.innerHTML = html;
   messages.insertBefore(card, scrollAnchor);
-  scrollToBottom();
+  throttledScroll();
 
   const submitBtn2 = card.querySelector(".interview-submit");
   submitBtn2.addEventListener("click", async () => {
@@ -550,7 +550,7 @@ function handleBrief(event) {
   wrapper.appendChild(body);
 
   messages.insertBefore(wrapper, scrollAnchor);
-  scrollToBottom();
+  throttledScroll();
 
   if (document.hidden) {
     playAlertSound();
@@ -1176,7 +1176,7 @@ function autoResize() {
 input.addEventListener("input", autoResize);
 
 input.addEventListener("focus", () => {
-  setTimeout(() => scrollToBottom(), 300);
+  setTimeout(() => { if (!userHasScrolledUp) scrollToBottom(); }, 300);
 });
 
 input.addEventListener("paste", (e) => {
@@ -1243,7 +1243,11 @@ function appendBubble(role, text, timestamp) {
   msg.appendChild(time);
 
   messages.insertBefore(msg, scrollAnchor);
-  scrollToBottom();
+  if (role === "user" || role === "system") {
+    scrollToBottom();
+  } else {
+    throttledScroll();
+  }
   return msg;
 }
 
