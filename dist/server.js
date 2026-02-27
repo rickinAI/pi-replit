@@ -3,8 +3,8 @@ import express from "express";
 import cors from "cors";
 import { createServer } from "http";
 import { fileURLToPath } from "url";
-import path5 from "path";
-import fs5 from "fs";
+import path6 from "path";
+import fs6 from "fs";
 import { createProxyMiddleware } from "http-proxy-middleware";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
@@ -1410,6 +1410,398 @@ ${lines.join("\n\n")}`;
   }
 }
 
+// src/alerts.ts
+import fs5 from "fs";
+import path5 from "path";
+var DEFAULT_CONFIG = {
+  timezone: "America/New_York",
+  location: "New York",
+  briefs: {
+    morning: { enabled: true, hour: 8, minute: 0, content: ["calendar", "tasks", "weather", "news", "markets", "email"] },
+    afternoon: { enabled: true, hour: 13, minute: 0, content: ["calendar", "tasks", "email", "markets"] },
+    evening: { enabled: true, hour: 19, minute: 0, content: ["calendar_tomorrow", "tasks", "markets", "email"] }
+  },
+  alerts: {
+    calendarReminder: { enabled: true, minutesBefore: 30 },
+    stockMove: { enabled: true, thresholdPercent: 3 },
+    taskDeadline: { enabled: true },
+    importantEmail: { enabled: true }
+  },
+  watchlist: [
+    { symbol: "GC=F", type: "stock", displaySymbol: "GOLD" },
+    { symbol: "SI=F", type: "stock", displaySymbol: "SILVER" },
+    { symbol: "bitcoin", type: "crypto", displaySymbol: "BTCUSD" },
+    { symbol: "MSTR", type: "stock" }
+  ],
+  lastPrices: {},
+  lastBriefRun: {}
+};
+var configPath = "";
+var config = { ...DEFAULT_CONFIG };
+var broadcastFn = null;
+var briefInterval = null;
+var alertInterval = null;
+var alertedCalendarEvents = /* @__PURE__ */ new Set();
+var alertedEmailIds = /* @__PURE__ */ new Set();
+var briefRunning = false;
+var alertRunning = false;
+var lastDedupeReset = "";
+function init5(root) {
+  const dataDir2 = path5.join(root, "data");
+  fs5.mkdirSync(dataDir2, { recursive: true });
+  configPath = path5.join(dataDir2, "alerts-config.json");
+  config = loadConfig();
+}
+function loadConfig() {
+  if (!configPath) return { ...DEFAULT_CONFIG };
+  try {
+    if (fs5.existsSync(configPath)) {
+      const raw = JSON.parse(fs5.readFileSync(configPath, "utf-8"));
+      return { ...DEFAULT_CONFIG, ...raw, briefs: { ...DEFAULT_CONFIG.briefs, ...raw.briefs }, alerts: { ...DEFAULT_CONFIG.alerts, ...raw.alerts } };
+    }
+  } catch (err) {
+    console.error("[alerts] Failed to load config:", err);
+  }
+  return { ...DEFAULT_CONFIG };
+}
+function saveConfig() {
+  if (!configPath) return;
+  try {
+    fs5.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  } catch (err) {
+    console.error("[alerts] Failed to save config:", err);
+  }
+}
+function getConfig() {
+  const { lastPrices, lastBriefRun, ...rest } = config;
+  return rest;
+}
+function updateConfig(partial) {
+  if (partial.timezone) config.timezone = partial.timezone;
+  if (partial.location) config.location = partial.location;
+  if (partial.briefs) {
+    for (const key of ["morning", "afternoon", "evening"]) {
+      if (partial.briefs[key]) {
+        config.briefs[key] = { ...config.briefs[key], ...partial.briefs[key] };
+      }
+    }
+  }
+  if (partial.alerts) {
+    for (const key of ["calendarReminder", "stockMove", "taskDeadline", "importantEmail"]) {
+      if (partial.alerts[key]) {
+        config.alerts[key] = { ...config.alerts[key], ...partial.alerts[key] };
+      }
+    }
+  }
+  if (partial.watchlist) config.watchlist = partial.watchlist;
+  saveConfig();
+  return getConfig();
+}
+function getNow() {
+  const nowStr = (/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: config.timezone });
+  return new Date(nowStr);
+}
+function getTodayKey() {
+  const now = getNow();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+async function gatherSection(name) {
+  try {
+    switch (name) {
+      case "calendar": {
+        if (!isConfigured3()) return "**Calendar:** [not connected]";
+        const now = /* @__PURE__ */ new Date();
+        const endOfDay = new Date(now);
+        endOfDay.setHours(23, 59, 59, 999);
+        const result = await listEvents({ timeMin: now.toISOString(), timeMax: endOfDay.toISOString(), maxResults: 10 });
+        return `**Today's Calendar:**
+${result}`;
+      }
+      case "calendar_tomorrow": {
+        if (!isConfigured3()) return "**Calendar:** [not connected]";
+        const tomorrow = /* @__PURE__ */ new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        tomorrow.setHours(0, 0, 0, 0);
+        const endTomorrow = new Date(tomorrow);
+        endTomorrow.setHours(23, 59, 59, 999);
+        const result = await listEvents({ timeMin: tomorrow.toISOString(), timeMax: endTomorrow.toISOString(), maxResults: 10 });
+        return `**Tomorrow's Calendar:**
+${result}`;
+      }
+      case "tasks": {
+        const result = listTasks();
+        return `**Tasks:**
+${result}`;
+      }
+      case "weather": {
+        const result = await getWeather(config.location);
+        return `**Weather:**
+${result}`;
+      }
+      case "news": {
+        const result = await getNews("top");
+        const lines = result.split("\n").slice(0, 12).join("\n");
+        return `**Headlines:**
+${lines}`;
+      }
+      case "markets": {
+        const items = [];
+        for (const w of config.watchlist) {
+          try {
+            const label = w.displaySymbol || w.symbol.toUpperCase();
+            if (w.type === "crypto") {
+              const data = await getCryptoPrice(w.symbol);
+              const priceLine = data.split("\n").slice(0, 3).join(" | ");
+              items.push(`${label}: ${priceLine}`);
+            } else {
+              const data = await getStockQuote(w.symbol);
+              const priceLine = data.split("\n").slice(0, 3).join(" | ");
+              items.push(`${label}: ${priceLine}`);
+            }
+          } catch {
+            items.push(`${w.displaySymbol || w.symbol}: [unavailable]`);
+          }
+        }
+        return `**Markets:**
+${items.join("\n")}`;
+      }
+      case "email": {
+        if (!isConfigured2() || !isConnected()) return "**Email:** [not connected]";
+        try {
+          const result = await listEmails("is:unread", 5);
+          return `**Email:**
+${result}`;
+        } catch {
+          return "**Email:** [unavailable]";
+        }
+      }
+      default:
+        return "";
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[alerts] Section "${name}" failed:`, msg);
+    return `**${name}:** [unavailable]`;
+  }
+}
+async function generateBrief(type) {
+  const briefConfig = config.briefs[type];
+  const sections = [];
+  const results = await Promise.allSettled(
+    briefConfig.content.map((name) => gatherSection(name))
+  );
+  for (const result of results) {
+    if (result.status === "fulfilled" && result.value) {
+      sections.push(result.value);
+    }
+  }
+  return sections.join("\n\n---\n\n");
+}
+async function checkBriefs() {
+  if (briefRunning) return;
+  briefRunning = true;
+  try {
+    await doCheckBriefs();
+  } finally {
+    briefRunning = false;
+  }
+}
+async function doCheckBriefs() {
+  const now = getNow();
+  const todayKey = getTodayKey();
+  const currentHour = now.getHours();
+  const currentMinute = now.getMinutes();
+  if (lastDedupeReset !== todayKey) {
+    alertedCalendarEvents.clear();
+    alertedEmailIds.clear();
+    lastDedupeReset = todayKey;
+  }
+  for (const type of ["morning", "afternoon", "evening"]) {
+    const briefConfig = config.briefs[type];
+    if (!briefConfig.enabled) continue;
+    const runKey = `${type}_${todayKey}`;
+    if (config.lastBriefRun[runKey]) continue;
+    const targetMinutes = briefConfig.hour * 60 + briefConfig.minute;
+    const nowMinutes = currentHour * 60 + currentMinute;
+    if (nowMinutes >= targetMinutes && nowMinutes <= targetMinutes + 2) {
+      console.log(`[alerts] Triggering ${type} brief`);
+      config.lastBriefRun[runKey] = (/* @__PURE__ */ new Date()).toISOString();
+      saveConfig();
+      try {
+        const content = await generateBrief(type);
+        const event = {
+          type: "brief",
+          briefType: type,
+          content,
+          timestamp: (/* @__PURE__ */ new Date()).toISOString()
+        };
+        broadcastFn?.(event);
+        console.log(`[alerts] ${type} brief sent`);
+      } catch (err) {
+        console.error(`[alerts] ${type} brief failed:`, err);
+      }
+    }
+  }
+}
+async function checkAlerts() {
+  if (alertRunning) return;
+  alertRunning = true;
+  try {
+    await doCheckAlerts();
+  } finally {
+    alertRunning = false;
+  }
+}
+async function doCheckAlerts() {
+  const now = /* @__PURE__ */ new Date();
+  if (config.alerts.calendarReminder.enabled && isConfigured3()) {
+    try {
+      const minutesBefore = config.alerts.calendarReminder.minutesBefore || 30;
+      const windowEnd = new Date(now.getTime() + minutesBefore * 60 * 1e3);
+      const result = await listEvents({ timeMin: now.toISOString(), timeMax: windowEnd.toISOString(), maxResults: 5 });
+      if (!result.includes("No upcoming events")) {
+        const lines = result.split("\n").filter((l) => l.trim());
+        for (const line of lines) {
+          const eventKey = line.trim().slice(0, 80);
+          if (alertedCalendarEvents.has(eventKey)) continue;
+          if (/^\d+\./.test(line.trim())) {
+            alertedCalendarEvents.add(eventKey);
+            broadcastFn?.({
+              type: "alert",
+              alertType: "calendar",
+              title: "Upcoming Event",
+              content: line.trim().replace(/^\d+\.\s*/, ""),
+              timestamp: now.toISOString()
+            });
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[alerts] Calendar alert check failed:", err);
+    }
+  }
+  if (config.alerts.stockMove.enabled && config.watchlist.length > 0) {
+    const threshold = config.alerts.stockMove.thresholdPercent || 3;
+    for (const w of config.watchlist) {
+      try {
+        const label = w.displaySymbol || w.symbol.toUpperCase();
+        let currentPrice = null;
+        if (w.type === "crypto") {
+          const data = await getCryptoPrice(w.symbol);
+          const priceMatch = data.match(/Price:\s*\$([0-9,]+\.?\d*)/);
+          if (priceMatch) currentPrice = parseFloat(priceMatch[1].replace(/,/g, ""));
+        } else {
+          const data = await getStockQuote(w.symbol);
+          const priceMatch = data.match(/Price:\s*\$([0-9,]+\.?\d*)/);
+          if (priceMatch) currentPrice = parseFloat(priceMatch[1].replace(/,/g, ""));
+        }
+        if (currentPrice !== null) {
+          const lastPrice = config.lastPrices[label];
+          if (lastPrice) {
+            const pctChange = (currentPrice - lastPrice) / lastPrice * 100;
+            if (Math.abs(pctChange) >= threshold) {
+              const direction = pctChange > 0 ? "UP" : "DOWN";
+              const arrow = pctChange > 0 ? "\u25B2" : "\u25BC";
+              broadcastFn?.({
+                type: "alert",
+                alertType: "stock",
+                title: `${label} ${direction} ${Math.abs(pctChange).toFixed(1)}%`,
+                content: `${label} moved ${arrow} ${Math.abs(pctChange).toFixed(1)}% \u2014 now $${currentPrice.toLocaleString("en-US", { minimumFractionDigits: 2 })}`,
+                timestamp: now.toISOString()
+              });
+            }
+          }
+          config.lastPrices[label] = currentPrice;
+        }
+      } catch (err) {
+        console.error(`[alerts] Stock alert check for ${w.symbol} failed:`, err);
+      }
+    }
+    saveConfig();
+  }
+  if (config.alerts.taskDeadline.enabled) {
+    try {
+      const todayKey = getTodayKey();
+      const taskList = listTasks();
+      if (!taskList.includes("No open tasks") && !taskList.includes("No tasks found")) {
+        const lines = taskList.split("\n");
+        for (const line of lines) {
+          if (line.includes(`due: ${todayKey}`) && !line.includes("[x]")) {
+            const taskTitle = line.replace(/^\d+\.\s*\[.\]\s*/, "").replace(/\s*!!.*/, "").replace(/\s*\(due:.*/, "").trim();
+            if (taskTitle && !alertedCalendarEvents.has(`task_${taskTitle}`)) {
+              alertedCalendarEvents.add(`task_${taskTitle}`);
+              broadcastFn?.({
+                type: "alert",
+                alertType: "task",
+                title: "Task Due Today",
+                content: taskTitle,
+                timestamp: now.toISOString()
+              });
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[alerts] Task alert check failed:", err);
+    }
+  }
+  if (config.alerts.importantEmail.enabled && isConfigured2() && isConnected()) {
+    try {
+      const result = await listEmails("is:unread is:important", 5);
+      if (!result.includes("No emails found") && !result.includes("not authorized")) {
+        const idMatches = result.matchAll(/\[([a-f0-9]+)\]/gi);
+        for (const match of idMatches) {
+          const emailId = match[1];
+          if (!alertedEmailIds.has(emailId)) {
+            alertedEmailIds.add(emailId);
+            const lineIdx = result.indexOf(`[${emailId}]`);
+            const lineStart = result.lastIndexOf("\n", lineIdx) + 1;
+            const lineEnd = result.indexOf("\n", lineIdx);
+            const emailLine = result.slice(lineStart, lineEnd === -1 ? void 0 : lineEnd).trim();
+            broadcastFn?.({
+              type: "alert",
+              alertType: "email",
+              title: "Important Email",
+              content: emailLine.replace(/^\d+\.\s*\*?\s*/, ""),
+              timestamp: now.toISOString()
+            });
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[alerts] Email alert check failed:", err);
+    }
+  }
+}
+function startAlertSystem(broadcast) {
+  broadcastFn = broadcast;
+  briefInterval = setInterval(() => {
+    checkBriefs().catch((err) => console.error("[alerts] Brief check error:", err));
+  }, 6e4);
+  alertInterval = setInterval(() => {
+    checkAlerts().catch((err) => console.error("[alerts] Alert check error:", err));
+  }, 15 * 6e4);
+  console.log(`[alerts] System started \u2014 briefs: morning=${config.briefs.morning.enabled}/${config.briefs.morning.hour}:${String(config.briefs.morning.minute).padStart(2, "0")}, afternoon=${config.briefs.afternoon.enabled}/${config.briefs.afternoon.hour}:${String(config.briefs.afternoon.minute).padStart(2, "0")}, evening=${config.briefs.evening.enabled}/${config.briefs.evening.hour}:${String(config.briefs.evening.minute).padStart(2, "0")} (${config.timezone})`);
+  console.log(`[alerts] Watchlist: ${config.watchlist.map((w) => w.displaySymbol || w.symbol).join(", ")}`);
+  alertedCalendarEvents.clear();
+  alertedEmailIds.clear();
+  setTimeout(() => {
+    checkAlerts().catch((err) => console.error("[alerts] Initial alert check error:", err));
+  }, 3e4);
+}
+async function triggerBrief(type) {
+  console.log(`[alerts] Manual trigger: ${type} brief`);
+  const content = await generateBrief(type);
+  const event = {
+    type: "brief",
+    briefType: type,
+    content,
+    timestamp: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  broadcastFn?.(event);
+  return event;
+}
+
 // server.ts
 var PORT = parseInt(process.env.PORT || "3000", 10);
 var INTERVIEW_PORT = parseInt(process.env.INTERVIEW_PORT || "19847", 10);
@@ -1417,23 +1809,24 @@ var ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
 var APP_PASSWORD = process.env.APP_PASSWORD || "";
 var SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path5.dirname(__filename);
-var PROJECT_ROOT = __filename.includes("/dist/") ? path5.resolve(__dirname, "..") : __dirname;
-var PUBLIC_DIR = path5.join(PROJECT_ROOT, "public");
-var AGENT_DIR = path5.join(PROJECT_ROOT, ".pi/agent");
-var DATA_DIR = path5.join(PROJECT_ROOT, "data", "conversations");
-fs5.mkdirSync(AGENT_DIR, { recursive: true });
+var __dirname = path6.dirname(__filename);
+var PROJECT_ROOT = __filename.includes("/dist/") ? path6.resolve(__dirname, "..") : __dirname;
+var PUBLIC_DIR = path6.join(PROJECT_ROOT, "public");
+var AGENT_DIR = path6.join(PROJECT_ROOT, ".pi/agent");
+var DATA_DIR = path6.join(PROJECT_ROOT, "data", "conversations");
+fs6.mkdirSync(AGENT_DIR, { recursive: true });
 init(DATA_DIR);
 init2(PROJECT_ROOT);
 init3(PROJECT_ROOT);
 init4(PROJECT_ROOT);
+init5(PROJECT_ROOT);
 if (!ANTHROPIC_KEY) console.warn("ANTHROPIC_API_KEY is not set.");
 if (!isConfigured()) console.warn("Knowledge base integration not configured.");
 if (!isConfigured2()) console.warn("Gmail integration not configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET missing).");
 else if (!isConnected()) console.warn("Gmail configured but not yet authorized. Visit /api/gmail/auth to connect.");
 if (!APP_PASSWORD) console.warn("APP_PASSWORD is not set \u2014 auth disabled.");
 console.log(`[boot] PORT=${PORT} PUBLIC_DIR=${PUBLIC_DIR} AGENT_DIR=${AGENT_DIR}`);
-console.log(`[boot] public/ exists: ${fs5.existsSync(PUBLIC_DIR)}`);
+console.log(`[boot] public/ exists: ${fs6.existsSync(PUBLIC_DIR)}`);
 function buildKnowledgeBaseTools() {
   if (!isConfigured()) return [];
   return [
@@ -1980,7 +2373,7 @@ app.get("/api/gmail/status", (_req, res) => {
 app.post("/api/session", async (_req, res) => {
   try {
     const sessionId = `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const authStorage = AuthStorage.create(path5.join(AGENT_DIR, "auth.json"));
+    const authStorage = AuthStorage.create(path6.join(AGENT_DIR, "auth.json"));
     authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
     const allTools = [
       ...buildKnowledgeBaseTools(),
@@ -2157,6 +2550,26 @@ app.post("/api/config/tunnel-url", (req, res) => {
   console.log(`Tunnel URL updated to: ${url}`);
   res.json({ ok: true, url });
 });
+app.get("/api/alerts/config", (_req, res) => {
+  res.json(getConfig());
+});
+app.put("/api/alerts/config", (req, res) => {
+  const updated = updateConfig(req.body);
+  res.json(updated);
+});
+app.post("/api/alerts/trigger/:type", async (req, res) => {
+  const type = req.params["type"];
+  if (!["morning", "afternoon", "evening"].includes(type)) {
+    res.status(400).json({ error: "Invalid brief type. Use morning, afternoon, or evening." });
+    return;
+  }
+  try {
+    const event = await triggerBrief(type);
+    res.json({ ok: true, event });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", sessions: sessions.size, ts: Date.now() });
 });
@@ -2207,6 +2620,21 @@ function startServer(retried = false) {
   });
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`[ready] pi-replit listening on http://localhost:${PORT}`);
+    function broadcastToAll(event) {
+      const data = `data: ${JSON.stringify(event)}
+
+`;
+      for (const entry of sessions.values()) {
+        for (const sub of entry.subscribers) {
+          try {
+            sub.write(data);
+          } catch {
+            entry.subscribers.delete(sub);
+          }
+        }
+      }
+    }
+    startAlertSystem(broadcastToAll);
   });
 }
 startServer();

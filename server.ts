@@ -31,6 +31,7 @@ import * as news from "./src/news.js";
 import * as twitter from "./src/twitter.js";
 import * as stocks from "./src/stocks.js";
 import * as maps from "./src/maps.js";
+import * as alerts from "./src/alerts.js";
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const INTERVIEW_PORT = parseInt(process.env.INTERVIEW_PORT || "19847", 10);
@@ -50,6 +51,7 @@ conversations.init(DATA_DIR);
 gmail.init(PROJECT_ROOT);
 calendar.init(PROJECT_ROOT);
 tasks.init(PROJECT_ROOT);
+alerts.init(PROJECT_ROOT);
 
 if (!ANTHROPIC_KEY) console.warn("ANTHROPIC_API_KEY is not set.");
 if (!obsidian.isConfigured()) console.warn("Knowledge base integration not configured.");
@@ -797,6 +799,29 @@ app.post("/api/config/tunnel-url", (req: Request, res: Response) => {
   res.json({ ok: true, url });
 });
 
+app.get("/api/alerts/config", (_req: Request, res: Response) => {
+  res.json(alerts.getConfig());
+});
+
+app.put("/api/alerts/config", (req: Request, res: Response) => {
+  const updated = alerts.updateConfig(req.body);
+  res.json(updated);
+});
+
+app.post("/api/alerts/trigger/:type", async (req: Request, res: Response) => {
+  const type = req.params["type"] as string;
+  if (!["morning", "afternoon", "evening"].includes(type)) {
+    res.status(400).json({ error: "Invalid brief type. Use morning, afternoon, or evening." });
+    return;
+  }
+  try {
+    const event = await alerts.triggerBrief(type as "morning" | "afternoon" | "evening");
+    res.json({ ok: true, event });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", sessions: sessions.size, ts: Date.now() });
 });
@@ -849,6 +874,21 @@ function startServer(retried = false) {
 
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`[ready] pi-replit listening on http://localhost:${PORT}`);
+
+    function broadcastToAll(event: any) {
+      const data = `data: ${JSON.stringify(event)}\n\n`;
+      for (const entry of sessions.values()) {
+        for (const sub of entry.subscribers) {
+          try {
+            sub.write(data);
+          } catch {
+            entry.subscribers.delete(sub);
+          }
+        }
+      }
+    }
+
+    alerts.startAlertSystem(broadcastToAll);
   });
 }
 

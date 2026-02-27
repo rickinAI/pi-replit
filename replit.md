@@ -71,6 +71,9 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 | `/api/conversations/:id` | GET | Get full conversation with messages |
 | `/api/conversations/:id` | DELETE | Delete a saved conversation |
 | `/api/config/tunnel-url` | POST | Update tunnel URL at runtime |
+| `/api/alerts/config` | GET | Get alert/brief configuration |
+| `/api/alerts/config` | PUT | Update alert/brief configuration |
+| `/api/alerts/trigger/:type` | POST | Manually trigger a brief (morning/afternoon/evening) |
 | `/health` | GET | Health check |
 | `/interview/*` | GET | Proxy to pi-interview-tool |
 
@@ -144,6 +147,32 @@ Auth via custom OAuth flow using `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`. To
 - `maps_directions` — Driving/walking/cycling directions via Nominatim geocoding + OSRM routing
 - `maps_search_places` — Place/business search via Nominatim, optionally near a location
 
+## Alert & Briefing System
+
+Proactive background scheduler that pushes briefings and alerts via SSE to all connected clients.
+
+- **src/alerts.ts** — Scheduler module with config persistence (`data/alerts-config.json`)
+- **Scheduled Briefs** (3x daily, US Eastern timezone):
+  - Morning (8:00 AM): Calendar, tasks, weather, news headlines, market watchlist, unread email
+  - Afternoon (1:00 PM): Calendar, tasks, email, markets
+  - Evening (7:00 PM): Tomorrow's calendar, tasks, markets, email
+- **Real-time Alerts** (checked every 15 min):
+  - Calendar reminders (configurable minutes before)
+  - Stock/crypto price moves exceeding threshold % on watchlist
+  - Task deadlines due today
+  - Important unread emails (deduped by message ID)
+- **Default Watchlist**: GC=F (Gold), SI=F (Silver), BTC (Bitcoin), MSTR
+- **API Endpoints**:
+  - `GET /api/alerts/config` — Read config
+  - `PUT /api/alerts/config` — Update config (partial merge)
+  - `POST /api/alerts/trigger/:type` — Manually trigger morning/afternoon/evening brief
+- **Frontend**:
+  - Briefs render as full-width styled messages with `// MORNING BRIEF — 8:00 AM` header
+  - Alerts show dismissible banner (auto-dismiss 30s) + persistent chat line
+  - Browser notifications + audio beep when tab is hidden
+  - Settings panel (gear icon in header) for configuring briefs, watchlist, alert thresholds
+  - Settings auto-save with 500ms debounce
+
 ## Image / Screenshot Support
 
 - Users can paste images (Cmd+V), drag-and-drop, or use the upload button
@@ -174,6 +203,7 @@ Auth via custom OAuth flow using `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`. To
 - **src/twitter.ts** — X/Twitter reader (fxtwitter for profiles/tweets, syndication API for timelines)
 - **src/stocks.ts** — Stock quotes (Yahoo Finance) and crypto prices (CoinGecko)
 - **src/maps.ts** — Directions (Nominatim + OSRM) and place search (Nominatim)
+- **src/alerts.ts** — Alert & briefing scheduler (background checks, brief generation, SSE broadcast)
 
 ## Environment Variables
 

@@ -27,6 +27,7 @@ const historyCloseBtn = document.getElementById("history-close-btn");
 const confirmModal  = document.getElementById("confirm-modal");
 const modalConfirm  = document.getElementById("modal-confirm");
 const modalCancel   = document.getElementById("modal-cancel");
+const alertsSettingsBtn = document.getElementById("alerts-settings-btn");
 
 function checkAuth(res) {
   if (res.status === 401) {
@@ -357,6 +358,100 @@ function handleAgentEvent(event) {
       hideStatus();
       sendBtn.disabled = false;
       break;
+
+    case "brief":
+      handleBrief(event);
+      break;
+
+    case "alert":
+      handleAlert(event);
+      break;
+  }
+}
+
+function handleBrief(event) {
+  removeEmptyState();
+  const wrapper = document.createElement("div");
+  wrapper.className = "msg brief-msg";
+
+  const header = document.createElement("div");
+  header.className = "brief-header";
+  const timeStr = new Date(event.timestamp).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  header.textContent = `// ${event.briefType.toUpperCase()} BRIEF — ${timeStr}`;
+  wrapper.appendChild(header);
+
+  const body = document.createElement("div");
+  body.className = "bubble brief-body";
+  body.innerHTML = renderMarkdown(event.content);
+  wrapper.appendChild(body);
+
+  messages.insertBefore(wrapper, scrollAnchor);
+  scrollToBottom();
+
+  if (document.hidden) {
+    playAlertSound();
+    showBrowserNotification(`${event.briefType.charAt(0).toUpperCase() + event.briefType.slice(1)} Brief Ready`, "Your scheduled briefing is available.");
+  }
+}
+
+function handleAlert(event) {
+  removeEmptyState();
+
+  const banner = document.createElement("div");
+  banner.className = `alert-banner alert-${event.alertType}`;
+
+  const icons = { calendar: "\u{1F4C5}", stock: "\u{1F4C8}", task: "\u2705", email: "\u{1F4E7}" };
+  const icon = icons[event.alertType] || "\u26A0";
+
+  banner.innerHTML = `<span class="alert-icon">${icon}</span><div class="alert-content"><strong>${escapeHtml(event.title)}</strong><span>${escapeHtml(event.content)}</span></div><button class="alert-dismiss">\u2715</button>`;
+
+  const dismissBtn = banner.querySelector(".alert-dismiss");
+  dismissBtn.addEventListener("click", () => banner.remove());
+  setTimeout(() => banner.remove(), 30000);
+
+  const firstMsg = messages.querySelector(".msg, .brief-msg, .system-msg");
+  if (firstMsg) {
+    messages.insertBefore(banner, firstMsg);
+  } else {
+    messages.insertBefore(banner, scrollAnchor);
+  }
+
+  const line = document.createElement("div");
+  line.className = "msg alert-line";
+  const timeStr = new Date(event.timestamp).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  line.innerHTML = `<span class="alert-tag">[ALERT]</span> ${escapeHtml(event.title)}: ${escapeHtml(event.content)} <span class="msg-time">${timeStr}</span>`;
+  messages.insertBefore(line, scrollAnchor);
+  scrollToBottom();
+
+  if (document.hidden) {
+    playAlertSound();
+    showBrowserNotification(event.title, event.content);
+  }
+}
+
+function playAlertSound() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = 440;
+    osc.type = "sine";
+    gain.gain.value = 0.1;
+    osc.start();
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+    osc.stop(ctx.currentTime + 0.15);
+  } catch {}
+}
+
+function showBrowserNotification(title, body) {
+  if (Notification.permission === "granted") {
+    new Notification(title, { body, icon: "/favicon.ico" });
+  } else if (Notification.permission !== "denied") {
+    Notification.requestPermission().then(p => {
+      if (p === "granted") new Notification(title, { body, icon: "/favicon.ico" });
+    });
   }
 }
 
@@ -472,6 +567,231 @@ async function sendMessage() {
 }
 
 sendBtn.addEventListener("click", sendMessage);
+
+let settingsPanel = null;
+let settingsDebounce = null;
+
+function createSettingsPanel() {
+  if (settingsPanel) return settingsPanel;
+  const panel = document.createElement("div");
+  panel.className = "alerts-settings-panel";
+  panel.innerHTML = `
+    <button class="settings-close">\u2715</button>
+    <div class="settings-section">
+      <h3>// SCHEDULED BRIEFS</h3>
+      <div class="settings-row"><label>Morning Brief</label><input type="checkbox" class="settings-toggle" data-brief="morning"></div>
+      <div class="settings-row"><label>Time</label><select class="settings-select" data-brief-time="morning"></select></div>
+      <div class="settings-row"><label>Afternoon Brief</label><input type="checkbox" class="settings-toggle" data-brief="afternoon"></div>
+      <div class="settings-row"><label>Time</label><select class="settings-select" data-brief-time="afternoon"></select></div>
+      <div class="settings-row"><label>Evening Brief</label><input type="checkbox" class="settings-toggle" data-brief="evening"></div>
+      <div class="settings-row"><label>Time</label><select class="settings-select" data-brief-time="evening"></select></div>
+    </div>
+    <div class="settings-section">
+      <h3>// WATCHLIST</h3>
+      <div class="watchlist-items" id="watchlist-items"></div>
+      <div class="watchlist-add-row">
+        <input type="text" class="watchlist-add-input" id="watchlist-input" placeholder="TICKER (e.g. AAPL, BTC)">
+        <button class="settings-btn" id="watchlist-add-btn">ADD</button>
+      </div>
+    </div>
+    <div class="settings-section">
+      <h3>// ALERT SETTINGS</h3>
+      <div class="settings-row"><label>Calendar Reminders</label><input type="checkbox" class="settings-toggle" data-alert="calendarReminder"></div>
+      <div class="settings-row"><label>Minutes Before</label><input type="number" class="settings-input" data-alert-val="minutesBefore" min="5" max="120" value="30"></div>
+      <div class="settings-row"><label>Stock Move Alerts</label><input type="checkbox" class="settings-toggle" data-alert="stockMove"></div>
+      <div class="settings-row"><label>Threshold %</label><input type="number" class="settings-input" data-alert-val="thresholdPercent" min="1" max="50" value="3" step="0.5"></div>
+      <div class="settings-row"><label>Task Deadline Alerts</label><input type="checkbox" class="settings-toggle" data-alert="taskDeadline"></div>
+      <div class="settings-row"><label>Important Email Alerts</label><input type="checkbox" class="settings-toggle" data-alert="importantEmail"></div>
+    </div>
+    <div class="settings-section">
+      <h3>// TEST</h3>
+      <div class="trigger-row">
+        <select class="settings-select" id="trigger-type">
+          <option value="morning">Morning</option>
+          <option value="afternoon">Afternoon</option>
+          <option value="evening">Evening</option>
+        </select>
+        <button class="settings-btn trigger-btn" id="trigger-btn">TRIGGER BRIEF</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(panel);
+  settingsPanel = panel;
+
+  const timeSelects = panel.querySelectorAll("[data-brief-time]");
+  timeSelects.forEach(sel => {
+    for (let h = 0; h < 24; h++) {
+      const opt = document.createElement("option");
+      opt.value = h;
+      const ampm = h < 12 ? "AM" : "PM";
+      const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+      opt.textContent = `${h12}:00 ${ampm}`;
+      sel.appendChild(opt);
+    }
+  });
+
+  panel.querySelector(".settings-close").addEventListener("click", toggleSettings);
+
+  panel.querySelectorAll(".settings-toggle, .settings-select, .settings-input").forEach(el => {
+    el.addEventListener("change", () => debounceSaveSettings());
+  });
+
+  panel.querySelector("#watchlist-add-btn").addEventListener("click", addWatchlistItem);
+  panel.querySelector("#watchlist-input").addEventListener("keydown", e => {
+    if (e.key === "Enter") addWatchlistItem();
+  });
+
+  panel.querySelector("#trigger-btn").addEventListener("click", async () => {
+    const type = panel.querySelector("#trigger-type").value;
+    const btn = panel.querySelector("#trigger-btn");
+    btn.textContent = "LOADING...";
+    btn.disabled = true;
+    try {
+      await fetch(`/api/alerts/trigger/${type}`, { method: "POST" });
+    } catch {}
+    btn.textContent = "TRIGGER BRIEF";
+    btn.disabled = false;
+  });
+
+  return panel;
+}
+
+function toggleSettings() {
+  const panel = createSettingsPanel();
+  const isOpen = panel.classList.contains("open");
+  if (isOpen) {
+    panel.classList.remove("open");
+  } else {
+    loadSettingsConfig();
+    panel.classList.add("open");
+  }
+}
+
+async function loadSettingsConfig() {
+  try {
+    const res = await fetch("/api/alerts/config");
+    if (!res.ok) return;
+    const cfg = await res.json();
+    const panel = settingsPanel;
+    if (!panel) return;
+
+    for (const type of ["morning", "afternoon", "evening"]) {
+      const toggle = panel.querySelector(`[data-brief="${type}"]`);
+      const timeSel = panel.querySelector(`[data-brief-time="${type}"]`);
+      if (toggle && cfg.briefs?.[type]) toggle.checked = cfg.briefs[type].enabled;
+      if (timeSel && cfg.briefs?.[type]) timeSel.value = cfg.briefs[type].hour;
+    }
+
+    for (const key of ["calendarReminder", "stockMove", "taskDeadline", "importantEmail"]) {
+      const toggle = panel.querySelector(`[data-alert="${key}"]`);
+      if (toggle && cfg.alerts?.[key]) toggle.checked = cfg.alerts[key].enabled;
+    }
+
+    const mbInput = panel.querySelector('[data-alert-val="minutesBefore"]');
+    if (mbInput && cfg.alerts?.calendarReminder) mbInput.value = cfg.alerts.calendarReminder.minutesBefore || 30;
+
+    const thInput = panel.querySelector('[data-alert-val="thresholdPercent"]');
+    if (thInput && cfg.alerts?.stockMove) thInput.value = cfg.alerts.stockMove.thresholdPercent || 3;
+
+    renderWatchlist(cfg.watchlist || []);
+  } catch {}
+}
+
+function renderWatchlist(items) {
+  const container = settingsPanel.querySelector("#watchlist-items");
+  container.innerHTML = "";
+  items.forEach((item, idx) => {
+    const div = document.createElement("div");
+    div.className = "watchlist-item";
+    div.innerHTML = `<span class="symbol">${escapeHtml(item.displaySymbol || item.symbol.toUpperCase())}</span><span class="type-badge">${item.type}</span><button class="watchlist-remove" data-idx="${idx}">\u2715</button>`;
+    div.querySelector(".watchlist-remove").addEventListener("click", () => {
+      items.splice(idx, 1);
+      renderWatchlist(items);
+      debounceSaveSettings();
+    });
+    container.appendChild(div);
+  });
+}
+
+function addWatchlistItem() {
+  const input = settingsPanel.querySelector("#watchlist-input");
+  const val = input.value.trim().toUpperCase();
+  if (!val) return;
+
+  const cryptoNames = ["BTC", "ETH", "SOL", "DOGE", "ADA", "XRP", "DOT", "MATIC", "AVAX", "LINK", "BNB", "LTC", "SHIB", "UNI", "ATOM", "NEAR", "APT", "ARB", "OP", "SUI", "PEPE", "BITCOIN", "ETHEREUM", "SOLANA"];
+  const isCrypto = cryptoNames.includes(val);
+
+  const items = getCurrentWatchlist();
+  if (items.find(w => (w.displaySymbol || w.symbol).toUpperCase() === val)) {
+    input.value = "";
+    return;
+  }
+
+  if (isCrypto) {
+    const aliases = { BTC: "bitcoin", BTCUSD: "bitcoin", ETH: "ethereum", SOL: "solana", DOGE: "dogecoin", ADA: "cardano", XRP: "ripple" };
+    items.push({ symbol: aliases[val] || val.toLowerCase(), type: "crypto", displaySymbol: val });
+  } else {
+    items.push({ symbol: val, type: "stock" });
+  }
+
+  renderWatchlist(items);
+  input.value = "";
+  debounceSaveSettings();
+}
+
+function getCurrentWatchlist() {
+  const container = settingsPanel.querySelector("#watchlist-items");
+  const items = [];
+  container.querySelectorAll(".watchlist-item").forEach(el => {
+    const symbol = el.querySelector(".symbol").textContent;
+    const type = el.querySelector(".type-badge").textContent;
+    items.push({ symbol: type === "crypto" ? symbol.toLowerCase() : symbol, type, displaySymbol: type === "crypto" ? symbol : undefined });
+  });
+  return items;
+}
+
+function debounceSaveSettings() {
+  if (settingsDebounce) clearTimeout(settingsDebounce);
+  settingsDebounce = setTimeout(saveSettings, 500);
+}
+
+async function saveSettings() {
+  if (!settingsPanel) return;
+  const panel = settingsPanel;
+
+  const config = { briefs: {}, alerts: {}, watchlist: getCurrentWatchlist() };
+
+  for (const type of ["morning", "afternoon", "evening"]) {
+    const toggle = panel.querySelector(`[data-brief="${type}"]`);
+    const timeSel = panel.querySelector(`[data-brief-time="${type}"]`);
+    config.briefs[type] = {
+      enabled: toggle?.checked || false,
+      hour: parseInt(timeSel?.value || "8"),
+      minute: 0,
+    };
+  }
+
+  for (const key of ["calendarReminder", "stockMove", "taskDeadline", "importantEmail"]) {
+    const toggle = panel.querySelector(`[data-alert="${key}"]`);
+    config.alerts[key] = { enabled: toggle?.checked || false };
+  }
+
+  const mbInput = panel.querySelector('[data-alert-val="minutesBefore"]');
+  if (mbInput) config.alerts.calendarReminder.minutesBefore = parseInt(mbInput.value) || 30;
+
+  const thInput = panel.querySelector('[data-alert-val="thresholdPercent"]');
+  if (thInput) config.alerts.stockMove.thresholdPercent = parseFloat(thInput.value) || 3;
+
+  try {
+    await fetch("/api/alerts/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(config),
+    });
+  } catch {}
+}
+
+alertsSettingsBtn.addEventListener("click", toggleSettings);
 
 const uploadBtn = document.getElementById("upload-btn");
 const imageUpload = document.getElementById("image-upload");
@@ -657,6 +977,7 @@ function renderMarkdown(text) {
 
   escaped = escaped.replace(/^### (.+)$/gm, '<strong class="md-h3">$1</strong>');
   escaped = escaped.replace(/^## (.+)$/gm, '<strong class="md-h2">$1</strong>');
+  escaped = escaped.replace(/^---$/gm, '<hr class="md-hr">');
 
   escaped = escaped.replace(/\x00CB(\d+)\x00/g, (_, idx) => codeBlocks[parseInt(idx)]);
   escaped = escaped.replace(/\x00IC(\d+)\x00/g, (_, idx) => inlineCodes[parseInt(idx)]);
