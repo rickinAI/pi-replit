@@ -297,7 +297,7 @@ async function pollKbStatus() {
     if (online) {
       kbBadge.classList.remove("offline");
       kbBadge.title = "Knowledge Vault: connected";
-      kbStatusText.textContent = "LINKED";
+      kbStatusText.textContent = "ONLINE";
     } else {
       kbBadge.classList.add("offline");
       kbBadge.title = "Knowledge Vault: offline";
