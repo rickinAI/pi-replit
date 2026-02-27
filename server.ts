@@ -12,6 +12,7 @@ import crypto from "crypto";
 import {
   createAgentSession,
   AuthStorage,
+  ModelRegistry,
   SessionManager,
   SettingsManager,
   DefaultResourceLoader,
@@ -458,14 +459,41 @@ function buildMapsTools(): ToolDefinition[] {
   ];
 }
 
+type ModelMode = "auto" | "fast" | "full";
+
 interface SessionEntry {
   session: Awaited<ReturnType<typeof createAgentSession>>["session"];
   subscribers: Set<Response>;
   createdAt: number;
   conversation: conversations.Conversation;
   currentAgentText: string;
+  modelMode: ModelMode;
+  activeModelName: string;
 }
 const sessions = new Map<string, SessionEntry>();
+
+const FAST_MODEL_ID = "claude-haiku-4-5";
+const FULL_MODEL_ID = "claude-sonnet-4-6";
+
+const FAST_PATTERNS = [
+  /^(hi|hello|hey|yo|sup|good\s*(morning|afternoon|evening)|thanks|thank you|ok|okay|got it|cool|nice|great)\b/i,
+  /^what('s| is) (the )?(time|date|day)\b/i,
+  /^(show|check|get|list|read)\s+(my\s+)?(tasks?|todos?|email|calendar|events?|weather|stock|price|portfolio|watchlist|notes?)\b/i,
+  /^(add|create|complete|delete|remove)\s+(a\s+)?(task|todo|note)\b/i,
+  /^(how'?s|what'?s)\s+(the\s+)?(weather|market|stock)\b/i,
+  /^(remind|timer|alarm|set)\b/i,
+];
+
+function classifyIntent(message: string): "fast" | "full" {
+  const trimmed = message.trim();
+  if (trimmed.length < 80) {
+    for (const pattern of FAST_PATTERNS) {
+      if (pattern.test(trimmed)) return "fast";
+    }
+  }
+  if (trimmed.length < 20 && !trimmed.includes("?")) return "fast";
+  return "full";
+}
 
 function saveAndCleanSession(id: string) {
   const entry = sessions.get(id);
@@ -627,6 +655,10 @@ app.post("/api/session", async (_req: Request, res: Response) => {
     const authStorage = AuthStorage.create(path.join(AGENT_DIR, "auth.json"));
     authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
 
+    const modelRegistry = new ModelRegistry(authStorage, path.join(AGENT_DIR, "models.json"));
+    const fullModel = modelRegistry.find("anthropic", FULL_MODEL_ID);
+    if (!fullModel) throw new Error(`Model ${FULL_MODEL_ID} not found in registry`);
+
     const allTools = [
       ...buildKnowledgeBaseTools(),
       ...buildGmailTools(),
@@ -656,6 +688,8 @@ app.post("/api/session", async (_req: Request, res: Response) => {
       sessionManager: SessionManager.inMemory(),
       settingsManager,
       resourceLoader,
+      modelRegistry,
+      model: fullModel,
       tools: [],
       customTools: allTools,
     });
@@ -667,6 +701,8 @@ app.post("/api/session", async (_req: Request, res: Response) => {
       createdAt: Date.now(),
       conversation: conv,
       currentAgentText: "",
+      modelMode: "auto",
+      activeModelName: FULL_MODEL_ID,
     };
     sessions.set(sessionId, entry);
 
@@ -749,6 +785,38 @@ app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
   const imgAttachments = images?.map(i => ({ mimeType: i.mimeType, data: i.data }));
   conversations.addMessage(entry.conversation, "user", text, imgAttachments);
 
+  let chosenModelId = FULL_MODEL_ID;
+  if (entry.modelMode === "fast") {
+    chosenModelId = FAST_MODEL_ID;
+  } else if (entry.modelMode === "auto") {
+    const intent = classifyIntent(text);
+    chosenModelId = intent === "fast" ? FAST_MODEL_ID : FULL_MODEL_ID;
+  }
+
+  if (chosenModelId !== entry.activeModelName) {
+    try {
+      const authStorage = AuthStorage.create(path.join(AGENT_DIR, "auth.json"));
+      authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
+      const modelRegistry = new ModelRegistry(authStorage, path.join(AGENT_DIR, "models.json"));
+      const newModel = modelRegistry.find("anthropic", chosenModelId);
+      if (newModel) {
+        await entry.session.setModel(newModel);
+        entry.activeModelName = chosenModelId;
+      } else {
+        console.warn(`[model] ${chosenModelId} not found, staying on ${entry.activeModelName}`);
+        chosenModelId = entry.activeModelName;
+      }
+    } catch (err) {
+      console.error(`[model] Failed to switch to ${chosenModelId}:`, err);
+      chosenModelId = entry.activeModelName;
+    }
+  }
+
+  const modelEvent = JSON.stringify({ type: "model_info", model: entry.activeModelName });
+  for (const sub of entry.subscribers) {
+    try { sub.write(`data: ${modelEvent}\n\n`); } catch {}
+  }
+
   res.json({ ok: true });
 
   try {
@@ -761,6 +829,24 @@ app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
       try { sub.write(`data: ${errEvent}\n\n`); } catch {}
     }
   }
+});
+
+app.put("/api/session/:id/model-mode", (req: Request, res: Response) => {
+  const entry = sessions.get(req.params["id"] as string);
+  if (!entry) { res.status(404).json({ error: "Session not found" }); return; }
+  const { mode } = req.body as { mode?: string };
+  if (!mode || !["auto", "fast", "full"].includes(mode)) {
+    res.status(400).json({ error: "mode must be auto, fast, or full" }); return;
+  }
+  entry.modelMode = mode as ModelMode;
+  console.log(`[model] Session ${req.params["id"]} mode set to: ${mode}`);
+  res.json({ ok: true, mode, activeModel: entry.activeModelName });
+});
+
+app.get("/api/session/:id/model-mode", (req: Request, res: Response) => {
+  const entry = sessions.get(req.params["id"] as string);
+  if (!entry) { res.status(404).json({ error: "Session not found" }); return; }
+  res.json({ mode: entry.modelMode, activeModel: entry.activeModelName });
 });
 
 app.delete("/api/session/:id", (req: Request, res: Response) => {

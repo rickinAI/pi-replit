@@ -93,6 +93,48 @@ body {
   border-radius: 2px;
   padding: 1px 8px;
   font-family: var(--font);
+  background: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.15s;
+}
+
+.model-badge:hover {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.model-mode {
+  font-weight: 600;
+  font-size: 9px;
+  padding: 0 4px;
+  border-radius: 2px;
+  background: var(--border);
+  color: var(--green);
+}
+
+.model-badge[data-mode="fast"] .model-mode {
+  background: #1a3a1a;
+  color: #6f6;
+}
+
+.model-badge[data-mode="full"] .model-mode {
+  background: #3a2a1a;
+  color: var(--amber);
+}
+
+.model-badge.model-fast {
+  border-color: #3a5a3a;
+}
+
+.model-badge.model-full {
+  border-color: #5a4a2a;
+}
+
+.model-name {
+  font-size: 10px;
 }
 
 .status-dot {

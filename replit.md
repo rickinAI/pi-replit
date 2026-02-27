@@ -66,6 +66,8 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 | `/api/session` | POST | Create new agent session |
 | `/api/session/:id/stream` | GET | SSE event stream |
 | `/api/session/:id/prompt` | POST | Send message to agent |
+| `/api/session/:id/model-mode` | GET | Get current model mode |
+| `/api/session/:id/model-mode` | PUT | Set model mode (auto/fast/full) |
 | `/api/session/:id` | DELETE | Close session |
 | `/api/conversations` | GET | List saved conversations |
 | `/api/conversations/:id` | GET | Get full conversation with messages |
@@ -204,6 +206,18 @@ Proactive background scheduler that pushes briefings and alerts via SSE to all c
 - **src/stocks.ts** — Stock quotes (Yahoo Finance) and crypto prices (CoinGecko)
 - **src/maps.ts** — Directions (Nominatim + OSRM) and place search (Nominatim)
 - **src/alerts.ts** — Alert & briefing scheduler (background checks, brief generation, SSE broadcast)
+
+## Two-Tier Model System
+
+Automatic model routing to optimize cost and speed:
+- **Auto mode** (default): Classifies intent per message — routes simple requests to Haiku 4.5, complex ones to Sonnet 4.6
+- **Fast mode**: Forces all requests through Claude Haiku 4.5 (cheap, fast)
+- **Full mode**: Forces all requests through Claude Sonnet 4.6 (powerful, thorough)
+- Model badge in header is clickable — cycles through Auto / Fast / Full
+- Badge updates live to show which model is actually handling the current response
+- Uses `ModelRegistry` from pi-coding-agent SDK, `session.setModel()` for runtime switching
+- Intent classifier: regex-based pattern matching for greetings, simple lookups, task management → fast; everything else → full
+- API: `GET/PUT /api/session/:id/model-mode`
 
 ## Environment Variables
 

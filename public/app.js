@@ -29,6 +29,11 @@ const modalConfirm  = document.getElementById("modal-confirm");
 const modalCancel   = document.getElementById("modal-cancel");
 const alertsSettingsBtn = document.getElementById("alerts-settings-btn");
 const generateBriefBtn = document.getElementById("generate-brief-btn");
+const modelBadge    = document.getElementById("model-badge");
+const modelModeEl   = document.getElementById("model-mode");
+const modelNameEl   = document.getElementById("model-name");
+let currentModelMode = "auto";
+const FULL_MODEL_ID = "claude-sonnet-4-6";
 
 function checkAuth(res) {
   if (res.status === 401) {
@@ -70,8 +75,15 @@ async function startSession() {
     sessionId = data.sessionId;
     hasMessages = false;
     viewingHistory = false;
+    updateModeDisplay(currentModelMode);
+    updateModelBadge(FULL_MODEL_ID);
     openEventStream(sessionId);
     hideStatus();
+    fetch(`/api/session/${sessionId}/model-mode`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: currentModelMode }),
+    }).catch(() => {});
   } catch (err) {
     showSystemMsg("ERR: " + err.message);
     hideStatus();
@@ -279,6 +291,10 @@ function handleAgentEvent(event) {
       const ae = event.assistantMessageEvent;
       if (!ae) break;
 
+      if (event.message && event.message.model) {
+        updateModelBadge(event.message.model);
+      }
+
       if (ae.type === "text_delta") {
         removeEmptyState();
         if (!agentBubble) {
@@ -321,6 +337,10 @@ function handleAgentEvent(event) {
       interviewNotice.classList.add("hidden");
       break;
     }
+
+    case "model_info":
+      updateModelBadge(event.model);
+      break;
 
     case "agent_end":
       if (agentBubble && agentText) {
@@ -773,6 +793,37 @@ async function saveSettings() {
 }
 
 alertsSettingsBtn.addEventListener("click", toggleSettings);
+
+const MODEL_DISPLAY = {
+  "claude-haiku-4-5": "haiku-4.5",
+  "claude-sonnet-4-6": "sonnet-4.6",
+};
+
+function updateModelBadge(modelId) {
+  modelNameEl.textContent = MODEL_DISPLAY[modelId] || modelId;
+  modelBadge.classList.toggle("model-fast", modelId === "claude-haiku-4-5");
+  modelBadge.classList.toggle("model-full", modelId === "claude-sonnet-4-6");
+}
+
+function updateModeDisplay(mode) {
+  currentModelMode = mode;
+  modelModeEl.textContent = mode.toUpperCase();
+  modelBadge.dataset.mode = mode;
+}
+
+modelBadge.addEventListener("click", async () => {
+  const modes = ["auto", "fast", "full"];
+  const next = modes[(modes.indexOf(currentModelMode) + 1) % modes.length];
+  updateModeDisplay(next);
+  if (!sessionId) return;
+  try {
+    await fetch(`/api/session/${sessionId}/model-mode`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: next }),
+    });
+  } catch {}
+});
 
 generateBriefBtn.addEventListener("click", async () => {
   const hour = new Date().getHours();
