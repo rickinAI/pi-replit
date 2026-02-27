@@ -1572,7 +1572,7 @@ body.light-theme .msg.user .bubble::before {
 }
 
 body.light-theme .msg.agent .bubble {
-  color: var(--amber);
+  color: #0d7c66;
   text-shadow: none;
 }
 
