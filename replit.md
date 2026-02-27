@@ -30,6 +30,8 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Confirmation modal before starting new session
 - **dist/** — esbuild output (compiled server)
 - **data/conversations/** — Persisted conversation JSON files
+- **public/manifest.json** — PWA web app manifest (name, icons, display mode)
+- **public/icons/** — App icons (180x180 apple-touch-icon, 192x192, 512x512)
 - **tunnel-setup/** — macOS LaunchAgent for cloudflared tunnel (retry notifications with backoff, log rotation)
 
 ## Port Configuration

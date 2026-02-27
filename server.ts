@@ -643,7 +643,7 @@ app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(cookieParser(SESSION_SECRET));
 
-const AUTH_PUBLIC_PATHS = new Set(["/login.html", "/login.css", "/api/login", "/health"]);
+const AUTH_PUBLIC_PATHS = new Set(["/login.html", "/login.css", "/api/login", "/health", "/manifest.json", "/icons/icon-180.png", "/icons/icon-192.png", "/icons/icon-512.png"]);
 
 function authMiddleware(req: Request, res: Response, next: NextFunction) {
   if (!APP_PASSWORD) { next(); return; }
