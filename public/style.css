@@ -1670,7 +1670,7 @@ body.light-theme .copy-btn:hover {
   flex-shrink: 0;
   background: rgba(0, 0, 0, 0.35);
   border-bottom: 1px solid rgba(0, 255, 65, 0.06);
-  cursor: default;
+  cursor: pointer;
   user-select: none;
   overflow: hidden;
   transition: background 0.2s ease;
