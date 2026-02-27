@@ -1143,21 +1143,32 @@ async function saveSettings() {
 
 alertsSettingsBtn.addEventListener("click", toggleSettings);
 
+const FAST_MODEL_ID = "claude-haiku-4-5";
 const MODEL_DISPLAY = {
-  "claude-haiku-4-5": "haiku-4.5",
-  "claude-sonnet-4-6": "sonnet-4.6",
+  [FAST_MODEL_ID]: "haiku-4.5",
+  [FULL_MODEL_ID]: "sonnet-4.6",
+};
+const MODE_TO_MODEL = {
+  fast: FAST_MODEL_ID,
+  full: FULL_MODEL_ID,
 };
 
 function updateModelBadge(modelId) {
   modelNameEl.textContent = MODEL_DISPLAY[modelId] || modelId;
-  modelBadge.classList.toggle("model-fast", modelId === "claude-haiku-4-5");
-  modelBadge.classList.toggle("model-full", modelId === "claude-sonnet-4-6");
+  modelBadge.classList.toggle("model-fast", modelId === FAST_MODEL_ID);
+  modelBadge.classList.toggle("model-full", modelId === FULL_MODEL_ID);
 }
 
 function updateModeDisplay(mode) {
   currentModelMode = mode;
   modelModeEl.textContent = mode.toUpperCase();
   modelBadge.dataset.mode = mode;
+  if (mode === "auto") {
+    modelNameEl.textContent = "auto";
+    modelBadge.classList.remove("model-fast", "model-full");
+  } else {
+    updateModelBadge(MODE_TO_MODEL[mode]);
+  }
 }
 
 modelBadge.addEventListener("click", async () => {
