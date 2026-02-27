@@ -660,7 +660,7 @@ input[type="checkbox"]:checked ~ .interview-check::after {
   flex-shrink: 0;
   background: var(--surface);
   border-top: 1px solid var(--border);
-  padding: 2px 12px calc(2px + var(--safe-bottom));
+  padding: 2px 12px 0;
 }
 
 .keyboard-open #input-area {
@@ -670,7 +670,7 @@ input[type="checkbox"]:checked ~ .interview-check::after {
 .mic-row {
   display: flex;
   justify-content: center;
-  padding: 6px 0 4px;
+  padding: 6px 0 calc(4px + var(--safe-bottom));
 }
 
 #mic-btn {
@@ -1527,10 +1527,6 @@ body.light-theme #mic-btn.recording {
   #app {
     padding-left: env(safe-area-inset-left, 0px);
     padding-right: env(safe-area-inset-right, 0px);
-  }
-
-  #input-area {
-    padding-bottom: calc(8px + var(--safe-bottom));
   }
 }
 
