@@ -1562,10 +1562,28 @@ ${vaultTasks}`);
 ${result}`;
       }
       case "news": {
-        const result = await getNews("top");
-        const lines = result.split("\n").slice(0, 12).join("\n");
-        return `**Headlines:**
-${lines}`;
+        const [top, finance, tech] = await Promise.allSettled([
+          getNews("top"),
+          getNews("business"),
+          getNews("technology")
+        ]);
+        const sections = [];
+        if (top.status === "fulfilled") {
+          const lines = top.value.split("\n").slice(0, 12).join("\n");
+          sections.push(`**Top Headlines:**
+${lines}`);
+        }
+        if (finance.status === "fulfilled") {
+          const lines = finance.value.split("\n").slice(0, 12).join("\n");
+          sections.push(`**Finance Headlines:**
+${lines}`);
+        }
+        if (tech.status === "fulfilled") {
+          const lines = tech.value.split("\n").slice(0, 12).join("\n");
+          sections.push(`**Technology Headlines:**
+${lines}`);
+        }
+        return sections.join("\n\n") || "**News:** [unavailable]";
       }
       case "markets": {
         const items = [];

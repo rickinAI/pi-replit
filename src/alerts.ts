@@ -220,9 +220,25 @@ async function gatherSection(name: string): Promise<string> {
         return `**Weather:**\n${result}`;
       }
       case "news": {
-        const result = await news.getNews("top");
-        const lines = result.split("\n").slice(0, 12).join("\n");
-        return `**Headlines:**\n${lines}`;
+        const [top, finance, tech] = await Promise.allSettled([
+          news.getNews("top"),
+          news.getNews("business"),
+          news.getNews("technology"),
+        ]);
+        const sections: string[] = [];
+        if (top.status === "fulfilled") {
+          const lines = top.value.split("\n").slice(0, 12).join("\n");
+          sections.push(`**Top Headlines:**\n${lines}`);
+        }
+        if (finance.status === "fulfilled") {
+          const lines = finance.value.split("\n").slice(0, 12).join("\n");
+          sections.push(`**Finance Headlines:**\n${lines}`);
+        }
+        if (tech.status === "fulfilled") {
+          const lines = tech.value.split("\n").slice(0, 12).join("\n");
+          sections.push(`**Technology Headlines:**\n${lines}`);
+        }
+        return sections.join("\n\n") || "**News:** [unavailable]";
       }
       case "markets": {
         const items: string[] = [];
