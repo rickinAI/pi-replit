@@ -6,8 +6,8 @@ modules = ["nodejs-20", "python-3.11"]
 channel = "stable-25_05"
 
 [deployment]
-run = ["npm", "start"]
-deploymentTarget = "autoscale"
+run = ["node", "dist/server.js"]
+deploymentTarget = "vm"
 build = ["npm", "run", "build"]
 publicDir = "dist"
 
