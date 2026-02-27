@@ -56,6 +56,11 @@ if (!ANTHROPIC_KEY) console.warn("ANTHROPIC_API_KEY is not set.");
 if (!obsidian.isConfigured()) console.warn("Knowledge base integration not configured.");
 if (!gmail.isConfigured()) console.warn("Gmail integration not configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET missing).");
 else if (!gmail.isConnected()) console.warn("Gmail configured but not yet authorized. Visit /api/gmail/auth to connect.");
+else {
+  gmail.getConnectedEmail().then(email => {
+    if (email) console.log(`[boot] Google account connected: ${email}`);
+  }).catch(() => {});
+}
 if (!APP_PASSWORD) console.warn("APP_PASSWORD is not set — auth disabled.");
 
 console.log(`[boot] PORT=${PORT} PUBLIC_DIR=${PUBLIC_DIR} AGENT_DIR=${AGENT_DIR}`);
@@ -775,11 +780,17 @@ app.get("/api/gmail/callback", async (req: Request, res: Response) => {
   }
 });
 
-app.get("/api/gmail/status", (_req: Request, res: Response) => {
-  res.json({
+app.get("/api/gmail/status", async (_req: Request, res: Response) => {
+  const status: any = {
     configured: gmail.isConfigured(),
     connected: gmail.isConnected(),
-  });
+  };
+  if (status.connected) {
+    try {
+      status.email = await gmail.getConnectedEmail();
+    } catch {}
+  }
+  res.json(status);
 });
 
 app.post("/api/session", async (_req: Request, res: Response) => {
@@ -1169,9 +1180,13 @@ app.get("/api/glance", async (_req: Request, res: Response) => {
     if (calendar.isConfigured()) {
       promises.push((async () => {
         try {
-          const endOfDay = new Date(now);
-          endOfDay.setHours(23, 59, 59, 999);
-          const raw = await calendar.listEvents({ maxResults: 3, timeMax: endOfDay.toISOString() });
+          const utcStr = now.toLocaleString("en-US", { timeZone: "UTC" });
+          const tzStr = now.toLocaleString("en-US", { timeZone: tz });
+          const tzOffsetMs = new Date(tzStr).getTime() - new Date(utcStr).getTime();
+          const nowShifted = new Date(now.getTime() + tzOffsetMs);
+          const eodInTz = new Date(Date.UTC(nowShifted.getUTCFullYear(), nowShifted.getUTCMonth(), nowShifted.getUTCDate(), 23, 59, 59, 999));
+          const endOfDayUTC = new Date(eodInTz.getTime() - tzOffsetMs);
+          const raw = await calendar.listEvents({ maxResults: 3, timeMax: endOfDayUTC.toISOString() });
           if (!raw.includes("No upcoming events") && !raw.includes("expired") && !raw.includes("not authorized")) {
             const events: Array<{ title: string; time: string }> = [];
             const eventBlocks = raw.split(/\d+\.\s+/).slice(1);

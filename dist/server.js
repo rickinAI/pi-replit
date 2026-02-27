@@ -526,6 +526,15 @@ ${truncatedBody}`;
 async function searchEmails(query) {
   return listEmails(query, 10);
 }
+async function getConnectedEmail() {
+  try {
+    const client = await getGmailClient();
+    const profile = await client.users.getProfile({ userId: "me" });
+    return profile.data.emailAddress || null;
+  } catch {
+    return null;
+  }
+}
 
 // src/calendar.ts
 import { google as google2 } from "googleapis";
@@ -583,18 +592,48 @@ function isConfigured3() {
 }
 async function listEvents(options) {
   try {
-    const calendar = await getCalendarClient();
+    const cal = await getCalendarClient();
     const now = /* @__PURE__ */ new Date();
-    const params = {
-      calendarId: "primary",
-      timeMin: options?.timeMin || now.toISOString(),
-      maxResults: options?.maxResults || 10,
-      singleEvents: true,
-      orderBy: "startTime"
-    };
-    if (options?.timeMax) params.timeMax = options.timeMax;
-    const res = await calendar.events.list(params);
-    const events = res.data.items || [];
+    const timeMin = options?.timeMin || now.toISOString();
+    const maxResults = options?.maxResults || 10;
+    let calendarIds = ["primary"];
+    try {
+      const calList = await cal.calendarList.list({ minAccessRole: "reader" });
+      const items = calList.data.items || [];
+      if (items.length > 0) {
+        calendarIds = items.filter((c) => c.selected !== false).map((c) => c.id).filter(Boolean);
+        if (calendarIds.length === 0) calendarIds = ["primary"];
+      }
+      console.log(`[calendar] Querying ${calendarIds.length} calendar(s): ${calendarIds.join(", ")}`);
+    } catch (err) {
+      console.log("[calendar] Could not list calendars, falling back to primary");
+    }
+    console.log(`[calendar] Query range: ${timeMin} to ${options?.timeMax || "open-ended"}`);
+    const allEvents = [];
+    for (const calId of calendarIds) {
+      try {
+        const params = {
+          calendarId: calId,
+          timeMin,
+          maxResults,
+          singleEvents: true,
+          orderBy: "startTime"
+        };
+        if (options?.timeMax) params.timeMax = options.timeMax;
+        const res = await cal.events.list(params);
+        const items = res.data.items || [];
+        allEvents.push(...items);
+      } catch (err) {
+        console.log(`[calendar] Failed to query calendar ${calId}:`, err instanceof Error ? err.message : String(err));
+      }
+    }
+    allEvents.sort((a, b) => {
+      const aTime = a.start?.dateTime || a.start?.date || "";
+      const bTime = b.start?.dateTime || b.start?.date || "";
+      return aTime.localeCompare(bTime);
+    });
+    const events = allEvents.slice(0, maxResults);
+    console.log(`[calendar] Found ${allEvents.length} event(s), returning ${events.length}`);
     if (events.length === 0) return "No upcoming events found.";
     const lines = events.map((event, i) => {
       const start = event.start?.dateTime ? new Date(event.start.dateTime).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : event.start?.date || "TBD";
@@ -1591,25 +1630,40 @@ function getTodayKey() {
   const now = getNow();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
+function getTzOffset(tz, refDate) {
+  const utcStr = refDate.toLocaleString("en-US", { timeZone: "UTC" });
+  const tzStr = refDate.toLocaleString("en-US", { timeZone: tz });
+  return new Date(tzStr).getTime() - new Date(utcStr).getTime();
+}
+function getDateInTimezone(tz, daysOffset = 0) {
+  const now = /* @__PURE__ */ new Date();
+  const nowOffsetMs = getTzOffset(tz, now);
+  const nowInTz = new Date(now.getTime() + nowOffsetMs);
+  nowInTz.setUTCDate(nowInTz.getUTCDate() + daysOffset);
+  const noonOnTarget = new Date(Date.UTC(nowInTz.getUTCFullYear(), nowInTz.getUTCMonth(), nowInTz.getUTCDate(), 12, 0, 0, 0));
+  const targetOffsetMs = getTzOffset(tz, new Date(noonOnTarget.getTime() - nowOffsetMs));
+  const startInTz = new Date(Date.UTC(nowInTz.getUTCFullYear(), nowInTz.getUTCMonth(), nowInTz.getUTCDate(), 0, 0, 0, 0));
+  const endInTz = new Date(Date.UTC(nowInTz.getUTCFullYear(), nowInTz.getUTCMonth(), nowInTz.getUTCDate(), 23, 59, 59, 999));
+  const startUTC = new Date(startInTz.getTime() - targetOffsetMs);
+  const endUTC = new Date(endInTz.getTime() - targetOffsetMs);
+  return { start: startUTC, end: endUTC };
+}
 async function gatherSection(name) {
   try {
     switch (name) {
       case "calendar": {
         if (!isConfigured3()) return "**Calendar:** [not connected]";
         const now = /* @__PURE__ */ new Date();
-        const endOfDay = new Date(now);
-        endOfDay.setHours(23, 59, 59, 999);
+        const { end: endOfDay } = getDateInTimezone(config.timezone, 0);
+        console.log(`[alerts] Calendar today query: ${now.toISOString()} to ${endOfDay.toISOString()}`);
         const result = await listEvents({ timeMin: now.toISOString(), timeMax: endOfDay.toISOString(), maxResults: 10 });
         return `**Today's Calendar:**
 ${result}`;
       }
       case "calendar_tomorrow": {
         if (!isConfigured3()) return "**Calendar:** [not connected]";
-        const tomorrow = /* @__PURE__ */ new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        tomorrow.setHours(0, 0, 0, 0);
-        const endTomorrow = new Date(tomorrow);
-        endTomorrow.setHours(23, 59, 59, 999);
+        const { start: tomorrow, end: endTomorrow } = getDateInTimezone(config.timezone, 1);
+        console.log(`[alerts] Calendar tomorrow query: ${tomorrow.toISOString()} to ${endTomorrow.toISOString()}`);
         const result = await listEvents({ timeMin: tomorrow.toISOString(), timeMax: endTomorrow.toISOString(), maxResults: 10 });
         return `**Tomorrow's Calendar:**
 ${result}`;
@@ -1936,6 +1990,12 @@ if (!ANTHROPIC_KEY) console.warn("ANTHROPIC_API_KEY is not set.");
 if (!isConfigured()) console.warn("Knowledge base integration not configured.");
 if (!isConfigured2()) console.warn("Gmail integration not configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET missing).");
 else if (!isConnected()) console.warn("Gmail configured but not yet authorized. Visit /api/gmail/auth to connect.");
+else {
+  getConnectedEmail().then((email) => {
+    if (email) console.log(`[boot] Google account connected: ${email}`);
+  }).catch(() => {
+  });
+}
 if (!APP_PASSWORD) console.warn("APP_PASSWORD is not set \u2014 auth disabled.");
 console.log(`[boot] PORT=${PORT} PUBLIC_DIR=${PUBLIC_DIR} AGENT_DIR=${AGENT_DIR}`);
 console.log(`[boot] public/ exists: ${fs6.existsSync(PUBLIC_DIR)}`);
@@ -2617,11 +2677,18 @@ app.get("/api/gmail/callback", async (req, res) => {
     res.status(500).send("Gmail authorization failed. Please try again.");
   }
 });
-app.get("/api/gmail/status", (_req, res) => {
-  res.json({
+app.get("/api/gmail/status", async (_req, res) => {
+  const status = {
     configured: isConfigured2(),
     connected: isConnected()
-  });
+  };
+  if (status.connected) {
+    try {
+      status.email = await getConnectedEmail();
+    } catch {
+    }
+  }
+  res.json(status);
 });
 app.post("/api/session", async (_req, res) => {
   try {
@@ -3014,9 +3081,13 @@ app.get("/api/glance", async (_req, res) => {
     if (isConfigured3()) {
       promises.push((async () => {
         try {
-          const endOfDay = new Date(now);
-          endOfDay.setHours(23, 59, 59, 999);
-          const raw = await listEvents({ maxResults: 3, timeMax: endOfDay.toISOString() });
+          const utcStr = now.toLocaleString("en-US", { timeZone: "UTC" });
+          const tzStr = now.toLocaleString("en-US", { timeZone: tz });
+          const tzOffsetMs = new Date(tzStr).getTime() - new Date(utcStr).getTime();
+          const nowShifted = new Date(now.getTime() + tzOffsetMs);
+          const eodInTz = new Date(Date.UTC(nowShifted.getUTCFullYear(), nowShifted.getUTCMonth(), nowShifted.getUTCDate(), 23, 59, 59, 999));
+          const endOfDayUTC = new Date(eodInTz.getTime() - tzOffsetMs);
+          const raw = await listEvents({ maxResults: 3, timeMax: endOfDayUTC.toISOString() });
           if (!raw.includes("No upcoming events") && !raw.includes("expired") && !raw.includes("not authorized")) {
             const events = [];
             const eventBlocks = raw.split(/\d+\.\s+/).slice(1);

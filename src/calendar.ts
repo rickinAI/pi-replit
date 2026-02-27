@@ -65,19 +65,56 @@ export function isConfigured(): boolean {
 
 export async function listEvents(options?: { maxResults?: number; timeMin?: string; timeMax?: string }): Promise<string> {
   try {
-    const calendar = await getCalendarClient();
+    const cal = await getCalendarClient();
     const now = new Date();
-    const params: any = {
-      calendarId: "primary",
-      timeMin: options?.timeMin || now.toISOString(),
-      maxResults: options?.maxResults || 10,
-      singleEvents: true,
-      orderBy: "startTime",
-    };
-    if (options?.timeMax) params.timeMax = options.timeMax;
+    const timeMin = options?.timeMin || now.toISOString();
+    const maxResults = options?.maxResults || 10;
 
-    const res = await calendar.events.list(params);
-    const events = res.data.items || [];
+    let calendarIds: string[] = ["primary"];
+    try {
+      const calList = await cal.calendarList.list({ minAccessRole: "reader" });
+      const items = calList.data.items || [];
+      if (items.length > 0) {
+        calendarIds = items
+          .filter((c: any) => c.selected !== false)
+          .map((c: any) => c.id)
+          .filter(Boolean);
+        if (calendarIds.length === 0) calendarIds = ["primary"];
+      }
+      console.log(`[calendar] Querying ${calendarIds.length} calendar(s): ${calendarIds.join(", ")}`);
+    } catch (err) {
+      console.log("[calendar] Could not list calendars, falling back to primary");
+    }
+
+    console.log(`[calendar] Query range: ${timeMin} to ${options?.timeMax || "open-ended"}`);
+
+    const allEvents: any[] = [];
+    for (const calId of calendarIds) {
+      try {
+        const params: any = {
+          calendarId: calId,
+          timeMin,
+          maxResults,
+          singleEvents: true,
+          orderBy: "startTime",
+        };
+        if (options?.timeMax) params.timeMax = options.timeMax;
+        const res = await cal.events.list(params);
+        const items = res.data.items || [];
+        allEvents.push(...items);
+      } catch (err) {
+        console.log(`[calendar] Failed to query calendar ${calId}:`, err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    allEvents.sort((a: any, b: any) => {
+      const aTime = a.start?.dateTime || a.start?.date || "";
+      const bTime = b.start?.dateTime || b.start?.date || "";
+      return aTime.localeCompare(bTime);
+    });
+
+    const events = allEvents.slice(0, maxResults);
+    console.log(`[calendar] Found ${allEvents.length} event(s), returning ${events.length}`);
 
     if (events.length === 0) return "No upcoming events found.";
 

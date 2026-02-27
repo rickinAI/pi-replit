@@ -237,3 +237,13 @@ export async function readEmail(messageId: string): Promise<string> {
 export async function searchEmails(query: string): Promise<string> {
   return listEmails(query, 10);
 }
+
+export async function getConnectedEmail(): Promise<string | null> {
+  try {
+    const client = await getGmailClient();
+    const profile = await client.users.getProfile({ userId: "me" });
+    return profile.data.emailAddress || null;
+  } catch {
+    return null;
+  }
+}

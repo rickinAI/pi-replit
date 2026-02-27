@@ -115,8 +115,10 @@ Auth via custom OAuth flow using `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`. To
 ## Calendar Integration
 
 2 custom tools using Google Calendar API (shares OAuth tokens with Gmail):
-- `calendar_list` — List upcoming events with date range filtering
+- `calendar_list` — List upcoming events with date range filtering (queries all visible calendars, not just primary)
 - `calendar_create` — Create new events with time, description, location
+- All date range calculations use proper timezone-aware UTC conversion (handles DST transitions)
+- Connected Google account logged at boot and visible via `/api/gmail/status` (includes email address)
 
 ## Weather
 

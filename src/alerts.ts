@@ -173,24 +173,41 @@ function formatTimeET(date?: Date): string {
   return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: config.timezone });
 }
 
+function getTzOffset(tz: string, refDate: Date): number {
+  const utcStr = refDate.toLocaleString("en-US", { timeZone: "UTC" });
+  const tzStr = refDate.toLocaleString("en-US", { timeZone: tz });
+  return new Date(tzStr).getTime() - new Date(utcStr).getTime();
+}
+
+function getDateInTimezone(tz: string, daysOffset: number = 0): { start: Date; end: Date } {
+  const now = new Date();
+  const nowOffsetMs = getTzOffset(tz, now);
+  const nowInTz = new Date(now.getTime() + nowOffsetMs);
+  nowInTz.setUTCDate(nowInTz.getUTCDate() + daysOffset);
+  const noonOnTarget = new Date(Date.UTC(nowInTz.getUTCFullYear(), nowInTz.getUTCMonth(), nowInTz.getUTCDate(), 12, 0, 0, 0));
+  const targetOffsetMs = getTzOffset(tz, new Date(noonOnTarget.getTime() - nowOffsetMs));
+  const startInTz = new Date(Date.UTC(nowInTz.getUTCFullYear(), nowInTz.getUTCMonth(), nowInTz.getUTCDate(), 0, 0, 0, 0));
+  const endInTz = new Date(Date.UTC(nowInTz.getUTCFullYear(), nowInTz.getUTCMonth(), nowInTz.getUTCDate(), 23, 59, 59, 999));
+  const startUTC = new Date(startInTz.getTime() - targetOffsetMs);
+  const endUTC = new Date(endInTz.getTime() - targetOffsetMs);
+  return { start: startUTC, end: endUTC };
+}
+
 async function gatherSection(name: string): Promise<string> {
   try {
     switch (name) {
       case "calendar": {
         if (!calendar.isConfigured()) return "**Calendar:** [not connected]";
         const now = new Date();
-        const endOfDay = new Date(now);
-        endOfDay.setHours(23, 59, 59, 999);
+        const { end: endOfDay } = getDateInTimezone(config.timezone, 0);
+        console.log(`[alerts] Calendar today query: ${now.toISOString()} to ${endOfDay.toISOString()}`);
         const result = await calendar.listEvents({ timeMin: now.toISOString(), timeMax: endOfDay.toISOString(), maxResults: 10 });
         return `**Today's Calendar:**\n${result}`;
       }
       case "calendar_tomorrow": {
         if (!calendar.isConfigured()) return "**Calendar:** [not connected]";
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        tomorrow.setHours(0, 0, 0, 0);
-        const endTomorrow = new Date(tomorrow);
-        endTomorrow.setHours(23, 59, 59, 999);
+        const { start: tomorrow, end: endTomorrow } = getDateInTimezone(config.timezone, 1);
+        console.log(`[alerts] Calendar tomorrow query: ${tomorrow.toISOString()} to ${endTomorrow.toISOString()}`);
         const result = await calendar.listEvents({ timeMin: tomorrow.toISOString(), timeMax: endTomorrow.toISOString(), maxResults: 10 });
         return `**Tomorrow's Calendar:**\n${result}`;
       }
