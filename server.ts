@@ -686,7 +686,7 @@ if (obsidian.isConfigured()) {
     if (alive && !lastTunnelStatus) {
       console.log("[health] Knowledge base connection recovered");
     } else if (!alive && lastTunnelStatus) {
-      console.warn("[health] Knowledge base connection DOWN — tunnel may have changed");
+      console.warn("[health] Knowledge base connection DOWN — check that Obsidian is running and tunnel service is active");
     }
     lastTunnelStatus = alive;
   }, 2 * 60 * 1000);

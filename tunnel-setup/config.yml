@@ -1,0 +1,9 @@
+tunnel: obsidian-vault
+credentials-file: /Users/YOUR_USERNAME/.cloudflared/TUNNEL_ID.json
+
+ingress:
+  - hostname: YOUR_SUBDOMAIN.cfargotunnel.com
+    service: https://localhost:27124
+    originRequest:
+      noTLSVerify: true
+  - service: http_status:404
