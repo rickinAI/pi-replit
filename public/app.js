@@ -793,11 +793,22 @@ function initSpeechRecognition() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) return null;
   const rec = new SR();
-  rec.continuous = true;
+  rec.continuous = false;
   rec.interimResults = true;
   rec.lang = "en-US";
 
   let finalTranscript = "";
+  let safetyTimer = null;
+
+  function clearSafetyTimer() {
+    if (safetyTimer) { clearTimeout(safetyTimer); safetyTimer = null; }
+  }
+
+  function resetMicState() {
+    clearSafetyTimer();
+    isRecording = false;
+    micBtn.classList.remove("recording");
+  }
 
   rec.onresult = (e) => {
     let interim = "";
@@ -814,8 +825,7 @@ function initSpeechRecognition() {
   };
 
   rec.onend = () => {
-    isRecording = false;
-    micBtn.classList.remove("recording");
+    resetMicState();
     if (finalTranscript.trim()) {
       input.value = finalTranscript.trim();
       sendMessage();
@@ -826,8 +836,7 @@ function initSpeechRecognition() {
   };
 
   rec.onerror = (e) => {
-    isRecording = false;
-    micBtn.classList.remove("recording");
+    resetMicState();
     finalTranscript = "";
     if (e.error === "not-allowed") {
       appendBubble("system", "Microphone access denied. Please allow microphone permission.");
@@ -835,6 +844,21 @@ function initSpeechRecognition() {
   };
 
   rec._resetTranscript = () => { finalTranscript = ""; };
+  rec._clearSafetyTimer = clearSafetyTimer;
+  rec._startSafetyTimer = () => {
+    clearSafetyTimer();
+    safetyTimer = setTimeout(() => {
+      if (isRecording) {
+        try { rec.stop(); } catch (_) {}
+        resetMicState();
+        if (finalTranscript.trim()) {
+          input.value = finalTranscript.trim();
+          sendMessage();
+        }
+        finalTranscript = "";
+      }
+    }, 30000);
+  };
   return rec;
 }
 
@@ -842,7 +866,15 @@ if (micBtn) {
   micBtn.addEventListener("click", () => {
     if (input.disabled || sendBtn.disabled) return;
     if (isRecording && speechRecognition) {
-      speechRecognition.stop();
+      try { speechRecognition.stop(); } catch (_) {}
+      setTimeout(() => {
+        if (isRecording) {
+          try { speechRecognition.abort(); } catch (_) {}
+          isRecording = false;
+          micBtn.classList.remove("recording");
+          if (speechRecognition._clearSafetyTimer) speechRecognition._clearSafetyTimer();
+        }
+      }, 500);
       return;
     }
     if (!speechRecognition) {
@@ -858,6 +890,7 @@ if (micBtn) {
       speechRecognition.start();
       isRecording = true;
       micBtn.classList.add("recording");
+      speechRecognition._startSafetyTimer();
     } catch (e) {
       isRecording = false;
       micBtn.classList.remove("recording");
