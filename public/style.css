@@ -137,9 +137,34 @@ body {
   font-size: 10px;
 }
 
+.status-badge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 2px 8px;
+  font-size: 10px;
+  color: var(--green-dim);
+  cursor: default;
+}
+
+.status-badge-label {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--green-dim);
+  font-family: var(--font);
+}
+
+.status-dots-col {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
 .status-dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   background: var(--green);
   box-shadow: 0 0 4px var(--green-glow);
@@ -149,10 +174,6 @@ body {
 .status-dot.disconnected {
   background: var(--red);
   box-shadow: 0 0 4px rgba(255, 0, 0, 0.4);
-}
-
-.kb-dot {
-  margin-left: -2px;
 }
 
 .header-actions {
@@ -1563,6 +1584,10 @@ body.light-theme .logo {
 
 body.light-theme .status-dot {
   box-shadow: none;
+}
+
+body.light-theme .status-badge {
+  background: var(--surface);
 }
 
 body.light-theme #header {

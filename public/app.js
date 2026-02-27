@@ -20,6 +20,7 @@ const newSessionBtn = document.getElementById("new-session-btn");
 const historyBtn    = document.getElementById("history-btn");
 const statusDot     = document.getElementById("status-dot");
 const kbDot         = document.getElementById("kb-dot");
+const statusBadge   = document.getElementById("status-badge");
 const appEl         = document.getElementById("app");
 const historyPanel  = document.getElementById("history-panel");
 const historyList   = document.getElementById("history-list");
@@ -278,6 +279,12 @@ function openEventStream(id) {
   });
 }
 
+function updateBadgeTooltip() {
+  const s = statusDot.title || "Server: unknown";
+  const k = kbDot.title || "Obsidian: unknown";
+  statusBadge.title = s + " · " + k;
+}
+
 function setConnected(connected) {
   if (connected) {
     statusDot.classList.remove("disconnected");
@@ -286,6 +293,7 @@ function setConnected(connected) {
     statusDot.classList.add("disconnected");
     statusDot.title = "Server: disconnected";
   }
+  updateBadgeTooltip();
 }
 
 async function pollKbStatus() {
@@ -304,6 +312,7 @@ async function pollKbStatus() {
     kbDot.classList.add("disconnected");
     kbDot.title = "Obsidian: unknown";
   }
+  updateBadgeTooltip();
 }
 pollKbStatus();
 setInterval(pollKbStatus, 2 * 60 * 1000);
