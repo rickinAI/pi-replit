@@ -828,7 +828,9 @@ function initSpeechRecognition() {
     resetMicState();
     if (finalTranscript.trim()) {
       input.value = finalTranscript.trim();
-      sendMessage();
+      input.style.height = "auto";
+      input.style.height = input.scrollHeight + "px";
+      input.focus();
     } else {
       input.value = "";
     }
@@ -853,7 +855,9 @@ function initSpeechRecognition() {
         resetMicState();
         if (finalTranscript.trim()) {
           input.value = finalTranscript.trim();
-          sendMessage();
+          input.style.height = "auto";
+          input.style.height = input.scrollHeight + "px";
+          input.focus();
         }
         finalTranscript = "";
       }
