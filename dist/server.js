@@ -1417,7 +1417,7 @@ var DEFAULT_CONFIG = {
   timezone: "America/New_York",
   location: "New York",
   briefs: {
-    morning: { enabled: true, hour: 8, minute: 0, content: ["calendar", "tasks", "weather", "news", "markets", "email"] },
+    morning: { enabled: true, hour: 8, minute: 0, content: ["calendar", "tasks", "weather", "news", "xfeed", "markets", "email"] },
     afternoon: { enabled: true, hour: 13, minute: 0, content: ["calendar", "tasks", "email", "markets"] },
     evening: { enabled: true, hour: 19, minute: 0, content: ["calendar_tomorrow", "tasks", "markets", "email"] }
   },
@@ -1504,6 +1504,54 @@ function getNow() {
 function getTodayKey() {
   const now = getNow();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+async function fetchXFeedAccount(account, limit) {
+  try {
+    const raw = await getUserTimeline(account, limit);
+    if (raw.includes("Could not fetch") || raw.includes("Error fetching") || raw.includes("No recent tweets")) return [];
+    const tweetBlocks = raw.split("\n\n").filter((t) => t.trim() && !t.startsWith("Recent tweets"));
+    const lines = [];
+    for (const block of tweetBlocks.slice(0, limit)) {
+      const blockLines = block.split("\n").map((l) => l.trim()).filter(Boolean);
+      const textLine = blockLines.find(
+        (l) => !l.match(/^\d+\.\s*@/) && !l.match(/^[\d,]+ likes/) && !l.startsWith("https://x.com/")
+      ) || (blockLines.length > 1 ? blockLines[1] : null);
+      if (textLine) {
+        const text = textLine.length > 200 ? textLine.slice(0, 200) + "..." : textLine;
+        lines.push(`- @${account}: ${text}`);
+      }
+    }
+    return lines;
+  } catch {
+    return [];
+  }
+}
+async function fetchXFeedGroup(accounts, limit) {
+  const lines = [];
+  for (const acct of accounts) {
+    const result = await fetchXFeedAccount(acct, limit);
+    lines.push(...result);
+    if (accounts.indexOf(acct) < accounts.length - 1) {
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  }
+  return lines;
+}
+async function gatherXFeed() {
+  const topAccounts = ["Reuters", "AP", "BBCBreaking", "WSJ"];
+  const aiAccounts = ["OpenAI", "AnthropicAI", "GoogleDeepMind", "ylecun", "kaborstrom"];
+  console.log("[xfeed] Starting fetch...");
+  const topLines = await fetchXFeedGroup(topAccounts, 3);
+  console.log(`[xfeed] Top Stories: ${topLines.length} items`);
+  await new Promise((r) => setTimeout(r, 500));
+  const aiLines = await fetchXFeedGroup(aiAccounts, 3);
+  console.log(`[xfeed] AI & Tech: ${aiLines.length} items`);
+  const sections = [];
+  if (topLines.length > 0) sections.push(`**X \u2014 Top Stories:**
+${topLines.join("\n")}`);
+  if (aiLines.length > 0) sections.push(`**X \u2014 AI & Technology:**
+${aiLines.join("\n")}`);
+  return sections.join("\n\n") || "**X Feed:** [unavailable]";
 }
 async function gatherSection(name) {
   try {
@@ -1605,6 +1653,9 @@ ${lines}`);
         }
         return `**Markets:**
 ${items.join("\n")}`;
+      }
+      case "xfeed": {
+        return await gatherXFeed();
       }
       case "email": {
         if (!isConfigured2() || !isConnected()) return "**Email:** [not connected]";
