@@ -221,6 +221,89 @@ function addMessage(conv, role, text, images) {
   }
   conv.updatedAt = Date.now();
 }
+function search(query, options) {
+  if (!fs.existsSync(dataDir)) return [];
+  const files = fs.readdirSync(dataDir).filter((f) => f.endsWith(".json"));
+  const results = [];
+  const terms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 0);
+  const limit = options?.limit ?? 10;
+  for (const file of files) {
+    try {
+      const conv = JSON.parse(fs.readFileSync(path.join(dataDir, file), "utf-8"));
+      if (options?.before && conv.createdAt > options.before) continue;
+      if (options?.after && conv.createdAt < options.after) continue;
+      const snippets = [];
+      for (const msg of conv.messages) {
+        if (msg.role === "system") continue;
+        const lower = msg.text.toLowerCase();
+        if (terms.some((t) => lower.includes(t))) {
+          const snippet = msg.text.slice(0, 200);
+          const role = msg.role === "user" ? "You" : "Agent";
+          const time = new Date(msg.timestamp).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+          snippets.push(`[${role}, ${time}] ${snippet}`);
+          if (snippets.length >= 3) break;
+        }
+      }
+      if (snippets.length > 0) {
+        results.push({
+          id: conv.id,
+          title: conv.title,
+          createdAt: conv.createdAt,
+          updatedAt: conv.updatedAt,
+          messageCount: conv.messages.length,
+          snippets
+        });
+      }
+    } catch {
+    }
+  }
+  results.sort((a, b) => b.updatedAt - a.updatedAt);
+  return results.slice(0, limit);
+}
+function shouldSync(conv) {
+  const userMessages = conv.messages.filter((m) => m.role === "user");
+  return userMessages.length >= 4;
+}
+function generateSummaryMarkdown(conv) {
+  const date = new Date(conv.createdAt).toLocaleDateString("en-US", {
+    timeZone: "America/New_York",
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric"
+  });
+  const time = new Date(conv.createdAt).toLocaleTimeString("en-US", {
+    timeZone: "America/New_York",
+    hour: "numeric",
+    minute: "2-digit"
+  });
+  const userMsgs = conv.messages.filter((m) => m.role === "user").map((m) => m.text.trim());
+  const agentMsgs = conv.messages.filter((m) => m.role === "agent").map((m) => m.text.trim());
+  const topicLines = userMsgs.slice(0, 8).map((t) => `- ${t.slice(0, 120)}`).join("\n");
+  let keyPoints = "";
+  for (const a of agentMsgs) {
+    const lines = a.split("\n").filter((l) => l.trim().length > 10);
+    for (const line of lines.slice(0, 2)) {
+      keyPoints += `- ${line.trim().slice(0, 150)}
+`;
+    }
+    if (keyPoints.split("\n").length > 6) break;
+  }
+  return `# ${conv.title}
+
+**Date:** ${date} at ${time}
+**Messages:** ${conv.messages.length}
+
+## Topics Discussed
+${topicLines}
+
+## Key Points
+${keyPoints.trim() || "- General discussion"}
+
+---
+*Session ID: ${conv.id}*
+`;
+}
 
 // src/gmail.ts
 import { google } from "googleapis";
@@ -683,7 +766,7 @@ async function getWeather(location) {
 }
 
 // src/websearch.ts
-async function search(query) {
+async function search2(query) {
   try {
     const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
     const res = await fetch(url, {
@@ -1991,7 +2074,7 @@ function buildSearchTools() {
         query: Type.String({ description: "Search query" })
       }),
       async execute(_toolCallId, params) {
-        const result = await search(params.query);
+        const result = await search2(params.query);
         return { content: [{ type: "text", text: result }], details: {} };
       }
     }
@@ -2322,6 +2405,33 @@ function buildInterviewTool(sessionId) {
     }
   ];
 }
+function buildConversationTools() {
+  return [
+    {
+      name: "conversation_search",
+      label: "Conversation Search",
+      description: "Search past conversations with the user by keyword. Use this when the user asks about previous discussions, e.g. 'what did we talk about last Tuesday?' or 'find our conversation about the trip'. Returns matching conversations with context snippets.",
+      parameters: Type.Object({
+        query: Type.String({ description: "Search keywords to find in past conversations" }),
+        days_ago: Type.Optional(Type.Number({ description: "Only search conversations from the last N days. E.g. 7 for last week." }))
+      }),
+      async execute(_toolCallId, params) {
+        const after = params.days_ago ? Date.now() - params.days_ago * 24 * 60 * 60 * 1e3 : void 0;
+        const results = search(params.query, { after, limit: 8 });
+        if (results.length === 0) {
+          return { content: [{ type: "text", text: `No past conversations found matching "${params.query}".` }], details: {} };
+        }
+        const formatted = results.map((r) => {
+          const date = new Date(r.createdAt).toLocaleDateString("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric" });
+          const snippetText = r.snippets.map((s) => `  ${s}`).join("\n");
+          return `**"${r.title}"** (${date}, ${r.messageCount} msgs)
+${snippetText}`;
+        }).join("\n\n---\n\n");
+        return { content: [{ type: "text", text: formatted }], details: {} };
+      }
+    }
+  ];
+}
 var sessions = /* @__PURE__ */ new Map();
 var FAST_MODEL_ID = "claude-haiku-4-5";
 var FULL_MODEL_ID = "claude-sonnet-4-6";
@@ -2343,6 +2453,7 @@ function classifyIntent(message) {
   if (trimmed.length < 20 && !trimmed.includes("?")) return "fast";
   return "full";
 }
+var syncedConversations = /* @__PURE__ */ new Set();
 function saveAndCleanSession(id) {
   const entry = sessions.get(id);
   if (!entry) return;
@@ -2352,6 +2463,7 @@ function saveAndCleanSession(id) {
   }
   if (entry.conversation.messages.length > 0) {
     save(entry.conversation);
+    syncConversationToVault(entry.conversation);
   }
   for (const sub of entry.subscribers) {
     try {
@@ -2361,6 +2473,30 @@ function saveAndCleanSession(id) {
   }
   entry.subscribers.clear();
   sessions.delete(id);
+}
+async function syncConversationToVault(conv) {
+  if (syncedConversations.has(conv.id)) return;
+  if (!shouldSync(conv)) return;
+  if (!isConfigured()) return;
+  const existing = load(conv.id);
+  if (existing && existing.syncedAt) {
+    syncedConversations.add(conv.id);
+    return;
+  }
+  try {
+    const summary = generateSummaryMarkdown(conv);
+    const dateStr = new Date(conv.createdAt).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+    let safeTitle = conv.title.replace(/[^a-zA-Z0-9 _-]/g, "").slice(0, 50).trim();
+    if (!safeTitle) safeTitle = conv.id;
+    const notePath = `Conversations/${dateStr} - ${safeTitle}.md`;
+    await createNote(notePath, summary);
+    syncedConversations.add(conv.id);
+    conv.syncedAt = Date.now();
+    save(conv);
+    console.log(`[sync] Conversation synced to vault: ${notePath}`);
+  } catch (err) {
+    console.error(`[sync] Failed to sync conversation ${conv.id}:`, err);
+  }
 }
 setInterval(() => {
   const cutoff = Date.now() - 2 * 60 * 60 * 1e3;
@@ -2506,6 +2642,7 @@ app.post("/api/session", async (_req, res) => {
       ...buildTwitterTools(),
       ...buildStockTools(),
       ...buildMapsTools(),
+      ...buildConversationTools(),
       ...buildInterviewTool(sessionId)
     ];
     console.log(`[session] ${allTools.length} tools registered`);
@@ -2720,6 +2857,17 @@ app.post("/api/session/:id/interview-response", (req, res) => {
 app.delete("/api/session/:id", (req, res) => {
   saveAndCleanSession(req.params["id"]);
   res.json({ ok: true });
+});
+app.get("/api/conversations/search", (req, res) => {
+  const q = req.query["q"] || "";
+  if (!q.trim()) {
+    res.json([]);
+    return;
+  }
+  const before = req.query["before"] ? Number(req.query["before"]) : void 0;
+  const after = req.query["after"] ? Number(req.query["after"]) : void 0;
+  const results = search(q, { before, after });
+  res.json(results);
 });
 app.get("/api/conversations", (_req, res) => {
   res.json(list());

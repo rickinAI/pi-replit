@@ -198,14 +198,17 @@ Proactive background scheduler that pushes briefings and alerts via SSE to all c
 - Image thumbnails displayed in chat bubbles and conversation history view
 - Express JSON body limit set to 50MB to accommodate base64 payloads
 
-## Conversation Persistence
+## Conversation Persistence & Memory Search
 
 - Conversations stored as JSON files in `data/conversations/`
-- Each file: `{ id, title, messages: [{role, text, timestamp, images?}], createdAt, updatedAt }`
+- Each file: `{ id, title, messages: [{role, text, timestamp, images?}], createdAt, updatedAt, syncedAt? }`
 - Title auto-derived from first user message (truncated to 60 chars)
 - Auto-save every 5 minutes for crash resilience
 - Saved on session close, 2-hour expiry, and graceful shutdown
 - History panel in UI for browsing/viewing/deleting past conversations
+- **Conversation search**: `GET /api/conversations/search?q=...&before=...&after=...` — full-text keyword search across all past conversations with date filtering
+- **AI tool**: `conversation_search` — AI can search past conversations when user asks about previous discussions
+- **Auto-sync to vault**: Substantive conversations (4+ user messages) are automatically summarized and saved to `Conversations/` folder in the knowledge base when sessions end. Prevents duplicates via `syncedAt` marker in conversation JSON. Empty/short chats are skipped.
 
 ## Dependencies
 

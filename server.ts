@@ -540,6 +540,36 @@ function buildInterviewTool(sessionId: string): ToolDefinition[] {
   ];
 }
 
+function buildConversationTools(): ToolDefinition[] {
+  return [
+    {
+      name: "conversation_search",
+      label: "Conversation Search",
+      description: "Search past conversations with the user by keyword. Use this when the user asks about previous discussions, e.g. 'what did we talk about last Tuesday?' or 'find our conversation about the trip'. Returns matching conversations with context snippets.",
+      parameters: Type.Object({
+        query: Type.String({ description: "Search keywords to find in past conversations" }),
+        days_ago: Type.Optional(Type.Number({ description: "Only search conversations from the last N days. E.g. 7 for last week." })),
+      }),
+      async execute(_toolCallId, params) {
+        const after = params.days_ago ? Date.now() - params.days_ago * 24 * 60 * 60 * 1000 : undefined;
+        const results = conversations.search(params.query, { after, limit: 8 });
+
+        if (results.length === 0) {
+          return { content: [{ type: "text" as const, text: `No past conversations found matching "${params.query}".` }], details: {} };
+        }
+
+        const formatted = results.map(r => {
+          const date = new Date(r.createdAt).toLocaleDateString("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric" });
+          const snippetText = r.snippets.map(s => `  ${s}`).join("\n");
+          return `**"${r.title}"** (${date}, ${r.messageCount} msgs)\n${snippetText}`;
+        }).join("\n\n---\n\n");
+
+        return { content: [{ type: "text" as const, text: formatted }], details: {} };
+      },
+    },
+  ];
+}
+
 type ModelMode = "auto" | "fast" | "full";
 
 interface InterviewWaiter {
@@ -583,6 +613,8 @@ function classifyIntent(message: string): "fast" | "full" {
   return "full";
 }
 
+const syncedConversations = new Set<string>();
+
 function saveAndCleanSession(id: string) {
   const entry = sessions.get(id);
   if (!entry) return;
@@ -592,10 +624,38 @@ function saveAndCleanSession(id: string) {
   }
   if (entry.conversation.messages.length > 0) {
     conversations.save(entry.conversation);
+    syncConversationToVault(entry.conversation);
   }
   for (const sub of entry.subscribers) { try { sub.end(); } catch {} }
   entry.subscribers.clear();
   sessions.delete(id);
+}
+
+async function syncConversationToVault(conv: conversations.Conversation) {
+  if (syncedConversations.has(conv.id)) return;
+  if (!conversations.shouldSync(conv)) return;
+  if (!obsidian.isConfigured()) return;
+
+  const existing = conversations.load(conv.id);
+  if (existing && (existing as any).syncedAt) {
+    syncedConversations.add(conv.id);
+    return;
+  }
+
+  try {
+    const summary = conversations.generateSummaryMarkdown(conv);
+    const dateStr = new Date(conv.createdAt).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+    let safeTitle = conv.title.replace(/[^a-zA-Z0-9 _-]/g, "").slice(0, 50).trim();
+    if (!safeTitle) safeTitle = conv.id;
+    const notePath = `Conversations/${dateStr} - ${safeTitle}.md`;
+    await obsidian.createNote(notePath, summary);
+    syncedConversations.add(conv.id);
+    (conv as any).syncedAt = Date.now();
+    conversations.save(conv);
+    console.log(`[sync] Conversation synced to vault: ${notePath}`);
+  } catch (err) {
+    console.error(`[sync] Failed to sync conversation ${conv.id}:`, err);
+  }
 }
 
 setInterval(() => {
@@ -744,6 +804,7 @@ app.post("/api/session", async (_req: Request, res: Response) => {
       ...buildTwitterTools(),
       ...buildStockTools(),
       ...buildMapsTools(),
+      ...buildConversationTools(),
       ...buildInterviewTool(sessionId),
     ];
     console.log(`[session] ${allTools.length} tools registered`);
@@ -946,6 +1007,15 @@ app.post("/api/session/:id/interview-response", (req: Request, res: Response) =>
 app.delete("/api/session/:id", (req: Request, res: Response) => {
   saveAndCleanSession(req.params["id"] as string);
   res.json({ ok: true });
+});
+
+app.get("/api/conversations/search", (req: Request, res: Response) => {
+  const q = (req.query["q"] as string) || "";
+  if (!q.trim()) { res.json([]); return; }
+  const before = req.query["before"] ? Number(req.query["before"]) : undefined;
+  const after = req.query["after"] ? Number(req.query["after"]) : undefined;
+  const results = conversations.search(q, { before, after });
+  res.json(results);
 });
 
 app.get("/api/conversations", (_req: Request, res: Response) => {

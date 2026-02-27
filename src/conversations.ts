@@ -122,3 +122,105 @@ export function addMessage(conv: Conversation, role: "user" | "agent" | "system"
   }
   conv.updatedAt = Date.now();
 }
+
+export interface SearchResult {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  messageCount: number;
+  snippets: string[];
+}
+
+export function search(query: string, options?: { before?: number; after?: number; limit?: number }): SearchResult[] {
+  if (!fs.existsSync(dataDir)) return [];
+  const files = fs.readdirSync(dataDir).filter(f => f.endsWith(".json"));
+  const results: SearchResult[] = [];
+  const terms = query.toLowerCase().split(/\s+/).filter(t => t.length > 0);
+  const limit = options?.limit ?? 10;
+
+  for (const file of files) {
+    try {
+      const conv = JSON.parse(fs.readFileSync(path.join(dataDir, file), "utf-8")) as Conversation;
+
+      if (options?.before && conv.createdAt > options.before) continue;
+      if (options?.after && conv.createdAt < options.after) continue;
+
+      const snippets: string[] = [];
+      for (const msg of conv.messages) {
+        if (msg.role === "system") continue;
+        const lower = msg.text.toLowerCase();
+        if (terms.some(t => lower.includes(t))) {
+          const snippet = msg.text.slice(0, 200);
+          const role = msg.role === "user" ? "You" : "Agent";
+          const time = new Date(msg.timestamp).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+          snippets.push(`[${role}, ${time}] ${snippet}`);
+          if (snippets.length >= 3) break;
+        }
+      }
+
+      if (snippets.length > 0) {
+        results.push({
+          id: conv.id,
+          title: conv.title,
+          createdAt: conv.createdAt,
+          updatedAt: conv.updatedAt,
+          messageCount: conv.messages.length,
+          snippets,
+        });
+      }
+    } catch {}
+  }
+
+  results.sort((a, b) => b.updatedAt - a.updatedAt);
+  return results.slice(0, limit);
+}
+
+export function shouldSync(conv: Conversation): boolean {
+  const userMessages = conv.messages.filter(m => m.role === "user");
+  return userMessages.length >= 4;
+}
+
+export function generateSummaryMarkdown(conv: Conversation): string {
+  const date = new Date(conv.createdAt).toLocaleDateString("en-US", {
+    timeZone: "America/New_York",
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+  const time = new Date(conv.createdAt).toLocaleTimeString("en-US", {
+    timeZone: "America/New_York",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+  const userMsgs = conv.messages.filter(m => m.role === "user").map(m => m.text.trim());
+  const agentMsgs = conv.messages.filter(m => m.role === "agent").map(m => m.text.trim());
+
+  const topicLines = userMsgs.slice(0, 8).map(t => `- ${t.slice(0, 120)}`).join("\n");
+
+  let keyPoints = "";
+  for (const a of agentMsgs) {
+    const lines = a.split("\n").filter(l => l.trim().length > 10);
+    for (const line of lines.slice(0, 2)) {
+      keyPoints += `- ${line.trim().slice(0, 150)}\n`;
+    }
+    if (keyPoints.split("\n").length > 6) break;
+  }
+
+  return `# ${conv.title}
+
+**Date:** ${date} at ${time}
+**Messages:** ${conv.messages.length}
+
+## Topics Discussed
+${topicLines}
+
+## Key Points
+${keyPoints.trim() || "- General discussion"}
+
+---
+*Session ID: ${conv.id}*
+`;
+}
