@@ -75,7 +75,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 100%;
+  height: var(--header-h);
 }
 
 .logo {
@@ -1450,13 +1450,17 @@ input[type="checkbox"]:checked ~ .interview-check::after {
 }
 
 @media (display-mode: standalone) {
+  body {
+    background: var(--surface);
+  }
+
   #app {
     padding-left: env(safe-area-inset-left, 0px);
     padding-right: env(safe-area-inset-right, 0px);
   }
 
   #input-area {
-    padding-bottom: calc(6px + var(--safe-bottom));
+    padding-bottom: calc(8px + var(--safe-bottom));
   }
 }
 
