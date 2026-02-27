@@ -571,38 +571,68 @@ function handleBrief(event) {
   }
 }
 
+const pendingAlerts = [];
+
 function handleAlert(event) {
-  removeEmptyState();
-
-  const banner = document.createElement("div");
-  banner.className = `alert-banner alert-${event.alertType}`;
-
   const icons = { calendar: "\u{1F4C5}", stock: "\u{1F4C8}", task: "\u2705", email: "\u{1F4E7}" };
-  const icon = icons[event.alertType] || "\u26A0";
-
-  banner.innerHTML = `<span class="alert-icon">${icon}</span><div class="alert-content"><strong>${escapeHtml(event.title)}</strong><span>${escapeHtml(event.content)}</span></div><button class="alert-dismiss">\u2715</button>`;
-
-  const dismissBtn = banner.querySelector(".alert-dismiss");
-  dismissBtn.addEventListener("click", () => banner.remove());
-  setTimeout(() => banner.remove(), 30000);
-
-  const firstMsg = messages.querySelector(".msg, .brief-msg, .system-msg");
-  if (firstMsg) {
-    messages.insertBefore(banner, firstMsg);
-  } else {
-    messages.insertBefore(banner, scrollAnchor);
-  }
-
-  const line = document.createElement("div");
-  line.className = "msg alert-line";
-  const timeStr = new Date(event.timestamp).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-  line.innerHTML = `<span class="alert-tag">[ALERT]</span> ${escapeHtml(event.title)}: ${escapeHtml(event.content)} <span class="msg-time">${timeStr}</span>`;
-  messages.insertBefore(line, scrollAnchor);
-  scrollToBottom();
+  pendingAlerts.push({
+    type: event.alertType,
+    icon: icons[event.alertType] || "\u26A0",
+    title: event.title,
+    content: event.content,
+    time: new Date(event.timestamp).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
+  });
+  updateGlanceAlerts();
 
   if (document.hidden) {
     playAlertSound();
     showBrowserNotification(event.title, event.content);
+  }
+}
+
+function updateGlanceAlerts() {
+  const bar = document.getElementById("glance-bar");
+  const collapsed = document.getElementById("glance-collapsed");
+  const expanded = document.getElementById("glance-expanded");
+  if (!bar || !collapsed) return;
+
+  let badge = collapsed.querySelector(".glance-alert-badge");
+  if (pendingAlerts.length > 0) {
+    if (!badge) {
+      badge = document.createElement("span");
+      badge.className = "glance-alert-badge";
+      collapsed.appendChild(badge);
+    }
+    badge.textContent = `${pendingAlerts.length} alert${pendingAlerts.length !== 1 ? "s" : ""}`;
+    bar.classList.add("has-alerts");
+  } else {
+    if (badge) badge.remove();
+    bar.classList.remove("has-alerts");
+  }
+
+  if (expanded) {
+    let alertSection = expanded.querySelector(".glance-alerts-section");
+    if (pendingAlerts.length > 0) {
+      if (!alertSection) {
+        alertSection = document.createElement("div");
+        alertSection.className = "glance-alerts-section";
+        expanded.appendChild(alertSection);
+      }
+      alertSection.innerHTML = pendingAlerts.map(a =>
+        `<div class="glance-alert-row"><span class="glance-alert-icon">${a.icon}</span><span class="glance-alert-text">${escapeHtml(a.title)}: ${escapeHtml(a.content)}</span><span class="glance-alert-time">${a.time}</span></div>`
+      ).join("");
+      const clearBtn = document.createElement("div");
+      clearBtn.className = "glance-alerts-clear";
+      clearBtn.textContent = "clear all";
+      clearBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        pendingAlerts.length = 0;
+        updateGlanceAlerts();
+      });
+      alertSection.appendChild(clearBtn);
+    } else {
+      if (alertSection) alertSection.remove();
+    }
   }
 }
 

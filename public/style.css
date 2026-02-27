@@ -1714,8 +1714,97 @@ body.light-theme .copy-btn:hover {
 }
 
 .glance-bar.expanded .glance-expanded {
-  max-height: 120px;
+  max-height: 200px;
   padding: 4px 14px 8px;
+  overflow-y: auto;
+}
+
+.glance-alert-badge {
+  margin-left: auto;
+  background: rgba(255, 180, 0, 0.15);
+  color: var(--amber);
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 8px;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  animation: alertPulse 2s ease-in-out infinite;
+}
+
+@keyframes alertPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.glance-alerts-section {
+  border-top: 1px solid rgba(0, 255, 65, 0.08);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+
+.glance-alert-row {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 10px;
+  padding: 2px 0;
+  color: var(--amber);
+}
+
+.glance-alert-icon {
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
+.glance-alert-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glance-alert-time {
+  flex-shrink: 0;
+  color: rgba(255, 180, 0, 0.4);
+  font-size: 9px;
+}
+
+.glance-alerts-clear {
+  text-align: right;
+  font-size: 9px;
+  color: rgba(0, 255, 65, 0.3);
+  cursor: pointer;
+  padding: 2px 0;
+  letter-spacing: 0.5px;
+}
+
+.glance-alerts-clear:hover {
+  color: var(--green);
+}
+
+body.light-theme .glance-alert-badge {
+  background: rgba(180, 120, 40, 0.12);
+  color: #a07030;
+}
+
+body.light-theme .glance-alerts-section {
+  border-top-color: rgba(90, 138, 122, 0.1);
+}
+
+body.light-theme .glance-alert-row {
+  color: #a07030;
+}
+
+body.light-theme .glance-alert-time {
+  color: rgba(160, 112, 48, 0.4);
+}
+
+body.light-theme .glance-alerts-clear {
+  color: #b0a498;
+}
+
+body.light-theme .glance-alerts-clear:hover {
+  color: #6e6358;
 }
 
 .glance-expanded .glance-detail-row {
