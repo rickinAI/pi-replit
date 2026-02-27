@@ -2416,7 +2416,7 @@ app.set("trust proxy", 1);
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(cookieParser(SESSION_SECRET));
-var AUTH_PUBLIC_PATHS = /* @__PURE__ */ new Set(["/login.html", "/login.css", "/api/login", "/health", "/manifest.json", "/icons/icon-180.png", "/icons/icon-192.png", "/icons/icon-512.png"]);
+var AUTH_PUBLIC_PATHS = /* @__PURE__ */ new Set(["/login.html", "/login.css", "/api/login", "/health", "/manifest.json", "/icons/icon-180.png", "/icons/icon-192.png", "/icons/icon-512.png", "/api/healthcheck"]);
 function authMiddleware(req, res, next) {
   if (!APP_PASSWORD) {
     next();
@@ -2443,7 +2443,9 @@ function authMiddleware(req, res, next) {
     next();
     return;
   }
-  if (req.headers.accept?.includes("text/html") || req.path === "/") {
+  if (req.path === "/" && !req.headers.accept?.includes("text/html")) {
+    res.status(200).send("ok");
+  } else if (req.headers.accept?.includes("text/html") || req.path === "/") {
     res.redirect("/login.html");
   } else {
     res.status(401).json({ error: "Unauthorized" });
