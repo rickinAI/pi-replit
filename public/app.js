@@ -811,7 +811,6 @@ function initSpeechRecognition() {
   rec.lang = "en-US";
 
   let finalTranscript = "";
-  let userStopped = false;
 
   rec.onresult = (e) => {
     let interim = "";
@@ -830,27 +829,25 @@ function initSpeechRecognition() {
   rec.onend = () => {
     isRecording = false;
     micBtn.classList.remove("recording");
-    if (userStopped && finalTranscript.trim()) {
+    if (finalTranscript.trim()) {
+      input.value = finalTranscript.trim();
       sendMessage();
-    } else if (!finalTranscript.trim()) {
+    } else {
       input.value = "";
     }
     finalTranscript = "";
-    userStopped = false;
   };
 
   rec.onerror = (e) => {
     isRecording = false;
     micBtn.classList.remove("recording");
     finalTranscript = "";
-    userStopped = false;
     if (e.error === "not-allowed") {
       appendBubble("system", "Microphone access denied. Please allow microphone permission.");
     }
   };
 
-  rec._resetTranscript = () => { finalTranscript = ""; userStopped = false; };
-  rec._userStop = () => { userStopped = true; };
+  rec._resetTranscript = () => { finalTranscript = ""; };
   return rec;
 }
 
@@ -858,7 +855,6 @@ if (micBtn) {
   micBtn.addEventListener("click", () => {
     if (input.disabled || sendBtn.disabled) return;
     if (isRecording && speechRecognition) {
-      speechRecognition._userStop();
       speechRecognition.stop();
       return;
     }
