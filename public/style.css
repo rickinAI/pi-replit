@@ -1224,9 +1224,9 @@ body {
   color: var(--green);
   cursor: pointer;
   font-family: var(--font);
-  font-size: 22px;
-  width: 36px;
-  height: 36px;
+  font-size: 18px;
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
