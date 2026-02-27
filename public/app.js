@@ -1148,6 +1148,81 @@ function escapeHtml(str) {
   return d.innerHTML;
 }
 
+let glanceTimer = null;
+let glanceCollapseTimer = null;
+let glanceRefreshInterval = null;
+
+async function fetchGlance() {
+  const bar = document.getElementById("glance-bar");
+  const collapsed = document.getElementById("glance-collapsed");
+  const expanded = document.getElementById("glance-expanded");
+  if (!bar || !collapsed) return;
+
+  bar.classList.add("loading");
+  try {
+    const res = await fetch("/api/glance");
+    if (!res.ok) throw new Error("fetch failed");
+    const d = await res.json();
+
+    const e = escapeHtml;
+    const parts = [];
+    if (d.weather) parts.push(`${e(d.weather.icon)} ${e(String(d.weather.tempF))}°F`);
+    if (d.emails && d.emails.unread > 0) parts.push(`${d.emails.unread} unread`);
+    if (d.tasks && d.tasks.active > 0) parts.push(`${d.tasks.active} task${d.tasks.active !== 1 ? "s" : ""}`);
+    if (d.nextEvent) {
+      const t = d.nextEvent.time || "";
+      const short = t.replace(/^.*?,\s*/, "").replace(/:00\s*/g, " ");
+      parts.push(`Next: ${e(d.nextEvent.title)}${short ? " " + e(short) : ""}`);
+    }
+    if (parts.length === 0 && d.time) parts.push(e(d.time));
+    if (parts.length === 0) parts.push("—");
+
+    const sep = '<span class="glance-sep">·</span>';
+    collapsed.innerHTML = parts.join(sep);
+
+    const detailRows = [];
+    if (d.time) detailRows.push(row("time", e(d.time)));
+    if (d.weather) detailRows.push(row("weather", `${e(d.weather.icon)} ${e(String(d.weather.tempF))}°F — ${e(d.weather.condition)}`));
+    if (d.emails) detailRows.push(row("email", d.emails.unread === 0 ? "Inbox clear" : `${d.emails.unread} unread`));
+    if (d.tasks) detailRows.push(row("tasks", d.tasks.active === 0 ? "All clear" : `${d.tasks.active} open`));
+    if (d.upcomingEvents && d.upcomingEvents.length > 0) {
+      const evList = d.upcomingEvents.map(ev => {
+        const t = (ev.time || "").replace(/^.*?,\s*/, "");
+        return `${e(ev.title)}${t ? " — " + e(t) : ""}`;
+      }).join("; ");
+      detailRows.push(row("calendar", evList));
+    } else if (d.nextEvent) {
+      detailRows.push(row("next", `${e(d.nextEvent.title)} — ${e(d.nextEvent.time || "")}`));
+    }
+    expanded.innerHTML = detailRows.join("");
+
+    bar.style.display = "";
+  } catch {
+    collapsed.innerHTML = '<span style="opacity:0.3">—</span>';
+  }
+  bar.classList.remove("loading");
+}
+
+function row(label, value) {
+  return `<div class="glance-detail-row"><span class="glance-detail-label">${label}</span><span class="glance-detail-value">${value}</span></div>`;
+}
+
+function initGlance() {
+  const bar = document.getElementById("glance-bar");
+  if (!bar) return;
+  bar.addEventListener("click", () => {
+    const isExpanded = bar.classList.toggle("expanded");
+    if (glanceCollapseTimer) clearTimeout(glanceCollapseTimer);
+    if (isExpanded) {
+      glanceCollapseTimer = setTimeout(() => bar.classList.remove("expanded"), 8000);
+    }
+  });
+  fetchGlance();
+  glanceRefreshInterval = setInterval(fetchGlance, 5 * 60 * 1000);
+}
+
+initGlance();
+
 function renderMarkdown(text) {
   const codeBlocks = [];
   const inlineCodes = [];

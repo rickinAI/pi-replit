@@ -2794,6 +2794,104 @@ app.post("/api/alerts/trigger/:type", async (req, res) => {
     res.status(500).json({ error: String(err) });
   }
 });
+var glanceCache = null;
+var GLANCE_TTL = 5 * 60 * 1e3;
+app.get("/api/glance", async (_req, res) => {
+  try {
+    if (glanceCache && Date.now() - glanceCache.ts < GLANCE_TTL) {
+      res.json(glanceCache.data);
+      return;
+    }
+    const cfg = getConfig();
+    const tz = cfg.timezone || "America/New_York";
+    const loc = cfg.location || "New York";
+    const now = /* @__PURE__ */ new Date();
+    let timeStr;
+    try {
+      timeStr = now.toLocaleString("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", weekday: "short", month: "short", day: "numeric" });
+    } catch {
+      timeStr = now.toLocaleString("en-US", { hour: "numeric", minute: "2-digit", weekday: "short", month: "short", day: "numeric" });
+    }
+    const result = { time: timeStr, weather: null, emails: null, tasks: null, nextEvent: null };
+    const promises = [];
+    promises.push((async () => {
+      try {
+        const raw = await getWeather(loc);
+        const tempMatch = raw.match(/Temperature:\s*([\d.-]+)°C\s*\((\d+)°F\)/);
+        const condMatch = raw.match(/Condition:\s*(.+)/);
+        if (tempMatch && condMatch) {
+          const condition = condMatch[1].trim();
+          let icon = "\u{1F321}\uFE0F";
+          const cl = condition.toLowerCase();
+          if (cl.includes("clear") || cl.includes("sunny")) icon = "\u2600\uFE0F";
+          else if (cl.includes("partly")) icon = "\u26C5";
+          else if (cl.includes("cloud") || cl.includes("overcast")) icon = "\u2601\uFE0F";
+          else if (cl.includes("rain") || cl.includes("drizzle") || cl.includes("shower")) icon = "\u{1F327}\uFE0F";
+          else if (cl.includes("snow")) icon = "\u2744\uFE0F";
+          else if (cl.includes("thunder")) icon = "\u26C8\uFE0F";
+          else if (cl.includes("fog")) icon = "\u{1F32B}\uFE0F";
+          result.weather = { tempF: parseInt(tempMatch[2]), condition, icon };
+        }
+      } catch {
+      }
+    })());
+    if (isConfigured2() && isConnected()) {
+      promises.push((async () => {
+        try {
+          const raw = await listEmails("is:unread", 20);
+          if (raw.includes("No emails found") || raw.includes("empty")) {
+            result.emails = { unread: 0 };
+          } else {
+            const countMatch = raw.match(/\((\d+)\)/);
+            result.emails = { unread: countMatch ? parseInt(countMatch[1]) : 0 };
+          }
+        } catch {
+        }
+      })());
+    }
+    promises.push((async () => {
+      try {
+        const raw = listTasks();
+        if (raw.includes("No open tasks") || raw.includes("No tasks found")) {
+          result.tasks = { active: 0 };
+        } else {
+          const countMatch = raw.match(/(\d+)\s*open/);
+          result.tasks = { active: countMatch ? parseInt(countMatch[1]) : 0 };
+        }
+      } catch {
+      }
+    })());
+    if (isConfigured3()) {
+      promises.push((async () => {
+        try {
+          const endOfDay = new Date(now);
+          endOfDay.setHours(23, 59, 59, 999);
+          const raw = await listEvents({ maxResults: 3, timeMax: endOfDay.toISOString() });
+          if (!raw.includes("No upcoming events") && !raw.includes("expired") && !raw.includes("not authorized")) {
+            const events = [];
+            const eventBlocks = raw.split(/\d+\.\s+/).slice(1);
+            for (const block of eventBlocks) {
+              const lines = block.trim().split("\n");
+              const title = lines[0]?.trim() || "";
+              const timeLine = lines[1]?.trim() || "";
+              if (title) events.push({ title, time: timeLine });
+            }
+            if (events.length > 0) {
+              result.nextEvent = events[0];
+              result.upcomingEvents = events.slice(0, 3);
+            }
+          }
+        } catch {
+        }
+      })());
+    }
+    await Promise.all(promises);
+    glanceCache = { data: result, ts: Date.now() };
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch glance data" });
+  }
+});
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", sessions: sessions.size, ts: Date.now() });
 });

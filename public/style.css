@@ -1665,3 +1665,102 @@ body.light-theme .copy-btn {
 body.light-theme .copy-btn:hover {
   color: var(--green);
 }
+
+.glance-bar {
+  flex-shrink: 0;
+  background: rgba(0, 0, 0, 0.35);
+  border-bottom: 1px solid rgba(0, 255, 65, 0.06);
+  cursor: pointer;
+  user-select: none;
+  overflow: hidden;
+  transition: background 0.2s ease;
+}
+
+.glance-bar:hover {
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.glance-collapsed {
+  height: 26px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  font-size: 11px;
+  color: rgba(0, 255, 65, 0.45);
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  gap: 4px;
+}
+
+.glance-collapsed .glance-sep {
+  color: rgba(0, 255, 65, 0.18);
+  margin: 0 2px;
+}
+
+.glance-expanded {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.3s ease, padding 0.3s ease;
+  padding: 0 14px;
+  font-size: 11px;
+  color: rgba(0, 255, 65, 0.5);
+  line-height: 1.6;
+}
+
+.glance-bar.expanded .glance-expanded {
+  max-height: 120px;
+  padding: 4px 14px 8px;
+}
+
+.glance-expanded .glance-detail-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.glance-expanded .glance-detail-label {
+  color: rgba(0, 255, 65, 0.3);
+  min-width: 60px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.glance-expanded .glance-detail-value {
+  color: rgba(0, 255, 65, 0.55);
+}
+
+.glance-bar.loading .glance-collapsed {
+  color: rgba(0, 255, 65, 0.2);
+}
+
+body.light-theme .glance-bar {
+  background: rgba(245, 242, 237, 0.7);
+  border-bottom: 1px solid rgba(90, 138, 122, 0.08);
+}
+
+body.light-theme .glance-bar:hover {
+  background: rgba(240, 237, 230, 0.9);
+}
+
+body.light-theme .glance-collapsed {
+  color: #9a8e82;
+}
+
+body.light-theme .glance-collapsed .glance-sep {
+  color: #c8bfb4;
+}
+
+body.light-theme .glance-expanded {
+  color: #8a7e72;
+}
+
+body.light-theme .glance-expanded .glance-detail-label {
+  color: #b0a498;
+}
+
+body.light-theme .glance-expanded .glance-detail-value {
+  color: #6e6358;
+}

@@ -61,6 +61,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - Login page: ASCII art header, simulated boot sequence, blinking cursor
 - Chat: terminal-style prompts, amber agent text
 - Mobile-friendly: visualViewport keyboard handling, 16px input fonts, 44px touch targets, smart auto-scroll
+- **Glance bar**: Slim strip pinned below header showing day-at-a-glance (weather, unread emails, task count, next calendar event). Tap to expand 3-line detail card (auto-collapses after 8s). Fetches from `/api/glance` every 5 min. Both dark/light mode styled. Graceful degradation when data sources unavailable.
 - **PWA standalone mode**: `manifest.json` with icons, `display: standalone`, iOS safe area insets for notch/Dynamic Island/home indicator, `@media (display-mode: standalone)` CSS block, `viewport-fit=cover`
 - Auth-public paths: `/manifest.json`, `/icons/*` bypassed for PWA install
 
@@ -85,6 +86,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 | `/api/alerts/config` | GET | Get alert/brief configuration |
 | `/api/alerts/config` | PUT | Update alert/brief configuration |
 | `/api/alerts/trigger/:type` | POST | Manually trigger a brief (morning/afternoon/evening) |
+| `/api/glance` | GET | Day-at-a-glance summary (weather, emails, tasks, calendar) — 5min server cache |
 | `/health` | GET | Health check |
 | `/api/session/:id/interview-response` | POST | Submit interview form responses |
 
