@@ -7,7 +7,6 @@ import * as stocks from "./stocks.js";
 import * as news from "./news.js";
 import * as gmail from "./gmail.js";
 import * as obsidian from "./obsidian.js";
-import * as twitter from "./twitter.js";
 
 interface WatchlistItem {
   symbol: string;
@@ -68,7 +67,7 @@ const DEFAULT_CONFIG: AlertConfig = {
   timezone: "America/New_York",
   location: "New York",
   briefs: {
-    morning: { enabled: true, hour: 8, minute: 0, content: ["calendar", "tasks", "weather", "news", "xfeed", "markets", "email"] },
+    morning: { enabled: true, hour: 8, minute: 0, content: ["calendar", "tasks", "weather", "news", "markets", "email"] },
     afternoon: { enabled: true, hour: 13, minute: 0, content: ["calendar", "tasks", "email", "markets"] },
     evening: { enabled: true, hour: 19, minute: 0, content: ["calendar_tomorrow", "tasks", "markets", "email"] },
   },
@@ -170,59 +169,6 @@ function formatTimeET(date?: Date): string {
   return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: config.timezone });
 }
 
-async function fetchXFeedAccount(account: string, limit: number): Promise<string[]> {
-  try {
-    const raw = await twitter.getUserTimeline(account, limit);
-    if (raw.includes("Could not fetch") || raw.includes("Error fetching") || raw.includes("No recent tweets")) return [];
-    const tweetBlocks = raw.split("\n\n").filter(t => t.trim() && !t.startsWith("Recent tweets"));
-    const lines: string[] = [];
-    for (const block of tweetBlocks.slice(0, limit)) {
-      const blockLines = block.split("\n").map(l => l.trim()).filter(Boolean);
-      const textLine = blockLines.find(l =>
-        !l.match(/^\d+\.\s*@/) &&
-        !l.match(/^[\d,]+ likes/) &&
-        !l.startsWith("https://x.com/")
-      ) || (blockLines.length > 1 ? blockLines[1] : null);
-      if (textLine) {
-        const text = textLine.length > 200 ? textLine.slice(0, 200) + "..." : textLine;
-        lines.push(`- @${account}: ${text}`);
-      }
-    }
-    return lines;
-  } catch {
-    return [];
-  }
-}
-
-async function fetchXFeedGroup(accounts: string[], limit: number): Promise<string[]> {
-  const lines: string[] = [];
-  for (const acct of accounts) {
-    const result = await fetchXFeedAccount(acct, limit);
-    lines.push(...result);
-    if (accounts.indexOf(acct) < accounts.length - 1) {
-      await new Promise(r => setTimeout(r, 300));
-    }
-  }
-  return lines;
-}
-
-async function gatherXFeed(): Promise<string> {
-  const topAccounts = ["Reuters", "AP", "BBCBreaking", "WSJ"];
-  const aiAccounts = ["OpenAI", "AnthropicAI", "GoogleDeepMind", "ylecun", "kaborstrom"];
-
-  console.log("[xfeed] Starting fetch...");
-  const topLines = await fetchXFeedGroup(topAccounts, 3);
-  console.log(`[xfeed] Top Stories: ${topLines.length} items`);
-  await new Promise(r => setTimeout(r, 500));
-  const aiLines = await fetchXFeedGroup(aiAccounts, 3);
-  console.log(`[xfeed] AI & Tech: ${aiLines.length} items`);
-
-  const sections: string[] = [];
-  if (topLines.length > 0) sections.push(`**X — Top Stories:**\n${topLines.join("\n")}`);
-  if (aiLines.length > 0) sections.push(`**X — AI & Technology:**\n${aiLines.join("\n")}`);
-  return sections.join("\n\n") || "**X Feed:** [unavailable]";
-}
-
 async function gatherSection(name: string): Promise<string> {
   try {
     switch (name) {
@@ -313,9 +259,6 @@ async function gatherSection(name: string): Promise<string> {
           }
         }
         return `**Markets:**\n${items.join("\n")}`;
-      }
-      case "xfeed": {
-        return await gatherXFeed();
       }
       case "email": {
         if (!gmail.isConfigured() || !gmail.isConnected()) return "**Email:** [not connected]";
