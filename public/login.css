@@ -203,6 +203,7 @@ body.light-theme {
   --green-glow: rgba(90, 138, 122, 0.12);
   --red: #c44;
   --bg: #f7f5f2;
+  --font: 'Inter', -apple-system, 'Segoe UI', sans-serif;
   color: #2d2a26;
 }
 
@@ -213,11 +214,21 @@ body.light-theme .scanlines {
 body.light-theme .ascii-art {
   text-shadow: none;
   color: #5a8a7a;
+  font-family: 'Fira Code', 'SF Mono', 'Courier New', monospace;
 }
 
 body.light-theme .boot-line {
+  font-family: 'Fira Code', 'SF Mono', 'Courier New', monospace;
   text-shadow: none;
   color: #8a8580;
+}
+
+body.light-theme .prompt-label {
+  font-family: 'Fira Code', 'SF Mono', 'Courier New', monospace;
+}
+
+body.light-theme .prompt-input {
+  font-family: 'Fira Code', 'SF Mono', 'Courier New', monospace;
 }
 
 body.light-theme .prompt-line {

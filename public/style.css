@@ -1476,6 +1476,7 @@ body.light-theme {
   --bg: #f7f5f2;
   --surface: #ffffff;
   --border: #e5e0da;
+  --font: 'Inter', -apple-system, 'Segoe UI', sans-serif;
   color: #2d2a26;
 }
 
@@ -1515,13 +1516,32 @@ body.light-theme .msg.system .bubble {
 
 body.light-theme .bubble pre {
   background: rgba(90, 138, 122, 0.05);
+  font-family: 'Fira Code', 'SF Mono', 'Courier New', monospace;
 }
 
 body.light-theme .bubble code {
   background: rgba(154, 109, 78, 0.08);
+  font-family: 'Fira Code', 'SF Mono', 'Courier New', monospace;
+  font-size: 0.9em;
+}
+
+body.light-theme .logo {
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+body.light-theme .model-badge {
+  font-size: 11px;
+  font-weight: 500;
+}
+
+body.light-theme .tool-pill {
+  font-family: 'Fira Code', 'SF Mono', 'Courier New', monospace;
+  font-size: 10px;
 }
 
 body.light-theme .prompt-prefix {
+  font-family: 'Fira Code', 'SF Mono', 'Courier New', monospace;
   text-shadow: none;
 }
 

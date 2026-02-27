@@ -57,7 +57,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Persisted to `localStorage` key `theme` (values: `dark` | `light`) and to `data/alerts-config.json` (`theme` field)
   - Applied via `body.light-theme` CSS class; CSS variable overrides in both `style.css` and `login.css`
   - Early `<script>` in `<head>` of index.html/login.html sets `document.documentElement.style.background` to prevent flash
-- Font: Fira Code from Google Fonts
+- Font: Fira Code (dark mode), Inter sans-serif (light mode) — both from Google Fonts. Code blocks, tool pills, and prompt prefix stay in Fira Code in both modes
 - Login page: ASCII art header, simulated boot sequence, blinking cursor
 - Chat: terminal-style prompts, amber agent text
 - Mobile-friendly: visualViewport keyboard handling, 16px input fonts, 44px touch targets, smart auto-scroll
