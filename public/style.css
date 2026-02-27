@@ -86,6 +86,12 @@ body {
   letter-spacing: 1px;
 }
 
+.badge-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .model-badge {
   font-size: 10px;
   color: var(--green-dim);
