@@ -51,12 +51,20 @@ messages.addEventListener("scroll", () => {
 if (window.visualViewport) {
   const vv = window.visualViewport;
   function onViewportResize() {
+    const keyboardOpen = window.innerHeight - vv.height > 100;
     appEl.style.height = vv.height + "px";
+    appEl.style.transform = vv.offsetTop > 0 ? "translateY(" + vv.offsetTop + "px)" : "";
+    if (keyboardOpen) {
+      document.body.classList.add("keyboard-open");
+    } else {
+      document.body.classList.remove("keyboard-open");
+    }
     requestAnimationFrame(() => {
       if (!userHasScrolledUp) scrollToBottom();
     });
   }
   vv.addEventListener("resize", onViewportResize);
+  vv.addEventListener("scroll", onViewportResize);
   if (window.navigator.standalone || window.matchMedia("(display-mode: standalone)").matches) {
     onViewportResize();
   }

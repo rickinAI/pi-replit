@@ -663,6 +663,10 @@ input[type="checkbox"]:checked ~ .interview-check::after {
   padding: 2px 12px calc(2px + var(--safe-bottom));
 }
 
+.keyboard-open #input-area {
+  padding-bottom: 2px;
+}
+
 .input-row {
   display: flex;
   align-items: center;
