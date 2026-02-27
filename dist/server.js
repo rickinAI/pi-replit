@@ -2946,10 +2946,12 @@ app.get("/api/glance", async (_req, res) => {
         const condMatch = raw.match(/Condition:\s*(.+)/);
         if (tempMatch && condMatch) {
           const condition = condMatch[1].trim();
+          const etHour = new Date((/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York" })).getHours();
+          const isNight = etHour >= 18 || etHour < 6;
           let icon = "\u{1F321}\uFE0F";
           const cl = condition.toLowerCase();
-          if (cl.includes("clear") || cl.includes("sunny")) icon = "\u2600\uFE0F";
-          else if (cl.includes("partly")) icon = "\u26C5";
+          if (cl.includes("clear") || cl.includes("sunny")) icon = isNight ? "\u{1F319}" : "\u2600\uFE0F";
+          else if (cl.includes("partly")) icon = isNight ? "\u2601\uFE0F" : "\u26C5";
           else if (cl.includes("cloud") || cl.includes("overcast")) icon = "\u2601\uFE0F";
           else if (cl.includes("rain") || cl.includes("drizzle") || cl.includes("shower")) icon = "\u{1F327}\uFE0F";
           else if (cl.includes("snow")) icon = "\u2744\uFE0F";
