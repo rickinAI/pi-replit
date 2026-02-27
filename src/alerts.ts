@@ -226,7 +226,12 @@ async function gatherSection(name: string): Promise<string> {
         if (!gmail.isConfigured() || !gmail.isConnected()) return "**Email:** [not connected]";
         try {
           const result = await gmail.listEmails("is:unread", 5);
-          return `**Email:**\n${result}`;
+          const cleaned = result
+            .replace(/\s*\[[a-f0-9]+\]/gi, "")
+            .replace(/\(\* = unread\)\n?/g, "")
+            .replace(/^\* /gm, "")
+            .replace(/\n{3,}/g, "\n\n");
+          return `**Email:**\n${cleaned}`;
         } catch {
           return "**Email:** [unavailable]";
         }

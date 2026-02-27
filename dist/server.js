@@ -1569,8 +1569,9 @@ ${items.join("\n")}`;
         if (!isConfigured2() || !isConnected()) return "**Email:** [not connected]";
         try {
           const result = await listEmails("is:unread", 5);
+          const cleaned = result.replace(/\s*\[[a-f0-9]+\]/gi, "").replace(/\(\* = unread\)\n?/g, "").replace(/^\* /gm, "").replace(/\n{3,}/g, "\n\n");
           return `**Email:**
-${result}`;
+${cleaned}`;
         } catch {
           return "**Email:** [unavailable]";
         }
