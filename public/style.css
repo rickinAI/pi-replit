@@ -1216,18 +1216,26 @@ body {
 
 .settings-close {
   position: absolute;
-  top: 16px;
-  right: 16px;
+  top: 12px;
+  right: 12px;
   background: none;
-  border: none;
-  color: var(--green-muted);
+  border: 1px solid var(--green-dim);
+  border-radius: 4px;
+  color: var(--green);
   cursor: pointer;
   font-family: var(--font);
-  font-size: 14px;
+  font-size: 22px;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
 }
 
 .settings-close:hover {
-  color: var(--green);
+  background: var(--green);
+  color: #000;
 }
 
 @media (max-width: 600px) {
