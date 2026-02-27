@@ -151,8 +151,40 @@ body {
   box-shadow: 0 0 4px rgba(255, 0, 0, 0.4);
 }
 
-.kb-dot {
-  margin-left: -2px;
+.kb-badge {
+  font-size: 10px;
+  color: var(--green-dim);
+  border: 1px solid var(--green-dim);
+  border-radius: 2px;
+  padding: 1px 8px;
+  font-family: var(--font);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.3s;
+}
+
+.kb-label {
+  font-weight: 600;
+  font-size: 9px;
+  padding: 0 4px;
+  border-radius: 2px;
+  background: #1a3a1a;
+  color: var(--green);
+}
+
+.kb-status {
+  font-size: 10px;
+}
+
+.kb-badge.offline {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.kb-badge.offline .kb-label {
+  background: #3a1a1a;
+  color: var(--red);
 }
 
 .header-actions {
