@@ -984,8 +984,10 @@ app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
   res.json({ ok: true });
 
   try {
+    const etNow = new Date().toLocaleString("en-US", { timeZone: "America/New_York", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" });
+    const augmentedText = `[Current date/time in Rickin's timezone (Eastern): ${etNow}]\n\n${text}`;
     const promptImages = images?.map(i => ({ type: "image" as const, data: i.data, mimeType: i.mimeType }));
-    await entry.session.prompt(text, promptImages ? { images: promptImages } : undefined);
+    await entry.session.prompt(augmentedText, promptImages ? { images: promptImages } : undefined);
   } catch (err) {
     console.error("Prompt error:", err);
     const errEvent = JSON.stringify({ type: "error", error: String(err) });
