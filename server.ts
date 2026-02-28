@@ -1247,21 +1247,32 @@ process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 process.on("SIGHUP", () => gracefulShutdown("SIGHUP"));
 
-function startServer(retried = false) {
-  if (retried) {
+function killPort(port: number) {
+  try {
+    const { execSync } = require("child_process");
+    execSync(`fuser -k -9 ${port}/tcp`, { stdio: "ignore" });
+  } catch {}
+}
+
+function startServer(attempt = 0) {
+  const MAX_ATTEMPTS = 4;
+  const DELAYS = [0, 1000, 2000, 3000];
+
+  if (attempt > 0) {
     server = createServer(app);
   }
 
+  if (attempt === 0) {
+    killPort(PORT);
+  }
+
   server.on("error", (err: NodeJS.ErrnoException) => {
-    if (err.code === "EADDRINUSE" && !retried) {
-      console.warn(`[boot] Port ${PORT} in use — killing old process and retrying...`);
-      import("child_process").then(({ execSync }) => {
-        try {
-          execSync(`fuser -k -9 ${PORT}/tcp`, { stdio: "ignore" });
-        } catch {}
-        server.close(() => {});
-        setTimeout(() => startServer(true), 2000);
-      });
+    if (err.code === "EADDRINUSE" && attempt < MAX_ATTEMPTS - 1) {
+      console.warn(`[boot] Port ${PORT} in use — attempt ${attempt + 1}/${MAX_ATTEMPTS}, killing and retrying...`);
+      killPort(PORT);
+      server.close(() => {});
+      const delay = DELAYS[attempt + 1] || 3000;
+      setTimeout(() => startServer(attempt + 1), delay);
     } else {
       console.error(`[boot] Fatal server error:`, err);
       process.exit(1);

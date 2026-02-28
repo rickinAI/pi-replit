@@ -1,3 +1,10 @@
+var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
+  get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
+}) : x)(function(x) {
+  if (typeof require !== "undefined") return require.apply(this, arguments);
+  throw Error('Dynamic require of "' + x + '" is not supported');
+});
+
 // server.ts
 import express from "express";
 import cors from "cors";
@@ -3161,22 +3168,30 @@ function gracefulShutdown(signal) {
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 process.on("SIGHUP", () => gracefulShutdown("SIGHUP"));
-function startServer(retried = false) {
-  if (retried) {
+function killPort(port) {
+  try {
+    const { execSync } = __require("child_process");
+    execSync(`fuser -k -9 ${port}/tcp`, { stdio: "ignore" });
+  } catch {
+  }
+}
+function startServer(attempt = 0) {
+  const MAX_ATTEMPTS = 4;
+  const DELAYS = [0, 1e3, 2e3, 3e3];
+  if (attempt > 0) {
     server = createServer(app);
   }
+  if (attempt === 0) {
+    killPort(PORT);
+  }
   server.on("error", (err) => {
-    if (err.code === "EADDRINUSE" && !retried) {
-      console.warn(`[boot] Port ${PORT} in use \u2014 killing old process and retrying...`);
-      import("child_process").then(({ execSync }) => {
-        try {
-          execSync(`fuser -k -9 ${PORT}/tcp`, { stdio: "ignore" });
-        } catch {
-        }
-        server.close(() => {
-        });
-        setTimeout(() => startServer(true), 2e3);
+    if (err.code === "EADDRINUSE" && attempt < MAX_ATTEMPTS - 1) {
+      console.warn(`[boot] Port ${PORT} in use \u2014 attempt ${attempt + 1}/${MAX_ATTEMPTS}, killing and retrying...`);
+      killPort(PORT);
+      server.close(() => {
       });
+      const delay = DELAYS[attempt + 1] || 3e3;
+      setTimeout(() => startServer(attempt + 1), delay);
     } else {
       console.error(`[boot] Fatal server error:`, err);
       process.exit(1);
