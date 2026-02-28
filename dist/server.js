@@ -2627,10 +2627,15 @@ function persistTunnelUrl(url) {
 }
 (function initTunnelUrl() {
   const envUrl = process.env.OBSIDIAN_API_URL || "";
-  const savedUrl = loadPersistedTunnelUrl();
-  if (savedUrl && savedUrl !== envUrl) {
-    setApiUrl(savedUrl);
-    console.log(`[boot] Loaded persisted tunnel URL: ${savedUrl}`);
+  if (envUrl) {
+    setApiUrl(envUrl);
+    console.log(`[boot] Using tunnel URL from env: ${envUrl}`);
+  } else {
+    const savedUrl = loadPersistedTunnelUrl();
+    if (savedUrl) {
+      setApiUrl(savedUrl);
+      console.log(`[boot] Loaded persisted tunnel URL: ${savedUrl}`);
+    }
   }
 })();
 var lastTunnelStatus = true;
@@ -2643,7 +2648,7 @@ if (isConfigured()) {
       console.warn("[health] Knowledge base connection DOWN \u2014 check that Obsidian is running and tunnel service is active");
     }
     lastTunnelStatus = alive;
-  }, 2 * 60 * 1e3);
+  }, 30 * 1e3);
   ping().then((ok) => {
     console.log(`[health] Knowledge base: ${ok ? "connected" : "offline"}`);
     lastTunnelStatus = ok;
