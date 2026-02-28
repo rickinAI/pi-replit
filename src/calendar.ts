@@ -120,10 +120,10 @@ export async function listEvents(options?: { maxResults?: number; timeMin?: stri
 
     const lines = events.map((event: any, i: number) => {
       const start = event.start?.dateTime
-        ? new Date(event.start.dateTime).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+        ? new Date(event.start.dateTime).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
         : event.start?.date || "TBD";
       const end = event.end?.dateTime
-        ? new Date(event.end.dateTime).toLocaleString("en-US", { hour: "numeric", minute: "2-digit" })
+        ? new Date(event.end.dateTime).toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" })
         : "";
       const location = event.location ? `\n   Location: ${event.location}` : "";
       const desc = event.description ? `\n   ${event.description.slice(0, 100).replace(/\n/g, " ")}` : "";
@@ -182,7 +182,7 @@ export async function createEvent(summary: string, options: { startTime: string;
 
     const created = res.data;
     const startStr = created.start?.dateTime
-      ? new Date(created.start.dateTime).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+      ? new Date(created.start.dateTime).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
       : created.start?.date || "";
 
     return `Created event: "${summary}" on ${startStr}`;

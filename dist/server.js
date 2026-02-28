@@ -636,8 +636,8 @@ async function listEvents(options) {
     console.log(`[calendar] Found ${allEvents.length} event(s), returning ${events.length}`);
     if (events.length === 0) return "No upcoming events found.";
     const lines = events.map((event, i) => {
-      const start = event.start?.dateTime ? new Date(event.start.dateTime).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : event.start?.date || "TBD";
-      const end = event.end?.dateTime ? new Date(event.end.dateTime).toLocaleString("en-US", { hour: "numeric", minute: "2-digit" }) : "";
+      const start = event.start?.dateTime ? new Date(event.start.dateTime).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : event.start?.date || "TBD";
+      const end = event.end?.dateTime ? new Date(event.end.dateTime).toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" }) : "";
       const location = event.location ? `
    Location: ${event.location}` : "";
       const desc = event.description ? `
@@ -692,7 +692,7 @@ async function createEvent(summary, options) {
       requestBody: event
     });
     const created = res.data;
-    const startStr = created.start?.dateTime ? new Date(created.start.dateTime).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : created.start?.date || "";
+    const startStr = created.start?.dateTime ? new Date(created.start.dateTime).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : created.start?.date || "";
     return `Created event: "${summary}" on ${startStr}`;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
