@@ -1539,9 +1539,9 @@ var DEFAULT_CONFIG = {
   timezone: "America/New_York",
   location: "New York",
   briefs: {
-    morning: { enabled: true, hour: 8, minute: 0, content: ["calendar", "tasks", "weather", "news", "markets", "email"] },
-    afternoon: { enabled: true, hour: 13, minute: 0, content: ["calendar", "tasks", "email", "markets"] },
-    evening: { enabled: true, hour: 19, minute: 0, content: ["calendar_tomorrow", "tasks", "markets", "email"] }
+    morning: { enabled: true, hour: 8, minute: 0, content: ["calendar", "tasks", "weather", "news", "markets", "headlines", "email"] },
+    afternoon: { enabled: true, hour: 13, minute: 0, content: ["calendar", "tasks", "email", "markets", "headlines"] },
+    evening: { enabled: true, hour: 19, minute: 0, content: ["calendar_tomorrow", "tasks", "markets", "headlines", "email"] }
   },
   alerts: {
     calendarReminder: { enabled: true, minutesBefore: 30 },
@@ -1722,6 +1722,20 @@ ${lines}`);
         }
         return `**Markets:**
 ${items.join("\n")}`;
+      }
+      case "headlines": {
+        try {
+          const topNews = await getNews("top");
+          const items = topNews.split("\n").filter((l) => /^\d+\./.test(l)).slice(0, 5);
+          const bullets = items.map((line) => {
+            const cleaned = line.replace(/^\d+\.\s*/, "");
+            return `\u2022 ${cleaned}`;
+          });
+          return `**Top Headlines:**
+${bullets.join("\n")}`;
+        } catch {
+          return "**Top Headlines:** [unavailable]";
+        }
       }
       case "email": {
         if (!isConfigured2() || !isConnected()) return "**Email:** [not connected]";
