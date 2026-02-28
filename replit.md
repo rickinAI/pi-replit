@@ -12,8 +12,8 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Auto-saves conversations every 5 minutes; saves on session close/expiry/shutdown
   - Inline interview tool: AI sends structured question forms to user, waits for responses via Promise/SSE
   - Graceful shutdown on SIGHUP/SIGTERM/SIGINT (saves all conversations, releases port)
-  - EADDRINUSE auto-recovery: detects port conflict, kills stale process, retries once
-  - Periodic knowledge base health check (every 2 min) with connection status logging
+  - EADDRINUSE auto-recovery: pre-emptive port kill, probes port availability before listen, waits up to 15s with retries
+  - Periodic knowledge base health check (every 30s) with connection status logging
   - Express error-handling middleware for clean JSON error responses
 - **src/obsidian.ts** — Client for the knowledge base REST API (10s timeout, 2 retries on transient failures, health ping)
 - **src/gmail.ts** — Gmail integration via custom Google OAuth (list/read/search emails)
@@ -32,7 +32,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **data/conversations/** — Persisted conversation JSON files
 - **public/manifest.json** — PWA web app manifest (name, icons, display mode)
 - **public/icons/** — App icons (180x180 apple-touch-icon, 192x192, 512x512)
-- **tunnel-setup/** — macOS LaunchAgent for cloudflared tunnel (retry notifications with backoff, log rotation)
+- **tunnel-setup/** — macOS cloudflared named tunnel startup script with auto-restart loop
 
 ## Port Configuration
 
@@ -101,7 +101,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - `notes_append` — Append content to an existing note
 - `notes_search` — Full-text search across all notes
 
-Requires Local REST API plugin + Cloudflare Quick Tunnel (see `tunnel-setup/`). Tunnel URL is pushed from the Mac via `/api/config/tunnel-url` and persisted to `data/tunnel-url.txt` so it survives server restarts and redeployments.
+Requires Local REST API plugin + Cloudflare Named Tunnel (see `tunnel-setup/`). Permanent URL: `https://obsidian.rickin.live` via named tunnel `obsidian-vault` (ID: `c1405892-a281-4d06-b4ef-b00900be547c`). Domain: `rickin.live` on Cloudflare. Config at `~/.cloudflared/config.yml` on Mac. Env var `OBSIDIAN_API_URL` is the primary URL source; falls back to persisted `data/tunnel-url.txt`. Dynamic URL push endpoint (`/api/config/tunnel-url`) still available as fallback.
 
 ## Gmail Integration
 
@@ -230,7 +230,7 @@ Proactive background scheduler that pushes briefings and alerts via SSE to all c
 1 custom tool for structured user input:
 - `interview` — Sends an interactive form (single-select, multi-select, text, info) inline in the chat
 - Server holds a Promise that resolves when user POSTs responses to `/api/session/:id/interview-response`
-- 5-minute timeout; form grays out after submission
+- 15-minute timeout; form grays out after submission
 - System prompt instructs the AI to use it for ambiguous requests, multi-option choices, and project setup
 
 ## Two-Tier Model System
