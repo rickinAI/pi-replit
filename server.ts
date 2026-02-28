@@ -1254,29 +1254,43 @@ function killPort(port: number) {
   } catch {}
 }
 
-function startServer(attempt = 0) {
-  const MAX_ATTEMPTS = 4;
-  const DELAYS = [0, 1000, 2000, 3000];
+function isPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const tester = createServer();
+    tester.once("error", () => resolve(false));
+    tester.listen(port, "0.0.0.0", () => {
+      tester.close(() => resolve(true));
+    });
+  });
+}
 
-  if (attempt > 0) {
-    server = createServer(app);
+async function waitForPort(port: number, maxWaitMs = 15000) {
+  const start = Date.now();
+  let attempt = 0;
+  while (Date.now() - start < maxWaitMs) {
+    if (await isPortFree(port)) return true;
+    attempt++;
+    console.warn(`[boot] Port ${port} still in use — waiting... (attempt ${attempt})`);
+    killPort(port);
+    await new Promise(r => setTimeout(r, Math.min(1000 * attempt, 3000)));
+  }
+  return false;
+}
+
+async function startServer() {
+  killPort(PORT);
+
+  const portReady = await waitForPort(PORT);
+  if (!portReady) {
+    console.error(`[boot] Port ${PORT} could not be freed after 15s — exiting`);
+    process.exit(1);
   }
 
-  if (attempt === 0) {
-    killPort(PORT);
-  }
+  server = createServer(app);
 
   server.on("error", (err: NodeJS.ErrnoException) => {
-    if (err.code === "EADDRINUSE" && attempt < MAX_ATTEMPTS - 1) {
-      console.warn(`[boot] Port ${PORT} in use — attempt ${attempt + 1}/${MAX_ATTEMPTS}, killing and retrying...`);
-      killPort(PORT);
-      server.close(() => {});
-      const delay = DELAYS[attempt + 1] || 3000;
-      setTimeout(() => startServer(attempt + 1), delay);
-    } else {
-      console.error(`[boot] Fatal server error:`, err);
-      process.exit(1);
-    }
+    console.error(`[boot] Fatal server error:`, err);
+    process.exit(1);
   });
 
   server.listen(PORT, "0.0.0.0", () => {

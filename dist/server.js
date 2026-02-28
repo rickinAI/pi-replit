@@ -3175,27 +3175,38 @@ function killPort(port) {
   } catch {
   }
 }
-function startServer(attempt = 0) {
-  const MAX_ATTEMPTS = 4;
-  const DELAYS = [0, 1e3, 2e3, 3e3];
-  if (attempt > 0) {
-    server = createServer(app);
+function isPortFree(port) {
+  return new Promise((resolve) => {
+    const tester = createServer();
+    tester.once("error", () => resolve(false));
+    tester.listen(port, "0.0.0.0", () => {
+      tester.close(() => resolve(true));
+    });
+  });
+}
+async function waitForPort(port, maxWaitMs = 15e3) {
+  const start = Date.now();
+  let attempt = 0;
+  while (Date.now() - start < maxWaitMs) {
+    if (await isPortFree(port)) return true;
+    attempt++;
+    console.warn(`[boot] Port ${port} still in use \u2014 waiting... (attempt ${attempt})`);
+    killPort(port);
+    await new Promise((r) => setTimeout(r, Math.min(1e3 * attempt, 3e3)));
   }
-  if (attempt === 0) {
-    killPort(PORT);
+  return false;
+}
+async function startServer() {
+  killPort(PORT);
+  const portReady = await waitForPort(PORT);
+  if (!portReady) {
+    console.error(`[boot] Port ${PORT} could not be freed after 15s \u2014 exiting`);
+    process.exit(1);
   }
+  server = createServer(app);
   server.on("error", (err) => {
-    if (err.code === "EADDRINUSE" && attempt < MAX_ATTEMPTS - 1) {
-      console.warn(`[boot] Port ${PORT} in use \u2014 attempt ${attempt + 1}/${MAX_ATTEMPTS}, killing and retrying...`);
-      killPort(PORT);
-      server.close(() => {
-      });
-      const delay = DELAYS[attempt + 1] || 3e3;
-      setTimeout(() => startServer(attempt + 1), delay);
-    } else {
-      console.error(`[boot] Fatal server error:`, err);
-      process.exit(1);
-    }
+    console.error(`[boot] Fatal server error:`, err);
+    process.exit(1);
   });
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`[ready] pi-replit listening on http://localhost:${PORT}`);
