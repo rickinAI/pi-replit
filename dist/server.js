@@ -2577,6 +2577,28 @@ setInterval(() => {
     }
   }
 }, 5 * 60 * 1e3);
+var TUNNEL_URL_FILE = path6.join(PROJECT_ROOT, "data", "tunnel-url.txt");
+function loadPersistedTunnelUrl() {
+  try {
+    return fs6.readFileSync(TUNNEL_URL_FILE, "utf-8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+function persistTunnelUrl(url) {
+  try {
+    fs6.writeFileSync(TUNNEL_URL_FILE, url, "utf-8");
+  } catch {
+  }
+}
+(function initTunnelUrl() {
+  const envUrl = process.env.OBSIDIAN_API_URL || "";
+  const savedUrl = loadPersistedTunnelUrl();
+  if (savedUrl && savedUrl !== envUrl) {
+    setApiUrl(savedUrl);
+    console.log(`[boot] Loaded persisted tunnel URL: ${savedUrl}`);
+  }
+})();
 var lastTunnelStatus = true;
 if (isConfigured()) {
   setInterval(async () => {
@@ -2951,28 +2973,6 @@ app.delete("/api/conversations/:id", (req, res) => {
   remove(req.params["id"]);
   res.json({ ok: true });
 });
-var TUNNEL_URL_FILE = path6.join(PROJECT_ROOT, "data", "tunnel-url.txt");
-function persistTunnelUrl(url) {
-  try {
-    fs6.writeFileSync(TUNNEL_URL_FILE, url, "utf-8");
-  } catch {
-  }
-}
-function loadPersistedTunnelUrl() {
-  try {
-    return fs6.readFileSync(TUNNEL_URL_FILE, "utf-8").trim() || null;
-  } catch {
-    return null;
-  }
-}
-(function initTunnelUrl() {
-  const envUrl = process.env.OBSIDIAN_API_URL || "";
-  const savedUrl = loadPersistedTunnelUrl();
-  if (savedUrl && savedUrl !== envUrl) {
-    setApiUrl(savedUrl);
-    console.log(`[boot] Loaded persisted tunnel URL: ${savedUrl}`);
-  }
-})();
 app.post("/api/config/tunnel-url", (req, res) => {
   const auth = req.headers.authorization;
   if (!auth || auth !== `Bearer ${process.env.OBSIDIAN_API_KEY}`) {
