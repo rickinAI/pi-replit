@@ -645,11 +645,17 @@ async function searchEmails(query) {
 async function getUnreadCount() {
   try {
     const client = await getGmailClient();
-    const label = await client.users.labels.get({ userId: "me", id: "INBOX" });
+    const label = await client.users.labels.get({ userId: "me", id: "CATEGORY_PRIMARY" });
     return label.data.messagesUnread || 0;
   } catch (err) {
-    console.error("Gmail getUnreadCount error:", err instanceof Error ? err.message : err);
-    return 0;
+    try {
+      const client = await getGmailClient();
+      const label = await client.users.labels.get({ userId: "me", id: "INBOX" });
+      return label.data.messagesUnread || 0;
+    } catch {
+      console.error("Gmail getUnreadCount error:", err instanceof Error ? err.message : err);
+      return 0;
+    }
   }
 }
 async function getConnectedEmail() {
