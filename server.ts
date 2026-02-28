@@ -1326,38 +1326,55 @@ async function waitForPort(port: number, maxWaitMs = 30000) {
   return false;
 }
 
-async function startServer() {
+async function startServer(maxRetries = 5) {
   const portReady = await waitForPort(PORT);
   if (!portReady) {
     console.error(`[boot] Port ${PORT} could not be freed after 30s — exiting`);
     process.exit(1);
   }
 
-  server = createServer(app);
-
-  server.on("error", (err: NodeJS.ErrnoException) => {
-    console.error(`[boot] Fatal server error:`, err);
-    process.exit(1);
-  });
-
-  server.listen(PORT, "0.0.0.0", () => {
-    console.log(`[ready] pi-replit listening on http://localhost:${PORT}`);
-
-    function broadcastToAll(event: any) {
-      const data = `data: ${JSON.stringify(event)}\n\n`;
-      for (const entry of sessions.values()) {
-        for (const sub of entry.subscribers) {
-          try {
-            sub.write(data);
-          } catch {
-            entry.subscribers.delete(sub);
-          }
+  function broadcastToAll(event: any) {
+    const data = `data: ${JSON.stringify(event)}\n\n`;
+    for (const entry of sessions.values()) {
+      for (const sub of entry.subscribers) {
+        try {
+          sub.write(data);
+        } catch {
+          entry.subscribers.delete(sub);
         }
       }
     }
+  }
 
-    alerts.startAlertSystem(broadcastToAll);
-  });
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server = createServer(app);
+        server.once("error", (err: NodeJS.ErrnoException) => {
+          if (err.code === "EADDRINUSE" && attempt < maxRetries) {
+            console.warn(`[boot] EADDRINUSE on attempt ${attempt}/${maxRetries} — retrying in 3s...`);
+            server.close();
+            reject(err);
+          } else {
+            console.error(`[boot] Fatal server error:`, err);
+            process.exit(1);
+          }
+        });
+        server.listen(PORT, "0.0.0.0", () => {
+          console.log(`[ready] pi-replit listening on http://localhost:${PORT}`);
+          alerts.startAlertSystem(broadcastToAll);
+          resolve();
+        });
+      });
+      return;
+    } catch {
+      killPort(PORT);
+      await new Promise(r => setTimeout(r, 3000));
+    }
+  }
+
+  console.error(`[boot] Could not bind port ${PORT} after ${maxRetries} attempts — exiting`);
+  process.exit(1);
 }
 
 startServer();

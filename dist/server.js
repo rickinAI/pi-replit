@@ -3368,34 +3368,53 @@ async function waitForPort(port, maxWaitMs = 3e4) {
   }
   return false;
 }
-async function startServer() {
+async function startServer(maxRetries = 5) {
   const portReady = await waitForPort(PORT);
   if (!portReady) {
     console.error(`[boot] Port ${PORT} could not be freed after 30s \u2014 exiting`);
     process.exit(1);
   }
-  server = createServer(app);
-  server.on("error", (err) => {
-    console.error(`[boot] Fatal server error:`, err);
-    process.exit(1);
-  });
-  server.listen(PORT, "0.0.0.0", () => {
-    console.log(`[ready] pi-replit listening on http://localhost:${PORT}`);
-    function broadcastToAll(event) {
-      const data = `data: ${JSON.stringify(event)}
+  function broadcastToAll(event) {
+    const data = `data: ${JSON.stringify(event)}
 
 `;
-      for (const entry of sessions.values()) {
-        for (const sub of entry.subscribers) {
-          try {
-            sub.write(data);
-          } catch {
-            entry.subscribers.delete(sub);
-          }
+    for (const entry of sessions.values()) {
+      for (const sub of entry.subscribers) {
+        try {
+          sub.write(data);
+        } catch {
+          entry.subscribers.delete(sub);
         }
       }
     }
-    startAlertSystem(broadcastToAll);
-  });
+  }
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      await new Promise((resolve, reject) => {
+        server = createServer(app);
+        server.once("error", (err) => {
+          if (err.code === "EADDRINUSE" && attempt < maxRetries) {
+            console.warn(`[boot] EADDRINUSE on attempt ${attempt}/${maxRetries} \u2014 retrying in 3s...`);
+            server.close();
+            reject(err);
+          } else {
+            console.error(`[boot] Fatal server error:`, err);
+            process.exit(1);
+          }
+        });
+        server.listen(PORT, "0.0.0.0", () => {
+          console.log(`[ready] pi-replit listening on http://localhost:${PORT}`);
+          startAlertSystem(broadcastToAll);
+          resolve();
+        });
+      });
+      return;
+    } catch {
+      killPort(PORT);
+      await new Promise((r) => setTimeout(r, 3e3));
+    }
+  }
+  console.error(`[boot] Could not bind port ${PORT} after ${maxRetries} attempts \u2014 exiting`);
+  process.exit(1);
 }
 startServer();
