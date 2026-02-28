@@ -1155,13 +1155,8 @@ app.get("/api/glance", async (_req: Request, res: Response) => {
     if (gmail.isConfigured() && gmail.isConnected()) {
       promises.push((async () => {
         try {
-          const raw = await gmail.listEmails("is:unread", 20);
-          if (raw.includes("No emails found") || raw.includes("empty")) {
-            result.emails = { unread: 0 };
-          } else {
-            const countMatch = raw.match(/\((\d+)\)/);
-            result.emails = { unread: countMatch ? parseInt(countMatch[1]) : 0 };
-          }
+          const unread = await gmail.getUnreadCount();
+          result.emails = { unread };
         } catch {}
       })());
     }

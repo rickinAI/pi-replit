@@ -488,14 +488,17 @@ async function doCheckAlerts() {
             alertedEmailIds.add(emailId);
             if (initialAlertCheckDone) {
               const lineIdx = result.indexOf(`[${emailId}]`);
-              const lineStart = result.lastIndexOf("\n", lineIdx) + 1;
-              const lineEnd = result.indexOf("\n", lineIdx);
-              const emailLine = result.slice(lineStart, lineEnd === -1 ? undefined : lineEnd).trim();
+              const blockEnd = result.indexOf("\n\n", lineIdx);
+              const block = result.slice(lineIdx, blockEnd === -1 ? undefined : blockEnd);
+              const fromMatch = block.match(/From:\s*(.+)/);
+              const subjectMatch = block.match(/Subject:\s*(.+)/);
+              const sender = fromMatch ? fromMatch[1].replace(/<[^>]+>/, "").trim() : "Unknown";
+              const subject = subjectMatch ? subjectMatch[1].trim() : "No subject";
               broadcastFn?.({
                 type: "alert",
                 alertType: "email",
-                title: "Important Email",
-                content: emailLine.replace(/^\d+\.\s*\*?\s*/, ""),
+                title: sender,
+                content: subject,
                 timestamp: now.toISOString(),
               });
             }

@@ -238,6 +238,17 @@ export async function searchEmails(query: string): Promise<string> {
   return listEmails(query, 10);
 }
 
+export async function getUnreadCount(): Promise<number> {
+  try {
+    const client = await getGmailClient();
+    const label = await client.users.labels.get({ userId: "me", id: "INBOX" });
+    return label.data.messagesUnread || 0;
+  } catch (err) {
+    console.error("Gmail getUnreadCount error:", err instanceof Error ? err.message : err);
+    return 0;
+  }
+}
+
 export async function getConnectedEmail(): Promise<string | null> {
   try {
     const client = await getGmailClient();

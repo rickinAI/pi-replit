@@ -533,6 +533,16 @@ ${truncatedBody}`;
 async function searchEmails(query) {
   return listEmails(query, 10);
 }
+async function getUnreadCount() {
+  try {
+    const client = await getGmailClient();
+    const label = await client.users.labels.get({ userId: "me", id: "INBOX" });
+    return label.data.messagesUnread || 0;
+  } catch (err) {
+    console.error("Gmail getUnreadCount error:", err instanceof Error ? err.message : err);
+    return 0;
+  }
+}
 async function getConnectedEmail() {
   try {
     const client = await getGmailClient();
@@ -1936,14 +1946,17 @@ async function doCheckAlerts() {
             alertedEmailIds.add(emailId);
             if (initialAlertCheckDone) {
               const lineIdx = result.indexOf(`[${emailId}]`);
-              const lineStart = result.lastIndexOf("\n", lineIdx) + 1;
-              const lineEnd = result.indexOf("\n", lineIdx);
-              const emailLine = result.slice(lineStart, lineEnd === -1 ? void 0 : lineEnd).trim();
+              const blockEnd = result.indexOf("\n\n", lineIdx);
+              const block = result.slice(lineIdx, blockEnd === -1 ? void 0 : blockEnd);
+              const fromMatch = block.match(/From:\s*(.+)/);
+              const subjectMatch = block.match(/Subject:\s*(.+)/);
+              const sender = fromMatch ? fromMatch[1].replace(/<[^>]+>/, "").trim() : "Unknown";
+              const subject = subjectMatch ? subjectMatch[1].trim() : "No subject";
               broadcastFn?.({
                 type: "alert",
                 alertType: "email",
-                title: "Important Email",
-                content: emailLine.replace(/^\d+\.\s*\*?\s*/, ""),
+                title: sender,
+                content: subject,
                 timestamp: now.toISOString()
               });
             }
@@ -3080,13 +3093,8 @@ app.get("/api/glance", async (_req, res) => {
     if (isConfigured2() && isConnected()) {
       promises.push((async () => {
         try {
-          const raw = await listEmails("is:unread", 20);
-          if (raw.includes("No emails found") || raw.includes("empty")) {
-            result.emails = { unread: 0 };
-          } else {
-            const countMatch = raw.match(/\((\d+)\)/);
-            result.emails = { unread: countMatch ? parseInt(countMatch[1]) : 0 };
-          }
+          const unread = await getUnreadCount();
+          result.emails = { unread };
         } catch {
         }
       })());
