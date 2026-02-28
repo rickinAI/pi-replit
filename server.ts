@@ -5,6 +5,7 @@ import { createServer } from "http";
 import { fileURLToPath } from "url";
 import path from "path";
 import fs from "fs";
+import { execSync } from "child_process";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
 
@@ -58,16 +59,20 @@ vaultLocal.init(VAULT_DIR);
 
 let useLocalVault = vaultLocal.isConfigured();
 
-if (!useLocalVault) {
-  const vaultCheckInterval = setInterval(() => {
-    if (vaultLocal.isConfigured()) {
-      useLocalVault = true;
-      console.log("[boot] Knowledge base: local vault now available (Obsidian Sync)");
-      lastTunnelStatus = true;
-      clearInterval(vaultCheckInterval);
+setInterval(() => {
+  const localAvailable = vaultLocal.isConfigured();
+  if (localAvailable && !useLocalVault) {
+    useLocalVault = true;
+    console.log("[health] Knowledge base: switched to local vault (Obsidian Sync)");
+  } else if (!localAvailable && useLocalVault) {
+    useLocalVault = false;
+    if (obsidian.isConfigured()) {
+      console.warn("[health] Local vault unavailable — falling back to remote (tunnel)");
+    } else {
+      console.warn("[health] Local vault unavailable — no remote fallback configured");
     }
-  }, 10_000);
-}
+  }
+}, 15_000);
 
 if (!ANTHROPIC_KEY) console.warn("ANTHROPIC_API_KEY is not set.");
 if (useLocalVault) {
@@ -89,25 +94,20 @@ if (!APP_PASSWORD) console.warn("APP_PASSWORD is not set — auth disabled.");
 console.log(`[boot] PORT=${PORT} PUBLIC_DIR=${PUBLIC_DIR} AGENT_DIR=${AGENT_DIR}`);
 console.log(`[boot] public/ exists: ${fs.existsSync(PUBLIC_DIR)}`);
 
-function kbList(p: string): Promise<string> | string {
-  if (useLocalVault) return vaultLocal.listNotes(p);
-  return obsidian.listNotes(p);
+function kbList(p: string): Promise<string> {
+  return useLocalVault ? vaultLocal.listNotes(p) : obsidian.listNotes(p);
 }
-function kbRead(p: string): Promise<string> | string {
-  if (useLocalVault) return vaultLocal.readNote(p);
-  return obsidian.readNote(p);
+function kbRead(p: string): Promise<string> {
+  return useLocalVault ? vaultLocal.readNote(p) : obsidian.readNote(p);
 }
-function kbCreate(p: string, c: string): Promise<string> | string {
-  if (useLocalVault) return vaultLocal.createNote(p, c);
-  return obsidian.createNote(p, c);
+function kbCreate(p: string, c: string): Promise<string> {
+  return useLocalVault ? vaultLocal.createNote(p, c) : obsidian.createNote(p, c);
 }
-function kbAppend(p: string, c: string): Promise<string> | string {
-  if (useLocalVault) return vaultLocal.appendToNote(p, c);
-  return obsidian.appendToNote(p, c);
+function kbAppend(p: string, c: string): Promise<string> {
+  return useLocalVault ? vaultLocal.appendToNote(p, c) : obsidian.appendToNote(p, c);
 }
-function kbSearch(q: string): Promise<string> | string {
-  if (useLocalVault) return vaultLocal.searchNotes(q);
-  return obsidian.searchNotes(q);
+function kbSearch(q: string): Promise<string> {
+  return useLocalVault ? vaultLocal.searchNotes(q) : obsidian.searchNotes(q);
 }
 
 function buildKnowledgeBaseTools(): ToolDefinition[] {
@@ -740,22 +740,20 @@ function persistTunnelUrl(url: string) {
   const envUrl = process.env.OBSIDIAN_API_URL || "";
   if (envUrl) {
     obsidian.setApiUrl(envUrl);
-    console.log(`[boot] Using tunnel URL from env: ${envUrl}`);
+    if (!useLocalVault) console.log(`[boot] Using tunnel URL from env: ${envUrl}`);
   } else {
     const savedUrl = loadPersistedTunnelUrl();
     if (savedUrl) {
       obsidian.setApiUrl(savedUrl);
-      console.log(`[boot] Loaded persisted tunnel URL: ${savedUrl}`);
+      if (!useLocalVault) console.log(`[boot] Loaded persisted tunnel URL: ${savedUrl}`);
     }
   }
 })();
 
-let lastTunnelStatus = true;
-if (useLocalVault) {
-  lastTunnelStatus = true;
-  console.log("[health] Knowledge base: connected (local)");
-} else if (obsidian.isConfigured()) {
+let lastTunnelStatus = useLocalVault;
+if (!useLocalVault && obsidian.isConfigured()) {
   setInterval(async () => {
+    if (useLocalVault) return;
     const alive = await obsidian.ping();
     if (alive && !lastTunnelStatus) {
       console.log("[health] Knowledge base connection recovered");
@@ -1262,7 +1260,7 @@ app.get("/api/glance", async (_req: Request, res: Response) => {
 });
 
 app.get("/api/kb-status", (_req, res) => {
-  res.json({ online: lastTunnelStatus });
+  res.json({ online: useLocalVault || lastTunnelStatus, mode: useLocalVault ? "local" : "remote" });
 });
 
 app.get("/health", (_req, res) => {
@@ -1296,14 +1294,12 @@ process.on("SIGHUP", () => gracefulShutdown("SIGHUP"));
 
 function killPort(port: number) {
   try {
-    const { execSync } = require("child_process");
     execSync(`fuser -k -9 ${port}/tcp`, { stdio: "ignore" });
   } catch {}
 }
 
 function isPortInUse(port: number): boolean {
   try {
-    const { execSync } = require("child_process");
     const out = execSync(`fuser ${port}/tcp 2>/dev/null`, { encoding: "utf-8" });
     return out.trim().length > 0;
   } catch {

@@ -1,4 +1,5 @@
-import fs from "fs";
+import fs from "fs/promises";
+import fsSync from "fs";
 import path from "path";
 
 let vaultPath = "";
@@ -10,7 +11,7 @@ export function init(basePath: string) {
 export function isConfigured(): boolean {
   if (!vaultPath) return false;
   try {
-    return fs.existsSync(vaultPath) && fs.readdirSync(vaultPath).length > 0;
+    return fsSync.existsSync(vaultPath) && fsSync.readdirSync(vaultPath).length > 0;
   } catch {
     return false;
   }
@@ -20,99 +21,99 @@ export function ping(): boolean {
   return isConfigured();
 }
 
-export function listNotes(dirPath = "/"): string {
+export async function listNotes(dirPath = "/"): Promise<string> {
   const resolved = resolvePath(dirPath);
-  if (!fs.existsSync(resolved)) {
-    throw new Error(`Path not found: ${dirPath}`);
-  }
-  const stat = fs.statSync(resolved);
-  if (!stat.isDirectory()) {
-    throw new Error(`Not a directory: ${dirPath}`);
-  }
-  const entries = fs.readdirSync(resolved, { withFileTypes: true });
-  const files: Array<{ path: string; type: "file" | "folder" }> = [];
+  const stat = await fs.stat(resolved).catch(() => null);
+  if (!stat) throw new Error(`Path not found: ${dirPath}`);
+  if (!stat.isDirectory()) throw new Error(`Not a directory: ${dirPath}`);
+
+  const entries = await fs.readdir(resolved, { withFileTypes: true });
+  const files: string[] = [];
   for (const entry of entries) {
     if (entry.name.startsWith(".")) continue;
     const rel = path.join(dirPath === "/" ? "" : dirPath, entry.name);
-    if (entry.isDirectory()) {
-      files.push({ path: rel + "/", type: "folder" });
-    } else {
-      files.push({ path: rel, type: "file" });
-    }
+    files.push(entry.isDirectory() ? rel + "/" : rel);
   }
   return JSON.stringify({ files }, null, 2);
 }
 
-export function readNote(notePath: string): string {
+export async function readNote(notePath: string): Promise<string> {
   const resolved = resolvePath(notePath);
-  if (!fs.existsSync(resolved)) {
+  try {
+    return await fs.readFile(resolved, "utf-8");
+  } catch {
     throw new Error(`Note not found: ${notePath}`);
   }
-  return fs.readFileSync(resolved, "utf-8");
 }
 
-export function createNote(notePath: string, content: string): string {
+export async function createNote(notePath: string, content: string): Promise<string> {
   const resolved = resolvePath(notePath);
   const dir = path.dirname(resolved);
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(resolved, content, "utf-8");
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(resolved, content, "utf-8");
   return `Created note: ${notePath}`;
 }
 
-export function appendToNote(notePath: string, content: string): string {
+export async function appendToNote(notePath: string, content: string): Promise<string> {
   const resolved = resolvePath(notePath);
-  if (!fs.existsSync(resolved)) {
+  try {
+    await fs.access(resolved);
+  } catch {
     throw new Error(`Note not found: ${notePath}`);
   }
-  fs.appendFileSync(resolved, content, "utf-8");
+  await fs.appendFile(resolved, content, "utf-8");
   return `Appended to note: ${notePath}`;
 }
 
-export function searchNotes(query: string): string {
+export async function searchNotes(query: string): Promise<string> {
   if (!query || query.trim().length === 0) {
     return JSON.stringify([], null, 2);
   }
   const results: Array<{ filename: string; matches: Array<{ match: { start: number; end: number }; context: string }> }> = [];
   const queryLower = query.toLowerCase();
 
-  function walkDir(dir: string, relBase: string) {
-    let entries: fs.Dirent[];
+  async function walkDir(dir: string, relBase: string) {
+    let entries;
     try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
+      entries = await fs.readdir(dir, { withFileTypes: true });
     } catch {
       return;
     }
+    const promises: Promise<void>[] = [];
     for (const entry of entries) {
       if (entry.name.startsWith(".")) continue;
       const fullPath = path.join(dir, entry.name);
       const relPath = relBase ? path.join(relBase, entry.name) : entry.name;
       if (entry.isDirectory()) {
-        walkDir(fullPath, relPath);
+        promises.push(walkDir(fullPath, relPath));
       } else if (entry.name.endsWith(".md")) {
-        try {
-          const content = fs.readFileSync(fullPath, "utf-8");
-          const contentLower = content.toLowerCase();
-          const matches: Array<{ match: { start: number; end: number }; context: string }> = [];
-          let idx = 0;
-          while ((idx = contentLower.indexOf(queryLower, idx)) !== -1) {
-            const start = Math.max(0, idx - 50);
-            const end = Math.min(content.length, idx + query.length + 50);
-            matches.push({
-              match: { start: idx, end: idx + query.length },
-              context: content.substring(start, end),
-            });
-            idx += query.length;
-            if (matches.length >= 5) break;
-          }
-          if (matches.length > 0) {
-            results.push({ filename: relPath, matches });
-          }
-        } catch {}
+        promises.push((async () => {
+          try {
+            const content = await fs.readFile(fullPath, "utf-8");
+            const contentLower = content.toLowerCase();
+            const matches: Array<{ match: { start: number; end: number }; context: string }> = [];
+            let idx = 0;
+            while ((idx = contentLower.indexOf(queryLower, idx)) !== -1) {
+              const start = Math.max(0, idx - 50);
+              const end = Math.min(content.length, idx + query.length + 50);
+              matches.push({
+                match: { start: idx, end: idx + query.length },
+                context: content.substring(start, end),
+              });
+              idx += query.length;
+              if (matches.length >= 5) break;
+            }
+            if (matches.length > 0) {
+              results.push({ filename: relPath, matches });
+            }
+          } catch {}
+        })());
       }
     }
+    await Promise.all(promises);
   }
 
-  walkDir(vaultPath, "");
+  await walkDir(vaultPath, "");
   return JSON.stringify(results, null, 2);
 }
 

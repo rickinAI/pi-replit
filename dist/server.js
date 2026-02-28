@@ -1,10 +1,3 @@
-var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
-  get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
-}) : x)(function(x) {
-  if (typeof require !== "undefined") return require.apply(this, arguments);
-  throw Error('Dynamic require of "' + x + '" is not supported');
-});
-
 // server.ts
 import express from "express";
 import cors from "cors";
@@ -12,6 +5,7 @@ import { createServer } from "http";
 import { fileURLToPath } from "url";
 import path7 from "path";
 import fs7 from "fs";
+import { execSync } from "child_process";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
 import {
@@ -144,7 +138,8 @@ async function searchNotes(query) {
 }
 
 // src/vault-local.ts
-import fs from "fs";
+import fs from "fs/promises";
+import fsSync from "fs";
 import path from "path";
 var vaultPath = "";
 function init(basePath) {
@@ -153,99 +148,98 @@ function init(basePath) {
 function isConfigured2() {
   if (!vaultPath) return false;
   try {
-    return fs.existsSync(vaultPath) && fs.readdirSync(vaultPath).length > 0;
+    return fsSync.existsSync(vaultPath) && fsSync.readdirSync(vaultPath).length > 0;
   } catch {
     return false;
   }
 }
-function listNotes2(dirPath = "/") {
+async function listNotes2(dirPath = "/") {
   const resolved = resolvePath(dirPath);
-  if (!fs.existsSync(resolved)) {
-    throw new Error(`Path not found: ${dirPath}`);
-  }
-  const stat = fs.statSync(resolved);
-  if (!stat.isDirectory()) {
-    throw new Error(`Not a directory: ${dirPath}`);
-  }
-  const entries = fs.readdirSync(resolved, { withFileTypes: true });
+  const stat = await fs.stat(resolved).catch(() => null);
+  if (!stat) throw new Error(`Path not found: ${dirPath}`);
+  if (!stat.isDirectory()) throw new Error(`Not a directory: ${dirPath}`);
+  const entries = await fs.readdir(resolved, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
     if (entry.name.startsWith(".")) continue;
     const rel = path.join(dirPath === "/" ? "" : dirPath, entry.name);
-    if (entry.isDirectory()) {
-      files.push({ path: rel + "/", type: "folder" });
-    } else {
-      files.push({ path: rel, type: "file" });
-    }
+    files.push(entry.isDirectory() ? rel + "/" : rel);
   }
   return JSON.stringify({ files }, null, 2);
 }
-function readNote2(notePath) {
+async function readNote2(notePath) {
   const resolved = resolvePath(notePath);
-  if (!fs.existsSync(resolved)) {
+  try {
+    return await fs.readFile(resolved, "utf-8");
+  } catch {
     throw new Error(`Note not found: ${notePath}`);
   }
-  return fs.readFileSync(resolved, "utf-8");
 }
-function createNote2(notePath, content) {
+async function createNote2(notePath, content) {
   const resolved = resolvePath(notePath);
   const dir = path.dirname(resolved);
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(resolved, content, "utf-8");
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(resolved, content, "utf-8");
   return `Created note: ${notePath}`;
 }
-function appendToNote2(notePath, content) {
+async function appendToNote2(notePath, content) {
   const resolved = resolvePath(notePath);
-  if (!fs.existsSync(resolved)) {
+  try {
+    await fs.access(resolved);
+  } catch {
     throw new Error(`Note not found: ${notePath}`);
   }
-  fs.appendFileSync(resolved, content, "utf-8");
+  await fs.appendFile(resolved, content, "utf-8");
   return `Appended to note: ${notePath}`;
 }
-function searchNotes2(query) {
+async function searchNotes2(query) {
   if (!query || query.trim().length === 0) {
     return JSON.stringify([], null, 2);
   }
   const results = [];
   const queryLower = query.toLowerCase();
-  function walkDir(dir, relBase) {
+  async function walkDir(dir, relBase) {
     let entries;
     try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
+      entries = await fs.readdir(dir, { withFileTypes: true });
     } catch {
       return;
     }
+    const promises = [];
     for (const entry of entries) {
       if (entry.name.startsWith(".")) continue;
       const fullPath = path.join(dir, entry.name);
       const relPath = relBase ? path.join(relBase, entry.name) : entry.name;
       if (entry.isDirectory()) {
-        walkDir(fullPath, relPath);
+        promises.push(walkDir(fullPath, relPath));
       } else if (entry.name.endsWith(".md")) {
-        try {
-          const content = fs.readFileSync(fullPath, "utf-8");
-          const contentLower = content.toLowerCase();
-          const matches = [];
-          let idx = 0;
-          while ((idx = contentLower.indexOf(queryLower, idx)) !== -1) {
-            const start = Math.max(0, idx - 50);
-            const end = Math.min(content.length, idx + query.length + 50);
-            matches.push({
-              match: { start: idx, end: idx + query.length },
-              context: content.substring(start, end)
-            });
-            idx += query.length;
-            if (matches.length >= 5) break;
+        promises.push((async () => {
+          try {
+            const content = await fs.readFile(fullPath, "utf-8");
+            const contentLower = content.toLowerCase();
+            const matches = [];
+            let idx = 0;
+            while ((idx = contentLower.indexOf(queryLower, idx)) !== -1) {
+              const start = Math.max(0, idx - 50);
+              const end = Math.min(content.length, idx + query.length + 50);
+              matches.push({
+                match: { start: idx, end: idx + query.length },
+                context: content.substring(start, end)
+              });
+              idx += query.length;
+              if (matches.length >= 5) break;
+            }
+            if (matches.length > 0) {
+              results.push({ filename: relPath, matches });
+            }
+          } catch {
           }
-          if (matches.length > 0) {
-            results.push({ filename: relPath, matches });
-          }
-        } catch {
-        }
+        })());
       }
     }
+    await Promise.all(promises);
   }
-  walkDir(vaultPath, "");
+  await walkDir(vaultPath, "");
   return JSON.stringify(results, null, 2);
 }
 function resolvePath(p) {
@@ -2138,16 +2132,20 @@ init5(PROJECT_ROOT);
 init6(PROJECT_ROOT);
 init(VAULT_DIR);
 var useLocalVault = isConfigured2();
-if (!useLocalVault) {
-  const vaultCheckInterval = setInterval(() => {
-    if (isConfigured2()) {
-      useLocalVault = true;
-      console.log("[boot] Knowledge base: local vault now available (Obsidian Sync)");
-      lastTunnelStatus = true;
-      clearInterval(vaultCheckInterval);
+setInterval(() => {
+  const localAvailable = isConfigured2();
+  if (localAvailable && !useLocalVault) {
+    useLocalVault = true;
+    console.log("[health] Knowledge base: switched to local vault (Obsidian Sync)");
+  } else if (!localAvailable && useLocalVault) {
+    useLocalVault = false;
+    if (isConfigured()) {
+      console.warn("[health] Local vault unavailable \u2014 falling back to remote (tunnel)");
+    } else {
+      console.warn("[health] Local vault unavailable \u2014 no remote fallback configured");
     }
-  }, 1e4);
-}
+  }
+}, 15e3);
 if (!ANTHROPIC_KEY) console.warn("ANTHROPIC_API_KEY is not set.");
 if (useLocalVault) {
   console.log("[boot] Knowledge base: local vault (Obsidian Sync)");
@@ -2168,24 +2166,19 @@ if (!APP_PASSWORD) console.warn("APP_PASSWORD is not set \u2014 auth disabled.")
 console.log(`[boot] PORT=${PORT} PUBLIC_DIR=${PUBLIC_DIR} AGENT_DIR=${AGENT_DIR}`);
 console.log(`[boot] public/ exists: ${fs7.existsSync(PUBLIC_DIR)}`);
 function kbList(p) {
-  if (useLocalVault) return listNotes2(p);
-  return listNotes(p);
+  return useLocalVault ? listNotes2(p) : listNotes(p);
 }
 function kbRead(p) {
-  if (useLocalVault) return readNote2(p);
-  return readNote(p);
+  return useLocalVault ? readNote2(p) : readNote(p);
 }
 function kbCreate(p, c) {
-  if (useLocalVault) return createNote2(p, c);
-  return createNote(p, c);
+  return useLocalVault ? createNote2(p, c) : createNote(p, c);
 }
 function kbAppend(p, c) {
-  if (useLocalVault) return appendToNote2(p, c);
-  return appendToNote(p, c);
+  return useLocalVault ? appendToNote2(p, c) : appendToNote(p, c);
 }
 function kbSearch(q) {
-  if (useLocalVault) return searchNotes2(q);
-  return searchNotes(q);
+  return useLocalVault ? searchNotes2(q) : searchNotes(q);
 }
 function buildKnowledgeBaseTools() {
   if (!useLocalVault && !isConfigured()) return [];
@@ -2783,21 +2776,19 @@ function persistTunnelUrl(url) {
   const envUrl = process.env.OBSIDIAN_API_URL || "";
   if (envUrl) {
     setApiUrl(envUrl);
-    console.log(`[boot] Using tunnel URL from env: ${envUrl}`);
+    if (!useLocalVault) console.log(`[boot] Using tunnel URL from env: ${envUrl}`);
   } else {
     const savedUrl = loadPersistedTunnelUrl();
     if (savedUrl) {
       setApiUrl(savedUrl);
-      console.log(`[boot] Loaded persisted tunnel URL: ${savedUrl}`);
+      if (!useLocalVault) console.log(`[boot] Loaded persisted tunnel URL: ${savedUrl}`);
     }
   }
 })();
-var lastTunnelStatus = true;
-if (useLocalVault) {
-  lastTunnelStatus = true;
-  console.log("[health] Knowledge base: connected (local)");
-} else if (isConfigured()) {
+var lastTunnelStatus = useLocalVault;
+if (!useLocalVault && isConfigured()) {
   setInterval(async () => {
+    if (useLocalVault) return;
     const alive = await ping();
     if (alive && !lastTunnelStatus) {
       console.log("[health] Knowledge base connection recovered");
@@ -3309,7 +3300,7 @@ app.get("/api/glance", async (_req, res) => {
   }
 });
 app.get("/api/kb-status", (_req, res) => {
-  res.json({ online: lastTunnelStatus });
+  res.json({ online: useLocalVault || lastTunnelStatus, mode: useLocalVault ? "local" : "remote" });
 });
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", sessions: sessions.size, ts: Date.now() });
@@ -3340,14 +3331,12 @@ process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 process.on("SIGHUP", () => gracefulShutdown("SIGHUP"));
 function killPort(port) {
   try {
-    const { execSync } = __require("child_process");
     execSync(`fuser -k -9 ${port}/tcp`, { stdio: "ignore" });
   } catch {
   }
 }
 function isPortInUse(port) {
   try {
-    const { execSync } = __require("child_process");
     const out = execSync(`fuser ${port}/tcp 2>/dev/null`, { encoding: "utf-8" });
     return out.trim().length > 0;
   } catch {

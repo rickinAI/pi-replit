@@ -5,8 +5,8 @@
   "type": "module",
   "main": "dist/server.js",
   "scripts": {
-    "build": "esbuild server.ts --bundle --platform=node --target=node20 --outfile=dist/server.js --format=esm --packages=external",
-    "bundle": "esbuild server.ts --bundle --platform=node --target=node20 --outfile=dist/server.bundle.js --format=esm",
+    "build": "esbuild server.ts --bundle --platform=node --target=node22 --outfile=dist/server.js --format=esm --packages=external",
+    "bundle": "esbuild server.ts --bundle --platform=node --target=node22 --outfile=dist/server.bundle.js --format=esm",
     "start": "node dist/server.js",
     "dev": "tsx watch server.ts"
   },
@@ -28,6 +28,6 @@
     "typescript": "^5.8.2"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   }
 }
