@@ -55,5 +55,5 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "PORT=5000 npm run build && PORT=5000 npm start"
+args = "PORT=5000 npm run build && (ob sync --continuous --path ./data/vault > /tmp/obsidian-sync.log 2>&1 &) && PORT=5000 npm start"
 waitForPort = 5000

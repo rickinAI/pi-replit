@@ -101,7 +101,9 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - `notes_append` — Append content to an existing note
 - `notes_search` — Full-text search across all notes
 
-Requires Local REST API plugin + Cloudflare Named Tunnel (see `tunnel-setup/`). Permanent URL: `https://obsidian.rickin.live` via named tunnel `obsidian-vault` (ID: `c1405892-a281-4d06-b4ef-b00900be547c`). Domain: `rickin.live` on Cloudflare. Config at `~/.cloudflared/config.yml` on Mac. Env var `OBSIDIAN_API_URL` is the primary URL source; falls back to persisted `data/tunnel-url.txt`. Dynamic URL push endpoint (`/api/config/tunnel-url`) still available as fallback.
+**Primary: Local vault via Obsidian Headless Sync** (`obsidian-headless` npm package, v1.0.0). Vault files synced to `data/vault/` using `ob sync --continuous` running as a background process alongside the server. Reads files directly from disk via `src/vault-local.ts` — no network dependency. Requires Node.js 22+ (for native WebSocket). Obsidian Sync credentials stored in `~/.config/obsidian-headless/` on the Replit instance.
+
+**Fallback: Cloudflare Named Tunnel** to Local REST API plugin on Mac. Permanent URL: `https://obsidian.rickin.live` via named tunnel `obsidian-vault`. Env var `OBSIDIAN_API_URL` is the URL source; falls back to persisted `data/tunnel-url.txt`. Dynamic URL push endpoint (`/api/config/tunnel-url`) still available.
 
 ## Gmail Integration
 

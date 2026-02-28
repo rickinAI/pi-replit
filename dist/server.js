@@ -10,8 +10,8 @@ import express from "express";
 import cors from "cors";
 import { createServer } from "http";
 import { fileURLToPath } from "url";
-import path6 from "path";
-import fs6 from "fs";
+import path7 from "path";
+import fs7 from "fs";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
 import {
@@ -143,38 +143,153 @@ async function searchNotes(query) {
   return JSON.stringify(data, null, 2);
 }
 
-// src/conversations.ts
+// src/vault-local.ts
 import fs from "fs";
 import path from "path";
+var vaultPath = "";
+function init(basePath) {
+  vaultPath = basePath;
+}
+function isConfigured2() {
+  if (!vaultPath) return false;
+  try {
+    return fs.existsSync(vaultPath) && fs.readdirSync(vaultPath).length > 0;
+  } catch {
+    return false;
+  }
+}
+function listNotes2(dirPath = "/") {
+  const resolved = resolvePath(dirPath);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`Path not found: ${dirPath}`);
+  }
+  const stat = fs.statSync(resolved);
+  if (!stat.isDirectory()) {
+    throw new Error(`Not a directory: ${dirPath}`);
+  }
+  const entries = fs.readdirSync(resolved, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
+    const rel = path.join(dirPath === "/" ? "" : dirPath, entry.name);
+    if (entry.isDirectory()) {
+      files.push({ path: rel + "/", type: "folder" });
+    } else {
+      files.push({ path: rel, type: "file" });
+    }
+  }
+  return JSON.stringify({ files }, null, 2);
+}
+function readNote2(notePath) {
+  const resolved = resolvePath(notePath);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`Note not found: ${notePath}`);
+  }
+  return fs.readFileSync(resolved, "utf-8");
+}
+function createNote2(notePath, content) {
+  const resolved = resolvePath(notePath);
+  const dir = path.dirname(resolved);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(resolved, content, "utf-8");
+  return `Created note: ${notePath}`;
+}
+function appendToNote2(notePath, content) {
+  const resolved = resolvePath(notePath);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`Note not found: ${notePath}`);
+  }
+  fs.appendFileSync(resolved, content, "utf-8");
+  return `Appended to note: ${notePath}`;
+}
+function searchNotes2(query) {
+  if (!query || query.trim().length === 0) {
+    return JSON.stringify([], null, 2);
+  }
+  const results = [];
+  const queryLower = query.toLowerCase();
+  function walkDir(dir, relBase) {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+      const fullPath = path.join(dir, entry.name);
+      const relPath = relBase ? path.join(relBase, entry.name) : entry.name;
+      if (entry.isDirectory()) {
+        walkDir(fullPath, relPath);
+      } else if (entry.name.endsWith(".md")) {
+        try {
+          const content = fs.readFileSync(fullPath, "utf-8");
+          const contentLower = content.toLowerCase();
+          const matches = [];
+          let idx = 0;
+          while ((idx = contentLower.indexOf(queryLower, idx)) !== -1) {
+            const start = Math.max(0, idx - 50);
+            const end = Math.min(content.length, idx + query.length + 50);
+            matches.push({
+              match: { start: idx, end: idx + query.length },
+              context: content.substring(start, end)
+            });
+            idx += query.length;
+            if (matches.length >= 5) break;
+          }
+          if (matches.length > 0) {
+            results.push({ filename: relPath, matches });
+          }
+        } catch {
+        }
+      }
+    }
+  }
+  walkDir(vaultPath, "");
+  return JSON.stringify(results, null, 2);
+}
+function resolvePath(p) {
+  const cleaned = p.replace(/^\/+/, "");
+  const resolved = path.resolve(vaultPath, cleaned);
+  const relative = path.relative(vaultPath, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("Path traversal not allowed");
+  }
+  return resolved;
+}
+
+// src/conversations.ts
+import fs2 from "fs";
+import path2 from "path";
 var dataDir = "";
-function init(dir) {
+function init2(dir) {
   dataDir = dir;
-  fs.mkdirSync(dataDir, { recursive: true });
+  fs2.mkdirSync(dataDir, { recursive: true });
 }
 function filePath(id) {
   const safe = id.replace(/[^a-zA-Z0-9_-]/g, "");
-  return path.join(dataDir, `${safe}.json`);
+  return path2.join(dataDir, `${safe}.json`);
 }
 function save(conv) {
   conv.updatedAt = Date.now();
-  fs.writeFileSync(filePath(conv.id), JSON.stringify(conv, null, 2));
+  fs2.writeFileSync(filePath(conv.id), JSON.stringify(conv, null, 2));
 }
 function load(id) {
   const fp = filePath(id);
-  if (!fs.existsSync(fp)) return null;
+  if (!fs2.existsSync(fp)) return null;
   try {
-    return JSON.parse(fs.readFileSync(fp, "utf-8"));
+    return JSON.parse(fs2.readFileSync(fp, "utf-8"));
   } catch {
     return null;
   }
 }
 function list() {
-  if (!fs.existsSync(dataDir)) return [];
-  const files = fs.readdirSync(dataDir).filter((f) => f.endsWith(".json"));
+  if (!fs2.existsSync(dataDir)) return [];
+  const files = fs2.readdirSync(dataDir).filter((f) => f.endsWith(".json"));
   const summaries = [];
   for (const file of files) {
     try {
-      const raw = JSON.parse(fs.readFileSync(path.join(dataDir, file), "utf-8"));
+      const raw = JSON.parse(fs2.readFileSync(path2.join(dataDir, file), "utf-8"));
       summaries.push({
         id: raw.id,
         title: raw.title,
@@ -190,8 +305,8 @@ function list() {
 }
 function remove(id) {
   const fp = filePath(id);
-  if (!fs.existsSync(fp)) return false;
-  fs.unlinkSync(fp);
+  if (!fs2.existsSync(fp)) return false;
+  fs2.unlinkSync(fp);
   return true;
 }
 function getRecentSummary(count = 3) {
@@ -229,14 +344,14 @@ function addMessage(conv, role, text, images) {
   conv.updatedAt = Date.now();
 }
 function search(query, options) {
-  if (!fs.existsSync(dataDir)) return [];
-  const files = fs.readdirSync(dataDir).filter((f) => f.endsWith(".json"));
+  if (!fs2.existsSync(dataDir)) return [];
+  const files = fs2.readdirSync(dataDir).filter((f) => f.endsWith(".json"));
   const results = [];
   const terms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 0);
   const limit = options?.limit ?? 10;
   for (const file of files) {
     try {
-      const conv = JSON.parse(fs.readFileSync(path.join(dataDir, file), "utf-8"));
+      const conv = JSON.parse(fs2.readFileSync(path2.join(dataDir, file), "utf-8"));
       if (options?.before && conv.createdAt > options.before) continue;
       if (options?.after && conv.createdAt < options.after) continue;
       const snippets = [];
@@ -314,24 +429,24 @@ ${keyPoints.trim() || "- General discussion"}
 
 // src/gmail.ts
 import { google } from "googleapis";
-import fs2 from "fs";
-import path2 from "path";
+import fs3 from "fs";
+import path3 from "path";
 var SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/calendar"
 ];
 var tokenFilePath = "";
 var projectRoot = "";
-function init2(root) {
+function init3(root) {
   projectRoot = root;
-  tokenFilePath = path2.join(root, "data", "gmail-tokens.json");
-  fs2.mkdirSync(path2.dirname(tokenFilePath), { recursive: true });
+  tokenFilePath = path3.join(root, "data", "gmail-tokens.json");
+  fs3.mkdirSync(path3.dirname(tokenFilePath), { recursive: true });
 }
-function isConfigured2() {
+function isConfigured3() {
   return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
 }
 function isConnected() {
-  if (!isConfigured2()) return false;
+  if (!isConfigured3()) return false;
   try {
     const tokens = loadTokens();
     return !!(tokens && tokens.refresh_token);
@@ -373,12 +488,12 @@ async function handleCallback(code) {
   saveTokens(tokens);
 }
 function saveTokens(tokens) {
-  fs2.writeFileSync(tokenFilePath, JSON.stringify(tokens, null, 2));
+  fs3.writeFileSync(tokenFilePath, JSON.stringify(tokens, null, 2));
 }
 function loadTokens() {
-  if (!fs2.existsSync(tokenFilePath)) return null;
+  if (!fs3.existsSync(tokenFilePath)) return null;
   try {
-    return JSON.parse(fs2.readFileSync(tokenFilePath, "utf-8"));
+    return JSON.parse(fs3.readFileSync(tokenFilePath, "utf-8"));
   } catch {
     return null;
   }
@@ -555,11 +670,11 @@ async function getConnectedEmail() {
 
 // src/calendar.ts
 import { google as google2 } from "googleapis";
-import fs3 from "fs";
-import path3 from "path";
+import fs4 from "fs";
+import path4 from "path";
 var tokenFilePath2 = "";
-function init3(root) {
-  tokenFilePath2 = path3.join(root, "data", "gmail-tokens.json");
+function init4(root) {
+  tokenFilePath2 = path4.join(root, "data", "gmail-tokens.json");
 }
 function getOAuth2Client2() {
   const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -568,15 +683,15 @@ function getOAuth2Client2() {
   return new google2.auth.OAuth2(clientId, clientSecret, redirectUri);
 }
 function loadTokens2() {
-  if (!fs3.existsSync(tokenFilePath2)) return null;
+  if (!fs4.existsSync(tokenFilePath2)) return null;
   try {
-    return JSON.parse(fs3.readFileSync(tokenFilePath2, "utf-8"));
+    return JSON.parse(fs4.readFileSync(tokenFilePath2, "utf-8"));
   } catch {
     return null;
   }
 }
 function saveTokens2(tokens) {
-  fs3.writeFileSync(tokenFilePath2, JSON.stringify(tokens, null, 2));
+  fs4.writeFileSync(tokenFilePath2, JSON.stringify(tokens, null, 2));
 }
 async function getCalendarClient() {
   const tokens = loadTokens2();
@@ -604,7 +719,7 @@ async function getCalendarClient() {
   }
   return google2.calendar({ version: "v3", auth: client });
 }
-function isConfigured3() {
+function isConfigured4() {
   return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
 }
 async function listEvents(options) {
@@ -883,24 +998,24 @@ ${lines.join("\n\n")}`;
 }
 
 // src/tasks.ts
-import fs4 from "fs";
-import path4 from "path";
+import fs5 from "fs";
+import path5 from "path";
 var tasksFilePath = "";
-function init4(root) {
-  const dataDir2 = path4.join(root, "data");
-  fs4.mkdirSync(dataDir2, { recursive: true });
-  tasksFilePath = path4.join(dataDir2, "tasks.json");
+function init5(root) {
+  const dataDir2 = path5.join(root, "data");
+  fs5.mkdirSync(dataDir2, { recursive: true });
+  tasksFilePath = path5.join(dataDir2, "tasks.json");
 }
 function loadTasks() {
-  if (!fs4.existsSync(tasksFilePath)) return [];
+  if (!fs5.existsSync(tasksFilePath)) return [];
   try {
-    return JSON.parse(fs4.readFileSync(tasksFilePath, "utf-8"));
+    return JSON.parse(fs5.readFileSync(tasksFilePath, "utf-8"));
   } catch {
     return [];
   }
 }
 function saveTasks(tasks) {
-  fs4.writeFileSync(tasksFilePath, JSON.stringify(tasks, null, 2));
+  fs5.writeFileSync(tasksFilePath, JSON.stringify(tasks, null, 2));
 }
 function generateId() {
   return `t_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
@@ -1550,8 +1665,8 @@ ${lines.join("\n\n")}`;
 }
 
 // src/alerts.ts
-import fs5 from "fs";
-import path5 from "path";
+import fs6 from "fs";
+import path6 from "path";
 var DEFAULT_CONFIG = {
   timezone: "America/New_York",
   location: "New York",
@@ -1587,17 +1702,17 @@ var initialAlertCheckDone = false;
 var briefRunning = false;
 var alertRunning = false;
 var lastDedupeReset = "";
-function init5(root) {
-  const dataDir2 = path5.join(root, "data");
-  fs5.mkdirSync(dataDir2, { recursive: true });
-  configPath = path5.join(dataDir2, "alerts-config.json");
+function init6(root) {
+  const dataDir2 = path6.join(root, "data");
+  fs6.mkdirSync(dataDir2, { recursive: true });
+  configPath = path6.join(dataDir2, "alerts-config.json");
   config = loadConfig();
 }
 function loadConfig() {
   if (!configPath) return { ...DEFAULT_CONFIG };
   try {
-    if (fs5.existsSync(configPath)) {
-      const raw = JSON.parse(fs5.readFileSync(configPath, "utf-8"));
+    if (fs6.existsSync(configPath)) {
+      const raw = JSON.parse(fs6.readFileSync(configPath, "utf-8"));
       return { ...DEFAULT_CONFIG, ...raw, briefs: { ...DEFAULT_CONFIG.briefs, ...raw.briefs }, alerts: { ...DEFAULT_CONFIG.alerts, ...raw.alerts } };
     }
   } catch (err) {
@@ -1608,7 +1723,7 @@ function loadConfig() {
 function saveConfig() {
   if (!configPath) return;
   try {
-    fs5.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    fs6.writeFileSync(configPath, JSON.stringify(config, null, 2));
   } catch (err) {
     console.error("[alerts] Failed to save config:", err);
   }
@@ -1669,7 +1784,7 @@ async function gatherSection(name) {
   try {
     switch (name) {
       case "calendar": {
-        if (!isConfigured3()) return "**Calendar:** [not connected]";
+        if (!isConfigured4()) return "**Calendar:** [not connected]";
         const now = /* @__PURE__ */ new Date();
         const { end: endOfDay } = getDateInTimezone(config.timezone, 0);
         console.log(`[alerts] Calendar today query: ${now.toISOString()} to ${endOfDay.toISOString()}`);
@@ -1678,7 +1793,7 @@ async function gatherSection(name) {
 ${result}`;
       }
       case "calendar_tomorrow": {
-        if (!isConfigured3()) return "**Calendar:** [not connected]";
+        if (!isConfigured4()) return "**Calendar:** [not connected]";
         const { start: tomorrow, end: endTomorrow } = getDateInTimezone(config.timezone, 1);
         console.log(`[alerts] Calendar tomorrow query: ${tomorrow.toISOString()} to ${endTomorrow.toISOString()}`);
         const result = await listEvents({ timeMin: tomorrow.toISOString(), timeMax: endTomorrow.toISOString(), maxResults: 10 });
@@ -1755,7 +1870,7 @@ ${bullets.join("\n")}`;
         }
       }
       case "email": {
-        if (!isConfigured2() || !isConnected()) return "**Email:** [not connected]";
+        if (!isConfigured3() || !isConnected()) return "**Email:** [not connected]";
         try {
           const result = await listEmails("is:unread", 5);
           const cleaned = result.replace(/\s*\[[a-f0-9]+\]/gi, "").replace(/\(\* = unread\)\n?/g, "").replace(/^\* /gm, "").replace(/\n{3,}/g, "\n\n");
@@ -1844,7 +1959,7 @@ async function checkAlerts() {
 }
 async function doCheckAlerts() {
   const now = /* @__PURE__ */ new Date();
-  if (config.alerts.calendarReminder.enabled && isConfigured3()) {
+  if (config.alerts.calendarReminder.enabled && isConfigured4()) {
     try {
       const minutesBefore = config.alerts.calendarReminder.minutesBefore || 30;
       const windowEnd = new Date(now.getTime() + minutesBefore * 60 * 1e3);
@@ -1935,7 +2050,7 @@ async function doCheckAlerts() {
       console.error("[alerts] Task alert check failed:", err);
     }
   }
-  if (config.alerts.importantEmail.enabled && isConfigured2() && isConnected()) {
+  if (config.alerts.importantEmail.enabled && isConfigured3() && isConnected()) {
     try {
       const result = await listEmails("is:unread is:important", 5);
       if (!result.includes("No emails found") && !result.includes("not authorized")) {
@@ -2009,20 +2124,39 @@ var ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
 var APP_PASSWORD = process.env.APP_PASSWORD || "";
 var SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path6.dirname(__filename);
-var PROJECT_ROOT = __filename.includes("/dist/") ? path6.resolve(__dirname, "..") : __dirname;
-var PUBLIC_DIR = path6.join(PROJECT_ROOT, "public");
-var AGENT_DIR = path6.join(PROJECT_ROOT, ".pi/agent");
-var DATA_DIR = path6.join(PROJECT_ROOT, "data", "conversations");
-fs6.mkdirSync(AGENT_DIR, { recursive: true });
-init(DATA_DIR);
-init2(PROJECT_ROOT);
+var __dirname = path7.dirname(__filename);
+var PROJECT_ROOT = __filename.includes("/dist/") ? path7.resolve(__dirname, "..") : __dirname;
+var PUBLIC_DIR = path7.join(PROJECT_ROOT, "public");
+var AGENT_DIR = path7.join(PROJECT_ROOT, ".pi/agent");
+var DATA_DIR = path7.join(PROJECT_ROOT, "data", "conversations");
+var VAULT_DIR = path7.join(PROJECT_ROOT, "data", "vault");
+fs7.mkdirSync(AGENT_DIR, { recursive: true });
+init2(DATA_DIR);
 init3(PROJECT_ROOT);
 init4(PROJECT_ROOT);
 init5(PROJECT_ROOT);
+init6(PROJECT_ROOT);
+init(VAULT_DIR);
+var useLocalVault = isConfigured2();
+if (!useLocalVault) {
+  const vaultCheckInterval = setInterval(() => {
+    if (isConfigured2()) {
+      useLocalVault = true;
+      console.log("[boot] Knowledge base: local vault now available (Obsidian Sync)");
+      lastTunnelStatus = true;
+      clearInterval(vaultCheckInterval);
+    }
+  }, 1e4);
+}
 if (!ANTHROPIC_KEY) console.warn("ANTHROPIC_API_KEY is not set.");
-if (!isConfigured()) console.warn("Knowledge base integration not configured.");
-if (!isConfigured2()) console.warn("Gmail integration not configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET missing).");
+if (useLocalVault) {
+  console.log("[boot] Knowledge base: local vault (Obsidian Sync)");
+} else if (isConfigured()) {
+  console.log("[boot] Knowledge base: remote (tunnel)");
+} else {
+  console.warn("Knowledge base integration not configured.");
+}
+if (!isConfigured3()) console.warn("Gmail integration not configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET missing).");
 else if (!isConnected()) console.warn("Gmail configured but not yet authorized. Visit /api/gmail/auth to connect.");
 else {
   getConnectedEmail().then((email) => {
@@ -2032,9 +2166,29 @@ else {
 }
 if (!APP_PASSWORD) console.warn("APP_PASSWORD is not set \u2014 auth disabled.");
 console.log(`[boot] PORT=${PORT} PUBLIC_DIR=${PUBLIC_DIR} AGENT_DIR=${AGENT_DIR}`);
-console.log(`[boot] public/ exists: ${fs6.existsSync(PUBLIC_DIR)}`);
+console.log(`[boot] public/ exists: ${fs7.existsSync(PUBLIC_DIR)}`);
+function kbList(p) {
+  if (useLocalVault) return listNotes2(p);
+  return listNotes(p);
+}
+function kbRead(p) {
+  if (useLocalVault) return readNote2(p);
+  return readNote(p);
+}
+function kbCreate(p, c) {
+  if (useLocalVault) return createNote2(p, c);
+  return createNote(p, c);
+}
+function kbAppend(p, c) {
+  if (useLocalVault) return appendToNote2(p, c);
+  return appendToNote(p, c);
+}
+function kbSearch(q) {
+  if (useLocalVault) return searchNotes2(q);
+  return searchNotes(q);
+}
 function buildKnowledgeBaseTools() {
-  if (!isConfigured()) return [];
+  if (!useLocalVault && !isConfigured()) return [];
   return [
     {
       name: "notes_list",
@@ -2044,7 +2198,7 @@ function buildKnowledgeBaseTools() {
         path: Type.Optional(Type.String({ description: "Directory path inside the knowledge base. Defaults to root." }))
       }),
       async execute(_toolCallId, params) {
-        const result = await listNotes(params.path ?? "/");
+        const result = await kbList(params.path ?? "/");
         return { content: [{ type: "text", text: result }], details: {} };
       }
     },
@@ -2056,7 +2210,7 @@ function buildKnowledgeBaseTools() {
         path: Type.String({ description: "Path to the note, e.g. 'Daily Notes/2025-01-15.md'" })
       }),
       async execute(_toolCallId, params) {
-        const result = await readNote(params.path);
+        const result = await kbRead(params.path);
         return { content: [{ type: "text", text: result }], details: {} };
       }
     },
@@ -2069,7 +2223,7 @@ function buildKnowledgeBaseTools() {
         content: Type.String({ description: "Markdown content for the note" })
       }),
       async execute(_toolCallId, params) {
-        const result = await createNote(params.path, params.content);
+        const result = await kbCreate(params.path, params.content);
         return { content: [{ type: "text", text: result }], details: {} };
       }
     },
@@ -2082,7 +2236,7 @@ function buildKnowledgeBaseTools() {
         content: Type.String({ description: "Markdown content to append" })
       }),
       async execute(_toolCallId, params) {
-        const result = await appendToNote(params.path, params.content);
+        const result = await kbAppend(params.path, params.content);
         return { content: [{ type: "text", text: result }], details: {} };
       }
     },
@@ -2094,14 +2248,14 @@ function buildKnowledgeBaseTools() {
         query: Type.String({ description: "Search query string" })
       }),
       async execute(_toolCallId, params) {
-        const result = await searchNotes(params.query);
+        const result = await kbSearch(params.query);
         return { content: [{ type: "text", text: result }], details: {} };
       }
     }
   ];
 }
 function buildGmailTools() {
-  if (!isConfigured2()) return [];
+  if (!isConfigured3()) return [];
   return [
     {
       name: "email_list",
@@ -2175,7 +2329,7 @@ function buildSearchTools() {
   ];
 }
 function buildCalendarTools() {
-  if (!isConfigured3()) return [];
+  if (!isConfigured4()) return [];
   return [
     {
       name: "calendar_list",
@@ -2611,17 +2765,17 @@ setInterval(() => {
     }
   }
 }, 5 * 60 * 1e3);
-var TUNNEL_URL_FILE = path6.join(PROJECT_ROOT, "data", "tunnel-url.txt");
+var TUNNEL_URL_FILE = path7.join(PROJECT_ROOT, "data", "tunnel-url.txt");
 function loadPersistedTunnelUrl() {
   try {
-    return fs6.readFileSync(TUNNEL_URL_FILE, "utf-8").trim() || null;
+    return fs7.readFileSync(TUNNEL_URL_FILE, "utf-8").trim() || null;
   } catch {
     return null;
   }
 }
 function persistTunnelUrl(url) {
   try {
-    fs6.writeFileSync(TUNNEL_URL_FILE, url, "utf-8");
+    fs7.writeFileSync(TUNNEL_URL_FILE, url, "utf-8");
   } catch {
   }
 }
@@ -2639,7 +2793,10 @@ function persistTunnelUrl(url) {
   }
 })();
 var lastTunnelStatus = true;
-if (isConfigured()) {
+if (useLocalVault) {
+  lastTunnelStatus = true;
+  console.log("[health] Knowledge base: connected (local)");
+} else if (isConfigured()) {
   setInterval(async () => {
     const alive = await ping();
     if (alive && !lastTunnelStatus) {
@@ -2717,7 +2874,7 @@ app.get("/api/logout", (_req, res) => {
 });
 app.use(express.static(PUBLIC_DIR));
 app.get("/api/gmail/auth", (_req, res) => {
-  if (!isConfigured2()) {
+  if (!isConfigured3()) {
     res.status(500).json({ error: "Gmail not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET." });
     return;
   }
@@ -2740,7 +2897,7 @@ app.get("/api/gmail/callback", async (req, res) => {
 });
 app.get("/api/gmail/status", async (_req, res) => {
   const status = {
-    configured: isConfigured2(),
+    configured: isConfigured3(),
     connected: isConnected()
   };
   if (status.connected) {
@@ -2754,9 +2911,9 @@ app.get("/api/gmail/status", async (_req, res) => {
 app.post("/api/session", async (_req, res) => {
   try {
     const sessionId = `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const authStorage = AuthStorage.create(path6.join(AGENT_DIR, "auth.json"));
+    const authStorage = AuthStorage.create(path7.join(AGENT_DIR, "auth.json"));
     authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
-    const modelRegistry = new ModelRegistry(authStorage, path6.join(AGENT_DIR, "models.json"));
+    const modelRegistry = new ModelRegistry(authStorage, path7.join(AGENT_DIR, "models.json"));
     const fullModel = modelRegistry.find("anthropic", FULL_MODEL_ID);
     if (!fullModel) throw new Error(`Model ${FULL_MODEL_ID} not found in registry`);
     const allTools = [
@@ -2898,9 +3055,9 @@ app.post("/api/session/:id/prompt", async (req, res) => {
   }
   if (chosenModelId !== entry.activeModelName) {
     try {
-      const authStorage = AuthStorage.create(path6.join(AGENT_DIR, "auth.json"));
+      const authStorage = AuthStorage.create(path7.join(AGENT_DIR, "auth.json"));
       authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
-      const modelRegistry = new ModelRegistry(authStorage, path6.join(AGENT_DIR, "models.json"));
+      const modelRegistry = new ModelRegistry(authStorage, path7.join(AGENT_DIR, "models.json"));
       const newModel = modelRegistry.find("anthropic", chosenModelId);
       if (newModel) {
         await entry.session.setModel(newModel);
@@ -3095,7 +3252,7 @@ app.get("/api/glance", async (_req, res) => {
       } catch {
       }
     })());
-    if (isConfigured2() && isConnected()) {
+    if (isConfigured3() && isConnected()) {
       promises.push((async () => {
         try {
           const unread = await getUnreadCount();
@@ -3116,7 +3273,7 @@ app.get("/api/glance", async (_req, res) => {
       } catch {
       }
     })());
-    if (isConfigured3()) {
+    if (isConfigured4()) {
       promises.push((async () => {
         try {
           const utcStr = now.toLocaleString("en-US", { timeZone: "UTC" });
@@ -3188,32 +3345,33 @@ function killPort(port) {
   } catch {
   }
 }
-function isPortFree(port) {
-  return new Promise((resolve) => {
-    const tester = createServer();
-    tester.once("error", () => resolve(false));
-    tester.listen(port, "0.0.0.0", () => {
-      tester.close(() => resolve(true));
-    });
-  });
+function isPortInUse(port) {
+  try {
+    const { execSync } = __require("child_process");
+    const out = execSync(`fuser ${port}/tcp 2>/dev/null`, { encoding: "utf-8" });
+    return out.trim().length > 0;
+  } catch {
+    return false;
+  }
 }
-async function waitForPort(port, maxWaitMs = 15e3) {
+async function waitForPort(port, maxWaitMs = 3e4) {
   const start = Date.now();
   let attempt = 0;
+  killPort(port);
+  await new Promise((r) => setTimeout(r, 500));
   while (Date.now() - start < maxWaitMs) {
-    if (await isPortFree(port)) return true;
+    if (!isPortInUse(port)) return true;
     attempt++;
     console.warn(`[boot] Port ${port} still in use \u2014 waiting... (attempt ${attempt})`);
     killPort(port);
-    await new Promise((r) => setTimeout(r, Math.min(1e3 * attempt, 3e3)));
+    await new Promise((r) => setTimeout(r, 2e3));
   }
   return false;
 }
 async function startServer() {
-  killPort(PORT);
   const portReady = await waitForPort(PORT);
   if (!portReady) {
-    console.error(`[boot] Port ${PORT} could not be freed after 15s \u2014 exiting`);
+    console.error(`[boot] Port ${PORT} could not be freed after 30s \u2014 exiting`);
     process.exit(1);
   }
   server = createServer(app);

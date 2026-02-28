@@ -21,6 +21,7 @@ import {
 import { Type } from "@sinclair/typebox";
 
 import * as obsidian from "./src/obsidian.js";
+import * as vaultLocal from "./src/vault-local.js";
 import * as conversations from "./src/conversations.js";
 import * as gmail from "./src/gmail.js";
 import * as calendar from "./src/calendar.js";
@@ -45,15 +46,37 @@ const PUBLIC_DIR = path.join(PROJECT_ROOT, "public");
 const AGENT_DIR = path.join(PROJECT_ROOT, ".pi/agent");
 const DATA_DIR = path.join(PROJECT_ROOT, "data", "conversations");
 
+const VAULT_DIR = path.join(PROJECT_ROOT, "data", "vault");
+
 fs.mkdirSync(AGENT_DIR, { recursive: true });
 conversations.init(DATA_DIR);
 gmail.init(PROJECT_ROOT);
 calendar.init(PROJECT_ROOT);
 tasks.init(PROJECT_ROOT);
 alerts.init(PROJECT_ROOT);
+vaultLocal.init(VAULT_DIR);
+
+let useLocalVault = vaultLocal.isConfigured();
+
+if (!useLocalVault) {
+  const vaultCheckInterval = setInterval(() => {
+    if (vaultLocal.isConfigured()) {
+      useLocalVault = true;
+      console.log("[boot] Knowledge base: local vault now available (Obsidian Sync)");
+      lastTunnelStatus = true;
+      clearInterval(vaultCheckInterval);
+    }
+  }, 10_000);
+}
 
 if (!ANTHROPIC_KEY) console.warn("ANTHROPIC_API_KEY is not set.");
-if (!obsidian.isConfigured()) console.warn("Knowledge base integration not configured.");
+if (useLocalVault) {
+  console.log("[boot] Knowledge base: local vault (Obsidian Sync)");
+} else if (obsidian.isConfigured()) {
+  console.log("[boot] Knowledge base: remote (tunnel)");
+} else {
+  console.warn("Knowledge base integration not configured.");
+}
 if (!gmail.isConfigured()) console.warn("Gmail integration not configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET missing).");
 else if (!gmail.isConnected()) console.warn("Gmail configured but not yet authorized. Visit /api/gmail/auth to connect.");
 else {
@@ -66,8 +89,29 @@ if (!APP_PASSWORD) console.warn("APP_PASSWORD is not set — auth disabled.");
 console.log(`[boot] PORT=${PORT} PUBLIC_DIR=${PUBLIC_DIR} AGENT_DIR=${AGENT_DIR}`);
 console.log(`[boot] public/ exists: ${fs.existsSync(PUBLIC_DIR)}`);
 
+function kbList(p: string): Promise<string> | string {
+  if (useLocalVault) return vaultLocal.listNotes(p);
+  return obsidian.listNotes(p);
+}
+function kbRead(p: string): Promise<string> | string {
+  if (useLocalVault) return vaultLocal.readNote(p);
+  return obsidian.readNote(p);
+}
+function kbCreate(p: string, c: string): Promise<string> | string {
+  if (useLocalVault) return vaultLocal.createNote(p, c);
+  return obsidian.createNote(p, c);
+}
+function kbAppend(p: string, c: string): Promise<string> | string {
+  if (useLocalVault) return vaultLocal.appendToNote(p, c);
+  return obsidian.appendToNote(p, c);
+}
+function kbSearch(q: string): Promise<string> | string {
+  if (useLocalVault) return vaultLocal.searchNotes(q);
+  return obsidian.searchNotes(q);
+}
+
 function buildKnowledgeBaseTools(): ToolDefinition[] {
-  if (!obsidian.isConfigured()) return [];
+  if (!useLocalVault && !obsidian.isConfigured()) return [];
 
   return [
     {
@@ -78,7 +122,7 @@ function buildKnowledgeBaseTools(): ToolDefinition[] {
         path: Type.Optional(Type.String({ description: "Directory path inside the knowledge base. Defaults to root." })),
       }),
       async execute(_toolCallId, params) {
-        const result = await obsidian.listNotes(params.path ?? "/");
+        const result = await kbList(params.path ?? "/");
         return { content: [{ type: "text" as const, text: result }], details: {} };
       },
     },
@@ -90,7 +134,7 @@ function buildKnowledgeBaseTools(): ToolDefinition[] {
         path: Type.String({ description: "Path to the note, e.g. 'Daily Notes/2025-01-15.md'" }),
       }),
       async execute(_toolCallId, params) {
-        const result = await obsidian.readNote(params.path);
+        const result = await kbRead(params.path);
         return { content: [{ type: "text" as const, text: result }], details: {} };
       },
     },
@@ -103,7 +147,7 @@ function buildKnowledgeBaseTools(): ToolDefinition[] {
         content: Type.String({ description: "Markdown content for the note" }),
       }),
       async execute(_toolCallId, params) {
-        const result = await obsidian.createNote(params.path, params.content);
+        const result = await kbCreate(params.path, params.content);
         return { content: [{ type: "text" as const, text: result }], details: {} };
       },
     },
@@ -116,7 +160,7 @@ function buildKnowledgeBaseTools(): ToolDefinition[] {
         content: Type.String({ description: "Markdown content to append" }),
       }),
       async execute(_toolCallId, params) {
-        const result = await obsidian.appendToNote(params.path, params.content);
+        const result = await kbAppend(params.path, params.content);
         return { content: [{ type: "text" as const, text: result }], details: {} };
       },
     },
@@ -128,7 +172,7 @@ function buildKnowledgeBaseTools(): ToolDefinition[] {
         query: Type.String({ description: "Search query string" }),
       }),
       async execute(_toolCallId, params) {
-        const result = await obsidian.searchNotes(params.query);
+        const result = await kbSearch(params.query);
         return { content: [{ type: "text" as const, text: result }], details: {} };
       },
     },
@@ -707,7 +751,10 @@ function persistTunnelUrl(url: string) {
 })();
 
 let lastTunnelStatus = true;
-if (obsidian.isConfigured()) {
+if (useLocalVault) {
+  lastTunnelStatus = true;
+  console.log("[health] Knowledge base: connected (local)");
+} else if (obsidian.isConfigured()) {
   setInterval(async () => {
     const alive = await obsidian.ping();
     if (alive && !lastTunnelStatus) {
@@ -1254,35 +1301,35 @@ function killPort(port: number) {
   } catch {}
 }
 
-function isPortFree(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const tester = createServer();
-    tester.once("error", () => resolve(false));
-    tester.listen(port, "0.0.0.0", () => {
-      tester.close(() => resolve(true));
-    });
-  });
+function isPortInUse(port: number): boolean {
+  try {
+    const { execSync } = require("child_process");
+    const out = execSync(`fuser ${port}/tcp 2>/dev/null`, { encoding: "utf-8" });
+    return out.trim().length > 0;
+  } catch {
+    return false;
+  }
 }
 
-async function waitForPort(port: number, maxWaitMs = 15000) {
+async function waitForPort(port: number, maxWaitMs = 30000) {
   const start = Date.now();
   let attempt = 0;
+  killPort(port);
+  await new Promise(r => setTimeout(r, 500));
   while (Date.now() - start < maxWaitMs) {
-    if (await isPortFree(port)) return true;
+    if (!isPortInUse(port)) return true;
     attempt++;
     console.warn(`[boot] Port ${port} still in use — waiting... (attempt ${attempt})`);
     killPort(port);
-    await new Promise(r => setTimeout(r, Math.min(1000 * attempt, 3000)));
+    await new Promise(r => setTimeout(r, 2000));
   }
   return false;
 }
 
 async function startServer() {
-  killPort(PORT);
-
   const portReady = await waitForPort(PORT);
   if (!portReady) {
-    console.error(`[boot] Port ${PORT} could not be freed after 15s — exiting`);
+    console.error(`[boot] Port ${PORT} could not be freed after 30s — exiting`);
     process.exit(1);
   }
 
