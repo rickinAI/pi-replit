@@ -1,0 +1,24 @@
+Last login: Sat Feb 28 08:52:33 on ttys000
+rickin@Rickins-Mac-mini ~ % /opt/homebrew/bin/cloudflared tunnel run obsidian-vault
+2026-02-28T13:52:55Z INF Starting tunnel tunnelID=c1405892-a281-4d06-b4ef-b00900be547c
+2026-02-28T13:52:55Z INF Version 2026.2.0 (Checksum dc6e60da390e702c4db3332d0cc9cf4e98a88df99f17273e9b3d83f435695fb4)
+2026-02-28T13:52:55Z INF GOOS: darwin, GOVersion: go1.25.7, GoArch: arm64
+2026-02-28T13:52:55Z INF Settings: map[cred-file:/Users/rickin/.cloudflared/c1405892-a281-4d06-b4ef-b00900be547c.json credentials-file:/Users/rickin/.cloudflared/c1405892-a281-4d06-b4ef-b00900be547c.json]
+2026-02-28T13:52:55Z INF cloudflared will not automatically update if installed by a package manager.
+2026-02-28T13:52:56Z INF Generated Connector ID: 2799282a-7408-4deb-a3ee-53ad273060f5
+2026-02-28T13:52:56Z INF Initial protocol quic
+2026-02-28T13:52:56Z INF ICMP proxy will use 192.168.0.159 as source for IPv4
+2026-02-28T13:52:56Z INF ICMP proxy will use fe80::8f1:cc3f:77f0:f7f in zone en1 as source for IPv6
+2026-02-28T13:52:56Z INF Created ICMP proxy listening on 192.168.0.159:0
+2026-02-28T13:52:56Z INF ICMP proxy will use 192.168.0.159 as source for IPv4
+2026-02-28T13:52:56Z INF ICMP proxy will use fe80::8f1:cc3f:77f0:f7f in zone en1 as source for IPv6
+2026-02-28T13:52:56Z INF Starting metrics server on 127.0.0.1:20243/metrics
+2026-02-28T13:52:56Z INF Tunnel connection curve preferences: [X25519MLKEM768 CurveP256] connIndex=0 event=0 ip=198.41.192.57
+2026-02-28T13:52:56Z INF Registered tunnel connection connIndex=0 connection=b7a79a88-1366-4964-9ace-b9638e374e9f event=0 ip=198.41.192.57 location=ewr01 protocol=quic
+2026-02-28T13:52:56Z INF Tunnel connection curve preferences: [X25519MLKEM768 CurveP256] connIndex=1 event=0 ip=198.41.200.233
+2026-02-28T13:52:56Z INF Registered tunnel connection connIndex=1 connection=8095780b-b4dd-4ab3-bd43-ee2add8a5122 event=0 ip=198.41.200.233 location=ewr08 protocol=quic
+2026-02-28T13:52:57Z INF Tunnel connection curve preferences: [X25519MLKEM768 CurveP256] connIndex=2 event=0 ip=198.41.192.107
+2026-02-28T13:52:57Z INF Registered tunnel connection connIndex=2 connection=0d80f5d5-cfd0-4fa1-bbe1-f4aedc07d0f6 event=0 ip=198.41.192.107 location=ewr11 protocol=quic
+2026-02-28T13:52:58Z INF Tunnel connection curve preferences: [X25519MLKEM768 CurveP256] connIndex=3 event=0 ip=198.41.200.23
+2026-02-28T13:52:58Z INF Registered tunnel connection connIndex=3 connection=bf361858-7367-423e-a596-6721e6aaaee6 event=0 ip=198.41.200.23 location=ewr14 protocol=quic
+
