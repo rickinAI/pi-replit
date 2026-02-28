@@ -2467,13 +2467,13 @@ function buildInterviewTool(sessionId) {
               }
               resolve([]);
             }
-          }, 5 * 60 * 1e3);
+          }, 15 * 60 * 1e3);
           entry.interviewWaiter = { resolve, reject: () => {
           }, timer };
         });
         if (responses.length === 0) {
           return {
-            content: [{ type: "text", text: "The user did not respond to the interview form (timed out after 5 minutes). You can ask them directly in chat instead." }],
+            content: [{ type: "text", text: "The user did not respond to the interview form (timed out after 15 minutes). You can ask them directly in chat instead." }],
             details: { timedOut: true }
           };
         }
