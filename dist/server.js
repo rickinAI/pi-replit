@@ -645,14 +645,22 @@ async function searchEmails(query) {
 async function getUnreadCount() {
   try {
     const client = await getGmailClient();
-    const label = await client.users.labels.get({ userId: "me", id: "CATEGORY_PRIMARY" });
-    return label.data.messagesUnread || 0;
-  } catch (err) {
+    const res = await client.users.messages.list({
+      userId: "me",
+      q: "is:unread newer_than:1d category:primary",
+      maxResults: 1
+    });
+    return res.data.resultSizeEstimate || 0;
+  } catch {
     try {
       const client = await getGmailClient();
-      const label = await client.users.labels.get({ userId: "me", id: "INBOX" });
-      return label.data.messagesUnread || 0;
-    } catch {
+      const res = await client.users.messages.list({
+        userId: "me",
+        q: "is:unread newer_than:1d",
+        maxResults: 1
+      });
+      return res.data.resultSizeEstimate || 0;
+    } catch (err) {
       console.error("Gmail getUnreadCount error:", err instanceof Error ? err.message : err);
       return 0;
     }
