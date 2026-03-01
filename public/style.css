@@ -1567,7 +1567,7 @@ body.light-theme #mic-btn.recording {
 
 @media (display-mode: standalone) {
   :root {
-    --safe-top: max(env(safe-area-inset-top, 0px), 20px);
+    --safe-top: max(env(safe-area-inset-top, 0px), 47px);
     --safe-bottom: max(env(safe-area-inset-bottom, 0px), 10px);
   }
 
