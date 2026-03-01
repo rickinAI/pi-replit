@@ -91,6 +91,8 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 | `/api/glance` | GET | Day-at-a-glance summary (weather, emails, tasks, calendar) — 5min server cache |
 | `/health` | GET | Health check |
 | `/api/session/:id/interview-response` | POST | Submit interview form responses |
+| `/api/agents` | GET | List all agent configs (id, name, tools, enabled) |
+| `/api/vault-tree` | GET | Vault folder/file structure as JSON |
 
 ## Knowledge Base Integration
 
@@ -214,9 +216,32 @@ Proactive background scheduler that pushes briefings and alerts via SSE to all c
 - **AI tool**: `conversation_search` — AI can search past conversations when user asks about previous discussions
 - **Auto-sync to vault**: Substantive conversations (4+ user messages) are automatically summarized and saved to `Conversations/` folder in the knowledge base when sessions end. Prevents duplicates via `syncedAt` marker in conversation JSON. Empty/short chats are skipped.
 
+## Multi-Agent System
+
+Config-driven specialist agents that RICKIN can delegate complex tasks to. Each agent runs as an independent Claude API call with a focused system prompt and filtered tool subset.
+
+- **data/agents.json** — Agent definitions (id, name, systemPrompt, tools, enabled, timeout, model). Hot-reloads on file change — no restart needed to add/remove/modify agents
+- **src/agents/loader.ts** — Reads and validates agent configs, watches for file changes, exports `getAgents()`, `getEnabledAgents()`, `getAgent(id)`
+- **src/agents/orchestrator.ts** — Runs sub-agents via direct Anthropic SDK calls. Handles tool-use loops (max 15 iterations), timeout enforcement, and token tracking
+- **Agent tools** registered on the main session:
+  - `delegate` — Route a task to a specialist agent by ID
+  - `list_agents` — Show available agents and descriptions
+- **API**: `GET /api/agents` — Returns all agent configs (behind auth)
+- **Vault docs**: `data/vault/Agents/` folder with overview and per-agent documentation
+
+### Current Agents
+| ID | Name | Tools |
+|----|------|-------|
+| `deep-researcher` | Deep Researcher | web_search, notes_create |
+| `project-planner` | Project Planner | task_add, notes_create, notes_read, notes_list, web_search |
+| `email-drafter` | Email Drafter | email_list, email_search, notes_read |
+| `analyst` | Market Analyst | stock_quote, crypto_price, news_headlines, news_search, web_search |
+| `knowledge-organizer` | Knowledge Organizer | notes_list, notes_read, notes_create, notes_append, notes_search |
+
 ## Dependencies
 
 - `@mariozechner/pi-coding-agent` — Pi coding agent SDK
+- `@anthropic-ai/sdk` — Direct Anthropic API calls for sub-agents (transitive dep from pi-coding-agent)
 - `@sinclair/typebox` — JSON schema for tool parameters
 - `googleapis` — Google APIs client (Gmail, Calendar)
 - `express`, `cors`, `cookie-parser`
@@ -226,6 +251,8 @@ Proactive background scheduler that pushes briefings and alerts via SSE to all c
 - **src/stocks.ts** — Stock quotes (Yahoo Finance) and crypto prices (CoinGecko)
 - **src/maps.ts** — Directions (Nominatim + OSRM) and place search (Nominatim)
 - **src/alerts.ts** — Alert & briefing scheduler (background checks, brief generation, SSE broadcast)
+- **src/agents/loader.ts** — Agent config loader with hot-reload
+- **src/agents/orchestrator.ts** — Sub-agent execution engine
 
 ## Interview / Clarification Forms
 

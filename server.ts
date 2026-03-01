@@ -34,6 +34,8 @@ import * as twitter from "./src/twitter.js";
 import * as stocks from "./src/stocks.js";
 import * as maps from "./src/maps.js";
 import * as alerts from "./src/alerts.js";
+import * as agentLoader from "./src/agents/loader.js";
+import { runSubAgent } from "./src/agents/orchestrator.js";
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
@@ -56,6 +58,7 @@ calendar.init(PROJECT_ROOT);
 tasks.init(PROJECT_ROOT);
 alerts.init(PROJECT_ROOT);
 vaultLocal.init(VAULT_DIR);
+agentLoader.init(path.join(PROJECT_ROOT, "data"));
 
 let useLocalVault = vaultLocal.isConfigured();
 
@@ -619,6 +622,59 @@ function buildConversationTools(): ToolDefinition[] {
   ];
 }
 
+function buildAgentTools(allToolsFn: () => ToolDefinition[]): ToolDefinition[] {
+  return [
+    {
+      name: "delegate",
+      label: "Delegate to Agent",
+      description:
+        "Delegate a complex task to a specialist agent. The agent will work independently using its own tools and return a comprehensive result. Use this for multi-step research, project planning, deep analysis, email drafting, or vault organization.",
+      parameters: Type.Object({
+        agent: Type.String({ description: "The specialist agent ID (e.g. 'deep-researcher', 'project-planner', 'analyst', 'email-drafter', 'knowledge-organizer')" }),
+        task: Type.String({ description: "Clear description of what the agent should do" }),
+        context: Type.Optional(Type.String({ description: "Additional context the agent needs (e.g. previous conversation details, specific requirements)" })),
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const result = await runSubAgent({
+            agentId: params.agent,
+            task: params.task,
+            context: params.context,
+            allTools: allToolsFn() as any,
+            apiKey: ANTHROPIC_KEY,
+          });
+          return {
+            content: [{ type: "text" as const, text: result.response }],
+            details: { agent: result.agentId, toolsUsed: result.toolsUsed, durationMs: result.durationMs },
+          };
+        } catch (err: any) {
+          return {
+            content: [{ type: "text" as const, text: `Agent delegation failed: ${err.message}` }],
+            details: { error: true },
+          };
+        }
+      },
+    },
+    {
+      name: "list_agents",
+      label: "List Agents",
+      description: "List all available specialist agents with their names and descriptions. Use when the user asks what agents are available or what your team can do.",
+      parameters: Type.Object({}),
+      async execute() {
+        const agents = agentLoader.getEnabledAgents();
+        if (agents.length === 0) {
+          return { content: [{ type: "text" as const, text: "No specialist agents are currently configured." }], details: {} };
+        }
+        const list = agents.map(a => `- **${a.name}** (${a.id}): ${a.description}`).join("\n");
+        return {
+          content: [{ type: "text" as const, text: `Available specialist agents:\n\n${list}` }],
+          details: { count: agents.length },
+        };
+      },
+    },
+  ];
+}
+
 type ModelMode = "auto" | "fast" | "full";
 
 interface InterviewWaiter {
@@ -871,7 +927,7 @@ app.post("/api/session", async (_req: Request, res: Response) => {
     const fullModel = modelRegistry.find("anthropic", FULL_MODEL_ID);
     if (!fullModel) throw new Error(`Model ${FULL_MODEL_ID} not found in registry`);
 
-    const allTools = [
+    const coreTools = [
       ...buildKnowledgeBaseTools(),
       ...buildGmailTools(),
       ...buildCalendarTools(),
@@ -884,6 +940,10 @@ app.post("/api/session", async (_req: Request, res: Response) => {
       ...buildMapsTools(),
       ...buildConversationTools(),
       ...buildInterviewTool(sessionId),
+    ];
+    const allTools = [
+      ...coreTools,
+      ...buildAgentTools(() => coreTools),
     ];
     console.log(`[session] ${allTools.length} tools registered`);
     const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false } });
@@ -1261,6 +1321,19 @@ app.get("/api/glance", async (_req: Request, res: Response) => {
 
 app.get("/api/kb-status", (_req, res) => {
   res.json({ online: useLocalVault || lastTunnelStatus, mode: useLocalVault ? "local" : "remote" });
+});
+
+app.get("/api/agents", (_req, res) => {
+  const agents = agentLoader.getAgents().map(a => ({
+    id: a.id,
+    name: a.name,
+    description: a.description,
+    enabled: a.enabled,
+    tools: a.tools,
+    timeout: a.timeout,
+    model: a.model,
+  }));
+  res.json({ agents });
 });
 
 app.get("/api/vault-tree", async (_req, res) => {

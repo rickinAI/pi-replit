@@ -3,8 +3,8 @@ import express from "express";
 import cors from "cors";
 import { createServer } from "http";
 import { fileURLToPath } from "url";
-import path7 from "path";
-import fs7 from "fs";
+import path8 from "path";
+import fs8 from "fs";
 import { execSync } from "child_process";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
@@ -2118,25 +2118,209 @@ async function triggerBrief(type) {
   return event;
 }
 
+// src/agents/loader.ts
+import fs7 from "fs";
+import path7 from "path";
+var agents = [];
+var configPath2 = "";
+function init7(dataDir2) {
+  configPath2 = path7.join(dataDir2, "agents.json");
+  loadAgents();
+  let reloadTimer = null;
+  try {
+    fs7.watch(configPath2, () => {
+      if (reloadTimer) clearTimeout(reloadTimer);
+      reloadTimer = setTimeout(() => {
+        console.log("[agents] Config file changed \u2014 reloading");
+        loadAgents();
+        reloadTimer = null;
+      }, 500);
+    });
+  } catch {
+    console.warn("[agents] Could not watch agents.json \u2014 using periodic reload");
+    setInterval(loadAgents, 6e4);
+  }
+}
+function loadAgents() {
+  try {
+    const raw = fs7.readFileSync(configPath2, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      console.error("[agents] agents.json must be an array");
+      return;
+    }
+    const valid = [];
+    for (const entry of parsed) {
+      if (!entry.id || !entry.name || !entry.systemPrompt || !Array.isArray(entry.tools)) {
+        console.warn(`[agents] Skipping malformed agent entry: ${JSON.stringify(entry.id || entry.name || "unknown")}`);
+        continue;
+      }
+      valid.push({
+        id: entry.id,
+        name: entry.name,
+        description: entry.description || "",
+        systemPrompt: entry.systemPrompt,
+        tools: entry.tools,
+        enabled: entry.enabled !== false,
+        timeout: entry.timeout || 120,
+        model: entry.model || "default"
+      });
+    }
+    agents = valid;
+    console.log(`[agents] Loaded ${agents.length} agents: ${agents.map((a) => a.id).join(", ")}`);
+  } catch (err) {
+    console.error(`[agents] Failed to load agents.json: ${err.message}`);
+  }
+}
+function getAgents() {
+  return agents;
+}
+function getEnabledAgents() {
+  return agents.filter((a) => a.enabled);
+}
+function getAgent(id) {
+  return agents.find((a) => a.id === id);
+}
+
+// src/agents/orchestrator.ts
+import Anthropic from "@anthropic-ai/sdk";
+var MAX_TOOL_ITERATIONS = 15;
+function convertToolsToAnthropicFormat(tools) {
+  return tools.map((t) => ({
+    name: t.name,
+    description: t.description,
+    input_schema: toJsonSchema(t.parameters)
+  }));
+}
+function toJsonSchema(typeboxSchema) {
+  if (!typeboxSchema) return { type: "object", properties: {} };
+  const schema = JSON.parse(JSON.stringify(typeboxSchema));
+  delete schema[/* @__PURE__ */ Symbol.for("TypeBox.Kind")];
+  removeTypeBoxKeys(schema);
+  return schema;
+}
+function removeTypeBoxKeys(obj) {
+  if (!obj || typeof obj !== "object") return;
+  for (const key of Object.keys(obj)) {
+    if (key.startsWith("$") && key !== "$ref" && key !== "$defs") {
+      delete obj[key];
+    }
+    removeTypeBoxKeys(obj[key]);
+  }
+}
+async function runSubAgent(opts) {
+  if (!opts.apiKey) throw new Error("Anthropic API key is not configured \u2014 cannot run sub-agents");
+  const agent = getAgent(opts.agentId);
+  if (!agent) throw new Error(`Agent "${opts.agentId}" not found. Use list_agents to see available agents.`);
+  if (!agent.enabled) throw new Error(`Agent "${opts.agentId}" is currently disabled`);
+  const startTime = Date.now();
+  console.log(`[agent:${agent.id}] started \u2014 "${opts.task.slice(0, 80)}"`);
+  const filteredTools = opts.allTools.filter((t) => agent.tools.includes(t.name));
+  const anthropicTools = convertToolsToAnthropicFormat(filteredTools);
+  const toolsUsed = [];
+  const client = new Anthropic({ apiKey: opts.apiKey });
+  const modelId = agent.model === "default" ? opts.model || "claude-sonnet-4-20250514" : agent.model;
+  let userContent = opts.task;
+  if (opts.context) userContent = `Context:
+${opts.context}
+
+Task:
+${opts.task}`;
+  const messages = [
+    { role: "user", content: userContent }
+  ];
+  let totalInput = 0;
+  let totalOutput = 0;
+  let finalResponse = "";
+  const timeoutMs = agent.timeout * 1e3;
+  for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+    if (Date.now() - startTime > timeoutMs) {
+      console.warn(`[agent:${agent.id}] timeout after ${agent.timeout}s`);
+      break;
+    }
+    const apiResponse = await client.messages.create({
+      model: modelId,
+      max_tokens: 4096,
+      system: agent.systemPrompt,
+      tools: anthropicTools.length > 0 ? anthropicTools : void 0,
+      messages
+    });
+    totalInput += apiResponse.usage?.input_tokens || 0;
+    totalOutput += apiResponse.usage?.output_tokens || 0;
+    const textBlocks = apiResponse.content.filter((b) => b.type === "text");
+    const toolBlocks = apiResponse.content.filter((b) => b.type === "tool_use");
+    if (textBlocks.length > 0) {
+      finalResponse = textBlocks.map((b) => b.text).join("\n");
+    }
+    if (apiResponse.stop_reason === "end_turn" || toolBlocks.length === 0) {
+      break;
+    }
+    messages.push({ role: "assistant", content: apiResponse.content });
+    const toolResults = [];
+    for (const toolCall of toolBlocks) {
+      const impl = filteredTools.find((t) => t.name === toolCall.name);
+      if (!impl) {
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: toolCall.id,
+          content: `Tool "${toolCall.name}" not available`,
+          is_error: true
+        });
+        continue;
+      }
+      if (!toolsUsed.includes(toolCall.name)) toolsUsed.push(toolCall.name);
+      console.log(`[agent:${agent.id}] calling tool: ${toolCall.name}`);
+      try {
+        const result = await impl.execute(toolCall.id, toolCall.input);
+        const text = result.content.map((c) => c.text || JSON.stringify(c)).filter(Boolean).join("\n");
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: toolCall.id,
+          content: text || "(empty result)"
+        });
+      } catch (err) {
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: toolCall.id,
+          content: `Error: ${err.message}`,
+          is_error: true
+        });
+      }
+    }
+    messages.push({ role: "user", content: toolResults });
+  }
+  const durationMs = Date.now() - startTime;
+  console.log(`[agent:${agent.id}] completed in ${(durationMs / 1e3).toFixed(1)}s (${toolsUsed.length} tools used, ${totalInput + totalOutput} tokens)`);
+  return {
+    agentId: agent.id,
+    agentName: agent.name,
+    response: finalResponse || "(No response generated)",
+    toolsUsed,
+    durationMs,
+    tokensUsed: { input: totalInput, output: totalOutput }
+  };
+}
+
 // server.ts
 var PORT = parseInt(process.env.PORT || "3000", 10);
 var ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
 var APP_PASSWORD = process.env.APP_PASSWORD || "";
 var SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path7.dirname(__filename);
-var PROJECT_ROOT = __filename.includes("/dist/") ? path7.resolve(__dirname, "..") : __dirname;
-var PUBLIC_DIR = path7.join(PROJECT_ROOT, "public");
-var AGENT_DIR = path7.join(PROJECT_ROOT, ".pi/agent");
-var DATA_DIR = path7.join(PROJECT_ROOT, "data", "conversations");
-var VAULT_DIR = path7.join(PROJECT_ROOT, "data", "vault");
-fs7.mkdirSync(AGENT_DIR, { recursive: true });
+var __dirname = path8.dirname(__filename);
+var PROJECT_ROOT = __filename.includes("/dist/") ? path8.resolve(__dirname, "..") : __dirname;
+var PUBLIC_DIR = path8.join(PROJECT_ROOT, "public");
+var AGENT_DIR = path8.join(PROJECT_ROOT, ".pi/agent");
+var DATA_DIR = path8.join(PROJECT_ROOT, "data", "conversations");
+var VAULT_DIR = path8.join(PROJECT_ROOT, "data", "vault");
+fs8.mkdirSync(AGENT_DIR, { recursive: true });
 init2(DATA_DIR);
 init3(PROJECT_ROOT);
 init4(PROJECT_ROOT);
 init5(PROJECT_ROOT);
 init6(PROJECT_ROOT);
 init(VAULT_DIR);
+init7(path8.join(PROJECT_ROOT, "data"));
 var useLocalVault = isConfigured2();
 setInterval(() => {
   const localAvailable = isConfigured2();
@@ -2170,7 +2354,7 @@ else {
 }
 if (!APP_PASSWORD) console.warn("APP_PASSWORD is not set \u2014 auth disabled.");
 console.log(`[boot] PORT=${PORT} PUBLIC_DIR=${PUBLIC_DIR} AGENT_DIR=${AGENT_DIR}`);
-console.log(`[boot] public/ exists: ${fs7.existsSync(PUBLIC_DIR)}`);
+console.log(`[boot] public/ exists: ${fs8.existsSync(PUBLIC_DIR)}`);
 function kbList(p) {
   return useLocalVault ? listNotes2(p) : listNotes(p);
 }
@@ -2679,6 +2863,59 @@ ${snippetText}`;
     }
   ];
 }
+function buildAgentTools(allToolsFn) {
+  return [
+    {
+      name: "delegate",
+      label: "Delegate to Agent",
+      description: "Delegate a complex task to a specialist agent. The agent will work independently using its own tools and return a comprehensive result. Use this for multi-step research, project planning, deep analysis, email drafting, or vault organization.",
+      parameters: Type.Object({
+        agent: Type.String({ description: "The specialist agent ID (e.g. 'deep-researcher', 'project-planner', 'analyst', 'email-drafter', 'knowledge-organizer')" }),
+        task: Type.String({ description: "Clear description of what the agent should do" }),
+        context: Type.Optional(Type.String({ description: "Additional context the agent needs (e.g. previous conversation details, specific requirements)" }))
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const result = await runSubAgent({
+            agentId: params.agent,
+            task: params.task,
+            context: params.context,
+            allTools: allToolsFn(),
+            apiKey: ANTHROPIC_KEY
+          });
+          return {
+            content: [{ type: "text", text: result.response }],
+            details: { agent: result.agentId, toolsUsed: result.toolsUsed, durationMs: result.durationMs }
+          };
+        } catch (err) {
+          return {
+            content: [{ type: "text", text: `Agent delegation failed: ${err.message}` }],
+            details: { error: true }
+          };
+        }
+      }
+    },
+    {
+      name: "list_agents",
+      label: "List Agents",
+      description: "List all available specialist agents with their names and descriptions. Use when the user asks what agents are available or what your team can do.",
+      parameters: Type.Object({}),
+      async execute() {
+        const agents2 = getEnabledAgents();
+        if (agents2.length === 0) {
+          return { content: [{ type: "text", text: "No specialist agents are currently configured." }], details: {} };
+        }
+        const list2 = agents2.map((a) => `- **${a.name}** (${a.id}): ${a.description}`).join("\n");
+        return {
+          content: [{ type: "text", text: `Available specialist agents:
+
+${list2}` }],
+          details: { count: agents2.length }
+        };
+      }
+    }
+  ];
+}
 var sessions = /* @__PURE__ */ new Map();
 var FAST_MODEL_ID = "claude-haiku-4-5";
 var FULL_MODEL_ID = "claude-sonnet-4-6";
@@ -2764,17 +3001,17 @@ setInterval(() => {
     }
   }
 }, 5 * 60 * 1e3);
-var TUNNEL_URL_FILE = path7.join(PROJECT_ROOT, "data", "tunnel-url.txt");
+var TUNNEL_URL_FILE = path8.join(PROJECT_ROOT, "data", "tunnel-url.txt");
 function loadPersistedTunnelUrl() {
   try {
-    return fs7.readFileSync(TUNNEL_URL_FILE, "utf-8").trim() || null;
+    return fs8.readFileSync(TUNNEL_URL_FILE, "utf-8").trim() || null;
   } catch {
     return null;
   }
 }
 function persistTunnelUrl(url) {
   try {
-    fs7.writeFileSync(TUNNEL_URL_FILE, url, "utf-8");
+    fs8.writeFileSync(TUNNEL_URL_FILE, url, "utf-8");
   } catch {
   }
 }
@@ -2908,12 +3145,12 @@ app.get("/api/gmail/status", async (_req, res) => {
 app.post("/api/session", async (_req, res) => {
   try {
     const sessionId = `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const authStorage = AuthStorage.create(path7.join(AGENT_DIR, "auth.json"));
+    const authStorage = AuthStorage.create(path8.join(AGENT_DIR, "auth.json"));
     authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
-    const modelRegistry = new ModelRegistry(authStorage, path7.join(AGENT_DIR, "models.json"));
+    const modelRegistry = new ModelRegistry(authStorage, path8.join(AGENT_DIR, "models.json"));
     const fullModel = modelRegistry.find("anthropic", FULL_MODEL_ID);
     if (!fullModel) throw new Error(`Model ${FULL_MODEL_ID} not found in registry`);
-    const allTools = [
+    const coreTools = [
       ...buildKnowledgeBaseTools(),
       ...buildGmailTools(),
       ...buildCalendarTools(),
@@ -2926,6 +3163,10 @@ app.post("/api/session", async (_req, res) => {
       ...buildMapsTools(),
       ...buildConversationTools(),
       ...buildInterviewTool(sessionId)
+    ];
+    const allTools = [
+      ...coreTools,
+      ...buildAgentTools(() => coreTools)
     ];
     console.log(`[session] ${allTools.length} tools registered`);
     const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false } });
@@ -3052,9 +3293,9 @@ app.post("/api/session/:id/prompt", async (req, res) => {
   }
   if (chosenModelId !== entry.activeModelName) {
     try {
-      const authStorage = AuthStorage.create(path7.join(AGENT_DIR, "auth.json"));
+      const authStorage = AuthStorage.create(path8.join(AGENT_DIR, "auth.json"));
       authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
-      const modelRegistry = new ModelRegistry(authStorage, path7.join(AGENT_DIR, "models.json"));
+      const modelRegistry = new ModelRegistry(authStorage, path8.join(AGENT_DIR, "models.json"));
       const newModel = modelRegistry.find("anthropic", chosenModelId);
       if (newModel) {
         await entry.session.setModel(newModel);
@@ -3308,15 +3549,27 @@ app.get("/api/glance", async (_req, res) => {
 app.get("/api/kb-status", (_req, res) => {
   res.json({ online: useLocalVault || lastTunnelStatus, mode: useLocalVault ? "local" : "remote" });
 });
+app.get("/api/agents", (_req, res) => {
+  const agents2 = getAgents().map((a) => ({
+    id: a.id,
+    name: a.name,
+    description: a.description,
+    enabled: a.enabled,
+    tools: a.tools,
+    timeout: a.timeout,
+    model: a.model
+  }));
+  res.json({ agents: agents2 });
+});
 app.get("/api/vault-tree", async (_req, res) => {
   try {
     async function buildTree(dir) {
-      const entries = await fs7.promises.readdir(dir, { withFileTypes: true });
+      const entries = await fs8.promises.readdir(dir, { withFileTypes: true });
       const result = [];
       for (const entry of entries) {
         if (entry.name.startsWith(".")) continue;
         if (entry.isDirectory()) {
-          const children = await buildTree(path7.join(dir, entry.name));
+          const children = await buildTree(path8.join(dir, entry.name));
           result.push({ name: entry.name, type: "folder", children });
         } else {
           result.push({ name: entry.name, type: "file" });
