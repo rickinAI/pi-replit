@@ -94,6 +94,10 @@ if (window.visualViewport) {
               else if (msg.role === "agent") appendBubble("agent", msg.text, msg.timestamp);
             }
             hasMessages = true;
+            if (msgs.length > 0 && !status.agentRunning) {
+              const lastMsg = msgs[msgs.length - 1];
+              if (lastMsg.role === "agent") renderSuggestionChipsFromText(lastMsg.text);
+            }
           }
           if (status.agentRunning) {
             isAgentRunning = true;
@@ -397,6 +401,10 @@ async function catchUpSession(sid) {
       agentText = "";
       hideStatus();
       sendBtn.disabled = false;
+      if (serverMessages.length > 0) {
+        const lastMsg = serverMessages[serverMessages.length - 1];
+        if (lastMsg.role === "agent") renderSuggestionChipsFromText(lastMsg.text);
+      }
     }
     scrollToBottom();
   } catch (err) {
@@ -462,7 +470,7 @@ window.addEventListener("online", () => {
 });
 
 function handleAgentEvent(event) {
-  if (catchUpInProgress && event.type !== "brief" && event.type !== "alert") return;
+  if (catchUpInProgress && !["brief", "alert", "agent_end", "agent_start"].includes(event.type)) return;
   switch (event.type) {
     case "agent_start":
       isAgentRunning = true;
@@ -526,10 +534,8 @@ function handleAgentEvent(event) {
 
     case "agent_end":
       if (agentBubble && agentText) {
-        const suggestions = parseSuggestions(agentText);
-        if (suggestions.length > 0) {
-          agentText = agentText.replace(/\[suggestions:[\s\S]*?\]\s*$/, "").trimEnd();
-        }
+        const rawForChips = agentText;
+        agentText = stripSuggestionTag(agentText);
         const bbl = agentBubble.querySelector(".bubble");
         if (bbl) {
           bbl.innerHTML = renderMarkdown(agentText);
@@ -549,24 +555,7 @@ function handleAgentEvent(event) {
           });
           agentBubble.appendChild(copyBtn);
         }
-        if (suggestions.length > 0) {
-          removeSuggestionChips();
-          const chips = document.createElement("div");
-          chips.className = "suggestion-chips";
-          suggestions.forEach(text => {
-            const chip = document.createElement("button");
-            chip.className = "suggestion-chip";
-            chip.textContent = text;
-            chip.addEventListener("click", () => {
-              input.value = text;
-              removeSuggestionChips();
-              sendMessage();
-            });
-            chips.appendChild(chip);
-          });
-          messages.insertBefore(chips, scrollAnchor);
-          throttledScroll();
-        }
+        renderSuggestionChipsFromText(rawForChips);
       }
       isAgentRunning = false;
       agentBubble = null;
@@ -901,6 +890,28 @@ function parseSuggestions(text) {
 
 function stripSuggestionTag(text) {
   return text.replace(/\[suggestions:[\s\S]*?\]\s*$/, "").trimEnd();
+}
+
+function renderSuggestionChipsFromText(rawText) {
+  if (!rawText) return;
+  const suggestions = parseSuggestions(rawText);
+  if (suggestions.length === 0) return;
+  removeSuggestionChips();
+  const chips = document.createElement("div");
+  chips.className = "suggestion-chips";
+  suggestions.forEach(text => {
+    const chip = document.createElement("button");
+    chip.className = "suggestion-chip";
+    chip.textContent = text;
+    chip.addEventListener("click", () => {
+      input.value = text;
+      removeSuggestionChips();
+      sendMessage();
+    });
+    chips.appendChild(chip);
+  });
+  messages.insertBefore(chips, scrollAnchor);
+  throttledScroll();
 }
 
 async function sendMessage() {
