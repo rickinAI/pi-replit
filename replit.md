@@ -25,6 +25,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **src/conversations.ts** — Conversation persistence module (save/load/list/delete JSON files, AI summaries via Haiku, last-conversation context for session start)
 - **src/memory-extractor.ts** — Post-conversation fact extraction (profile updates, action items) via Claude Haiku
 - **.pi/SYSTEM.md** — Agent personality, greeting template, vault structure map, and auto-categorization rules (auto-loaded by SDK from `.pi/SYSTEM.md`)
+- **Vault index injection** — At session creation, a full vault tree (all folders/files) is generated via `buildVaultTree()` / `formatVaultIndex()` and injected into the agent's first prompt via `startupContext`. This gives the agent immediate awareness of all vault contents without needing to call notes_list first
 - **.pi/agent/system-prompt.md** — Synced copy of SYSTEM.md for reference
 - **public/** — Static frontend (terminal/hacker aesthetic, branded as "RICKIN")
   - History panel (slide-out, lists past conversations, view/delete)

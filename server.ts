@@ -701,6 +701,7 @@ interface SessionEntry {
   interviewWaiter?: InterviewWaiter;
   isAgentRunning: boolean;
   pendingMessages: PendingMessage[];
+  startupContext?: string;
 }
 const sessions = new Map<string, SessionEntry>();
 
@@ -1108,7 +1109,9 @@ app.post("/api/session", async (_req: Request, res: Response) => {
 
     const recentSummary = conversations.getRecentSummary(5);
     const lastConvoContext = conversations.getLastConversationContext(10);
-    const combinedContext = [lastConvoContext, recentSummary].filter(Boolean).join("\n\n---\n\n") || null;
+    const vaultIndex = await getVaultIndex();
+    const combinedContext = [lastConvoContext, recentSummary, vaultIndex].filter(Boolean).join("\n\n---\n\n") || null;
+    entry.startupContext = combinedContext || undefined;
 
     res.json({ sessionId, recentContext: combinedContext });
   } catch (err) {
@@ -1226,7 +1229,12 @@ app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
   entry.isAgentRunning = true;
   try {
     const etNow = new Date().toLocaleString("en-US", { timeZone: "America/New_York", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" });
-    const augmentedText = `[Current date/time in Rickin's timezone (Eastern): ${etNow}]\n\n${text}`;
+    let augmentedText = `[Current date/time in Rickin's timezone (Eastern): ${etNow}]\n\n`;
+    if (entry.startupContext) {
+      augmentedText += `[Session Context]\n${entry.startupContext}\n\n`;
+      entry.startupContext = undefined;
+    }
+    augmentedText += text;
     const promptImages = images?.map(i => ({ type: "image" as const, data: i.data, mimeType: i.mimeType }));
     await entry.session.prompt(augmentedText, promptImages ? { images: promptImages } : undefined);
   } catch (err) {
@@ -1468,27 +1476,54 @@ app.get("/api/agents", (_req, res) => {
   res.json({ agents });
 });
 
+interface TreeEntry { name: string; type: "file" | "folder"; children?: TreeEntry[] }
+
+async function buildVaultTree(dir: string): Promise<TreeEntry[]> {
+  const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  const result: TreeEntry[] = [];
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
+    if (entry.isDirectory()) {
+      const children = await buildVaultTree(path.join(dir, entry.name));
+      result.push({ name: entry.name, type: "folder", children });
+    } else {
+      result.push({ name: entry.name, type: "file" });
+    }
+  }
+  return result.sort((a, b) => {
+    if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+function formatVaultIndex(entries: TreeEntry[], indent: number = 0): string {
+  const lines: string[] = [];
+  for (const entry of entries) {
+    const prefix = "  ".repeat(indent);
+    if (entry.type === "folder") {
+      lines.push(`${prefix}${entry.name}/`);
+      if (entry.children) {
+        lines.push(formatVaultIndex(entry.children, indent + 1));
+      }
+    } else {
+      lines.push(`${prefix}${entry.name}`);
+    }
+  }
+  return lines.filter(Boolean).join("\n");
+}
+
+async function getVaultIndex(): Promise<string> {
+  try {
+    const tree = await buildVaultTree(VAULT_DIR);
+    return `## Vault Index (all folders and files)\n${formatVaultIndex(tree)}`;
+  } catch {
+    return "";
+  }
+}
+
 app.get("/api/vault-tree", async (_req, res) => {
   try {
-    interface TreeEntry { name: string; type: "file" | "folder"; children?: TreeEntry[] }
-    async function buildTree(dir: string): Promise<TreeEntry[]> {
-      const entries = await fs.promises.readdir(dir, { withFileTypes: true });
-      const result: TreeEntry[] = [];
-      for (const entry of entries) {
-        if (entry.name.startsWith(".")) continue;
-        if (entry.isDirectory()) {
-          const children = await buildTree(path.join(dir, entry.name));
-          result.push({ name: entry.name, type: "folder", children });
-        } else {
-          result.push({ name: entry.name, type: "file" });
-        }
-      }
-      return result.sort((a, b) => {
-        if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
-        return a.name.localeCompare(b.name);
-      });
-    }
-    const tree = await buildTree(VAULT_DIR);
+    const tree = await buildVaultTree(VAULT_DIR);
     res.json({ vault: tree });
   } catch (err) {
     res.status(500).json({ error: "Failed to read vault structure" });

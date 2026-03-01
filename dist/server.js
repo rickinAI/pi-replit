@@ -3553,7 +3553,9 @@ app.post("/api/session", async (_req, res) => {
     });
     const recentSummary = getRecentSummary(5);
     const lastConvoContext = getLastConversationContext(10);
-    const combinedContext = [lastConvoContext, recentSummary].filter(Boolean).join("\n\n---\n\n") || null;
+    const vaultIndex = await getVaultIndex();
+    const combinedContext = [lastConvoContext, recentSummary, vaultIndex].filter(Boolean).join("\n\n---\n\n") || null;
+    entry.startupContext = combinedContext || void 0;
     res.json({ sessionId, recentContext: combinedContext });
   } catch (err) {
     console.error("Failed to create session:", err);
@@ -3681,9 +3683,17 @@ app.post("/api/session/:id/prompt", async (req, res) => {
   entry.isAgentRunning = true;
   try {
     const etNow = (/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" });
-    const augmentedText = `[Current date/time in Rickin's timezone (Eastern): ${etNow}]
+    let augmentedText = `[Current date/time in Rickin's timezone (Eastern): ${etNow}]
 
-${text}`;
+`;
+    if (entry.startupContext) {
+      augmentedText += `[Session Context]
+${entry.startupContext}
+
+`;
+      entry.startupContext = void 0;
+    }
+    augmentedText += text;
     const promptImages = images?.map((i) => ({ type: "image", data: i.data, mimeType: i.mimeType }));
     await entry.session.prompt(augmentedText, promptImages ? { images: promptImages } : void 0);
   } catch (err) {
@@ -3922,26 +3932,50 @@ app.get("/api/agents", (_req, res) => {
   }));
   res.json({ agents: agents2 });
 });
+async function buildVaultTree(dir) {
+  const entries = await fs8.promises.readdir(dir, { withFileTypes: true });
+  const result = [];
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
+    if (entry.isDirectory()) {
+      const children = await buildVaultTree(path8.join(dir, entry.name));
+      result.push({ name: entry.name, type: "folder", children });
+    } else {
+      result.push({ name: entry.name, type: "file" });
+    }
+  }
+  return result.sort((a, b) => {
+    if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+}
+function formatVaultIndex(entries, indent = 0) {
+  const lines = [];
+  for (const entry of entries) {
+    const prefix = "  ".repeat(indent);
+    if (entry.type === "folder") {
+      lines.push(`${prefix}${entry.name}/`);
+      if (entry.children) {
+        lines.push(formatVaultIndex(entry.children, indent + 1));
+      }
+    } else {
+      lines.push(`${prefix}${entry.name}`);
+    }
+  }
+  return lines.filter(Boolean).join("\n");
+}
+async function getVaultIndex() {
+  try {
+    const tree = await buildVaultTree(VAULT_DIR);
+    return `## Vault Index (all folders and files)
+${formatVaultIndex(tree)}`;
+  } catch {
+    return "";
+  }
+}
 app.get("/api/vault-tree", async (_req, res) => {
   try {
-    async function buildTree(dir) {
-      const entries = await fs8.promises.readdir(dir, { withFileTypes: true });
-      const result = [];
-      for (const entry of entries) {
-        if (entry.name.startsWith(".")) continue;
-        if (entry.isDirectory()) {
-          const children = await buildTree(path8.join(dir, entry.name));
-          result.push({ name: entry.name, type: "folder", children });
-        } else {
-          result.push({ name: entry.name, type: "file" });
-        }
-      }
-      return result.sort((a, b) => {
-        if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
-        return a.name.localeCompare(b.name);
-      });
-    }
-    const tree = await buildTree(VAULT_DIR);
+    const tree = await buildVaultTree(VAULT_DIR);
     res.json({ vault: tree });
   } catch (err) {
     res.status(500).json({ error: "Failed to read vault structure" });
