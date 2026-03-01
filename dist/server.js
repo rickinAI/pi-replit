@@ -3197,7 +3197,8 @@ app.post("/api/session", async (_req, res) => {
       conversation: conv,
       currentAgentText: "",
       modelMode: "auto",
-      activeModelName: FULL_MODEL_ID
+      activeModelName: FULL_MODEL_ID,
+      isAgentRunning: false
     };
     sessions.set(sessionId, entry);
     session.subscribe((event) => {
@@ -3217,6 +3218,7 @@ app.post("/api/session", async (_req, res) => {
         }
       }
       if (event.type === "agent_end") {
+        entry.isAgentRunning = false;
         if (entry.currentAgentText) {
           addMessage(entry.conversation, "agent", entry.currentAgentText);
           entry.currentAgentText = "";
@@ -3248,6 +3250,19 @@ app.get("/api/session/:id/stream", (req, res) => {
   req.on("close", () => {
     clearInterval(heartbeat);
     entry.subscribers.delete(res);
+  });
+});
+app.get("/api/session/:id/status", (req, res) => {
+  const entry = sessions.get(req.params["id"]);
+  if (!entry) {
+    res.json({ alive: false });
+    return;
+  }
+  res.json({
+    alive: true,
+    agentRunning: entry.isAgentRunning,
+    currentAgentText: entry.currentAgentText,
+    messages: entry.conversation.messages
   });
 });
 app.post("/api/session/:id/prompt", async (req, res) => {
@@ -3319,6 +3334,7 @@ app.post("/api/session/:id/prompt", async (req, res) => {
     }
   }
   res.json({ ok: true });
+  entry.isAgentRunning = true;
   try {
     const etNow = (/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" });
     const augmentedText = `[Current date/time in Rickin's timezone (Eastern): ${etNow}]
@@ -3327,6 +3343,7 @@ ${text}`;
     const promptImages = images?.map((i) => ({ type: "image", data: i.data, mimeType: i.mimeType }));
     await entry.session.prompt(augmentedText, promptImages ? { images: promptImages } : void 0);
   } catch (err) {
+    entry.isAgentRunning = false;
     console.error("Prompt error:", err);
     const errEvent = JSON.stringify({ type: "error", error: String(err) });
     for (const sub of entry.subscribers) {

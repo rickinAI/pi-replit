@@ -9,6 +9,9 @@ let hasMessages = false;
 let viewingHistory = false;
 let savedSessionNodes = null;
 let pendingImages = [];
+let reconnectAttempts = 0;
+let reconnectTimer = null;
+let catchUpInProgress = false;
 
 const messages      = document.getElementById("messages");
 const scrollAnchor  = document.getElementById("scroll-anchor");
@@ -74,6 +77,46 @@ if (window.visualViewport) {
 
 (async () => {
   showEmptyState();
+  const savedSession = localStorage.getItem("activeSession");
+  if (savedSession) {
+    try {
+      const res = await fetch(`/api/session/${savedSession}/status`);
+      if (res.ok) {
+        const status = await res.json();
+        if (status.alive) {
+          sessionId = savedSession;
+          clearMessages();
+          const msgs = status.messages || [];
+          if (msgs.length > 0) {
+            removeEmptyState();
+            for (const msg of msgs) {
+              if (msg.role === "user") appendBubble("user", msg.text, msg.timestamp);
+              else if (msg.role === "agent") appendBubble("agent", msg.text, msg.timestamp);
+            }
+            hasMessages = true;
+          }
+          if (status.agentRunning) {
+            isAgentRunning = true;
+            sendBtn.disabled = true;
+            if (status.currentAgentText) {
+              removeEmptyState();
+              agentBubble = appendBubble("agent", "");
+              agentText = status.currentAgentText;
+              const bbl = agentBubble.querySelector(".bubble");
+              bbl.innerHTML = renderMarkdown(agentText);
+              bbl.dataset.rawText = agentText;
+            }
+            showStatus("[PROCESSING...]");
+          }
+          openEventStream(sessionId);
+          scrollToBottom();
+          showSystemMsg("SESSION RESUMED.");
+          return;
+        }
+      }
+    } catch {}
+    localStorage.removeItem("activeSession");
+  }
   await startSession();
 })();
 
@@ -87,6 +130,8 @@ async function startSession() {
     sessionId = data.sessionId;
     hasMessages = false;
     viewingHistory = false;
+    reconnectAttempts = 0;
+    localStorage.setItem("activeSession", sessionId);
     updateModeDisplay(currentModelMode);
     updateModelBadge(FULL_MODEL_ID);
     openEventStream(sessionId);
@@ -124,6 +169,7 @@ confirmModal.addEventListener("click", (e) => {
 });
 
 async function doNewSession() {
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   if (eventSource) { eventSource.close(); eventSource = null; }
   if (sessionId) await fetch(`/api/session/${sessionId}`, { method: "DELETE" }).catch(() => {});
   sessionId = null;
@@ -132,6 +178,8 @@ async function doNewSession() {
   isAgentRunning = false;
   hasMessages = false;
   viewingHistory = false;
+  reconnectAttempts = 0;
+  localStorage.removeItem("activeSession");
   clearMessages();
   showEmptyState();
   setConnected(false);
@@ -260,10 +308,18 @@ async function deleteConversation(id, el) {
 }
 
 function openEventStream(id) {
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   if (eventSource) eventSource.close();
   eventSource = new EventSource(`/api/session/${id}/stream`);
 
-  eventSource.addEventListener("open", () => setConnected(true));
+  eventSource.addEventListener("open", () => {
+    setConnected(true);
+    if (reconnectAttempts > 0) {
+      catchUpSession(id);
+      hideStatus();
+    }
+    reconnectAttempts = 0;
+  });
 
   eventSource.addEventListener("message", (e) => {
     let event;
@@ -273,10 +329,80 @@ function openEventStream(id) {
 
   eventSource.addEventListener("error", () => {
     setConnected(false);
-    if (eventSource.readyState === EventSource.CLOSED) {
+    if (!sessionId) return;
+    const MAX_RETRIES = 30;
+    if (reconnectAttempts >= MAX_RETRIES) {
       showSystemMsg("CONNECTION LOST. TAP + TO RECONNECT.");
+      return;
     }
+    reconnectAttempts++;
+    const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 30000);
+    showStatus("[RECONNECTING...]");
+    reconnectTimer = setTimeout(() => {
+      if (sessionId === id) openEventStream(id);
+    }, delay);
   });
+}
+
+async function catchUpSession(sid) {
+  if (catchUpInProgress) return;
+  catchUpInProgress = true;
+  try {
+    const res = await fetch(`/api/session/${sid}/status`);
+    if (!res.ok) { catchUpInProgress = false; return; }
+    const status = await res.json();
+    if (!status.alive) {
+      localStorage.removeItem("activeSession");
+      catchUpInProgress = false;
+      return;
+    }
+
+    const serverMessages = status.messages || [];
+    const domBubbles = messages.querySelectorAll(".msg.user, .msg.agent");
+    const domCount = domBubbles.length;
+
+    if (serverMessages.length > domCount || (!status.agentRunning && isAgentRunning)) {
+      clearMessages();
+      removeSuggestionChips();
+      agentBubble = null;
+      agentText = "";
+
+      if (serverMessages.length > 0) {
+        removeEmptyState();
+        for (const msg of serverMessages) {
+          if (msg.role === "user") appendBubble("user", msg.text, msg.timestamp);
+          else if (msg.role === "agent") appendBubble("agent", msg.text, msg.timestamp);
+        }
+        hasMessages = true;
+      }
+    }
+
+    if (status.agentRunning) {
+      if (status.currentAgentText) {
+        if (!agentBubble) {
+          removeEmptyState();
+          agentBubble = appendBubble("agent", "");
+        }
+        agentText = status.currentAgentText;
+        const bbl = agentBubble.querySelector(".bubble");
+        bbl.innerHTML = renderMarkdown(agentText);
+        bbl.dataset.rawText = agentText;
+      }
+      isAgentRunning = true;
+      sendBtn.disabled = true;
+      showStatus("[PROCESSING...]");
+    } else {
+      isAgentRunning = false;
+      agentBubble = null;
+      agentText = "";
+      hideStatus();
+      sendBtn.disabled = false;
+    }
+    scrollToBottom();
+  } catch (err) {
+    console.error("Catch-up failed:", err);
+  }
+  catchUpInProgress = false;
 }
 
 function setConnected(connected) {
@@ -312,7 +438,31 @@ async function pollKbStatus() {
 pollKbStatus();
 setInterval(pollKbStatus, 2 * 60 * 1000);
 
+let visibilityDebounce = null;
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible" || !sessionId) return;
+  if (visibilityDebounce) clearTimeout(visibilityDebounce);
+  visibilityDebounce = setTimeout(() => {
+    visibilityDebounce = null;
+    if (eventSource && eventSource.readyState === EventSource.CLOSED) {
+      reconnectAttempts = 0;
+      openEventStream(sessionId);
+    } else {
+      catchUpSession(sessionId);
+    }
+  }, 500);
+});
+
+window.addEventListener("online", () => {
+  if (!sessionId) return;
+  if (!eventSource || eventSource.readyState !== EventSource.OPEN) {
+    reconnectAttempts = 0;
+    openEventStream(sessionId);
+  }
+});
+
 function handleAgentEvent(event) {
+  if (catchUpInProgress && event.type !== "brief" && event.type !== "alert") return;
   switch (event.type) {
     case "agent_start":
       isAgentRunning = true;

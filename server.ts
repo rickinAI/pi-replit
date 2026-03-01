@@ -692,6 +692,7 @@ interface SessionEntry {
   modelMode: ModelMode;
   activeModelName: string;
   interviewWaiter?: InterviewWaiter;
+  isAgentRunning: boolean;
 }
 const sessions = new Map<string, SessionEntry>();
 
@@ -977,6 +978,7 @@ app.post("/api/session", async (_req: Request, res: Response) => {
       currentAgentText: "",
       modelMode: "auto",
       activeModelName: FULL_MODEL_ID,
+      isAgentRunning: false,
     };
     sessions.set(sessionId, entry);
 
@@ -994,6 +996,7 @@ app.post("/api/session", async (_req: Request, res: Response) => {
       }
 
       if (event.type === "agent_end") {
+        entry.isAgentRunning = false;
         if (entry.currentAgentText) {
           conversations.addMessage(entry.conversation, "agent", entry.currentAgentText);
           entry.currentAgentText = "";
@@ -1026,6 +1029,17 @@ app.get("/api/session/:id/stream", (req: Request, res: Response) => {
   req.on("close", () => {
     clearInterval(heartbeat);
     entry.subscribers.delete(res);
+  });
+});
+
+app.get("/api/session/:id/status", (req: Request, res: Response) => {
+  const entry = sessions.get(req.params["id"] as string);
+  if (!entry) { res.json({ alive: false }); return; }
+  res.json({
+    alive: true,
+    agentRunning: entry.isAgentRunning,
+    currentAgentText: entry.currentAgentText,
+    messages: entry.conversation.messages,
   });
 });
 
@@ -1093,12 +1107,14 @@ app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
 
   res.json({ ok: true });
 
+  entry.isAgentRunning = true;
   try {
     const etNow = new Date().toLocaleString("en-US", { timeZone: "America/New_York", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" });
     const augmentedText = `[Current date/time in Rickin's timezone (Eastern): ${etNow}]\n\n${text}`;
     const promptImages = images?.map(i => ({ type: "image" as const, data: i.data, mimeType: i.mimeType }));
     await entry.session.prompt(augmentedText, promptImages ? { images: promptImages } : undefined);
   } catch (err) {
+    entry.isAgentRunning = false;
     console.error("Prompt error:", err);
     const errEvent = JSON.stringify({ type: "error", error: String(err) });
     for (const sub of entry.subscribers) {

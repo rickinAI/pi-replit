@@ -67,6 +67,17 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **PWA standalone mode**: `manifest.json` with icons, `display: standalone`, iOS safe area insets for notch/Dynamic Island/home indicator, `@media (display-mode: standalone)` CSS block, `viewport-fit=cover`
 - Auth-public paths: `/manifest.json`, `/icons/*` bypassed for PWA install
 
+## Session Resilience
+
+Client-side session resume and background agent support:
+- **Session persistence**: `sessionId` saved to `localStorage` — closing the app and reopening resumes the active session via `GET /api/session/:id/status`
+- **SSE auto-reconnect**: On connection drop, exponential backoff reconnect (1s→2s→4s→...→30s cap, max 30 retries). Shows "[RECONNECTING...]" status during retries
+- **Catch-up on reconnect**: `catchUpSession()` calls the status endpoint to fetch missed messages and render them. In-progress agent responses shown with partial text
+- **Visibility API**: `visibilitychange` listener triggers immediate reconnect + catch-up when user returns to the tab/app (500ms debounce for iOS PWA gestures)
+- **Network recovery**: `online` event triggers SSE reconnect after wifi→cellular or network outage
+- **Server-side tracking**: `isAgentRunning` flag on `SessionEntry` tracks whether agent is mid-response; status endpoint returns full conversation + in-progress text
+- **Agent background work**: The `/prompt` endpoint returns immediately; agent runs asynchronously on the server regardless of client connection state
+
 ## API Routes
 
 | Route | Method | Description |
@@ -93,6 +104,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 | `/api/session/:id/interview-response` | POST | Submit interview form responses |
 | `/api/agents` | GET | List all agent configs (id, name, tools, enabled) |
 | `/api/vault-tree` | GET | Vault folder/file structure as JSON |
+| `/api/session/:id/status` | GET | Session state for resume (alive, agentRunning, messages, currentAgentText) |
 
 ## Knowledge Base Integration
 
