@@ -72,11 +72,13 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 Client-side session resume and background agent support:
 - **Session persistence**: `sessionId` saved to `localStorage` — closing the app and reopening resumes the active session via `GET /api/session/:id/status`
 - **SSE auto-reconnect**: On connection drop, exponential backoff reconnect (1s→2s→4s→...→30s cap, max 30 retries). Shows "[RECONNECTING...]" status during retries
-- **Catch-up on reconnect**: `catchUpSession()` calls the status endpoint to fetch missed messages and render them. In-progress agent responses shown with partial text
+- **Catch-up on reconnect**: `catchUpSession()` calls the status endpoint to fetch missed messages and render them. In-progress agent responses shown with partial text. Uses `textOffsetAfterCatchUp` to skip already-rendered SSE deltas and prevent duplicate text
 - **Visibility API**: `visibilitychange` listener triggers immediate reconnect + catch-up when user returns to the tab/app (500ms debounce for iOS PWA gestures)
 - **Network recovery**: `online` event triggers SSE reconnect after wifi→cellular or network outage
-- **Server-side tracking**: `isAgentRunning` flag on `SessionEntry` tracks whether agent is mid-response; status endpoint returns full conversation + in-progress text
+- **Server-side tracking**: `isAgentRunning` flag on `SessionEntry` tracks whether agent is mid-response; status endpoint returns full conversation + in-progress text + pending queue count
 - **Agent background work**: The `/prompt` endpoint returns immediately; agent runs asynchronously on the server regardless of client connection state
+- **Message queue**: Users can send messages while the agent is processing. Messages are queued server-side (`pendingMessages` on `SessionEntry`) and auto-processed in order after each `agent_end`. Queue protected by `processingQueue` lock to prevent concurrent `session.prompt` calls. Client shows "Queued — will process next" system message. Send button stays enabled at all times
+- **Port resilience**: `killPort()` uses both `fuser` and `lsof` fallbacks. Workflow command includes pre-start `fuser -k` to clear stale processes
 
 ## API Routes
 

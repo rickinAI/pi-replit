@@ -12,6 +12,7 @@ let pendingImages = [];
 let reconnectAttempts = 0;
 let reconnectTimer = null;
 let catchUpInProgress = false;
+let textOffsetAfterCatchUp = 0;
 
 const messages      = document.getElementById("messages");
 const scrollAnchor  = document.getElementById("scroll-anchor");
@@ -101,7 +102,6 @@ if (window.visualViewport) {
           }
           if (status.agentRunning) {
             isAgentRunning = true;
-            sendBtn.disabled = true;
             if (status.currentAgentText) {
               removeEmptyState();
               agentBubble = appendBubble("agent", "");
@@ -287,7 +287,7 @@ async function viewConversation(id) {
 function exitHistoryView() {
   viewingHistory = false;
   input.disabled = false;
-  sendBtn.disabled = isAgentRunning;
+  sendBtn.disabled = false;
   clearMessages();
 
   if (savedSessionNodes && savedSessionNodes.length > 0) {
@@ -388,19 +388,21 @@ async function catchUpSession(sid) {
           agentBubble = appendBubble("agent", "");
         }
         agentText = status.currentAgentText;
+        textOffsetAfterCatchUp = agentText.length;
         const bbl = agentBubble.querySelector(".bubble");
         bbl.innerHTML = renderMarkdown(agentText);
         bbl.dataset.rawText = agentText;
+      } else {
+        textOffsetAfterCatchUp = 0;
       }
       isAgentRunning = true;
-      sendBtn.disabled = true;
-      showStatus("[PROCESSING...]");
+      showStatus(status.pendingCount > 0 ? `[PROCESSING... ${status.pendingCount} QUEUED]` : "[PROCESSING...]");
     } else {
       isAgentRunning = false;
       agentBubble = null;
       agentText = "";
+      textOffsetAfterCatchUp = 0;
       hideStatus();
-      sendBtn.disabled = false;
       if (serverMessages.length > 0) {
         const lastMsg = serverMessages[serverMessages.length - 1];
         if (lastMsg.role === "agent") renderSuggestionChipsFromText(lastMsg.text);
@@ -470,14 +472,19 @@ window.addEventListener("online", () => {
 });
 
 function handleAgentEvent(event) {
-  if (catchUpInProgress && !["brief", "alert", "agent_end", "agent_start"].includes(event.type)) return;
+  if (catchUpInProgress && !["brief", "alert", "agent_end", "agent_start", "message_queued"].includes(event.type)) return;
   switch (event.type) {
     case "agent_start":
       isAgentRunning = true;
       agentBubble = null;
       agentText = "";
+      textOffsetAfterCatchUp = 0;
       removeSuggestionChips();
       showStatus("[PROCESSING...]");
+      break;
+
+    case "message_queued":
+      showSystemMsg(`Queued — will process next (${event.position || 1} pending)`);
       break;
 
     case "message_update": {
@@ -489,11 +496,24 @@ function handleAgentEvent(event) {
       }
 
       if (ae.type === "text_delta") {
+        if (textOffsetAfterCatchUp > 0) {
+          textOffsetAfterCatchUp -= ae.delta.length;
+          if (textOffsetAfterCatchUp > 0) break;
+          const overflow = -textOffsetAfterCatchUp;
+          textOffsetAfterCatchUp = 0;
+          if (overflow > 0 && overflow < ae.delta.length) {
+            const newPart = ae.delta.slice(ae.delta.length - overflow);
+            agentText += newPart;
+          } else {
+            break;
+          }
+        } else {
+          agentText += ae.delta;
+        }
         removeEmptyState();
         if (!agentBubble) {
           agentBubble = appendBubble("agent", "");
         }
-        agentText += ae.delta;
         const bbl = agentBubble.querySelector(".bubble");
         bbl.innerHTML = renderMarkdown(agentText);
         bbl.dataset.rawText = agentText;
@@ -561,7 +581,6 @@ function handleAgentEvent(event) {
       agentBubble = null;
       agentText = "";
       hideStatus();
-      sendBtn.disabled = false;
       input.focus();
       throttledScroll();
       break;
@@ -570,7 +589,6 @@ function handleAgentEvent(event) {
       showSystemMsg("ERR: " + event.error);
       isAgentRunning = false;
       hideStatus();
-      sendBtn.disabled = false;
       break;
 
     case "brief":
@@ -918,7 +936,7 @@ async function sendMessage() {
   removeSuggestionChips();
   const text = input.value.trim();
   const images = pendingImages.map(i => ({ mimeType: i.mimeType, data: i.data }));
-  if ((!text && images.length === 0) || !sessionId || isAgentRunning || viewingHistory) return;
+  if ((!text && images.length === 0) || !sessionId || viewingHistory) return;
 
   removeEmptyState();
   hasMessages = true;
@@ -937,7 +955,6 @@ async function sendMessage() {
   pendingImages = [];
   renderImagePreviews();
   autoResize();
-  sendBtn.disabled = true;
   scrollToBottom();
 
   const body = { message: text || undefined };
@@ -965,7 +982,6 @@ async function sendMessage() {
     if (!res.ok) throw new Error(await res.text());
   } catch (err) {
     showSystemMsg("ERR: " + err.message);
-    sendBtn.disabled = false;
   }
 }
 
@@ -1054,7 +1070,7 @@ function initSpeechRecognition() {
 
 if (micBtn) {
   micBtn.addEventListener("click", () => {
-    if (input.disabled || sendBtn.disabled) return;
+    if (input.disabled) return;
     if (isRecording && speechRecognition) {
       try { speechRecognition.stop(); } catch (_) {}
       setTimeout(() => {

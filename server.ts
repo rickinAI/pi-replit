@@ -683,6 +683,12 @@ interface InterviewWaiter {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface PendingMessage {
+  text: string;
+  images?: Array<{ mimeType: string; data: string }>;
+  timestamp: number;
+}
+
 interface SessionEntry {
   session: Awaited<ReturnType<typeof createAgentSession>>["session"];
   subscribers: Set<Response>;
@@ -693,6 +699,7 @@ interface SessionEntry {
   activeModelName: string;
   interviewWaiter?: InterviewWaiter;
   isAgentRunning: boolean;
+  pendingMessages: PendingMessage[];
 }
 const sessions = new Map<string, SessionEntry>();
 
@@ -762,6 +769,43 @@ async function syncConversationToVault(conv: conversations.Conversation) {
   } catch (err) {
     console.error(`[sync] Failed to sync conversation ${conv.id}:`, err);
   }
+}
+
+let processingQueue = new Set<string>();
+
+async function processNextPendingMessage(sessionId: string) {
+  const entry = sessions.get(sessionId);
+  if (!entry || entry.pendingMessages.length === 0) return;
+  if (processingQueue.has(sessionId) || entry.isAgentRunning) return;
+  
+  processingQueue.add(sessionId);
+  const pending = entry.pendingMessages.shift()!;
+  entry.isAgentRunning = true;
+  entry.currentAgentText = "";
+
+  const startEvent = JSON.stringify({ type: "agent_start" });
+  for (const sub of entry.subscribers) {
+    try { sub.write(`data: ${startEvent}\n\n`); } catch {}
+  }
+
+  try {
+    const etNow = new Date().toLocaleString("en-US", { timeZone: "America/New_York", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" });
+    const queueContext = "[Note: This message was sent while the previous task was still running. The previous task has now completed.]\n\n";
+    const augmentedText = `[Current date/time in Rickin's timezone (Eastern): ${etNow}]\n\n${queueContext}${pending.text}`;
+    const promptImages = pending.images?.map(i => ({ type: "image" as const, data: i.data, mimeType: i.mimeType }));
+    await entry.session.prompt(augmentedText, promptImages ? { images: promptImages } : undefined);
+  } catch (err) {
+    entry.isAgentRunning = false;
+    console.error("Queued prompt error:", err);
+    const errEvent = JSON.stringify({ type: "error", error: String(err) });
+    for (const sub of entry.subscribers) {
+      try { sub.write(`data: ${errEvent}\n\n`); } catch {}
+    }
+    processingQueue.delete(sessionId);
+    processNextPendingMessage(sessionId);
+    return;
+  }
+  processingQueue.delete(sessionId);
 }
 
 setInterval(() => {
@@ -979,6 +1023,7 @@ app.post("/api/session", async (_req: Request, res: Response) => {
       modelMode: "auto",
       activeModelName: FULL_MODEL_ID,
       isAgentRunning: false,
+      pendingMessages: [],
     };
     sessions.set(sessionId, entry);
 
@@ -1001,6 +1046,7 @@ app.post("/api/session", async (_req: Request, res: Response) => {
           conversations.addMessage(entry.conversation, "agent", entry.currentAgentText);
           entry.currentAgentText = "";
         }
+        processNextPendingMessage(sessionId);
       }
     });
 
@@ -1040,6 +1086,7 @@ app.get("/api/session/:id/status", (req: Request, res: Response) => {
     agentRunning: entry.isAgentRunning,
     currentAgentText: entry.currentAgentText,
     messages: entry.conversation.messages,
+    pendingCount: entry.pendingMessages.length,
   });
 });
 
@@ -1072,6 +1119,16 @@ app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
   const text = message?.trim() || "(image attached)";
   const imgAttachments = images?.map(i => ({ mimeType: i.mimeType, data: i.data }));
   conversations.addMessage(entry.conversation, "user", text, imgAttachments);
+
+  if (entry.isAgentRunning) {
+    entry.pendingMessages.push({ text, images, timestamp: Date.now() });
+    const queuedEvent = JSON.stringify({ type: "message_queued", position: entry.pendingMessages.length });
+    for (const sub of entry.subscribers) {
+      try { sub.write(`data: ${queuedEvent}\n\n`); } catch {}
+    }
+    res.json({ ok: true, queued: true, position: entry.pendingMessages.length });
+    return;
+  }
 
   let chosenModelId = FULL_MODEL_ID;
   if (entry.modelMode === "fast") {
@@ -1411,6 +1468,9 @@ process.on("SIGHUP", () => gracefulShutdown("SIGHUP"));
 function killPort(port: number) {
   try {
     execSync(`fuser -k -9 ${port}/tcp`, { stdio: "ignore" });
+  } catch {}
+  try {
+    execSync(`lsof -ti :${port} | xargs kill -9`, { stdio: "ignore" });
   } catch {}
 }
 

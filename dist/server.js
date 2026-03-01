@@ -2990,6 +2990,50 @@ async function syncConversationToVault(conv) {
     console.error(`[sync] Failed to sync conversation ${conv.id}:`, err);
   }
 }
+var processingQueue = /* @__PURE__ */ new Set();
+async function processNextPendingMessage(sessionId) {
+  const entry = sessions.get(sessionId);
+  if (!entry || entry.pendingMessages.length === 0) return;
+  if (processingQueue.has(sessionId) || entry.isAgentRunning) return;
+  processingQueue.add(sessionId);
+  const pending = entry.pendingMessages.shift();
+  entry.isAgentRunning = true;
+  entry.currentAgentText = "";
+  const startEvent = JSON.stringify({ type: "agent_start" });
+  for (const sub of entry.subscribers) {
+    try {
+      sub.write(`data: ${startEvent}
+
+`);
+    } catch {
+    }
+  }
+  try {
+    const etNow = (/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" });
+    const queueContext = "[Note: This message was sent while the previous task was still running. The previous task has now completed.]\n\n";
+    const augmentedText = `[Current date/time in Rickin's timezone (Eastern): ${etNow}]
+
+${queueContext}${pending.text}`;
+    const promptImages = pending.images?.map((i) => ({ type: "image", data: i.data, mimeType: i.mimeType }));
+    await entry.session.prompt(augmentedText, promptImages ? { images: promptImages } : void 0);
+  } catch (err) {
+    entry.isAgentRunning = false;
+    console.error("Queued prompt error:", err);
+    const errEvent = JSON.stringify({ type: "error", error: String(err) });
+    for (const sub of entry.subscribers) {
+      try {
+        sub.write(`data: ${errEvent}
+
+`);
+      } catch {
+      }
+    }
+    processingQueue.delete(sessionId);
+    processNextPendingMessage(sessionId);
+    return;
+  }
+  processingQueue.delete(sessionId);
+}
 setInterval(() => {
   const cutoff = Date.now() - 2 * 60 * 60 * 1e3;
   for (const [id, entry] of sessions.entries()) {
@@ -3206,7 +3250,8 @@ app.post("/api/session", async (_req, res) => {
       currentAgentText: "",
       modelMode: "auto",
       activeModelName: FULL_MODEL_ID,
-      isAgentRunning: false
+      isAgentRunning: false,
+      pendingMessages: []
     };
     sessions.set(sessionId, entry);
     session.subscribe((event) => {
@@ -3231,6 +3276,7 @@ app.post("/api/session", async (_req, res) => {
           addMessage(entry.conversation, "agent", entry.currentAgentText);
           entry.currentAgentText = "";
         }
+        processNextPendingMessage(sessionId);
       }
     });
     const recentSummary = getRecentSummary(5);
@@ -3270,7 +3316,8 @@ app.get("/api/session/:id/status", (req, res) => {
     alive: true,
     agentRunning: entry.isAgentRunning,
     currentAgentText: entry.currentAgentText,
-    messages: entry.conversation.messages
+    messages: entry.conversation.messages,
+    pendingCount: entry.pendingMessages.length
   });
 });
 app.post("/api/session/:id/prompt", async (req, res) => {
@@ -3307,6 +3354,20 @@ app.post("/api/session/:id/prompt", async (req, res) => {
   const text = message?.trim() || "(image attached)";
   const imgAttachments = images?.map((i) => ({ mimeType: i.mimeType, data: i.data }));
   addMessage(entry.conversation, "user", text, imgAttachments);
+  if (entry.isAgentRunning) {
+    entry.pendingMessages.push({ text, images, timestamp: Date.now() });
+    const queuedEvent = JSON.stringify({ type: "message_queued", position: entry.pendingMessages.length });
+    for (const sub of entry.subscribers) {
+      try {
+        sub.write(`data: ${queuedEvent}
+
+`);
+      } catch {
+      }
+    }
+    res.json({ ok: true, queued: true, position: entry.pendingMessages.length });
+    return;
+  }
   let chosenModelId = FULL_MODEL_ID;
   if (entry.modelMode === "fast") {
     chosenModelId = FAST_MODEL_ID;
@@ -3641,6 +3702,10 @@ process.on("SIGHUP", () => gracefulShutdown("SIGHUP"));
 function killPort(port) {
   try {
     execSync(`fuser -k -9 ${port}/tcp`, { stdio: "ignore" });
+  } catch {
+  }
+  try {
+    execSync(`lsof -ti :${port} | xargs kill -9`, { stdio: "ignore" });
   } catch {
   }
 }
