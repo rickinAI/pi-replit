@@ -3308,6 +3308,31 @@ app.get("/api/glance", async (_req, res) => {
 app.get("/api/kb-status", (_req, res) => {
   res.json({ online: useLocalVault || lastTunnelStatus, mode: useLocalVault ? "local" : "remote" });
 });
+app.get("/api/vault-tree", async (_req, res) => {
+  try {
+    async function buildTree(dir) {
+      const entries = await fs7.promises.readdir(dir, { withFileTypes: true });
+      const result = [];
+      for (const entry of entries) {
+        if (entry.name.startsWith(".")) continue;
+        if (entry.isDirectory()) {
+          const children = await buildTree(path7.join(dir, entry.name));
+          result.push({ name: entry.name, type: "folder", children });
+        } else {
+          result.push({ name: entry.name, type: "file" });
+        }
+      }
+      return result.sort((a, b) => {
+        if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+    }
+    const tree = await buildTree(VAULT_DIR);
+    res.json({ vault: tree });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to read vault structure" });
+  }
+});
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", sessions: sessions.size, ts: Date.now() });
 });
