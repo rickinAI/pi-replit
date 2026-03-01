@@ -2969,7 +2969,7 @@ function saveAndCleanSession(id) {
 async function syncConversationToVault(conv) {
   if (syncedConversations.has(conv.id)) return;
   if (!shouldSync(conv)) return;
-  if (!isConfigured()) return;
+  if (!useLocalVault && !isConfigured()) return;
   const existing = load(conv.id);
   if (existing && existing.syncedAt) {
     syncedConversations.add(conv.id);
@@ -2981,7 +2981,7 @@ async function syncConversationToVault(conv) {
     let safeTitle = conv.title.replace(/[^a-zA-Z0-9 _-]/g, "").slice(0, 50).trim();
     if (!safeTitle) safeTitle = conv.id;
     const notePath = `Conversations/${dateStr} - ${safeTitle}.md`;
-    await createNote(notePath, summary);
+    await kbCreate(notePath, summary);
     syncedConversations.add(conv.id);
     conv.syncedAt = Date.now();
     save(conv);
@@ -3276,6 +3276,8 @@ app.post("/api/session", async (_req, res) => {
           addMessage(entry.conversation, "agent", entry.currentAgentText);
           entry.currentAgentText = "";
         }
+        save(entry.conversation);
+        syncConversationToVault(entry.conversation);
         processNextPendingMessage(sessionId);
       }
     });
@@ -3354,6 +3356,7 @@ app.post("/api/session/:id/prompt", async (req, res) => {
   const text = message?.trim() || "(image attached)";
   const imgAttachments = images?.map((i) => ({ mimeType: i.mimeType, data: i.data }));
   addMessage(entry.conversation, "user", text, imgAttachments);
+  save(entry.conversation);
   if (entry.isAgentRunning) {
     entry.pendingMessages.push({ text, images, timestamp: Date.now() });
     const queuedEvent = JSON.stringify({ type: "message_queued", position: entry.pendingMessages.length });

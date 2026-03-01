@@ -747,7 +747,7 @@ function saveAndCleanSession(id: string) {
 async function syncConversationToVault(conv: conversations.Conversation) {
   if (syncedConversations.has(conv.id)) return;
   if (!conversations.shouldSync(conv)) return;
-  if (!obsidian.isConfigured()) return;
+  if (!useLocalVault && !obsidian.isConfigured()) return;
 
   const existing = conversations.load(conv.id);
   if (existing && (existing as any).syncedAt) {
@@ -761,7 +761,7 @@ async function syncConversationToVault(conv: conversations.Conversation) {
     let safeTitle = conv.title.replace(/[^a-zA-Z0-9 _-]/g, "").slice(0, 50).trim();
     if (!safeTitle) safeTitle = conv.id;
     const notePath = `Conversations/${dateStr} - ${safeTitle}.md`;
-    await obsidian.createNote(notePath, summary);
+    await kbCreate(notePath, summary);
     syncedConversations.add(conv.id);
     (conv as any).syncedAt = Date.now();
     conversations.save(conv);
@@ -1046,6 +1046,8 @@ app.post("/api/session", async (_req: Request, res: Response) => {
           conversations.addMessage(entry.conversation, "agent", entry.currentAgentText);
           entry.currentAgentText = "";
         }
+        conversations.save(entry.conversation);
+        syncConversationToVault(entry.conversation);
         processNextPendingMessage(sessionId);
       }
     });
@@ -1119,6 +1121,7 @@ app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
   const text = message?.trim() || "(image attached)";
   const imgAttachments = images?.map(i => ({ mimeType: i.mimeType, data: i.data }));
   conversations.addMessage(entry.conversation, "user", text, imgAttachments);
+  conversations.save(entry.conversation);
 
   if (entry.isAgentRunning) {
     entry.pendingMessages.push({ text, images, timestamp: Date.now() });
