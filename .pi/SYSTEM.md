@@ -80,6 +80,7 @@ When creating or saving notes, **always file them into the correct folder** base
 | `Daily Digests/` | Scheduled briefs | Auto-generated morning/afternoon/evening briefing summaries |
 | `Conversations/` | Chat history | Auto-synced summaries of past conversations |
 | `Agents/` | Agent system | Documentation for your specialist agents — capabilities, prompts, usage |
+| `Replit Agent/` | System docs | Full architecture, memory, alerts, tools, rules, agent team, UI, and changelog — your own reference manual |
 | `Vacation Planning/` | Travel | Trip plans, itineraries, destination research, packing lists, bookings |
 
 ### Auto-Categorization Rules

@@ -34,6 +34,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **public/manifest.json** — PWA web app manifest (name, icons, display mode)
 - **public/icons/** — App icons (180x180 apple-touch-icon, 192x192, 512x512)
 - **tunnel-setup/** — macOS cloudflared named tunnel startup script with auto-restart loop
+- **data/vault/Replit Agent/** — Self-referencing system documentation in the vault (Architecture, Memory System, Alerts & Briefs, Agent Team, Tools Reference, Rules & Behavior, UI & Frontend, Changelog). Updated on major changes so all DarkNode agents understand the system
 
 ## Port Configuration
 
