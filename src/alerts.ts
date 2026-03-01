@@ -1,12 +1,12 @@
 import fs from "fs";
 import path from "path";
+import Anthropic from "@anthropic-ai/sdk";
 import * as calendar from "./calendar.js";
 import * as tasks from "./tasks.js";
 import * as weather from "./weather.js";
 import * as stocks from "./stocks.js";
 import * as news from "./news.js";
 import * as gmail from "./gmail.js";
-import * as obsidian from "./obsidian.js";
 
 interface WatchlistItem {
   symbol: string;
@@ -48,6 +48,7 @@ interface AlertConfig {
 }
 
 type BroadcastFn = (event: BriefEvent | AlertEvent) => void;
+type SaveBriefFn = (path: string, content: string) => Promise<void>;
 
 export interface BriefEvent {
   type: "brief";
@@ -92,6 +93,7 @@ const DEFAULT_CONFIG: AlertConfig = {
 let configPath = "";
 let config: AlertConfig = { ...DEFAULT_CONFIG };
 let broadcastFn: BroadcastFn | null = null;
+let saveBriefFn: SaveBriefFn | null = null;
 let briefInterval: ReturnType<typeof setInterval> | null = null;
 let alertInterval: ReturnType<typeof setInterval> | null = null;
 let alertedCalendarEvents = new Set<string>();
@@ -297,6 +299,41 @@ async function gatherSection(name: string): Promise<string> {
   }
 }
 
+async function synthesizeBrief(type: string, rawSections: string): Promise<string> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return rawSections;
+
+  try {
+    const client = new Anthropic({ apiKey });
+    const response = await client.messages.create({
+      model: "claude-haiku-4-5-20241022",
+      max_tokens: 800,
+      messages: [{
+        role: "user",
+        content: `You are Rickin's personal assistant delivering his ${type} briefing. Synthesize the following raw data into a concise, natural-language briefing. Lead with the most important and actionable items. Be direct — no filler.
+
+Format rules:
+- Use markdown headers (##) for major sections
+- Use bullet points for individual items
+- Keep each item to 1-2 lines max
+- If a section has no data or says "not connected", skip it entirely
+- For markets, highlight notable moves; don't just list prices
+- For calendar, emphasize timing and what's next
+- For email, mention sender and subject briefly
+
+RAW DATA:
+${rawSections}`
+      }],
+    });
+
+    const text = response.content[0]?.type === "text" ? response.content[0].text : "";
+    return text || rawSections;
+  } catch (err) {
+    console.error(`[alerts] AI synthesis failed for ${type} brief:`, err);
+    return rawSections;
+  }
+}
+
 async function generateBrief(type: "morning" | "afternoon" | "evening"): Promise<string> {
   const briefConfig = config.briefs[type];
   const sections: string[] = [];
@@ -311,7 +348,22 @@ async function generateBrief(type: "morning" | "afternoon" | "evening"): Promise
     }
   }
 
-  return sections.join("\n\n---\n\n");
+  const rawContent = sections.join("\n\n---\n\n");
+  const synthesized = await synthesizeBrief(type, rawContent);
+
+  if (saveBriefFn) {
+    try {
+      const dateStr = new Date().toLocaleDateString("en-CA", { timeZone: config.timezone });
+      const briefPath = `Daily Digests/${dateStr}-${type}.md`;
+      const header = `# ${type.charAt(0).toUpperCase() + type.slice(1)} Brief — ${dateStr}\n\n`;
+      await saveBriefFn(briefPath, header + synthesized);
+      console.log(`[alerts] Brief saved to vault: ${briefPath}`);
+    } catch (err) {
+      console.error(`[alerts] Failed to save brief to vault:`, err);
+    }
+  }
+
+  return synthesized;
 }
 
 async function checkBriefs() {
@@ -511,8 +563,9 @@ async function doCheckAlerts() {
   }
 }
 
-export function startAlertSystem(broadcast: BroadcastFn) {
+export function startAlertSystem(broadcast: BroadcastFn, saveBrief?: SaveBriefFn) {
   broadcastFn = broadcast;
+  saveBriefFn = saveBrief || null;
 
   briefInterval = setInterval(() => {
     checkBriefs().catch(err => console.error("[alerts] Brief check error:", err));

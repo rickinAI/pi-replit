@@ -22,7 +22,8 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **src/websearch.ts** — Web search via DuckDuckGo HTML (free, no API key)
 - **src/tasks.ts** — Local task manager with JSON storage
 - **src/news.ts** — News headlines via Google News RSS feeds
-- **src/conversations.ts** — Conversation persistence module (save/load/list/delete JSON files)
+- **src/conversations.ts** — Conversation persistence module (save/load/list/delete JSON files, AI summaries via Haiku, last-conversation context for session start)
+- **src/memory-extractor.ts** — Post-conversation fact extraction (profile updates, action items) via Claude Haiku
 - **.pi/SYSTEM.md** — Agent personality, greeting template, vault structure map, and auto-categorization rules (auto-loaded by SDK from `.pi/SYSTEM.md`)
 - **.pi/agent/system-prompt.md** — Synced copy of SYSTEM.md for reference
 - **public/** — Static frontend (terminal/hacker aesthetic, branded as "RICKIN")
@@ -228,7 +229,16 @@ Proactive background scheduler that pushes briefings and alerts via SSE to all c
 - History panel in UI for browsing/viewing/deleting past conversations
 - **Conversation search**: `GET /api/conversations/search?q=...&before=...&after=...` — full-text keyword search across all past conversations with date filtering
 - **AI tool**: `conversation_search` — AI can search past conversations when user asks about previous discussions
-- **Auto-sync to vault**: Substantive conversations (4+ user messages) are automatically summarized and saved to `Conversations/` folder in the knowledge base when sessions end. Prevents duplicates via `syncedAt` marker in conversation JSON. Empty/short chats are skipped.
+- **Auto-sync to vault**: All conversations (1+ user messages) are automatically synced to `Conversations/` folder:
+  - Short conversations (<3 user msgs): snippet-based summary (fast, no API call)
+  - Longer conversations (3+ user msgs): AI-generated summary via Claude Haiku (overview, decisions, action items, follow-ups)
+  - Prevents duplicates via `syncedAt` marker in conversation JSON
+- **Post-conversation memory extraction**: After syncing longer conversations, `extractAndFileInsights()` runs to:
+  - Extract new profile facts → appended to `About Me/My Profile.md`
+  - Extract action items → filed to `Tasks & TODOs/Extracted Tasks.md`
+  - Skips if nothing new was learned (AI-determined)
+- **Richer session start**: New sessions receive the last conversation's final 10 exchanges (not just title) plus recent conversation titles, enabling natural continuity
+- **Daily Digests**: Scheduled briefs (morning/afternoon/evening) are AI-synthesized by Claude Haiku into conversational summaries and saved to `Daily Digests/` in the vault
 
 ## Multi-Agent System
 

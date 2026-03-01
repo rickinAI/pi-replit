@@ -255,6 +255,7 @@ function resolvePath(p) {
 // src/conversations.ts
 import fs2 from "fs";
 import path2 from "path";
+import Anthropic from "@anthropic-ai/sdk";
 var dataDir = "";
 function init2(dir) {
   dataDir = dir;
@@ -317,6 +318,45 @@ function getRecentSummary(count = 3) {
   return `Recent conversations:
 ${lines.join("\n")}`;
 }
+function getLastConversationContext(maxMessages = 10) {
+  if (!fs2.existsSync(dataDir)) return "";
+  const files = fs2.readdirSync(dataDir).filter((f) => f.endsWith(".json"));
+  if (files.length === 0) return "";
+  let mostRecent = null;
+  let latestTime = 0;
+  for (const file of files) {
+    try {
+      const conv = JSON.parse(fs2.readFileSync(path2.join(dataDir, file), "utf-8"));
+      if (conv.updatedAt > latestTime && conv.messages.length > 0) {
+        latestTime = conv.updatedAt;
+        mostRecent = conv;
+      }
+    } catch {
+    }
+  }
+  if (!mostRecent) return "";
+  const relevantMsgs = mostRecent.messages.filter((m) => m.role !== "system").slice(-maxMessages);
+  if (relevantMsgs.length === 0) return "";
+  const date = new Date(mostRecent.createdAt).toLocaleDateString("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    month: "short",
+    day: "numeric"
+  });
+  const time = new Date(mostRecent.updatedAt).toLocaleTimeString("en-US", {
+    timeZone: "America/New_York",
+    hour: "numeric",
+    minute: "2-digit"
+  });
+  const exchanges = relevantMsgs.map((m) => {
+    const role = m.role === "user" ? "Rickin" : "You";
+    const text = m.text.length > 300 ? m.text.slice(0, 300) + "..." : m.text;
+    return `**${role}:** ${text}`;
+  }).join("\n\n");
+  return `Your last conversation with Rickin was "${mostRecent.title}" (${date}, last active ${time}):
+
+${exchanges}`;
+}
 function createConversation(sessionId) {
   return {
     id: sessionId,
@@ -378,9 +418,9 @@ function search(query, options) {
 }
 function shouldSync(conv) {
   const userMessages = conv.messages.filter((m) => m.role === "user");
-  return userMessages.length >= 4;
+  return userMessages.length >= 1;
 }
-function generateSummaryMarkdown(conv) {
+function generateSnippetSummary(conv) {
   const date = new Date(conv.createdAt).toLocaleDateString("en-US", {
     timeZone: "America/New_York",
     weekday: "long",
@@ -419,6 +459,74 @@ ${keyPoints.trim() || "- General discussion"}
 ---
 *Session ID: ${conv.id}*
 `;
+}
+async function generateAISummary(conv) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    console.warn("[conversations] No ANTHROPIC_API_KEY \u2014 falling back to snippet summary");
+    return generateSnippetSummary(conv);
+  }
+  const date = new Date(conv.createdAt).toLocaleDateString("en-US", {
+    timeZone: "America/New_York",
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric"
+  });
+  const time = new Date(conv.createdAt).toLocaleTimeString("en-US", {
+    timeZone: "America/New_York",
+    hour: "numeric",
+    minute: "2-digit"
+  });
+  const transcript = conv.messages.filter((m) => m.role !== "system").map((m) => {
+    const role = m.role === "user" ? "Rickin" : "Assistant";
+    const text = m.text.length > 500 ? m.text.slice(0, 500) + "..." : m.text;
+    return `${role}: ${text}`;
+  }).join("\n\n");
+  try {
+    const client = new Anthropic({ apiKey });
+    const response = await client.messages.create({
+      model: "claude-haiku-4-5-20241022",
+      max_tokens: 800,
+      messages: [{
+        role: "user",
+        content: `Summarize this conversation between Rickin and his AI assistant. Write in third person about what was discussed.
+
+Format your response EXACTLY as markdown with these sections:
+## Summary
+2-3 sentences capturing the main topics and purpose of the conversation.
+
+## Key Decisions & Outcomes
+- Bullet points of any decisions made, answers given, or outcomes reached
+- If none, write "- General discussion, no specific decisions"
+
+## Action Items
+- Any tasks, follow-ups, or things to do that came up
+- If none, write "- No action items"
+
+## Topics for Follow-up
+- Things that were mentioned but not fully resolved, or areas to revisit
+- If none, write "- None identified"
+
+CONVERSATION:
+${transcript}`
+      }]
+    });
+    const aiText = response.content[0]?.type === "text" ? response.content[0].text : "";
+    return `# ${conv.title}
+
+**Date:** ${date} at ${time}
+**Messages:** ${conv.messages.length}
+
+${aiText}
+
+---
+*Session ID: ${conv.id}*
+`;
+  } catch (err) {
+    console.error("[conversations] AI summary failed, falling back to snippet:", err);
+    return generateSnippetSummary(conv);
+  }
 }
 
 // src/gmail.ts
@@ -1675,6 +1783,7 @@ ${lines.join("\n\n")}`;
 // src/alerts.ts
 import fs6 from "fs";
 import path6 from "path";
+import Anthropic2 from "@anthropic-ai/sdk";
 var DEFAULT_CONFIG = {
   timezone: "America/New_York",
   location: "New York",
@@ -1702,6 +1811,7 @@ var DEFAULT_CONFIG = {
 var configPath = "";
 var config = { ...DEFAULT_CONFIG };
 var broadcastFn = null;
+var saveBriefFn = null;
 var briefInterval = null;
 var alertInterval = null;
 var alertedCalendarEvents = /* @__PURE__ */ new Set();
@@ -1897,6 +2007,38 @@ ${cleaned}`;
     return `**${name}:** [unavailable]`;
   }
 }
+async function synthesizeBrief(type, rawSections) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return rawSections;
+  try {
+    const client = new Anthropic2({ apiKey });
+    const response = await client.messages.create({
+      model: "claude-haiku-4-5-20241022",
+      max_tokens: 800,
+      messages: [{
+        role: "user",
+        content: `You are Rickin's personal assistant delivering his ${type} briefing. Synthesize the following raw data into a concise, natural-language briefing. Lead with the most important and actionable items. Be direct \u2014 no filler.
+
+Format rules:
+- Use markdown headers (##) for major sections
+- Use bullet points for individual items
+- Keep each item to 1-2 lines max
+- If a section has no data or says "not connected", skip it entirely
+- For markets, highlight notable moves; don't just list prices
+- For calendar, emphasize timing and what's next
+- For email, mention sender and subject briefly
+
+RAW DATA:
+${rawSections}`
+      }]
+    });
+    const text = response.content[0]?.type === "text" ? response.content[0].text : "";
+    return text || rawSections;
+  } catch (err) {
+    console.error(`[alerts] AI synthesis failed for ${type} brief:`, err);
+    return rawSections;
+  }
+}
 async function generateBrief(type) {
   const briefConfig = config.briefs[type];
   const sections = [];
@@ -1908,7 +2050,22 @@ async function generateBrief(type) {
       sections.push(result.value);
     }
   }
-  return sections.join("\n\n---\n\n");
+  const rawContent = sections.join("\n\n---\n\n");
+  const synthesized = await synthesizeBrief(type, rawContent);
+  if (saveBriefFn) {
+    try {
+      const dateStr = (/* @__PURE__ */ new Date()).toLocaleDateString("en-CA", { timeZone: config.timezone });
+      const briefPath = `Daily Digests/${dateStr}-${type}.md`;
+      const header = `# ${type.charAt(0).toUpperCase() + type.slice(1)} Brief \u2014 ${dateStr}
+
+`;
+      await saveBriefFn(briefPath, header + synthesized);
+      console.log(`[alerts] Brief saved to vault: ${briefPath}`);
+    } catch (err) {
+      console.error(`[alerts] Failed to save brief to vault:`, err);
+    }
+  }
+  return synthesized;
 }
 async function checkBriefs() {
   if (briefRunning) return;
@@ -2091,8 +2248,9 @@ async function doCheckAlerts() {
     }
   }
 }
-function startAlertSystem(broadcast) {
+function startAlertSystem(broadcast, saveBrief) {
   broadcastFn = broadcast;
+  saveBriefFn = saveBrief || null;
   briefInterval = setInterval(() => {
     checkBriefs().catch((err) => console.error("[alerts] Brief check error:", err));
   }, 6e4);
@@ -2191,7 +2349,7 @@ function getAgent(id) {
 }
 
 // src/agents/orchestrator.ts
-import Anthropic from "@anthropic-ai/sdk";
+import Anthropic3 from "@anthropic-ai/sdk";
 var MAX_TOOL_ITERATIONS = 15;
 function convertToolsToAnthropicFormat(tools) {
   return tools.map((t) => ({
@@ -2226,7 +2384,7 @@ async function runSubAgent(opts) {
   const filteredTools = opts.allTools.filter((t) => agent.tools.includes(t.name));
   const anthropicTools = convertToolsToAnthropicFormat(filteredTools);
   const toolsUsed = [];
-  const client = new Anthropic({ apiKey: opts.apiKey });
+  const client = new Anthropic3({ apiKey: opts.apiKey });
   const modelId = agent.model === "default" ? opts.model || "claude-sonnet-4-20250514" : agent.model;
   let userContent = opts.task;
   if (opts.context) userContent = `Context:
@@ -2307,6 +2465,66 @@ ${opts.task}`;
     durationMs,
     tokensUsed: { input: totalInput, output: totalOutput }
   };
+}
+
+// src/memory-extractor.ts
+import Anthropic4 from "@anthropic-ai/sdk";
+async function extractAndFileInsights(messages, currentProfile) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return { profileUpdates: [], actionItems: [], skipReason: "no_api_key" };
+  }
+  const transcript = messages.filter((m) => m.role !== "system").map((m) => {
+    const role = m.role === "user" ? "Rickin" : "Assistant";
+    const text = m.text.length > 600 ? m.text.slice(0, 600) + "..." : m.text;
+    return `${role}: ${text}`;
+  }).join("\n\n");
+  if (transcript.length < 50) {
+    return { profileUpdates: [], actionItems: [], skipReason: "too_short" };
+  }
+  try {
+    const client = new Anthropic4({ apiKey });
+    const response = await client.messages.create({
+      model: "claude-haiku-4-5-20241022",
+      max_tokens: 600,
+      messages: [{
+        role: "user",
+        content: `You analyze conversations between Rickin and his AI assistant to extract new facts worth remembering.
+
+CURRENT PROFILE (already known):
+${currentProfile || "(empty)"}
+
+CONVERSATION:
+${transcript}
+
+Extract ONLY genuinely new information not already in the profile. Respond with valid JSON:
+{
+  "profileUpdates": ["string array of new facts about Rickin \u2014 preferences, people, projects, routines, interests, decisions. Each item is a short sentence."],
+  "actionItems": ["string array of action items or tasks mentioned \u2014 things to do, follow up on, or remember. Each item is a short sentence."],
+  "skipReason": "If nothing new was learned, set this to 'nothing_new'. Otherwise omit this field."
+}
+
+Rules:
+- Only include facts that are NOT already in the current profile
+- Do not include generic observations or AI-side actions
+- Action items must be things Rickin needs to do, not things the assistant did
+- If the conversation was purely functional (weather check, quick lookup) with no new personal info, return skipReason: "nothing_new"
+- Keep each item concise \u2014 one sentence max
+- Return ONLY the JSON, no markdown fencing`
+      }]
+    });
+    const text = response.content[0]?.type === "text" ? response.content[0].text : "";
+    const cleaned = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+    const parsed = JSON.parse(cleaned);
+    return {
+      profileUpdates: Array.isArray(parsed.profileUpdates) ? parsed.profileUpdates : [],
+      actionItems: Array.isArray(parsed.actionItems) ? parsed.actionItems : [],
+      skipReason: parsed.skipReason || void 0
+    };
+  } catch (err) {
+    console.error("[memory-extractor] Extraction failed:", err);
+    return { profileUpdates: [], actionItems: [], skipReason: "extraction_error" };
+  }
 }
 
 // server.ts
@@ -2975,8 +3193,10 @@ async function syncConversationToVault(conv) {
     syncedConversations.add(conv.id);
     return;
   }
+  const userMsgCount = conv.messages.filter((m) => m.role === "user").length;
+  const useAI = userMsgCount >= 3;
   try {
-    const summary = generateSummaryMarkdown(conv);
+    const summary = useAI ? await generateAISummary(conv) : generateSnippetSummary(conv);
     const dateStr = new Date(conv.createdAt).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
     let safeTitle = conv.title.replace(/[^a-zA-Z0-9 _-]/g, "").slice(0, 50).trim();
     if (!safeTitle) safeTitle = conv.id;
@@ -2985,9 +3205,59 @@ async function syncConversationToVault(conv) {
     syncedConversations.add(conv.id);
     conv.syncedAt = Date.now();
     save(conv);
-    console.log(`[sync] Conversation synced to vault: ${notePath}`);
+    console.log(`[sync] Conversation synced to vault: ${notePath} (${useAI ? "AI" : "snippet"} summary)`);
+    if (useAI) {
+      runInsightExtraction(conv).catch(
+        (err) => console.error(`[sync] Insight extraction failed for ${conv.id}:`, err)
+      );
+    }
   } catch (err) {
     console.error(`[sync] Failed to sync conversation ${conv.id}:`, err);
+  }
+}
+async function runInsightExtraction(conv) {
+  try {
+    let currentProfile = "";
+    try {
+      currentProfile = await kbRead("About Me/My Profile.md");
+    } catch {
+    }
+    const result = await extractAndFileInsights(conv.messages, currentProfile);
+    if (result.skipReason) {
+      console.log(`[memory] Skipped extraction for ${conv.id}: ${result.skipReason}`);
+      return;
+    }
+    if (result.profileUpdates.length > 0) {
+      const newEntries = result.profileUpdates.map((u) => `- ${u}`).join("\n");
+      const appendText = `
+
+### Learned (${(/* @__PURE__ */ new Date()).toLocaleDateString("en-CA", { timeZone: "America/New_York" })})
+${newEntries}`;
+      try {
+        await kbAppend("About Me/My Profile.md", appendText);
+        console.log(`[memory] Appended ${result.profileUpdates.length} profile updates`);
+      } catch {
+        await kbCreate("About Me/My Profile.md", currentProfile + appendText);
+        console.log(`[memory] Created/overwrote profile with ${result.profileUpdates.length} updates`);
+      }
+    }
+    if (result.actionItems.length > 0) {
+      const dateStr = (/* @__PURE__ */ new Date()).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+      const items = result.actionItems.map((a) => `- [ ] ${a}`).join("\n");
+      const appendText = `
+
+### From conversation (${dateStr}): ${conv.title}
+${items}`;
+      try {
+        await kbAppend("Tasks & TODOs/Extracted Tasks.md", appendText);
+      } catch {
+        await kbCreate("Tasks & TODOs/Extracted Tasks.md", `# Extracted Tasks
+${appendText}`);
+      }
+      console.log(`[memory] Filed ${result.actionItems.length} action items`);
+    }
+  } catch (err) {
+    console.error(`[memory] Insight extraction error:`, err);
   }
 }
 var processingQueue = /* @__PURE__ */ new Set();
@@ -3282,7 +3552,9 @@ app.post("/api/session", async (_req, res) => {
       }
     });
     const recentSummary = getRecentSummary(5);
-    res.json({ sessionId, recentContext: recentSummary || null });
+    const lastConvoContext = getLastConversationContext(10);
+    const combinedContext = [lastConvoContext, recentSummary].filter(Boolean).join("\n\n---\n\n") || null;
+    res.json({ sessionId, recentContext: combinedContext });
   } catch (err) {
     console.error("Failed to create session:", err);
     res.status(500).json({ error: String(err) });
@@ -3770,7 +4042,13 @@ async function startServer(maxRetries = 5) {
         });
         server.listen(PORT, "0.0.0.0", () => {
           console.log(`[ready] pi-replit listening on http://localhost:${PORT}`);
-          startAlertSystem(broadcastToAll);
+          startAlertSystem(broadcastToAll, async (briefPath, content) => {
+            try {
+              await kbCreate(briefPath, content);
+            } catch (err) {
+              console.error(`[alerts] Vault save failed for ${briefPath}:`, err);
+            }
+          });
           resolve();
         });
       });

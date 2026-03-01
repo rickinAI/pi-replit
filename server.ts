@@ -36,6 +36,7 @@ import * as maps from "./src/maps.js";
 import * as alerts from "./src/alerts.js";
 import * as agentLoader from "./src/agents/loader.js";
 import { runSubAgent } from "./src/agents/orchestrator.js";
+import { extractAndFileInsights } from "./src/memory-extractor.js";
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
@@ -755,8 +756,13 @@ async function syncConversationToVault(conv: conversations.Conversation) {
     return;
   }
 
+  const userMsgCount = conv.messages.filter(m => m.role === "user").length;
+  const useAI = userMsgCount >= 3;
+
   try {
-    const summary = conversations.generateSummaryMarkdown(conv);
+    const summary = useAI
+      ? await conversations.generateAISummary(conv)
+      : conversations.generateSnippetSummary(conv);
     const dateStr = new Date(conv.createdAt).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
     let safeTitle = conv.title.replace(/[^a-zA-Z0-9 _-]/g, "").slice(0, 50).trim();
     if (!safeTitle) safeTitle = conv.id;
@@ -765,9 +771,57 @@ async function syncConversationToVault(conv: conversations.Conversation) {
     syncedConversations.add(conv.id);
     (conv as any).syncedAt = Date.now();
     conversations.save(conv);
-    console.log(`[sync] Conversation synced to vault: ${notePath}`);
+    console.log(`[sync] Conversation synced to vault: ${notePath} (${useAI ? "AI" : "snippet"} summary)`);
+
+    if (useAI) {
+      runInsightExtraction(conv).catch(err =>
+        console.error(`[sync] Insight extraction failed for ${conv.id}:`, err)
+      );
+    }
   } catch (err) {
     console.error(`[sync] Failed to sync conversation ${conv.id}:`, err);
+  }
+}
+
+async function runInsightExtraction(conv: conversations.Conversation) {
+  try {
+    let currentProfile = "";
+    try {
+      currentProfile = await kbRead("About Me/My Profile.md");
+    } catch {}
+
+    const result = await extractAndFileInsights(conv.messages, currentProfile);
+
+    if (result.skipReason) {
+      console.log(`[memory] Skipped extraction for ${conv.id}: ${result.skipReason}`);
+      return;
+    }
+
+    if (result.profileUpdates.length > 0) {
+      const newEntries = result.profileUpdates.map(u => `- ${u}`).join("\n");
+      const appendText = `\n\n### Learned (${new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" })})\n${newEntries}`;
+      try {
+        await kbAppend("About Me/My Profile.md", appendText);
+        console.log(`[memory] Appended ${result.profileUpdates.length} profile updates`);
+      } catch {
+        await kbCreate("About Me/My Profile.md", currentProfile + appendText);
+        console.log(`[memory] Created/overwrote profile with ${result.profileUpdates.length} updates`);
+      }
+    }
+
+    if (result.actionItems.length > 0) {
+      const dateStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+      const items = result.actionItems.map(a => `- [ ] ${a}`).join("\n");
+      const appendText = `\n\n### From conversation (${dateStr}): ${conv.title}\n${items}`;
+      try {
+        await kbAppend("Tasks & TODOs/Extracted Tasks.md", appendText);
+      } catch {
+        await kbCreate("Tasks & TODOs/Extracted Tasks.md", `# Extracted Tasks\n${appendText}`);
+      }
+      console.log(`[memory] Filed ${result.actionItems.length} action items`);
+    }
+  } catch (err) {
+    console.error(`[memory] Insight extraction error:`, err);
   }
 }
 
@@ -1053,8 +1107,10 @@ app.post("/api/session", async (_req: Request, res: Response) => {
     });
 
     const recentSummary = conversations.getRecentSummary(5);
+    const lastConvoContext = conversations.getLastConversationContext(10);
+    const combinedContext = [lastConvoContext, recentSummary].filter(Boolean).join("\n\n---\n\n") || null;
 
-    res.json({ sessionId, recentContext: recentSummary || null });
+    res.json({ sessionId, recentContext: combinedContext });
   } catch (err) {
     console.error("Failed to create session:", err);
     res.status(500).json({ error: String(err) });
@@ -1537,7 +1593,11 @@ async function startServer(maxRetries = 5) {
         });
         server.listen(PORT, "0.0.0.0", () => {
           console.log(`[ready] pi-replit listening on http://localhost:${PORT}`);
-          alerts.startAlertSystem(broadcastToAll);
+          alerts.startAlertSystem(broadcastToAll, async (briefPath, content) => {
+            try { await kbCreate(briefPath, content); } catch (err) {
+              console.error(`[alerts] Vault save failed for ${briefPath}:`, err);
+            }
+          });
           resolve();
         });
       });
