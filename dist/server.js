@@ -2721,7 +2721,7 @@ async function runSubAgent(opts) {
   const anthropicTools = convertToolsToAnthropicFormat(filteredTools);
   const toolsUsed = [];
   const client = new Anthropic3({ apiKey: opts.apiKey });
-  const modelId = agent.model === "default" ? opts.model || "claude-sonnet-4-6-latest" : agent.model;
+  const modelId = agent.model === "default" ? opts.model || "claude-sonnet-4-6" : agent.model;
   let userContent = opts.task;
   if (opts.context) userContent = `Context:
 ${opts.context}
@@ -3608,8 +3608,8 @@ ${list2}` }],
   ];
 }
 var sessions = /* @__PURE__ */ new Map();
-var FAST_MODEL_ID = "claude-haiku-4-5-latest";
-var FULL_MODEL_ID = "claude-sonnet-4-6-latest";
+var FAST_MODEL_ID = "claude-haiku-4-5";
+var FULL_MODEL_ID = "claude-sonnet-4-6";
 var FAST_PATTERNS = [
   /^(hi|hello|hey|yo|sup|good\s*(morning|afternoon|evening)|thanks|thank you|ok|okay|got it|cool|nice|great)\b/i,
   /^what('s| is) (the )?(time|date|day)\b/i,
