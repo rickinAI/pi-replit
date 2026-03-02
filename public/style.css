@@ -1805,17 +1805,25 @@ body.light-theme .copy-btn:hover {
 }
 
 .glance-collapsed {
-  height: 26px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  padding: 0 14px;
+  padding: 4px 14px;
   font-size: 11px;
   color: rgba(0, 255, 65, 0.45);
   letter-spacing: 0.3px;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
   gap: 4px;
+}
+
+.glance-next-row {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  color: rgba(0, 255, 65, 0.35);
 }
 
 .glance-clock {

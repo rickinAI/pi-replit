@@ -1620,17 +1620,18 @@ async function fetchGlance() {
     if (d.weather) parts.push(`${e(d.weather.icon)} ${e(String(d.weather.tempC))}°C`);
     if (d.emails && d.emails.unread > 0) parts.push(`${d.emails.unread} new today`);
     if (d.tasks && d.tasks.active > 0) parts.push(`${d.tasks.active} task${d.tasks.active !== 1 ? "s" : ""}`);
+    let nextEventHtml = "";
     if (d.nextEvent) {
       const t = d.nextEvent.time || "";
       const short = t.replace(/^.*?,\s*/, "").replace(/:00\s*/g, " ");
-      parts.push(`Next: ${e(d.nextEvent.title)}${short ? " " + e(short) : ""}`);
+      nextEventHtml = `<div class="glance-next-row">Next: ${e(d.nextEvent.title)}${short ? " " + e(short) : ""}</div>`;
     }
     if (parts.length === 0 && d.time) parts.push(e(d.time));
     if (parts.length === 0) parts.push("—");
 
     const sep = '<span class="glance-sep">·</span>';
     const clockHtml = `<span id="glance-clock" class="glance-clock">${getETTimeString()}</span>`;
-    collapsed.innerHTML = clockHtml + sep + parts.join(sep);
+    collapsed.innerHTML = clockHtml + sep + parts.join(sep) + nextEventHtml;
 
     const detailRows = [];
     if (d.time) detailRows.push(row("time", e(d.time)));
