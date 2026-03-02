@@ -48,12 +48,9 @@ const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = __filename.includes("/dist/") ? path.resolve(__dirname, "..") : __dirname;
 const PUBLIC_DIR = path.join(PROJECT_ROOT, "public");
 const AGENT_DIR = path.join(PROJECT_ROOT, ".pi/agent");
-const DATA_DIR = path.join(PROJECT_ROOT, "data", "conversations");
-
 const VAULT_DIR = path.join(PROJECT_ROOT, "data", "vault");
 
 fs.mkdirSync(AGENT_DIR, { recursive: true });
-conversations.init(DATA_DIR);
 gmail.init(PROJECT_ROOT);
 calendar.init(PROJECT_ROOT);
 tasks.init(PROJECT_ROOT);
@@ -748,7 +745,7 @@ function buildConversationTools(): ToolDefinition[] {
       }),
       async execute(_toolCallId, params) {
         const after = params.days_ago ? Date.now() - params.days_ago * 24 * 60 * 60 * 1000 : undefined;
-        const results = conversations.search(params.query, { after, limit: 8 });
+        const results = await conversations.search(params.query, { after, limit: 8 });
 
         if (results.length === 0) {
           return { content: [{ type: "text" as const, text: `No past conversations found matching "${params.query}".` }], details: {} };
@@ -873,7 +870,7 @@ function classifyIntent(message: string): "fast" | "full" {
 
 const syncedConversations = new Set<string>();
 
-function saveAndCleanSession(id: string) {
+async function saveAndCleanSession(id: string) {
   const entry = sessions.get(id);
   if (!entry) return;
   if (entry.currentAgentText) {
@@ -881,7 +878,7 @@ function saveAndCleanSession(id: string) {
     entry.currentAgentText = "";
   }
   if (entry.conversation.messages.length > 0) {
-    conversations.save(entry.conversation);
+    await conversations.save(entry.conversation);
     syncConversationToVault(entry.conversation);
   }
   for (const sub of entry.subscribers) { try { sub.end(); } catch {} }
@@ -894,7 +891,7 @@ async function syncConversationToVault(conv: conversations.Conversation) {
   if (!conversations.shouldSync(conv)) return;
   if (!useLocalVault && !obsidian.isConfigured()) return;
 
-  const existing = conversations.load(conv.id);
+  const existing = await conversations.load(conv.id);
   if (existing && (existing as any).syncedAt) {
     syncedConversations.add(conv.id);
     return;
@@ -914,7 +911,7 @@ async function syncConversationToVault(conv: conversations.Conversation) {
     await kbCreate(notePath, summary);
     syncedConversations.add(conv.id);
     (conv as any).syncedAt = Date.now();
-    conversations.save(conv);
+    await conversations.save(conv);
     console.log(`[sync] Conversation synced to vault: ${notePath} (${useAI ? "AI" : "snippet"} summary)`);
 
     if (useAI) {
@@ -1006,23 +1003,23 @@ async function processNextPendingMessage(sessionId: string) {
   processingQueue.delete(sessionId);
 }
 
-setInterval(() => {
+setInterval(async () => {
   const cutoff = Date.now() - 2 * 60 * 60 * 1000;
   for (const [id, entry] of sessions.entries()) {
     if (entry.createdAt < cutoff) {
-      saveAndCleanSession(id);
+      await saveAndCleanSession(id);
     }
   }
 }, 10 * 60 * 1000);
 
-setInterval(() => {
+setInterval(async () => {
   for (const entry of sessions.values()) {
     if (entry.currentAgentText) {
       conversations.addMessage(entry.conversation, "agent", entry.currentAgentText);
       entry.currentAgentText = "";
     }
     if (entry.conversation.messages.length > 0) {
-      conversations.save(entry.conversation);
+      await conversations.save(entry.conversation);
     }
   }
 }, 5 * 60 * 1000);
@@ -1244,14 +1241,14 @@ app.post("/api/session", async (_req: Request, res: Response) => {
           conversations.addMessage(entry.conversation, "agent", entry.currentAgentText);
           entry.currentAgentText = "";
         }
-        conversations.save(entry.conversation);
+        conversations.save(entry.conversation).catch(err => console.error("[conversations] save error:", err));
         syncConversationToVault(entry.conversation);
         processNextPendingMessage(sessionId);
       }
     });
 
-    const recentSummary = conversations.getRecentSummary(5);
-    const lastConvoContext = conversations.getLastConversationContext(10);
+    const recentSummary = await conversations.getRecentSummary(5);
+    const lastConvoContext = await conversations.getLastConversationContext(10);
     const vaultIndex = await getVaultIndex();
     const combinedContext = [lastConvoContext, recentSummary, vaultIndex].filter(Boolean).join("\n\n---\n\n") || null;
     entry.startupContext = combinedContext || undefined;
@@ -1323,7 +1320,7 @@ app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
   const text = message?.trim() || "(image attached)";
   const imgAttachments = images?.map(i => ({ mimeType: i.mimeType, data: i.data }));
   conversations.addMessage(entry.conversation, "user", text, imgAttachments);
-  conversations.save(entry.conversation);
+  await conversations.save(entry.conversation);
 
   if (entry.isAgentRunning) {
     entry.pendingMessages.push({ text, images, timestamp: Date.now() });
@@ -1427,32 +1424,32 @@ app.post("/api/session/:id/interview-response", (req: Request, res: Response) =>
   res.json({ ok: true });
 });
 
-app.delete("/api/session/:id", (req: Request, res: Response) => {
-  saveAndCleanSession(req.params["id"] as string);
+app.delete("/api/session/:id", async (req: Request, res: Response) => {
+  await saveAndCleanSession(req.params["id"] as string);
   res.json({ ok: true });
 });
 
-app.get("/api/conversations/search", (req: Request, res: Response) => {
+app.get("/api/conversations/search", async (req: Request, res: Response) => {
   const q = (req.query["q"] as string) || "";
   if (!q.trim()) { res.json([]); return; }
   const before = req.query["before"] ? Number(req.query["before"]) : undefined;
   const after = req.query["after"] ? Number(req.query["after"]) : undefined;
-  const results = conversations.search(q, { before, after });
+  const results = await conversations.search(q, { before, after });
   res.json(results);
 });
 
-app.get("/api/conversations", (_req: Request, res: Response) => {
-  res.json(conversations.list());
+app.get("/api/conversations", async (_req: Request, res: Response) => {
+  res.json(await conversations.list());
 });
 
-app.get("/api/conversations/:id", (req: Request, res: Response) => {
-  const conv = conversations.load(req.params["id"] as string);
+app.get("/api/conversations/:id", async (req: Request, res: Response) => {
+  const conv = await conversations.load(req.params["id"] as string);
   if (!conv) { res.status(404).json({ error: "Conversation not found" }); return; }
   res.json(conv);
 });
 
-app.delete("/api/conversations/:id", (req: Request, res: Response) => {
-  conversations.remove(req.params["id"] as string);
+app.delete("/api/conversations/:id", async (req: Request, res: Response) => {
+  await conversations.remove(req.params["id"] as string);
   res.json({ ok: true });
 });
 
@@ -1780,6 +1777,9 @@ async function waitForPort(port: number, maxWaitMs = 30000) {
 }
 
 async function startServer(maxRetries = 5) {
+  await conversations.init();
+  console.log("[boot] Conversations storage ready (PostgreSQL)");
+
   const portReady = await waitForPort(PORT);
   if (!portReady) {
     console.error(`[boot] Port ${PORT} could not be freed after 30s — exiting`);

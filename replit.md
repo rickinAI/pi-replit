@@ -22,7 +22,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **src/websearch.ts** — Web search via DuckDuckGo HTML (free, no API key)
 - **src/tasks.ts** — Local task manager with JSON storage
 - **src/news.ts** — News headlines via Google News RSS feeds
-- **src/conversations.ts** — Conversation persistence module (save/load/list/delete JSON files, AI summaries via Haiku, last-conversation context for session start)
+- **src/conversations.ts** — Conversation persistence module (save/load/list/delete via PostgreSQL, AI summaries via Haiku, last-conversation context for session start). Uses Replit's built-in PostgreSQL database (DATABASE_URL) so conversations persist across deployments
 - **src/memory-extractor.ts** — Post-conversation fact extraction (profile updates, action items) via Claude Haiku
 - **.pi/SYSTEM.md** — Agent personality, greeting template, vault structure map, and auto-categorization rules (auto-loaded by SDK from `.pi/SYSTEM.md`)
 - **Vault index injection** — At session creation, a full vault tree (all folders/files) is generated via `buildVaultTree()` / `formatVaultIndex()` and injected into the agent's first prompt via `startupContext`. This gives the agent immediate awareness of all vault contents without needing to call notes_list first
@@ -31,7 +31,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - History panel (slide-out, lists past conversations, view/delete)
   - Confirmation modal before starting new session
 - **dist/** — esbuild output (compiled server)
-- **data/conversations/** — Persisted conversation JSON files
+- **data/conversations/** — Legacy conversation JSON files (now stored in PostgreSQL)
 - **public/manifest.json** — PWA web app manifest (name, icons, display mode)
 - **public/icons/** — App icons (180x180 apple-touch-icon, 192x192, 512x512)
 - **tunnel-setup/** — macOS cloudflared named tunnel startup script with auto-restart loop

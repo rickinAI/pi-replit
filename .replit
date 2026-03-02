@@ -1,6 +1,6 @@
 run = "bash start.sh"
 entrypoint = "server.ts"
-modules = ["python-3.11", "nodejs-22"]
+modules = ["python-3.11", "nodejs-22", "postgresql-16"]
 
 [nix]
 channel = "stable-25_05"

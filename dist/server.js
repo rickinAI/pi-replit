@@ -10,8 +10,8 @@ import express from "express";
 import cors from "cors";
 import { createServer } from "http";
 import { fileURLToPath } from "url";
-import path8 from "path";
-import fs8 from "fs";
+import path7 from "path";
+import fs7 from "fs";
 import { execSync } from "child_process";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
@@ -372,11 +372,11 @@ async function fileInfo2(notePath) {
     modified: stat.mtime.toISOString()
   }, null, 2);
 }
-function nudgeSync(filePath2) {
+function nudgeSync(filePath) {
   setTimeout(async () => {
     try {
       const now = /* @__PURE__ */ new Date();
-      await fs.utimes(filePath2, now, now);
+      await fs.utimes(filePath, now, now);
     } catch {
     }
   }, 600);
@@ -442,59 +442,73 @@ function resolvePath(p) {
 }
 
 // src/conversations.ts
-import fs2 from "fs";
-import path2 from "path";
+import pg from "pg";
 import Anthropic from "@anthropic-ai/sdk";
-var dataDir = "";
-function init2(dir) {
-  dataDir = dir;
-  fs2.mkdirSync(dataDir, { recursive: true });
+var pool = null;
+async function init2() {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error("[conversations] DATABASE_URL not set");
+  }
+  pool = new pg.Pool({ connectionString, max: 5 });
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS conversations (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL DEFAULT 'New conversation',
+      messages JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      synced_at BIGINT
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC)
+  `);
+  console.log("[conversations] PostgreSQL storage initialized");
 }
-function filePath(id) {
-  const safe = id.replace(/[^a-zA-Z0-9_-]/g, "");
-  return path2.join(dataDir, `${safe}.json`);
+function db() {
+  if (!pool) throw new Error("[conversations] Not initialized \u2014 call init() first");
+  return pool;
 }
-function save(conv) {
+async function save(conv) {
   conv.updatedAt = Date.now();
-  fs2.writeFileSync(filePath(conv.id), JSON.stringify(conv, null, 2));
+  await db().query(
+    `INSERT INTO conversations (id, title, messages, created_at, updated_at, synced_at)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (id) DO UPDATE SET
+       title = EXCLUDED.title,
+       messages = EXCLUDED.messages,
+       updated_at = EXCLUDED.updated_at,
+       synced_at = EXCLUDED.synced_at`,
+    [conv.id, conv.title, JSON.stringify(conv.messages), conv.createdAt, conv.updatedAt, conv.syncedAt || null]
+  );
 }
-function load(id) {
-  const fp = filePath(id);
-  if (!fs2.existsSync(fp)) return null;
-  try {
-    return JSON.parse(fs2.readFileSync(fp, "utf-8"));
-  } catch {
-    return null;
-  }
+async function load(id) {
+  const result = await db().query(
+    `SELECT id, title, messages, created_at, updated_at, synced_at FROM conversations WHERE id = $1`,
+    [id]
+  );
+  if (result.rows.length === 0) return null;
+  return rowToConversation(result.rows[0]);
 }
-function list() {
-  if (!fs2.existsSync(dataDir)) return [];
-  const files = fs2.readdirSync(dataDir).filter((f) => f.endsWith(".json"));
-  const summaries = [];
-  for (const file of files) {
-    try {
-      const raw = JSON.parse(fs2.readFileSync(path2.join(dataDir, file), "utf-8"));
-      summaries.push({
-        id: raw.id,
-        title: raw.title,
-        createdAt: raw.createdAt,
-        updatedAt: raw.updatedAt,
-        messageCount: raw.messages.length
-      });
-    } catch {
-    }
-  }
-  summaries.sort((a, b) => b.updatedAt - a.updatedAt);
-  return summaries;
+async function list() {
+  const result = await db().query(
+    `SELECT id, title, messages, created_at, updated_at FROM conversations ORDER BY updated_at DESC`
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    title: row.title,
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+    messageCount: Array.isArray(row.messages) ? row.messages.length : 0
+  }));
 }
-function remove(id) {
-  const fp = filePath(id);
-  if (!fs2.existsSync(fp)) return false;
-  fs2.unlinkSync(fp);
-  return true;
+async function remove(id) {
+  const result = await db().query(`DELETE FROM conversations WHERE id = $1`, [id]);
+  return (result.rowCount ?? 0) > 0;
 }
-function getRecentSummary(count = 3) {
-  const recent = list().slice(0, count);
+async function getRecentSummary(count = 3) {
+  const recent = (await list()).slice(0, count);
   if (recent.length === 0) return "";
   const lines = recent.map((c) => {
     const date = new Date(c.createdAt).toLocaleDateString("en-US", {
@@ -507,23 +521,14 @@ function getRecentSummary(count = 3) {
   return `Recent conversations:
 ${lines.join("\n")}`;
 }
-function getLastConversationContext(maxMessages = 10) {
-  if (!fs2.existsSync(dataDir)) return "";
-  const files = fs2.readdirSync(dataDir).filter((f) => f.endsWith(".json"));
-  if (files.length === 0) return "";
-  let mostRecent = null;
-  let latestTime = 0;
-  for (const file of files) {
-    try {
-      const conv = JSON.parse(fs2.readFileSync(path2.join(dataDir, file), "utf-8"));
-      if (conv.updatedAt > latestTime && conv.messages.length > 0) {
-        latestTime = conv.updatedAt;
-        mostRecent = conv;
-      }
-    } catch {
-    }
-  }
-  if (!mostRecent) return "";
+async function getLastConversationContext(maxMessages = 10) {
+  const result = await db().query(
+    `SELECT id, title, messages, created_at, updated_at FROM conversations
+     WHERE jsonb_array_length(messages) > 0
+     ORDER BY updated_at DESC LIMIT 1`
+  );
+  if (result.rows.length === 0) return "";
+  const mostRecent = rowToConversation(result.rows[0]);
   const relevantMsgs = mostRecent.messages.filter((m) => m.role !== "system").slice(-maxMessages);
   if (relevantMsgs.length === 0) return "";
   const date = new Date(mostRecent.createdAt).toLocaleDateString("en-US", {
@@ -566,44 +571,51 @@ function addMessage(conv, role, text, images) {
   }
   conv.updatedAt = Date.now();
 }
-function search(query, options) {
-  if (!fs2.existsSync(dataDir)) return [];
-  const files = fs2.readdirSync(dataDir).filter((f) => f.endsWith(".json"));
-  const results = [];
+async function search(query, options) {
   const terms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 0);
+  if (terms.length === 0) return [];
   const limit = options?.limit ?? 10;
-  for (const file of files) {
-    try {
-      const conv = JSON.parse(fs2.readFileSync(path2.join(dataDir, file), "utf-8"));
-      if (options?.before && conv.createdAt > options.before) continue;
-      if (options?.after && conv.createdAt < options.after) continue;
-      const snippets = [];
-      for (const msg of conv.messages) {
-        if (msg.role === "system") continue;
-        const lower = msg.text.toLowerCase();
-        if (terms.some((t) => lower.includes(t))) {
-          const snippet = msg.text.slice(0, 200);
-          const role = msg.role === "user" ? "You" : "Agent";
-          const time = new Date(msg.timestamp).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-          snippets.push(`[${role}, ${time}] ${snippet}`);
-          if (snippets.length >= 3) break;
-        }
-      }
-      if (snippets.length > 0) {
-        results.push({
-          id: conv.id,
-          title: conv.title,
-          createdAt: conv.createdAt,
-          updatedAt: conv.updatedAt,
-          messageCount: conv.messages.length,
-          snippets
-        });
-      }
-    } catch {
-    }
+  let sql = `SELECT id, title, messages, created_at, updated_at FROM conversations WHERE 1=1`;
+  const params = [];
+  let paramIdx = 1;
+  if (options?.before) {
+    sql += ` AND created_at <= $${paramIdx++}`;
+    params.push(options.before);
   }
-  results.sort((a, b) => b.updatedAt - a.updatedAt);
-  return results.slice(0, limit);
+  if (options?.after) {
+    sql += ` AND created_at >= $${paramIdx++}`;
+    params.push(options.after);
+  }
+  sql += ` ORDER BY updated_at DESC`;
+  const result = await db().query(sql, params);
+  const results = [];
+  for (const row of result.rows) {
+    const conv = rowToConversation(row);
+    const snippets = [];
+    for (const msg of conv.messages) {
+      if (msg.role === "system") continue;
+      const lower = msg.text.toLowerCase();
+      if (terms.some((t) => lower.includes(t))) {
+        const snippet = msg.text.slice(0, 200);
+        const role = msg.role === "user" ? "You" : "Agent";
+        const time = new Date(msg.timestamp).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+        snippets.push(`[${role}, ${time}] ${snippet}`);
+        if (snippets.length >= 3) break;
+      }
+    }
+    if (snippets.length > 0) {
+      results.push({
+        id: conv.id,
+        title: conv.title,
+        createdAt: conv.createdAt,
+        updatedAt: conv.updatedAt,
+        messageCount: conv.messages.length,
+        snippets
+      });
+    }
+    if (results.length >= limit) break;
+  }
+  return results;
 }
 function shouldSync(conv) {
   const userMessages = conv.messages.filter((m) => m.role === "user");
@@ -717,11 +729,24 @@ ${aiText}
     return generateSnippetSummary(conv);
   }
 }
+function rowToConversation(row) {
+  const conv = {
+    id: row.id,
+    title: row.title,
+    messages: Array.isArray(row.messages) ? row.messages : JSON.parse(row.messages || "[]"),
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at)
+  };
+  if (row.synced_at) {
+    conv.syncedAt = Number(row.synced_at);
+  }
+  return conv;
+}
 
 // src/gmail.ts
 import { google } from "googleapis";
-import fs3 from "fs";
-import path3 from "path";
+import fs2 from "fs";
+import path2 from "path";
 var SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/calendar"
@@ -730,8 +755,8 @@ var tokenFilePath = "";
 var projectRoot = "";
 function init3(root) {
   projectRoot = root;
-  tokenFilePath = path3.join(root, "data", "gmail-tokens.json");
-  fs3.mkdirSync(path3.dirname(tokenFilePath), { recursive: true });
+  tokenFilePath = path2.join(root, "data", "gmail-tokens.json");
+  fs2.mkdirSync(path2.dirname(tokenFilePath), { recursive: true });
 }
 function isConfigured3() {
   return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
@@ -779,12 +804,12 @@ async function handleCallback(code) {
   saveTokens(tokens);
 }
 function saveTokens(tokens) {
-  fs3.writeFileSync(tokenFilePath, JSON.stringify(tokens, null, 2));
+  fs2.writeFileSync(tokenFilePath, JSON.stringify(tokens, null, 2));
 }
 function loadTokens() {
-  if (!fs3.existsSync(tokenFilePath)) return null;
+  if (!fs2.existsSync(tokenFilePath)) return null;
   try {
-    return JSON.parse(fs3.readFileSync(tokenFilePath, "utf-8"));
+    return JSON.parse(fs2.readFileSync(tokenFilePath, "utf-8"));
   } catch {
     return null;
   }
@@ -975,11 +1000,11 @@ async function getConnectedEmail() {
 
 // src/calendar.ts
 import { google as google2 } from "googleapis";
-import fs4 from "fs";
-import path4 from "path";
+import fs3 from "fs";
+import path3 from "path";
 var tokenFilePath2 = "";
 function init4(root) {
-  tokenFilePath2 = path4.join(root, "data", "gmail-tokens.json");
+  tokenFilePath2 = path3.join(root, "data", "gmail-tokens.json");
 }
 function getOAuth2Client2() {
   const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -988,15 +1013,15 @@ function getOAuth2Client2() {
   return new google2.auth.OAuth2(clientId, clientSecret, redirectUri);
 }
 function loadTokens2() {
-  if (!fs4.existsSync(tokenFilePath2)) return null;
+  if (!fs3.existsSync(tokenFilePath2)) return null;
   try {
-    return JSON.parse(fs4.readFileSync(tokenFilePath2, "utf-8"));
+    return JSON.parse(fs3.readFileSync(tokenFilePath2, "utf-8"));
   } catch {
     return null;
   }
 }
 function saveTokens2(tokens) {
-  fs4.writeFileSync(tokenFilePath2, JSON.stringify(tokens, null, 2));
+  fs3.writeFileSync(tokenFilePath2, JSON.stringify(tokens, null, 2));
 }
 async function getCalendarClient() {
   const tokens = loadTokens2();
@@ -1303,24 +1328,24 @@ ${lines.join("\n\n")}`;
 }
 
 // src/tasks.ts
-import fs5 from "fs";
-import path5 from "path";
+import fs4 from "fs";
+import path4 from "path";
 var tasksFilePath = "";
 function init5(root) {
-  const dataDir2 = path5.join(root, "data");
-  fs5.mkdirSync(dataDir2, { recursive: true });
-  tasksFilePath = path5.join(dataDir2, "tasks.json");
+  const dataDir = path4.join(root, "data");
+  fs4.mkdirSync(dataDir, { recursive: true });
+  tasksFilePath = path4.join(dataDir, "tasks.json");
 }
 function loadTasks() {
-  if (!fs5.existsSync(tasksFilePath)) return [];
+  if (!fs4.existsSync(tasksFilePath)) return [];
   try {
-    return JSON.parse(fs5.readFileSync(tasksFilePath, "utf-8"));
+    return JSON.parse(fs4.readFileSync(tasksFilePath, "utf-8"));
   } catch {
     return [];
   }
 }
 function saveTasks(tasks) {
-  fs5.writeFileSync(tasksFilePath, JSON.stringify(tasks, null, 2));
+  fs4.writeFileSync(tasksFilePath, JSON.stringify(tasks, null, 2));
 }
 function generateId() {
   return `t_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
@@ -1970,8 +1995,8 @@ ${lines.join("\n\n")}`;
 }
 
 // src/alerts.ts
-import fs6 from "fs";
-import path6 from "path";
+import fs5 from "fs";
+import path5 from "path";
 import Anthropic2 from "@anthropic-ai/sdk";
 var DEFAULT_CONFIG = {
   timezone: "America/New_York",
@@ -2010,16 +2035,16 @@ var briefRunning = false;
 var alertRunning = false;
 var lastDedupeReset = "";
 function init6(root) {
-  const dataDir2 = path6.join(root, "data");
-  fs6.mkdirSync(dataDir2, { recursive: true });
-  configPath = path6.join(dataDir2, "alerts-config.json");
+  const dataDir = path5.join(root, "data");
+  fs5.mkdirSync(dataDir, { recursive: true });
+  configPath = path5.join(dataDir, "alerts-config.json");
   config = loadConfig();
 }
 function loadConfig() {
   if (!configPath) return { ...DEFAULT_CONFIG };
   try {
-    if (fs6.existsSync(configPath)) {
-      const raw = JSON.parse(fs6.readFileSync(configPath, "utf-8"));
+    if (fs5.existsSync(configPath)) {
+      const raw = JSON.parse(fs5.readFileSync(configPath, "utf-8"));
       return { ...DEFAULT_CONFIG, ...raw, briefs: { ...DEFAULT_CONFIG.briefs, ...raw.briefs }, alerts: { ...DEFAULT_CONFIG.alerts, ...raw.alerts } };
     }
   } catch (err) {
@@ -2030,7 +2055,7 @@ function loadConfig() {
 function saveConfig() {
   if (!configPath) return;
   try {
-    fs6.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    fs5.writeFileSync(configPath, JSON.stringify(config, null, 2));
   } catch (err) {
     console.error("[alerts] Failed to save config:", err);
   }
@@ -2474,16 +2499,16 @@ async function triggerBrief(type) {
 }
 
 // src/agents/loader.ts
-import fs7 from "fs";
-import path7 from "path";
+import fs6 from "fs";
+import path6 from "path";
 var agents = [];
 var configPath2 = "";
-function init7(dataDir2) {
-  configPath2 = path7.join(dataDir2, "agents.json");
+function init7(dataDir) {
+  configPath2 = path6.join(dataDir, "agents.json");
   loadAgents();
   let reloadTimer = null;
   try {
-    fs7.watch(configPath2, () => {
+    fs6.watch(configPath2, () => {
       if (reloadTimer) clearTimeout(reloadTimer);
       reloadTimer = setTimeout(() => {
         console.log("[agents] Config file changed \u2014 reloading");
@@ -2498,7 +2523,7 @@ function init7(dataDir2) {
 }
 function loadAgents() {
   try {
-    const raw = fs7.readFileSync(configPath2, "utf-8");
+    const raw = fs6.readFileSync(configPath2, "utf-8");
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) {
       console.error("[agents] agents.json must be an array");
@@ -2722,20 +2747,18 @@ var ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
 var APP_PASSWORD = process.env.APP_PASSWORD || "";
 var SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path8.dirname(__filename);
-var PROJECT_ROOT = __filename.includes("/dist/") ? path8.resolve(__dirname, "..") : __dirname;
-var PUBLIC_DIR = path8.join(PROJECT_ROOT, "public");
-var AGENT_DIR = path8.join(PROJECT_ROOT, ".pi/agent");
-var DATA_DIR = path8.join(PROJECT_ROOT, "data", "conversations");
-var VAULT_DIR = path8.join(PROJECT_ROOT, "data", "vault");
-fs8.mkdirSync(AGENT_DIR, { recursive: true });
-init2(DATA_DIR);
+var __dirname = path7.dirname(__filename);
+var PROJECT_ROOT = __filename.includes("/dist/") ? path7.resolve(__dirname, "..") : __dirname;
+var PUBLIC_DIR = path7.join(PROJECT_ROOT, "public");
+var AGENT_DIR = path7.join(PROJECT_ROOT, ".pi/agent");
+var VAULT_DIR = path7.join(PROJECT_ROOT, "data", "vault");
+fs7.mkdirSync(AGENT_DIR, { recursive: true });
 init3(PROJECT_ROOT);
 init4(PROJECT_ROOT);
 init5(PROJECT_ROOT);
 init6(PROJECT_ROOT);
 init(VAULT_DIR);
-init7(path8.join(PROJECT_ROOT, "data"));
+init7(path7.join(PROJECT_ROOT, "data"));
 var useLocalVault = isConfigured2();
 setInterval(() => {
   const localAvailable = isConfigured2();
@@ -2769,7 +2792,7 @@ else {
 }
 if (!APP_PASSWORD) console.warn("APP_PASSWORD is not set \u2014 auth disabled.");
 console.log(`[boot] PORT=${PORT} PUBLIC_DIR=${PUBLIC_DIR} AGENT_DIR=${AGENT_DIR}`);
-console.log(`[boot] public/ exists: ${fs8.existsSync(PUBLIC_DIR)}`);
+console.log(`[boot] public/ exists: ${fs7.existsSync(PUBLIC_DIR)}`);
 function kbList(p) {
   return useLocalVault ? listNotes2(p) : listNotes(p);
 }
@@ -3406,7 +3429,7 @@ function buildConversationTools() {
       }),
       async execute(_toolCallId, params) {
         const after = params.days_ago ? Date.now() - params.days_ago * 24 * 60 * 60 * 1e3 : void 0;
-        const results = search(params.query, { after, limit: 8 });
+        const results = await search(params.query, { after, limit: 8 });
         if (results.length === 0) {
           return { content: [{ type: "text", text: `No past conversations found matching "${params.query}".` }], details: {} };
         }
@@ -3496,7 +3519,7 @@ function classifyIntent(message) {
   return "full";
 }
 var syncedConversations = /* @__PURE__ */ new Set();
-function saveAndCleanSession(id) {
+async function saveAndCleanSession(id) {
   const entry = sessions.get(id);
   if (!entry) return;
   if (entry.currentAgentText) {
@@ -3504,7 +3527,7 @@ function saveAndCleanSession(id) {
     entry.currentAgentText = "";
   }
   if (entry.conversation.messages.length > 0) {
-    save(entry.conversation);
+    await save(entry.conversation);
     syncConversationToVault(entry.conversation);
   }
   for (const sub of entry.subscribers) {
@@ -3520,7 +3543,7 @@ async function syncConversationToVault(conv) {
   if (syncedConversations.has(conv.id)) return;
   if (!shouldSync(conv)) return;
   if (!useLocalVault && !isConfigured()) return;
-  const existing = load(conv.id);
+  const existing = await load(conv.id);
   if (existing && existing.syncedAt) {
     syncedConversations.add(conv.id);
     return;
@@ -3536,7 +3559,7 @@ async function syncConversationToVault(conv) {
     await kbCreate(notePath, summary);
     syncedConversations.add(conv.id);
     conv.syncedAt = Date.now();
-    save(conv);
+    await save(conv);
     console.log(`[sync] Conversation synced to vault: ${notePath} (${useAI ? "AI" : "snippet"} summary)`);
     if (useAI) {
       runInsightExtraction(conv).catch(
@@ -3636,36 +3659,36 @@ ${queueContext}${pending.text}`;
   }
   processingQueue.delete(sessionId);
 }
-setInterval(() => {
+setInterval(async () => {
   const cutoff = Date.now() - 2 * 60 * 60 * 1e3;
   for (const [id, entry] of sessions.entries()) {
     if (entry.createdAt < cutoff) {
-      saveAndCleanSession(id);
+      await saveAndCleanSession(id);
     }
   }
 }, 10 * 60 * 1e3);
-setInterval(() => {
+setInterval(async () => {
   for (const entry of sessions.values()) {
     if (entry.currentAgentText) {
       addMessage(entry.conversation, "agent", entry.currentAgentText);
       entry.currentAgentText = "";
     }
     if (entry.conversation.messages.length > 0) {
-      save(entry.conversation);
+      await save(entry.conversation);
     }
   }
 }, 5 * 60 * 1e3);
-var TUNNEL_URL_FILE = path8.join(PROJECT_ROOT, "data", "tunnel-url.txt");
+var TUNNEL_URL_FILE = path7.join(PROJECT_ROOT, "data", "tunnel-url.txt");
 function loadPersistedTunnelUrl() {
   try {
-    return fs8.readFileSync(TUNNEL_URL_FILE, "utf-8").trim() || null;
+    return fs7.readFileSync(TUNNEL_URL_FILE, "utf-8").trim() || null;
   } catch {
     return null;
   }
 }
 function persistTunnelUrl(url) {
   try {
-    fs8.writeFileSync(TUNNEL_URL_FILE, url, "utf-8");
+    fs7.writeFileSync(TUNNEL_URL_FILE, url, "utf-8");
   } catch {
   }
 }
@@ -3799,9 +3822,9 @@ app.get("/api/gmail/status", async (_req, res) => {
 app.post("/api/session", async (_req, res) => {
   try {
     const sessionId = `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const authStorage = AuthStorage.create(path8.join(AGENT_DIR, "auth.json"));
+    const authStorage = AuthStorage.create(path7.join(AGENT_DIR, "auth.json"));
     authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
-    const modelRegistry = new ModelRegistry(authStorage, path8.join(AGENT_DIR, "models.json"));
+    const modelRegistry = new ModelRegistry(authStorage, path7.join(AGENT_DIR, "models.json"));
     const fullModel = modelRegistry.find("anthropic", FULL_MODEL_ID);
     if (!fullModel) throw new Error(`Model ${FULL_MODEL_ID} not found in registry`);
     const coreTools = [
@@ -3878,13 +3901,13 @@ app.post("/api/session", async (_req, res) => {
           addMessage(entry.conversation, "agent", entry.currentAgentText);
           entry.currentAgentText = "";
         }
-        save(entry.conversation);
+        save(entry.conversation).catch((err) => console.error("[conversations] save error:", err));
         syncConversationToVault(entry.conversation);
         processNextPendingMessage(sessionId);
       }
     });
-    const recentSummary = getRecentSummary(5);
-    const lastConvoContext = getLastConversationContext(10);
+    const recentSummary = await getRecentSummary(5);
+    const lastConvoContext = await getLastConversationContext(10);
     const vaultIndex = await getVaultIndex();
     const combinedContext = [lastConvoContext, recentSummary, vaultIndex].filter(Boolean).join("\n\n---\n\n") || null;
     entry.startupContext = combinedContext || void 0;
@@ -3962,7 +3985,7 @@ app.post("/api/session/:id/prompt", async (req, res) => {
   const text = message?.trim() || "(image attached)";
   const imgAttachments = images?.map((i) => ({ mimeType: i.mimeType, data: i.data }));
   addMessage(entry.conversation, "user", text, imgAttachments);
-  save(entry.conversation);
+  await save(entry.conversation);
   if (entry.isAgentRunning) {
     entry.pendingMessages.push({ text, images, timestamp: Date.now() });
     const queuedEvent = JSON.stringify({ type: "message_queued", position: entry.pendingMessages.length });
@@ -3986,9 +4009,9 @@ app.post("/api/session/:id/prompt", async (req, res) => {
   }
   if (chosenModelId !== entry.activeModelName) {
     try {
-      const authStorage = AuthStorage.create(path8.join(AGENT_DIR, "auth.json"));
+      const authStorage = AuthStorage.create(path7.join(AGENT_DIR, "auth.json"));
       authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
-      const modelRegistry = new ModelRegistry(authStorage, path8.join(AGENT_DIR, "models.json"));
+      const modelRegistry = new ModelRegistry(authStorage, path7.join(AGENT_DIR, "models.json"));
       const newModel = modelRegistry.find("anthropic", chosenModelId);
       if (newModel) {
         await entry.session.setModel(newModel);
@@ -4084,11 +4107,11 @@ app.post("/api/session/:id/interview-response", (req, res) => {
   }
   res.json({ ok: true });
 });
-app.delete("/api/session/:id", (req, res) => {
-  saveAndCleanSession(req.params["id"]);
+app.delete("/api/session/:id", async (req, res) => {
+  await saveAndCleanSession(req.params["id"]);
   res.json({ ok: true });
 });
-app.get("/api/conversations/search", (req, res) => {
+app.get("/api/conversations/search", async (req, res) => {
   const q = req.query["q"] || "";
   if (!q.trim()) {
     res.json([]);
@@ -4096,22 +4119,22 @@ app.get("/api/conversations/search", (req, res) => {
   }
   const before = req.query["before"] ? Number(req.query["before"]) : void 0;
   const after = req.query["after"] ? Number(req.query["after"]) : void 0;
-  const results = search(q, { before, after });
+  const results = await search(q, { before, after });
   res.json(results);
 });
-app.get("/api/conversations", (_req, res) => {
-  res.json(list());
+app.get("/api/conversations", async (_req, res) => {
+  res.json(await list());
 });
-app.get("/api/conversations/:id", (req, res) => {
-  const conv = load(req.params["id"]);
+app.get("/api/conversations/:id", async (req, res) => {
+  const conv = await load(req.params["id"]);
   if (!conv) {
     res.status(404).json({ error: "Conversation not found" });
     return;
   }
   res.json(conv);
 });
-app.delete("/api/conversations/:id", (req, res) => {
-  remove(req.params["id"]);
+app.delete("/api/conversations/:id", async (req, res) => {
+  await remove(req.params["id"]);
   res.json({ ok: true });
 });
 app.post("/api/config/tunnel-url", (req, res) => {
@@ -4256,7 +4279,7 @@ function getSyncStatus() {
   const logPath = "/tmp/obsidian-sync.log";
   const lastChecked = (/* @__PURE__ */ new Date()).toISOString();
   try {
-    const content = fs8.readFileSync(logPath, "utf-8");
+    const content = fs7.readFileSync(logPath, "utf-8");
     const lines = content.trim().split("\n").filter((l) => l.trim());
     if (lines.length === 0) return { running: false, status: "not_running", lastLine: "", lastChecked };
     const lastLine = lines[lines.length - 1].trim();
@@ -4311,12 +4334,12 @@ app.get("/api/agents", (_req, res) => {
   res.json({ agents: agents2 });
 });
 async function buildVaultTree(dir) {
-  const entries = await fs8.promises.readdir(dir, { withFileTypes: true });
+  const entries = await fs7.promises.readdir(dir, { withFileTypes: true });
   const result = [];
   for (const entry of entries) {
     if (entry.name.startsWith(".")) continue;
     if (entry.isDirectory()) {
-      const children = await buildVaultTree(path8.join(dir, entry.name));
+      const children = await buildVaultTree(path7.join(dir, entry.name));
       result.push({ name: entry.name, type: "folder", children });
     } else {
       result.push({ name: entry.name, type: "file" });
@@ -4419,6 +4442,8 @@ async function waitForPort(port, maxWaitMs = 3e4) {
   return false;
 }
 async function startServer(maxRetries = 5) {
+  await init2();
+  console.log("[boot] Conversations storage ready (PostgreSQL)");
   const portReady = await waitForPort(PORT);
   if (!portReady) {
     console.error(`[boot] Port ${PORT} could not be freed after 30s \u2014 exiting`);

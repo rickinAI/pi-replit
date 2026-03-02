@@ -1,5 +1,4 @@
-import fs from "fs";
-import path from "path";
+import pg from "pg";
 import Anthropic from "@anthropic-ai/sdk";
 
 export interface ImageAttachment {
@@ -30,64 +29,78 @@ export interface ConversationSummary {
   messageCount: number;
 }
 
-let dataDir = "";
+let pool: pg.Pool | null = null;
 
-export function init(dir: string) {
-  dataDir = dir;
-  fs.mkdirSync(dataDir, { recursive: true });
+export async function init(): Promise<void> {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error("[conversations] DATABASE_URL not set");
+  }
+  pool = new pg.Pool({ connectionString, max: 5 });
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS conversations (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL DEFAULT 'New conversation',
+      messages JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      synced_at BIGINT
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC)
+  `);
+  console.log("[conversations] PostgreSQL storage initialized");
 }
 
-function filePath(id: string): string {
-  const safe = id.replace(/[^a-zA-Z0-9_-]/g, "");
-  return path.join(dataDir, `${safe}.json`);
+function db(): pg.Pool {
+  if (!pool) throw new Error("[conversations] Not initialized — call init() first");
+  return pool;
 }
 
-export function save(conv: Conversation): void {
+export async function save(conv: Conversation): Promise<void> {
   conv.updatedAt = Date.now();
-  fs.writeFileSync(filePath(conv.id), JSON.stringify(conv, null, 2));
+  await db().query(
+    `INSERT INTO conversations (id, title, messages, created_at, updated_at, synced_at)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (id) DO UPDATE SET
+       title = EXCLUDED.title,
+       messages = EXCLUDED.messages,
+       updated_at = EXCLUDED.updated_at,
+       synced_at = EXCLUDED.synced_at`,
+    [conv.id, conv.title, JSON.stringify(conv.messages), conv.createdAt, conv.updatedAt, (conv as any).syncedAt || null]
+  );
 }
 
-export function load(id: string): Conversation | null {
-  const fp = filePath(id);
-  if (!fs.existsSync(fp)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(fp, "utf-8")) as Conversation;
-  } catch {
-    return null;
-  }
+export async function load(id: string): Promise<Conversation | null> {
+  const result = await db().query(
+    `SELECT id, title, messages, created_at, updated_at, synced_at FROM conversations WHERE id = $1`,
+    [id]
+  );
+  if (result.rows.length === 0) return null;
+  return rowToConversation(result.rows[0]);
 }
 
-export function list(): ConversationSummary[] {
-  if (!fs.existsSync(dataDir)) return [];
-  const files = fs.readdirSync(dataDir).filter(f => f.endsWith(".json"));
-  const summaries: ConversationSummary[] = [];
-
-  for (const file of files) {
-    try {
-      const raw = JSON.parse(fs.readFileSync(path.join(dataDir, file), "utf-8")) as Conversation;
-      summaries.push({
-        id: raw.id,
-        title: raw.title,
-        createdAt: raw.createdAt,
-        updatedAt: raw.updatedAt,
-        messageCount: raw.messages.length,
-      });
-    } catch {}
-  }
-
-  summaries.sort((a, b) => b.updatedAt - a.updatedAt);
-  return summaries;
+export async function list(): Promise<ConversationSummary[]> {
+  const result = await db().query(
+    `SELECT id, title, messages, created_at, updated_at FROM conversations ORDER BY updated_at DESC`
+  );
+  return result.rows.map(row => ({
+    id: row.id,
+    title: row.title,
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+    messageCount: Array.isArray(row.messages) ? row.messages.length : 0,
+  }));
 }
 
-export function remove(id: string): boolean {
-  const fp = filePath(id);
-  if (!fs.existsSync(fp)) return false;
-  fs.unlinkSync(fp);
-  return true;
+export async function remove(id: string): Promise<boolean> {
+  const result = await db().query(`DELETE FROM conversations WHERE id = $1`, [id]);
+  return (result.rowCount ?? 0) > 0;
 }
 
-export function getRecentSummary(count: number = 3): string {
-  const recent = list().slice(0, count);
+export async function getRecentSummary(count: number = 3): Promise<string> {
+  const recent = (await list()).slice(0, count);
   if (recent.length === 0) return "";
 
   const lines = recent.map(c => {
@@ -102,25 +115,15 @@ export function getRecentSummary(count: number = 3): string {
   return `Recent conversations:\n${lines.join("\n")}`;
 }
 
-export function getLastConversationContext(maxMessages: number = 10): string {
-  if (!fs.existsSync(dataDir)) return "";
-  const files = fs.readdirSync(dataDir).filter(f => f.endsWith(".json"));
-  if (files.length === 0) return "";
+export async function getLastConversationContext(maxMessages: number = 10): Promise<string> {
+  const result = await db().query(
+    `SELECT id, title, messages, created_at, updated_at FROM conversations
+     WHERE jsonb_array_length(messages) > 0
+     ORDER BY updated_at DESC LIMIT 1`
+  );
+  if (result.rows.length === 0) return "";
 
-  let mostRecent: Conversation | null = null;
-  let latestTime = 0;
-
-  for (const file of files) {
-    try {
-      const conv = JSON.parse(fs.readFileSync(path.join(dataDir, file), "utf-8")) as Conversation;
-      if (conv.updatedAt > latestTime && conv.messages.length > 0) {
-        latestTime = conv.updatedAt;
-        mostRecent = conv;
-      }
-    } catch {}
-  }
-
-  if (!mostRecent) return "";
+  const mostRecent = rowToConversation(result.rows[0]);
 
   const relevantMsgs = mostRecent.messages
     .filter(m => m.role !== "system")
@@ -180,48 +183,60 @@ export interface SearchResult {
   snippets: string[];
 }
 
-export function search(query: string, options?: { before?: number; after?: number; limit?: number }): SearchResult[] {
-  if (!fs.existsSync(dataDir)) return [];
-  const files = fs.readdirSync(dataDir).filter(f => f.endsWith(".json"));
-  const results: SearchResult[] = [];
+export async function search(query: string, options?: { before?: number; after?: number; limit?: number }): Promise<SearchResult[]> {
   const terms = query.toLowerCase().split(/\s+/).filter(t => t.length > 0);
+  if (terms.length === 0) return [];
   const limit = options?.limit ?? 10;
 
-  for (const file of files) {
-    try {
-      const conv = JSON.parse(fs.readFileSync(path.join(dataDir, file), "utf-8")) as Conversation;
+  let sql = `SELECT id, title, messages, created_at, updated_at FROM conversations WHERE 1=1`;
+  const params: any[] = [];
+  let paramIdx = 1;
 
-      if (options?.before && conv.createdAt > options.before) continue;
-      if (options?.after && conv.createdAt < options.after) continue;
-
-      const snippets: string[] = [];
-      for (const msg of conv.messages) {
-        if (msg.role === "system") continue;
-        const lower = msg.text.toLowerCase();
-        if (terms.some(t => lower.includes(t))) {
-          const snippet = msg.text.slice(0, 200);
-          const role = msg.role === "user" ? "You" : "Agent";
-          const time = new Date(msg.timestamp).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-          snippets.push(`[${role}, ${time}] ${snippet}`);
-          if (snippets.length >= 3) break;
-        }
-      }
-
-      if (snippets.length > 0) {
-        results.push({
-          id: conv.id,
-          title: conv.title,
-          createdAt: conv.createdAt,
-          updatedAt: conv.updatedAt,
-          messageCount: conv.messages.length,
-          snippets,
-        });
-      }
-    } catch {}
+  if (options?.before) {
+    sql += ` AND created_at <= $${paramIdx++}`;
+    params.push(options.before);
+  }
+  if (options?.after) {
+    sql += ` AND created_at >= $${paramIdx++}`;
+    params.push(options.after);
   }
 
-  results.sort((a, b) => b.updatedAt - a.updatedAt);
-  return results.slice(0, limit);
+  sql += ` ORDER BY updated_at DESC`;
+
+  const result = await db().query(sql, params);
+  const results: SearchResult[] = [];
+
+  for (const row of result.rows) {
+    const conv = rowToConversation(row);
+    const snippets: string[] = [];
+
+    for (const msg of conv.messages) {
+      if (msg.role === "system") continue;
+      const lower = msg.text.toLowerCase();
+      if (terms.some(t => lower.includes(t))) {
+        const snippet = msg.text.slice(0, 200);
+        const role = msg.role === "user" ? "You" : "Agent";
+        const time = new Date(msg.timestamp).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+        snippets.push(`[${role}, ${time}] ${snippet}`);
+        if (snippets.length >= 3) break;
+      }
+    }
+
+    if (snippets.length > 0) {
+      results.push({
+        id: conv.id,
+        title: conv.title,
+        createdAt: conv.createdAt,
+        updatedAt: conv.updatedAt,
+        messageCount: conv.messages.length,
+        snippets,
+      });
+    }
+
+    if (results.length >= limit) break;
+  }
+
+  return results;
 }
 
 export function shouldSync(conv: Conversation): boolean {
@@ -352,4 +367,18 @@ ${aiText}
 
 export function generateSummaryMarkdown(conv: Conversation): string {
   return generateSnippetSummary(conv);
+}
+
+function rowToConversation(row: any): Conversation {
+  const conv: Conversation = {
+    id: row.id,
+    title: row.title,
+    messages: Array.isArray(row.messages) ? row.messages : JSON.parse(row.messages || "[]"),
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+  };
+  if (row.synced_at) {
+    (conv as any).syncedAt = Number(row.synced_at);
+  }
+  return conv;
 }

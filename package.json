@@ -13,11 +13,13 @@
   "dependencies": {
     "@mariozechner/pi-coding-agent": "^0.55.1",
     "@sinclair/typebox": "^0.34.48",
+    "@types/pg": "^8.18.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "googleapis": "^148.0.0",
-    "http-proxy-middleware": "^3.0.3"
+    "http-proxy-middleware": "^3.0.3",
+    "pg": "^8.19.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
