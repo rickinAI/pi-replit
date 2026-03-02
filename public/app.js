@@ -665,6 +665,8 @@ function renderInterviewForm(event) {
 
   card.innerHTML = html;
   messages.insertBefore(card, scrollAnchor);
+  agentBubble = null;
+  agentText = "";
   throttledScroll();
 
   const submitBtn2 = card.querySelector(".interview-submit");
@@ -1567,6 +1569,7 @@ function stopSyncPolling() {
 }
 
 function scrollToBottom() {
+  if (messages.querySelector(".interview-card:not(.interview-submitted)")) return;
   userHasScrolledUp = false;
   messages.scrollTop = messages.scrollHeight;
 }
