@@ -12,6 +12,8 @@ let pendingImages = [];
 let reconnectAttempts = 0;
 let reconnectTimer = null;
 let catchUpInProgress = false;
+let syncPollTimer = null;
+let isSyncingToCloud = false;
 let textOffsetAfterCatchUp = 0;
 
 const messages      = document.getElementById("messages");
@@ -113,6 +115,7 @@ if (window.visualViewport) {
             showStatus("[PROCESSING...]");
           }
           openEventStream(sessionId);
+          startSyncPolling();
           scrollToBottom();
           showSystemMsg("SESSION RESUMED.");
           return;
@@ -139,6 +142,7 @@ async function startSession() {
     updateModeDisplay(currentModelMode);
     updateModelBadge(FULL_MODEL_ID);
     openEventStream(sessionId);
+    startSyncPolling();
     hideStatus();
     fetch(`/api/session/${sessionId}/model-mode`, {
       method: "PUT",
@@ -173,6 +177,7 @@ confirmModal.addEventListener("click", (e) => {
 });
 
 async function doNewSession() {
+  stopSyncPolling();
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   if (eventSource) { eventSource.close(); eventSource = null; }
   if (sessionId) await fetch(`/api/session/${sessionId}`, { method: "DELETE" }).catch(() => {});
@@ -1531,7 +1536,34 @@ function showStatus(text) {
 }
 
 function hideStatus() {
+  if (isSyncingToCloud && !isAgentRunning && reconnectAttempts === 0) {
+    showStatus("[SYNCING TO CLOUD...]");
+    return;
+  }
   statusBar.classList.add("hidden");
+}
+
+function startSyncPolling() {
+  if (syncPollTimer) return;
+  syncPollTimer = setInterval(async () => {
+    try {
+      const res = await fetch("/api/sync-status", { credentials: "same-origin" });
+      if (!res.ok) return;
+      const data = await res.json();
+      const wasSync = isSyncingToCloud;
+      isSyncingToCloud = data.status === "uploading" || data.status === "downloading";
+      if (isSyncingToCloud && !wasSync && !isAgentRunning && reconnectAttempts === 0) {
+        showStatus("[SYNCING TO CLOUD...]");
+      } else if (!isSyncingToCloud && wasSync && !isAgentRunning && reconnectAttempts === 0) {
+        hideStatus();
+      }
+    } catch {}
+  }, 10_000);
+}
+
+function stopSyncPolling() {
+  if (syncPollTimer) { clearInterval(syncPollTimer); syncPollTimer = null; }
+  isSyncingToCloud = false;
 }
 
 function scrollToBottom() {
