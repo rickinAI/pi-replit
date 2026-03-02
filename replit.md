@@ -143,7 +143,7 @@ Client-side session resume and background agent support:
 - `notes_list_recursive` — List all files/subfolders recursively within a folder
 - `notes_file_info` — Get file metadata (size, created, modified dates)
 
-**Primary: Local vault via Obsidian Headless Sync** (`obsidian-headless` npm package, v1.0.0). Vault files synced to `data/vault/` using `ob sync --continuous` running as a background process alongside the server. Reads files directly from disk via `src/vault-local.ts` — no network dependency. Requires Node.js 22+ (for native WebSocket). Obsidian Sync credentials stored in `~/.config/obsidian-headless/` on the Replit instance.
+**Primary: Local vault via Obsidian Headless Sync** (`obsidian-headless` npm package, v1.0.0). Vault files synced to `data/vault/` using `ob sync --continuous` spawned by `startObSync()` in `server.ts` on server startup (works in both dev and production). Auto-restarts on crash (10s delay). Reads files directly from disk via `src/vault-local.ts` — no network dependency. Requires Node.js 22+ (for native WebSocket). Obsidian Sync credentials stored in `~/.config/obsidian-headless/` on the Replit instance.
 
 **Fallback: Cloudflare Named Tunnel** to Local REST API plugin on Mac. Permanent URL: `https://obsidian.rickin.live` via named tunnel `obsidian-vault`. Env var `OBSIDIAN_API_URL` is the URL source; falls back to persisted `data/tunnel-url.txt`. Dynamic URL push endpoint (`/api/config/tunnel-url`) still available.
 

@@ -12,7 +12,7 @@ import { createServer } from "http";
 import { fileURLToPath } from "url";
 import path3 from "path";
 import fs3 from "fs";
-import { execSync } from "child_process";
+import { execSync, spawn } from "child_process";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
 import {
@@ -4421,6 +4421,40 @@ app.get("/api/glance", async (_req, res) => {
 app.get("/api/kb-status", (_req, res) => {
   res.json({ online: useLocalVault || lastTunnelStatus, mode: useLocalVault ? "local" : "remote" });
 });
+var obSyncProcess = null;
+function startObSync() {
+  const vaultPath2 = path3.join(process.cwd(), "data", "vault");
+  const logPath = "/tmp/obsidian-sync.log";
+  if (obSyncProcess) {
+    try {
+      obSyncProcess.kill();
+    } catch {
+    }
+    obSyncProcess = null;
+  }
+  try {
+    execSync("pgrep -f 'ob sync' 2>/dev/null && pkill -f 'ob sync'", { encoding: "utf-8" });
+  } catch {
+  }
+  const logFd = fs3.openSync(logPath, "a");
+  const child = spawn("ob", ["sync", "--continuous", "--path", vaultPath2], {
+    stdio: ["ignore", logFd, logFd],
+    detached: false
+  });
+  child.on("error", (err) => {
+    console.error("[sync] ob sync failed to start:", err.message);
+    obSyncProcess = null;
+  });
+  child.on("exit", (code) => {
+    console.warn(`[sync] ob sync exited with code ${code} \u2014 restarting in 10s`);
+    obSyncProcess = null;
+    setTimeout(() => {
+      if (!obSyncProcess) startObSync();
+    }, 1e4);
+  });
+  obSyncProcess = child;
+  console.log(`[sync] ob sync started (pid ${child.pid})`);
+}
 function getSyncStatus() {
   const logPath = "/tmp/obsidian-sync.log";
   const lastChecked = (/* @__PURE__ */ new Date()).toISOString();
@@ -4542,6 +4576,13 @@ process.on("unhandledRejection", (reason) => console.error("Unhandled rejection:
 var server = createServer(app);
 function gracefulShutdown(signal) {
   console.error(`Got ${signal} \u2014 closing server...`);
+  if (obSyncProcess) {
+    try {
+      obSyncProcess.kill();
+    } catch {
+    }
+    obSyncProcess = null;
+  }
   for (const [id] of sessions.entries()) {
     saveAndCleanSession(id);
   }
@@ -4637,6 +4678,7 @@ async function startServer(maxRetries = 5) {
         });
         server.listen(PORT, "0.0.0.0", () => {
           console.log(`[ready] pi-replit listening on http://localhost:${PORT}`);
+          startObSync();
           startAlertSystem(broadcastToAll, async (briefPath, content) => {
             try {
               await kbCreate(briefPath, content);

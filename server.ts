@@ -5,7 +5,7 @@ import { createServer } from "http";
 import { fileURLToPath } from "url";
 import path from "path";
 import fs from "fs";
-import { execSync } from "child_process";
+import { execSync, spawn, type ChildProcess } from "child_process";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
 
@@ -1629,6 +1629,44 @@ app.get("/api/kb-status", (_req, res) => {
   res.json({ online: useLocalVault || lastTunnelStatus, mode: useLocalVault ? "local" : "remote" });
 });
 
+let obSyncProcess: ChildProcess | null = null;
+
+function startObSync() {
+  const vaultPath = path.join(process.cwd(), "data", "vault");
+  const logPath = "/tmp/obsidian-sync.log";
+
+  if (obSyncProcess) {
+    try { obSyncProcess.kill(); } catch {}
+    obSyncProcess = null;
+  }
+
+  try {
+    execSync("pgrep -f 'ob sync' 2>/dev/null && pkill -f 'ob sync'", { encoding: "utf-8" });
+  } catch {}
+
+  const logFd = fs.openSync(logPath, "a");
+  const child = spawn("ob", ["sync", "--continuous", "--path", vaultPath], {
+    stdio: ["ignore", logFd, logFd],
+    detached: false,
+  });
+
+  child.on("error", (err) => {
+    console.error("[sync] ob sync failed to start:", err.message);
+    obSyncProcess = null;
+  });
+
+  child.on("exit", (code) => {
+    console.warn(`[sync] ob sync exited with code ${code} — restarting in 10s`);
+    obSyncProcess = null;
+    setTimeout(() => {
+      if (!obSyncProcess) startObSync();
+    }, 10_000);
+  });
+
+  obSyncProcess = child;
+  console.log(`[sync] ob sync started (pid ${child.pid})`);
+}
+
 function getSyncStatus(): { running: boolean; status: string; lastLine: string; lastChecked: string } {
   const logPath = "/tmp/obsidian-sync.log";
   const lastChecked = new Date().toISOString();
@@ -1758,6 +1796,10 @@ let server = createServer(app);
 
 function gracefulShutdown(signal: string) {
   console.error(`Got ${signal} — closing server...`);
+  if (obSyncProcess) {
+    try { obSyncProcess.kill(); } catch {}
+    obSyncProcess = null;
+  }
   for (const [id] of sessions.entries()) {
     saveAndCleanSession(id);
   }
@@ -1853,6 +1895,7 @@ async function startServer(maxRetries = 5) {
         });
         server.listen(PORT, "0.0.0.0", () => {
           console.log(`[ready] pi-replit listening on http://localhost:${PORT}`);
+          startObSync();
           alerts.startAlertSystem(broadcastToAll, async (briefPath, content) => {
             try { await kbCreate(briefPath, content); } catch (err) {
               console.error(`[alerts] Vault save failed for ${briefPath}:`, err);
