@@ -113,6 +113,12 @@ function kbAppend(p: string, c: string): Promise<string> {
 function kbSearch(q: string): Promise<string> {
   return useLocalVault ? vaultLocal.searchNotes(q) : obsidian.searchNotes(q);
 }
+function kbDelete(p: string): Promise<string> {
+  return useLocalVault ? vaultLocal.deleteNote(p) : obsidian.deleteNote(p);
+}
+function kbMove(from: string, to: string): Promise<string> {
+  return useLocalVault ? vaultLocal.moveNote(from, to) : obsidian.moveNote(from, to);
+}
 
 function buildKnowledgeBaseTools(): ToolDefinition[] {
   if (!useLocalVault && !obsidian.isConfigured()) return [];
@@ -177,6 +183,31 @@ function buildKnowledgeBaseTools(): ToolDefinition[] {
       }),
       async execute(_toolCallId, params) {
         const result = await kbSearch(params.query);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "notes_delete",
+      label: "Notes Delete",
+      description: "Permanently delete a note from the user's knowledge base. This cannot be undone. Use when reorganizing notes (e.g. after moving content to a new location). Empty parent folders are cleaned up automatically.",
+      parameters: Type.Object({
+        path: Type.String({ description: "Path to the note to delete (e.g. 'Projects/old-file.md')" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await kbDelete(params.path);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "notes_move",
+      label: "Notes Move",
+      description: "Move or rename a note in the user's knowledge base. Moves the file from one path to another, creating destination folders as needed. Empty source folders are cleaned up automatically.",
+      parameters: Type.Object({
+        from: Type.String({ description: "Current path of the note (e.g. 'Projects/old-name.md')" }),
+        to: Type.String({ description: "New path for the note (e.g. 'Projects/Subfolder/new-name.md')" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await kbMove(params.from, params.to);
         return { content: [{ type: "text" as const, text: result }], details: {} };
       },
     },

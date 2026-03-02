@@ -127,6 +127,20 @@ export async function appendToNote(notePath: string, content: string): Promise<s
   }
 }
 
+export async function deleteNote(notePath: string): Promise<string> {
+  const url = `${baseUrl()}/vault/${encodePath(notePath)}`;
+  const res = await fetchWithRetry(url, { method: "DELETE", headers: headers() });
+  if (!res.ok) throw new Error(`Obsidian API error ${res.status}: ${await res.text()}`);
+  return `Deleted note: ${notePath}`;
+}
+
+export async function moveNote(fromPath: string, toPath: string): Promise<string> {
+  const content = await readNote(fromPath);
+  await createNote(toPath, content);
+  await deleteNote(fromPath);
+  return `Moved note: ${fromPath} → ${toPath}`;
+}
+
 export async function searchNotes(query: string): Promise<string> {
   const url = `${baseUrl()}/search/simple/?query=${encodeURIComponent(query)}`;
   const res = await fetchWithRetry(url, { headers: headers() });

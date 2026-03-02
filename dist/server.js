@@ -129,6 +129,18 @@ async function appendToNote(notePath, content) {
     throw err;
   }
 }
+async function deleteNote(notePath) {
+  const url = `${baseUrl()}/vault/${encodePath(notePath)}`;
+  const res = await fetchWithRetry(url, { method: "DELETE", headers: headers() });
+  if (!res.ok) throw new Error(`Obsidian API error ${res.status}: ${await res.text()}`);
+  return `Deleted note: ${notePath}`;
+}
+async function moveNote(fromPath, toPath) {
+  const content = await readNote(fromPath);
+  await createNote(toPath, content);
+  await deleteNote(fromPath);
+  return `Moved note: ${fromPath} \u2192 ${toPath}`;
+}
 async function searchNotes(query) {
   const url = `${baseUrl()}/search/simple/?query=${encodeURIComponent(query)}`;
   const res = await fetchWithRetry(url, { headers: headers() });
@@ -193,6 +205,50 @@ async function appendToNote2(notePath, content) {
   await fs.appendFile(resolved, content, "utf-8");
   nudgeSync(resolved);
   return `Appended to note: ${notePath}`;
+}
+async function deleteNote2(notePath) {
+  const resolved = resolvePath(notePath);
+  try {
+    await fs.access(resolved);
+  } catch {
+    throw new Error(`Note not found: ${notePath}`);
+  }
+  await fs.unlink(resolved);
+  const dir = path.dirname(resolved);
+  try {
+    const entries = await fs.readdir(dir);
+    const visible = entries.filter((e) => !e.startsWith("."));
+    if (visible.length === 0 && dir !== vaultPath) {
+      await fs.rm(dir, { recursive: true });
+    }
+  } catch {
+  }
+  return `Deleted note: ${notePath}`;
+}
+async function moveNote2(fromPath, toPath) {
+  const resolvedFrom = resolvePath(fromPath);
+  const resolvedTo = resolvePath(toPath);
+  try {
+    await fs.access(resolvedFrom);
+  } catch {
+    throw new Error(`Note not found: ${fromPath}`);
+  }
+  const content = await fs.readFile(resolvedFrom, "utf-8");
+  const destDir = path.dirname(resolvedTo);
+  await fs.mkdir(destDir, { recursive: true });
+  await fs.writeFile(resolvedTo, content, "utf-8");
+  await fs.unlink(resolvedFrom);
+  const oldDir = path.dirname(resolvedFrom);
+  try {
+    const entries = await fs.readdir(oldDir);
+    const visible = entries.filter((e) => !e.startsWith("."));
+    if (visible.length === 0 && oldDir !== vaultPath) {
+      await fs.rm(oldDir, { recursive: true });
+    }
+  } catch {
+  }
+  nudgeSync(resolvedTo);
+  return `Moved note: ${fromPath} \u2192 ${toPath}`;
 }
 function nudgeSync(filePath2) {
   setTimeout(async () => {
@@ -2607,6 +2663,12 @@ function kbAppend(p, c) {
 function kbSearch(q) {
   return useLocalVault ? searchNotes2(q) : searchNotes(q);
 }
+function kbDelete(p) {
+  return useLocalVault ? deleteNote2(p) : deleteNote(p);
+}
+function kbMove(from, to) {
+  return useLocalVault ? moveNote2(from, to) : moveNote(from, to);
+}
 function buildKnowledgeBaseTools() {
   if (!useLocalVault && !isConfigured()) return [];
   return [
@@ -2669,6 +2731,31 @@ function buildKnowledgeBaseTools() {
       }),
       async execute(_toolCallId, params) {
         const result = await kbSearch(params.query);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "notes_delete",
+      label: "Notes Delete",
+      description: "Permanently delete a note from the user's knowledge base. This cannot be undone. Use when reorganizing notes (e.g. after moving content to a new location). Empty parent folders are cleaned up automatically.",
+      parameters: Type.Object({
+        path: Type.String({ description: "Path to the note to delete (e.g. 'Projects/old-file.md')" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await kbDelete(params.path);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "notes_move",
+      label: "Notes Move",
+      description: "Move or rename a note in the user's knowledge base. Moves the file from one path to another, creating destination folders as needed. Empty source folders are cleaned up automatically.",
+      parameters: Type.Object({
+        from: Type.String({ description: "Current path of the note (e.g. 'Projects/old-name.md')" }),
+        to: Type.String({ description: "New path for the note (e.g. 'Projects/Subfolder/new-name.md')" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await kbMove(params.from, params.to);
         return { content: [{ type: "text", text: result }], details: {} };
       }
     }

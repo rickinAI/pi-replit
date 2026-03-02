@@ -67,6 +67,50 @@ export async function appendToNote(notePath: string, content: string): Promise<s
   return `Appended to note: ${notePath}`;
 }
 
+export async function deleteNote(notePath: string): Promise<string> {
+  const resolved = resolvePath(notePath);
+  try {
+    await fs.access(resolved);
+  } catch {
+    throw new Error(`Note not found: ${notePath}`);
+  }
+  await fs.unlink(resolved);
+  const dir = path.dirname(resolved);
+  try {
+    const entries = await fs.readdir(dir);
+    const visible = entries.filter(e => !e.startsWith("."));
+    if (visible.length === 0 && dir !== vaultPath) {
+      await fs.rm(dir, { recursive: true });
+    }
+  } catch {}
+  return `Deleted note: ${notePath}`;
+}
+
+export async function moveNote(fromPath: string, toPath: string): Promise<string> {
+  const resolvedFrom = resolvePath(fromPath);
+  const resolvedTo = resolvePath(toPath);
+  try {
+    await fs.access(resolvedFrom);
+  } catch {
+    throw new Error(`Note not found: ${fromPath}`);
+  }
+  const content = await fs.readFile(resolvedFrom, "utf-8");
+  const destDir = path.dirname(resolvedTo);
+  await fs.mkdir(destDir, { recursive: true });
+  await fs.writeFile(resolvedTo, content, "utf-8");
+  await fs.unlink(resolvedFrom);
+  const oldDir = path.dirname(resolvedFrom);
+  try {
+    const entries = await fs.readdir(oldDir);
+    const visible = entries.filter(e => !e.startsWith("."));
+    if (visible.length === 0 && oldDir !== vaultPath) {
+      await fs.rm(oldDir, { recursive: true });
+    }
+  } catch {}
+  nudgeSync(resolvedTo);
+  return `Moved note: ${fromPath} → ${toPath}`;
+}
+
 function nudgeSync(filePath: string) {
   setTimeout(async () => {
     try {
