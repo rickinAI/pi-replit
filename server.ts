@@ -51,10 +51,6 @@ const AGENT_DIR = path.join(PROJECT_ROOT, ".pi/agent");
 const VAULT_DIR = path.join(PROJECT_ROOT, "data", "vault");
 
 fs.mkdirSync(AGENT_DIR, { recursive: true });
-gmail.init(PROJECT_ROOT);
-calendar.init(PROJECT_ROOT);
-tasks.init(PROJECT_ROOT);
-alerts.init(PROJECT_ROOT);
 vaultLocal.init(VAULT_DIR);
 agentLoader.init(path.join(PROJECT_ROOT, "data"));
 
@@ -82,13 +78,6 @@ if (useLocalVault) {
   console.log("[boot] Knowledge base: remote (tunnel)");
 } else {
   console.warn("Knowledge base integration not configured.");
-}
-if (!gmail.isConfigured()) console.warn("Gmail integration not configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET missing).");
-else if (!gmail.isConnected()) console.warn("Gmail configured but not yet authorized. Visit /api/gmail/auth to connect.");
-else {
-  gmail.getConnectedEmail().then(email => {
-    if (email) console.log(`[boot] Google account connected: ${email}`);
-  }).catch(() => {});
 }
 if (!APP_PASSWORD) console.warn("APP_PASSWORD is not set — auth disabled.");
 
@@ -455,7 +444,7 @@ function buildTaskTools(): ToolDefinition[] {
       }),
       async execute(_toolCallId, params) {
         const { title, ...options } = params;
-        const result = tasks.addTask(title, options);
+        const result = await tasks.addTask(title, options);
         return { content: [{ type: "text" as const, text: result }], details: {} };
       },
     },
@@ -469,7 +458,7 @@ function buildTaskTools(): ToolDefinition[] {
         priority: Type.Optional(Type.String({ description: "Filter by priority: 'low', 'medium', 'high'" })),
       }),
       async execute(_toolCallId, params) {
-        const result = tasks.listTasks(params);
+        const result = await tasks.listTasks(params);
         return { content: [{ type: "text" as const, text: result }], details: {} };
       },
     },
@@ -481,7 +470,7 @@ function buildTaskTools(): ToolDefinition[] {
         taskId: Type.String({ description: "The task ID to complete" }),
       }),
       async execute(_toolCallId, params) {
-        const result = tasks.completeTask(params.taskId);
+        const result = await tasks.completeTask(params.taskId);
         return { content: [{ type: "text" as const, text: result }], details: {} };
       },
     },
@@ -493,7 +482,7 @@ function buildTaskTools(): ToolDefinition[] {
         taskId: Type.String({ description: "The task ID to delete" }),
       }),
       async execute(_toolCallId, params) {
-        const result = tasks.deleteTask(params.taskId);
+        const result = await tasks.deleteTask(params.taskId);
         return { content: [{ type: "text" as const, text: result }], details: {} };
       },
     },
@@ -511,7 +500,7 @@ function buildTaskTools(): ToolDefinition[] {
       }),
       async execute(_toolCallId, params) {
         const { taskId, ...updates } = params;
-        const result = tasks.updateTask(taskId, updates);
+        const result = await tasks.updateTask(taskId, updates);
         return { content: [{ type: "text" as const, text: result }], details: {} };
       },
     },
@@ -1553,7 +1542,7 @@ app.get("/api/glance", async (_req: Request, res: Response) => {
 
     promises.push((async () => {
       try {
-        const raw = tasks.listTasks();
+        const raw = await tasks.listTasks();
         if (raw.includes("No open tasks") || raw.includes("No tasks found")) {
           result.tasks = { active: 0 };
         } else {
@@ -1778,7 +1767,18 @@ async function waitForPort(port: number, maxWaitMs = 30000) {
 
 async function startServer(maxRetries = 5) {
   await conversations.init();
-  console.log("[boot] Conversations storage ready (PostgreSQL)");
+  await gmail.init();
+  await tasks.init();
+  await alerts.init();
+  console.log("[boot] All PostgreSQL storage initialized (conversations, tasks, alerts, tokens)");
+
+  if (!gmail.isConfigured()) console.warn("Gmail integration not configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET missing).");
+  else if (!gmail.isConnected()) console.warn("Gmail configured but not yet authorized. Visit /api/gmail/auth to connect.");
+  else {
+    gmail.getConnectedEmail().then(email => {
+      if (email) console.log(`[boot] Google account connected: ${email}`);
+    }).catch(() => {});
+  }
 
   const portReady = await waitForPort(PORT);
   if (!portReady) {

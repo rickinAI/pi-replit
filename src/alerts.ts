@@ -1,5 +1,4 @@
-import fs from "fs";
-import path from "path";
+import pg from "pg";
 import Anthropic from "@anthropic-ai/sdk";
 import * as calendar from "./calendar.js";
 import * as tasks from "./tasks.js";
@@ -90,7 +89,7 @@ const DEFAULT_CONFIG: AlertConfig = {
   lastBriefRun: {},
 };
 
-let configPath = "";
+let pool: pg.Pool | null = null;
 let config: AlertConfig = { ...DEFAULT_CONFIG };
 let broadcastFn: BroadcastFn | null = null;
 let saveBriefFn: SaveBriefFn | null = null;
@@ -103,18 +102,57 @@ let briefRunning = false;
 let alertRunning = false;
 let lastDedupeReset = "";
 
-export function init(root: string) {
-  const dataDir = path.join(root, "data");
-  fs.mkdirSync(dataDir, { recursive: true });
-  configPath = path.join(dataDir, "alerts-config.json");
-  config = loadConfig();
+export async function init(): Promise<void> {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error("[alerts] DATABASE_URL not set");
+  }
+  pool = new pg.Pool({ connectionString, max: 3 });
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_config (
+      key TEXT PRIMARY KEY,
+      value JSONB NOT NULL,
+      updated_at BIGINT NOT NULL DEFAULT 0
+    )
+  `);
+
+  const existing = await pool.query(`SELECT value FROM app_config WHERE key = 'alerts'`);
+  if (existing.rows.length === 0) {
+    try {
+      const fs = await import("fs");
+      const path = await import("path");
+      const legacyPath = path.default.join(process.cwd(), "data", "alerts-config.json");
+      if (fs.default.existsSync(legacyPath)) {
+        const raw = JSON.parse(fs.default.readFileSync(legacyPath, "utf-8"));
+        const migrated = { ...DEFAULT_CONFIG, ...raw, briefs: { ...DEFAULT_CONFIG.briefs, ...raw.briefs }, alerts: { ...DEFAULT_CONFIG.alerts, ...raw.alerts } };
+        await pool.query(
+          `INSERT INTO app_config (key, value, updated_at) VALUES ('alerts', $1, $2)`,
+          [JSON.stringify(migrated), Date.now()]
+        );
+        config = migrated;
+        console.log("[alerts] Migrated config from data/alerts-config.json to PostgreSQL");
+      }
+    } catch (err) {
+      console.error("[alerts] Config migration failed:", err);
+    }
+  }
+
+  if (existing.rows.length > 0) {
+    config = await loadConfig();
+  }
+  console.log("[alerts] PostgreSQL config initialized");
 }
 
-function loadConfig(): AlertConfig {
-  if (!configPath) return { ...DEFAULT_CONFIG };
+function db(): pg.Pool {
+  if (!pool) throw new Error("[alerts] Not initialized — call init() first");
+  return pool;
+}
+
+async function loadConfig(): Promise<AlertConfig> {
   try {
-    if (fs.existsSync(configPath)) {
-      const raw = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    const result = await db().query(`SELECT value FROM app_config WHERE key = 'alerts'`);
+    if (result.rows.length > 0) {
+      const raw = result.rows[0].value;
       return { ...DEFAULT_CONFIG, ...raw, briefs: { ...DEFAULT_CONFIG.briefs, ...raw.briefs }, alerts: { ...DEFAULT_CONFIG.alerts, ...raw.alerts } };
     }
   } catch (err) {
@@ -123,10 +161,14 @@ function loadConfig(): AlertConfig {
   return { ...DEFAULT_CONFIG };
 }
 
-function saveConfig() {
-  if (!configPath) return;
+async function saveConfig(): Promise<void> {
   try {
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    await db().query(
+      `INSERT INTO app_config (key, value, updated_at)
+       VALUES ('alerts', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(config), Date.now()]
+    );
   } catch (err) {
     console.error("[alerts] Failed to save config:", err);
   }
@@ -214,7 +256,7 @@ async function gatherSection(name: string): Promise<string> {
         return `**Tomorrow's Calendar:**\n${result}`;
       }
       case "tasks": {
-        const localTasks = tasks.listTasks();
+        const localTasks = await tasks.listTasks();
         return `**Tasks:**\n${localTasks}`;
       }
       case "weather": {
@@ -401,7 +443,7 @@ async function doCheckBriefs() {
     if (nowMinutes >= targetMinutes && nowMinutes <= targetMinutes + 2) {
       console.log(`[alerts] Triggering ${type} brief`);
       config.lastBriefRun[runKey] = new Date().toISOString();
-      saveConfig();
+      await saveConfig();
 
       try {
         const content = await generateBrief(type);
@@ -499,13 +541,13 @@ async function doCheckAlerts() {
         console.error(`[alerts] Stock alert check for ${w.symbol} failed:`, err);
       }
     }
-    saveConfig();
+    await saveConfig();
   }
 
   if (config.alerts.taskDeadline.enabled) {
     try {
       const todayKey = getTodayKey();
-      const taskList = tasks.listTasks();
+      const taskList = await tasks.listTasks();
       if (!taskList.includes("No open tasks") && !taskList.includes("No tasks found")) {
         const lines = taskList.split("\n");
         for (const line of lines) {

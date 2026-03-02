@@ -1,5 +1,4 @@
-import fs from "fs";
-import path from "path";
+import pg from "pg";
 
 interface Task {
   id: string;
@@ -13,33 +12,98 @@ interface Task {
   tags?: string[];
 }
 
-let tasksFilePath = "";
+let pool: pg.Pool | null = null;
 
-export function init(root: string) {
-  const dataDir = path.join(root, "data");
-  fs.mkdirSync(dataDir, { recursive: true });
-  tasksFilePath = path.join(dataDir, "tasks.json");
-}
-
-function loadTasks(): Task[] {
-  if (!fs.existsSync(tasksFilePath)) return [];
-  try {
-    return JSON.parse(fs.readFileSync(tasksFilePath, "utf-8"));
-  } catch {
-    return [];
+export async function init(): Promise<void> {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error("[tasks] DATABASE_URL not set");
   }
+  pool = new pg.Pool({ connectionString, max: 3 });
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT,
+      due_date TEXT,
+      priority TEXT NOT NULL DEFAULT 'medium',
+      completed BOOLEAN NOT NULL DEFAULT false,
+      created_at TEXT NOT NULL,
+      completed_at TEXT,
+      tags JSONB DEFAULT '[]'::jsonb
+    )
+  `);
+
+  const existing = await pool.query(`SELECT count(*) FROM tasks`);
+  if (parseInt(existing.rows[0].count) === 0) {
+    try {
+      const fs = await import("fs");
+      const pathMod = await import("path");
+      const legacyPath = pathMod.default.join(process.cwd(), "data", "tasks.json");
+      if (fs.default.existsSync(legacyPath)) {
+        const legacyTasks = JSON.parse(fs.default.readFileSync(legacyPath, "utf-8"));
+        for (const t of legacyTasks) {
+          await pool.query(
+            `INSERT INTO tasks (id, title, description, due_date, priority, completed, created_at, completed_at, tags)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO NOTHING`,
+            [t.id, t.title, t.description || null, t.dueDate || null, t.priority || "medium", t.completed || false, t.createdAt, t.completedAt || null, JSON.stringify(t.tags || [])]
+          );
+        }
+        console.log(`[tasks] Migrated ${legacyTasks.length} tasks from data/tasks.json to PostgreSQL`);
+      }
+    } catch (err) {
+      console.error("[tasks] Task migration failed:", err);
+    }
+  }
+
+  console.log("[tasks] PostgreSQL storage initialized");
 }
 
-function saveTasks(tasks: Task[]) {
-  fs.writeFileSync(tasksFilePath, JSON.stringify(tasks, null, 2));
+function db(): pg.Pool {
+  if (!pool) throw new Error("[tasks] Not initialized — call init() first");
+  return pool;
 }
 
 function generateId(): string {
   return `t_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 }
 
-export function addTask(title: string, options?: { description?: string; dueDate?: string; priority?: string; tags?: string[] }): string {
-  const tasks = loadTasks();
+async function loadTasks(): Promise<Task[]> {
+  const result = await db().query(`SELECT * FROM tasks ORDER BY created_at DESC`);
+  return result.rows.map(rowToTask);
+}
+
+async function saveTask(task: Task): Promise<void> {
+  await db().query(
+    `INSERT INTO tasks (id, title, description, due_date, priority, completed, created_at, completed_at, tags)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     ON CONFLICT (id) DO UPDATE SET
+       title = EXCLUDED.title,
+       description = EXCLUDED.description,
+       due_date = EXCLUDED.due_date,
+       priority = EXCLUDED.priority,
+       completed = EXCLUDED.completed,
+       completed_at = EXCLUDED.completed_at,
+       tags = EXCLUDED.tags`,
+    [task.id, task.title, task.description || null, task.dueDate || null, task.priority, task.completed, task.createdAt, task.completedAt || null, JSON.stringify(task.tags || [])]
+  );
+}
+
+function rowToTask(row: any): Task {
+  return {
+    id: row.id,
+    title: row.title,
+    description: row.description || undefined,
+    dueDate: row.due_date || undefined,
+    priority: row.priority as Task["priority"],
+    completed: row.completed,
+    createdAt: row.created_at,
+    completedAt: row.completed_at || undefined,
+    tags: Array.isArray(row.tags) ? row.tags : JSON.parse(row.tags || "[]"),
+  };
+}
+
+export async function addTask(title: string, options?: { description?: string; dueDate?: string; priority?: string; tags?: string[] }): Promise<string> {
   const task: Task = {
     id: generateId(),
     title,
@@ -50,13 +114,12 @@ export function addTask(title: string, options?: { description?: string; dueDate
     createdAt: new Date().toISOString(),
     tags: options?.tags,
   };
-  tasks.push(task);
-  saveTasks(tasks);
+  await saveTask(task);
   return `Added task: "${title}"${task.dueDate ? ` (due: ${task.dueDate})` : ""}${task.priority !== "medium" ? ` [${task.priority} priority]` : ""}`;
 }
 
-export function listTasks(filter?: { showCompleted?: boolean; tag?: string; priority?: string }): string {
-  const tasks = loadTasks();
+export async function listTasks(filter?: { showCompleted?: boolean; tag?: string; priority?: string }): Promise<string> {
+  const tasks = await loadTasks();
   let filtered = tasks;
 
   if (!filter?.showCompleted) {
@@ -100,35 +163,34 @@ export function listTasks(filter?: { showCompleted?: boolean; tag?: string; prio
   return `${header}\n\n${lines.join("\n\n")}`;
 }
 
-export function completeTask(taskId: string): string {
-  const tasks = loadTasks();
-  const task = tasks.find(t => t.id === taskId);
-  if (!task) return `Task not found: ${taskId}`;
+export async function completeTask(taskId: string): Promise<string> {
+  const result = await db().query(`SELECT * FROM tasks WHERE id = $1`, [taskId]);
+  if (result.rows.length === 0) return `Task not found: ${taskId}`;
+  const task = rowToTask(result.rows[0]);
   if (task.completed) return `Task already completed: "${task.title}"`;
   task.completed = true;
   task.completedAt = new Date().toISOString();
-  saveTasks(tasks);
+  await saveTask(task);
   return `Completed task: "${task.title}"`;
 }
 
-export function deleteTask(taskId: string): string {
-  const tasks = loadTasks();
-  const idx = tasks.findIndex(t => t.id === taskId);
-  if (idx === -1) return `Task not found: ${taskId}`;
-  const removed = tasks.splice(idx, 1)[0];
-  saveTasks(tasks);
-  return `Deleted task: "${removed.title}"`;
+export async function deleteTask(taskId: string): Promise<string> {
+  const result = await db().query(`SELECT * FROM tasks WHERE id = $1`, [taskId]);
+  if (result.rows.length === 0) return `Task not found: ${taskId}`;
+  const task = rowToTask(result.rows[0]);
+  await db().query(`DELETE FROM tasks WHERE id = $1`, [taskId]);
+  return `Deleted task: "${task.title}"`;
 }
 
-export function updateTask(taskId: string, updates: { title?: string; description?: string; dueDate?: string; priority?: string; tags?: string[] }): string {
-  const tasks = loadTasks();
-  const task = tasks.find(t => t.id === taskId);
-  if (!task) return `Task not found: ${taskId}`;
+export async function updateTask(taskId: string, updates: { title?: string; description?: string; dueDate?: string; priority?: string; tags?: string[] }): Promise<string> {
+  const result = await db().query(`SELECT * FROM tasks WHERE id = $1`, [taskId]);
+  if (result.rows.length === 0) return `Task not found: ${taskId}`;
+  const task = rowToTask(result.rows[0]);
   if (updates.title) task.title = updates.title;
   if (updates.description !== undefined) task.description = updates.description;
   if (updates.dueDate !== undefined) task.dueDate = updates.dueDate;
   if (updates.priority) task.priority = updates.priority as Task["priority"];
   if (updates.tags) task.tags = updates.tags;
-  saveTasks(tasks);
+  await saveTask(task);
   return `Updated task: "${task.title}"`;
 }

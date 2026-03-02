@@ -1,11 +1,7 @@
 import { google } from "googleapis";
-import fs from "fs";
-import path from "path";
+import * as gmail from "./gmail.js";
 
-let tokenFilePath = "";
-
-export function init(root: string) {
-  tokenFilePath = path.join(root, "data", "gmail-tokens.json");
+export function init() {
 }
 
 function getOAuth2Client() {
@@ -15,21 +11,35 @@ function getOAuth2Client() {
   return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 }
 
-function loadTokens(): any | null {
-  if (!fs.existsSync(tokenFilePath)) return null;
+async function loadTokens(): Promise<any | null> {
   try {
-    return JSON.parse(fs.readFileSync(tokenFilePath, "utf-8"));
-  } catch {
-    return null;
+    const pool = gmail.getPool();
+    const result = await pool.query(`SELECT tokens FROM oauth_tokens WHERE service = 'google'`);
+    if (result.rows.length > 0) {
+      return result.rows[0].tokens;
+    }
+  } catch (err) {
+    console.error("[calendar] Failed to load tokens:", err);
+  }
+  return null;
+}
+
+async function saveTokens(tokens: any): Promise<void> {
+  try {
+    const pool = gmail.getPool();
+    await pool.query(
+      `INSERT INTO oauth_tokens (service, tokens, updated_at)
+       VALUES ('google', $1, $2)
+       ON CONFLICT (service) DO UPDATE SET tokens = EXCLUDED.tokens, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(tokens), Date.now()]
+    );
+  } catch (err) {
+    console.error("[calendar] Failed to save tokens:", err);
   }
 }
 
-function saveTokens(tokens: any): void {
-  fs.writeFileSync(tokenFilePath, JSON.stringify(tokens, null, 2));
-}
-
 async function getCalendarClient() {
-  const tokens = loadTokens();
+  const tokens = await loadTokens();
   if (!tokens || !tokens.refresh_token) {
     throw new Error("Google not connected — need to authorize first");
   }
@@ -37,9 +47,9 @@ async function getCalendarClient() {
   const client = getOAuth2Client();
   client.setCredentials(tokens);
 
-  client.on("tokens", (newTokens: any) => {
+  client.on("tokens", async (newTokens: any) => {
     const merged = { ...tokens, ...newTokens };
-    saveTokens(merged);
+    await saveTokens(merged);
   });
 
   const isExpired = !tokens.expiry_date || Date.now() >= tokens.expiry_date - 60000;
@@ -47,7 +57,7 @@ async function getCalendarClient() {
     try {
       const { credentials } = await client.refreshAccessToken();
       client.setCredentials(credentials);
-      saveTokens({ ...tokens, ...credentials });
+      await saveTokens({ ...tokens, ...credentials });
     } catch (err: any) {
       if (err.message?.includes("invalid_grant")) {
         throw new Error("Google authorization expired — need to reconnect");

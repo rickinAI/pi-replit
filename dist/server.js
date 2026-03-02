@@ -10,8 +10,8 @@ import express from "express";
 import cors from "cors";
 import { createServer } from "http";
 import { fileURLToPath } from "url";
-import path7 from "path";
-import fs7 from "fs";
+import path3 from "path";
+import fs3 from "fs";
 import { execSync } from "child_process";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
@@ -745,18 +745,56 @@ function rowToConversation(row) {
 
 // src/gmail.ts
 import { google } from "googleapis";
-import fs2 from "fs";
-import path2 from "path";
+import pg2 from "pg";
 var SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/calendar"
 ];
-var tokenFilePath = "";
-var projectRoot = "";
-function init3(root) {
-  projectRoot = root;
-  tokenFilePath = path2.join(root, "data", "gmail-tokens.json");
-  fs2.mkdirSync(path2.dirname(tokenFilePath), { recursive: true });
+var pool2 = null;
+async function init3() {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error("[gmail] DATABASE_URL not set");
+  }
+  pool2 = new pg2.Pool({ connectionString, max: 3 });
+  await pool2.query(`
+    CREATE TABLE IF NOT EXISTS oauth_tokens (
+      service TEXT PRIMARY KEY,
+      tokens JSONB NOT NULL,
+      updated_at BIGINT NOT NULL DEFAULT 0
+    )
+  `);
+  const existing = await pool2.query(`SELECT tokens FROM oauth_tokens WHERE service = 'google'`);
+  if (existing.rows.length === 0) {
+    try {
+      const fs4 = await import("fs");
+      const path4 = await import("path");
+      const legacyPath = path4.default.join(process.cwd(), "data", "gmail-tokens.json");
+      if (fs4.default.existsSync(legacyPath)) {
+        const tokens = JSON.parse(fs4.default.readFileSync(legacyPath, "utf-8"));
+        await pool2.query(
+          `INSERT INTO oauth_tokens (service, tokens, updated_at) VALUES ('google', $1, $2)`,
+          [JSON.stringify(tokens), Date.now()]
+        );
+        cachedTokens = tokens;
+        tokensCacheTime = Date.now();
+        console.log("[gmail] Migrated tokens from data/gmail-tokens.json to PostgreSQL");
+      }
+    } catch (err) {
+      console.error("[gmail] Token migration failed:", err);
+    }
+  } else {
+    cachedTokens = existing.rows[0].tokens;
+    tokensCacheTime = Date.now();
+  }
+  console.log("[gmail] PostgreSQL token storage initialized");
+}
+function db2() {
+  if (!pool2) throw new Error("[gmail] Not initialized \u2014 call init() first");
+  return pool2;
+}
+function getPool() {
+  return db2();
 }
 function isConfigured3() {
   return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
@@ -764,10 +802,45 @@ function isConfigured3() {
 function isConnected() {
   if (!isConfigured3()) return false;
   try {
-    const tokens = loadTokens();
+    const tokens = loadTokensSync();
     return !!(tokens && tokens.refresh_token);
   } catch {
     return false;
+  }
+}
+var cachedTokens = null;
+var tokensCacheTime = 0;
+function loadTokensSync() {
+  if (cachedTokens && Date.now() - tokensCacheTime < 3e4) {
+    return cachedTokens;
+  }
+  return cachedTokens;
+}
+async function loadTokens() {
+  try {
+    const result = await db2().query(`SELECT tokens FROM oauth_tokens WHERE service = 'google'`);
+    if (result.rows.length > 0) {
+      cachedTokens = result.rows[0].tokens;
+      tokensCacheTime = Date.now();
+      return cachedTokens;
+    }
+  } catch (err) {
+    console.error("[gmail] Failed to load tokens:", err);
+  }
+  return null;
+}
+async function saveTokens(tokens) {
+  cachedTokens = tokens;
+  tokensCacheTime = Date.now();
+  try {
+    await db2().query(
+      `INSERT INTO oauth_tokens (service, tokens, updated_at)
+       VALUES ('google', $1, $2)
+       ON CONFLICT (service) DO UPDATE SET tokens = EXCLUDED.tokens, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(tokens), Date.now()]
+    );
+  } catch (err) {
+    console.error("[gmail] Failed to save tokens:", err);
   }
 }
 function getOAuth2Client() {
@@ -801,29 +874,18 @@ function getAuthUrl() {
 async function handleCallback(code) {
   const client = getOAuth2Client();
   const { tokens } = await client.getToken(code);
-  saveTokens(tokens);
-}
-function saveTokens(tokens) {
-  fs2.writeFileSync(tokenFilePath, JSON.stringify(tokens, null, 2));
-}
-function loadTokens() {
-  if (!fs2.existsSync(tokenFilePath)) return null;
-  try {
-    return JSON.parse(fs2.readFileSync(tokenFilePath, "utf-8"));
-  } catch {
-    return null;
-  }
+  await saveTokens(tokens);
 }
 async function getGmailClient() {
-  const tokens = loadTokens();
+  const tokens = await loadTokens();
   if (!tokens || !tokens.refresh_token) {
     throw new Error("Gmail not connected");
   }
   const client = getOAuth2Client();
   client.setCredentials(tokens);
-  client.on("tokens", (newTokens) => {
+  client.on("tokens", async (newTokens) => {
     const merged = { ...tokens, ...newTokens };
-    saveTokens(merged);
+    await saveTokens(merged);
   });
   const isExpired = !tokens.expiry_date || Date.now() >= tokens.expiry_date - 6e4;
   if (isExpired) {
@@ -831,7 +893,7 @@ async function getGmailClient() {
       const { credentials } = await client.refreshAccessToken();
       client.setCredentials(credentials);
       const merged = { ...tokens, ...credentials };
-      saveTokens(merged);
+      await saveTokens(merged);
     } catch (err) {
       if (err.message?.includes("invalid_grant")) {
         throw new Error("Gmail authorization expired \u2014 need to reconnect");
@@ -1000,46 +1062,54 @@ async function getConnectedEmail() {
 
 // src/calendar.ts
 import { google as google2 } from "googleapis";
-import fs3 from "fs";
-import path3 from "path";
-var tokenFilePath2 = "";
-function init4(root) {
-  tokenFilePath2 = path3.join(root, "data", "gmail-tokens.json");
-}
 function getOAuth2Client2() {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   const redirectUri = process.env.GMAIL_REDIRECT_URI || "";
   return new google2.auth.OAuth2(clientId, clientSecret, redirectUri);
 }
-function loadTokens2() {
-  if (!fs3.existsSync(tokenFilePath2)) return null;
+async function loadTokens2() {
   try {
-    return JSON.parse(fs3.readFileSync(tokenFilePath2, "utf-8"));
-  } catch {
-    return null;
+    const pool5 = getPool();
+    const result = await pool5.query(`SELECT tokens FROM oauth_tokens WHERE service = 'google'`);
+    if (result.rows.length > 0) {
+      return result.rows[0].tokens;
+    }
+  } catch (err) {
+    console.error("[calendar] Failed to load tokens:", err);
+  }
+  return null;
+}
+async function saveTokens2(tokens) {
+  try {
+    const pool5 = getPool();
+    await pool5.query(
+      `INSERT INTO oauth_tokens (service, tokens, updated_at)
+       VALUES ('google', $1, $2)
+       ON CONFLICT (service) DO UPDATE SET tokens = EXCLUDED.tokens, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(tokens), Date.now()]
+    );
+  } catch (err) {
+    console.error("[calendar] Failed to save tokens:", err);
   }
 }
-function saveTokens2(tokens) {
-  fs3.writeFileSync(tokenFilePath2, JSON.stringify(tokens, null, 2));
-}
 async function getCalendarClient() {
-  const tokens = loadTokens2();
+  const tokens = await loadTokens2();
   if (!tokens || !tokens.refresh_token) {
     throw new Error("Google not connected \u2014 need to authorize first");
   }
   const client = getOAuth2Client2();
   client.setCredentials(tokens);
-  client.on("tokens", (newTokens) => {
+  client.on("tokens", async (newTokens) => {
     const merged = { ...tokens, ...newTokens };
-    saveTokens2(merged);
+    await saveTokens2(merged);
   });
   const isExpired = !tokens.expiry_date || Date.now() >= tokens.expiry_date - 6e4;
   if (isExpired) {
     try {
       const { credentials } = await client.refreshAccessToken();
       client.setCredentials(credentials);
-      saveTokens2({ ...tokens, ...credentials });
+      await saveTokens2({ ...tokens, ...credentials });
     } catch (err) {
       if (err.message?.includes("invalid_grant")) {
         throw new Error("Google authorization expired \u2014 need to reconnect");
@@ -1328,30 +1398,90 @@ ${lines.join("\n\n")}`;
 }
 
 // src/tasks.ts
-import fs4 from "fs";
-import path4 from "path";
-var tasksFilePath = "";
-function init5(root) {
-  const dataDir = path4.join(root, "data");
-  fs4.mkdirSync(dataDir, { recursive: true });
-  tasksFilePath = path4.join(dataDir, "tasks.json");
-}
-function loadTasks() {
-  if (!fs4.existsSync(tasksFilePath)) return [];
-  try {
-    return JSON.parse(fs4.readFileSync(tasksFilePath, "utf-8"));
-  } catch {
-    return [];
+import pg3 from "pg";
+var pool3 = null;
+async function init4() {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error("[tasks] DATABASE_URL not set");
   }
+  pool3 = new pg3.Pool({ connectionString, max: 3 });
+  await pool3.query(`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT,
+      due_date TEXT,
+      priority TEXT NOT NULL DEFAULT 'medium',
+      completed BOOLEAN NOT NULL DEFAULT false,
+      created_at TEXT NOT NULL,
+      completed_at TEXT,
+      tags JSONB DEFAULT '[]'::jsonb
+    )
+  `);
+  const existing = await pool3.query(`SELECT count(*) FROM tasks`);
+  if (parseInt(existing.rows[0].count) === 0) {
+    try {
+      const fs4 = await import("fs");
+      const pathMod = await import("path");
+      const legacyPath = pathMod.default.join(process.cwd(), "data", "tasks.json");
+      if (fs4.default.existsSync(legacyPath)) {
+        const legacyTasks = JSON.parse(fs4.default.readFileSync(legacyPath, "utf-8"));
+        for (const t of legacyTasks) {
+          await pool3.query(
+            `INSERT INTO tasks (id, title, description, due_date, priority, completed, created_at, completed_at, tags)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO NOTHING`,
+            [t.id, t.title, t.description || null, t.dueDate || null, t.priority || "medium", t.completed || false, t.createdAt, t.completedAt || null, JSON.stringify(t.tags || [])]
+          );
+        }
+        console.log(`[tasks] Migrated ${legacyTasks.length} tasks from data/tasks.json to PostgreSQL`);
+      }
+    } catch (err) {
+      console.error("[tasks] Task migration failed:", err);
+    }
+  }
+  console.log("[tasks] PostgreSQL storage initialized");
 }
-function saveTasks(tasks) {
-  fs4.writeFileSync(tasksFilePath, JSON.stringify(tasks, null, 2));
+function db3() {
+  if (!pool3) throw new Error("[tasks] Not initialized \u2014 call init() first");
+  return pool3;
 }
 function generateId() {
   return `t_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 }
-function addTask(title, options) {
-  const tasks = loadTasks();
+async function loadTasks() {
+  const result = await db3().query(`SELECT * FROM tasks ORDER BY created_at DESC`);
+  return result.rows.map(rowToTask);
+}
+async function saveTask(task) {
+  await db3().query(
+    `INSERT INTO tasks (id, title, description, due_date, priority, completed, created_at, completed_at, tags)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     ON CONFLICT (id) DO UPDATE SET
+       title = EXCLUDED.title,
+       description = EXCLUDED.description,
+       due_date = EXCLUDED.due_date,
+       priority = EXCLUDED.priority,
+       completed = EXCLUDED.completed,
+       completed_at = EXCLUDED.completed_at,
+       tags = EXCLUDED.tags`,
+    [task.id, task.title, task.description || null, task.dueDate || null, task.priority, task.completed, task.createdAt, task.completedAt || null, JSON.stringify(task.tags || [])]
+  );
+}
+function rowToTask(row) {
+  return {
+    id: row.id,
+    title: row.title,
+    description: row.description || void 0,
+    dueDate: row.due_date || void 0,
+    priority: row.priority,
+    completed: row.completed,
+    createdAt: row.created_at,
+    completedAt: row.completed_at || void 0,
+    tags: Array.isArray(row.tags) ? row.tags : JSON.parse(row.tags || "[]")
+  };
+}
+async function addTask(title, options) {
   const task = {
     id: generateId(),
     title,
@@ -1362,12 +1492,11 @@ function addTask(title, options) {
     createdAt: (/* @__PURE__ */ new Date()).toISOString(),
     tags: options?.tags
   };
-  tasks.push(task);
-  saveTasks(tasks);
+  await saveTask(task);
   return `Added task: "${title}"${task.dueDate ? ` (due: ${task.dueDate})` : ""}${task.priority !== "medium" ? ` [${task.priority} priority]` : ""}`;
 }
-function listTasks(filter) {
-  const tasks = loadTasks();
+async function listTasks(filter) {
+  const tasks = await loadTasks();
   let filtered = tasks;
   if (!filter?.showCompleted) {
     filtered = filtered.filter((t) => !t.completed);
@@ -1408,34 +1537,33 @@ function listTasks(filter) {
 
 ${lines.join("\n\n")}`;
 }
-function completeTask(taskId) {
-  const tasks = loadTasks();
-  const task = tasks.find((t) => t.id === taskId);
-  if (!task) return `Task not found: ${taskId}`;
+async function completeTask(taskId) {
+  const result = await db3().query(`SELECT * FROM tasks WHERE id = $1`, [taskId]);
+  if (result.rows.length === 0) return `Task not found: ${taskId}`;
+  const task = rowToTask(result.rows[0]);
   if (task.completed) return `Task already completed: "${task.title}"`;
   task.completed = true;
   task.completedAt = (/* @__PURE__ */ new Date()).toISOString();
-  saveTasks(tasks);
+  await saveTask(task);
   return `Completed task: "${task.title}"`;
 }
-function deleteTask(taskId) {
-  const tasks = loadTasks();
-  const idx = tasks.findIndex((t) => t.id === taskId);
-  if (idx === -1) return `Task not found: ${taskId}`;
-  const removed = tasks.splice(idx, 1)[0];
-  saveTasks(tasks);
-  return `Deleted task: "${removed.title}"`;
+async function deleteTask(taskId) {
+  const result = await db3().query(`SELECT * FROM tasks WHERE id = $1`, [taskId]);
+  if (result.rows.length === 0) return `Task not found: ${taskId}`;
+  const task = rowToTask(result.rows[0]);
+  await db3().query(`DELETE FROM tasks WHERE id = $1`, [taskId]);
+  return `Deleted task: "${task.title}"`;
 }
-function updateTask(taskId, updates) {
-  const tasks = loadTasks();
-  const task = tasks.find((t) => t.id === taskId);
-  if (!task) return `Task not found: ${taskId}`;
+async function updateTask(taskId, updates) {
+  const result = await db3().query(`SELECT * FROM tasks WHERE id = $1`, [taskId]);
+  if (result.rows.length === 0) return `Task not found: ${taskId}`;
+  const task = rowToTask(result.rows[0]);
   if (updates.title) task.title = updates.title;
   if (updates.description !== void 0) task.description = updates.description;
   if (updates.dueDate !== void 0) task.dueDate = updates.dueDate;
   if (updates.priority) task.priority = updates.priority;
   if (updates.tags) task.tags = updates.tags;
-  saveTasks(tasks);
+  await saveTask(task);
   return `Updated task: "${task.title}"`;
 }
 
@@ -1995,8 +2123,7 @@ ${lines.join("\n\n")}`;
 }
 
 // src/alerts.ts
-import fs5 from "fs";
-import path5 from "path";
+import pg4 from "pg";
 import Anthropic2 from "@anthropic-ai/sdk";
 var DEFAULT_CONFIG = {
   timezone: "America/New_York",
@@ -2022,7 +2149,7 @@ var DEFAULT_CONFIG = {
   lastPrices: {},
   lastBriefRun: {}
 };
-var configPath = "";
+var pool4 = null;
 var config = { ...DEFAULT_CONFIG };
 var broadcastFn = null;
 var saveBriefFn = null;
@@ -2034,17 +2161,53 @@ var initialAlertCheckDone = false;
 var briefRunning = false;
 var alertRunning = false;
 var lastDedupeReset = "";
-function init6(root) {
-  const dataDir = path5.join(root, "data");
-  fs5.mkdirSync(dataDir, { recursive: true });
-  configPath = path5.join(dataDir, "alerts-config.json");
-  config = loadConfig();
+async function init5() {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error("[alerts] DATABASE_URL not set");
+  }
+  pool4 = new pg4.Pool({ connectionString, max: 3 });
+  await pool4.query(`
+    CREATE TABLE IF NOT EXISTS app_config (
+      key TEXT PRIMARY KEY,
+      value JSONB NOT NULL,
+      updated_at BIGINT NOT NULL DEFAULT 0
+    )
+  `);
+  const existing = await pool4.query(`SELECT value FROM app_config WHERE key = 'alerts'`);
+  if (existing.rows.length === 0) {
+    try {
+      const fs4 = await import("fs");
+      const path4 = await import("path");
+      const legacyPath = path4.default.join(process.cwd(), "data", "alerts-config.json");
+      if (fs4.default.existsSync(legacyPath)) {
+        const raw = JSON.parse(fs4.default.readFileSync(legacyPath, "utf-8"));
+        const migrated = { ...DEFAULT_CONFIG, ...raw, briefs: { ...DEFAULT_CONFIG.briefs, ...raw.briefs }, alerts: { ...DEFAULT_CONFIG.alerts, ...raw.alerts } };
+        await pool4.query(
+          `INSERT INTO app_config (key, value, updated_at) VALUES ('alerts', $1, $2)`,
+          [JSON.stringify(migrated), Date.now()]
+        );
+        config = migrated;
+        console.log("[alerts] Migrated config from data/alerts-config.json to PostgreSQL");
+      }
+    } catch (err) {
+      console.error("[alerts] Config migration failed:", err);
+    }
+  }
+  if (existing.rows.length > 0) {
+    config = await loadConfig();
+  }
+  console.log("[alerts] PostgreSQL config initialized");
 }
-function loadConfig() {
-  if (!configPath) return { ...DEFAULT_CONFIG };
+function db4() {
+  if (!pool4) throw new Error("[alerts] Not initialized \u2014 call init() first");
+  return pool4;
+}
+async function loadConfig() {
   try {
-    if (fs5.existsSync(configPath)) {
-      const raw = JSON.parse(fs5.readFileSync(configPath, "utf-8"));
+    const result = await db4().query(`SELECT value FROM app_config WHERE key = 'alerts'`);
+    if (result.rows.length > 0) {
+      const raw = result.rows[0].value;
       return { ...DEFAULT_CONFIG, ...raw, briefs: { ...DEFAULT_CONFIG.briefs, ...raw.briefs }, alerts: { ...DEFAULT_CONFIG.alerts, ...raw.alerts } };
     }
   } catch (err) {
@@ -2052,10 +2215,14 @@ function loadConfig() {
   }
   return { ...DEFAULT_CONFIG };
 }
-function saveConfig() {
-  if (!configPath) return;
+async function saveConfig() {
   try {
-    fs5.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    await db4().query(
+      `INSERT INTO app_config (key, value, updated_at)
+       VALUES ('alerts', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(config), Date.now()]
+    );
   } catch (err) {
     console.error("[alerts] Failed to save config:", err);
   }
@@ -2133,7 +2300,7 @@ ${result}`;
 ${result}`;
       }
       case "tasks": {
-        const localTasks = listTasks();
+        const localTasks = await listTasks();
         return `**Tasks:**
 ${localTasks}`;
       }
@@ -2310,7 +2477,7 @@ async function doCheckBriefs() {
     if (nowMinutes >= targetMinutes && nowMinutes <= targetMinutes + 2) {
       console.log(`[alerts] Triggering ${type} brief`);
       config.lastBriefRun[runKey] = (/* @__PURE__ */ new Date()).toISOString();
-      saveConfig();
+      await saveConfig();
       try {
         const content = await generateBrief(type);
         const event = {
@@ -2401,12 +2568,12 @@ async function doCheckAlerts() {
         console.error(`[alerts] Stock alert check for ${w.symbol} failed:`, err);
       }
     }
-    saveConfig();
+    await saveConfig();
   }
   if (config.alerts.taskDeadline.enabled) {
     try {
       const todayKey = getTodayKey();
-      const taskList = listTasks();
+      const taskList = await listTasks();
       if (!taskList.includes("No open tasks") && !taskList.includes("No tasks found")) {
         const lines = taskList.split("\n");
         for (const line of lines) {
@@ -2499,16 +2666,16 @@ async function triggerBrief(type) {
 }
 
 // src/agents/loader.ts
-import fs6 from "fs";
-import path6 from "path";
+import fs2 from "fs";
+import path2 from "path";
 var agents = [];
-var configPath2 = "";
-function init7(dataDir) {
-  configPath2 = path6.join(dataDir, "agents.json");
+var configPath = "";
+function init6(dataDir) {
+  configPath = path2.join(dataDir, "agents.json");
   loadAgents();
   let reloadTimer = null;
   try {
-    fs6.watch(configPath2, () => {
+    fs2.watch(configPath, () => {
       if (reloadTimer) clearTimeout(reloadTimer);
       reloadTimer = setTimeout(() => {
         console.log("[agents] Config file changed \u2014 reloading");
@@ -2523,7 +2690,7 @@ function init7(dataDir) {
 }
 function loadAgents() {
   try {
-    const raw = fs6.readFileSync(configPath2, "utf-8");
+    const raw = fs2.readFileSync(configPath, "utf-8");
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) {
       console.error("[agents] agents.json must be an array");
@@ -2747,18 +2914,14 @@ var ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
 var APP_PASSWORD = process.env.APP_PASSWORD || "";
 var SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path7.dirname(__filename);
-var PROJECT_ROOT = __filename.includes("/dist/") ? path7.resolve(__dirname, "..") : __dirname;
-var PUBLIC_DIR = path7.join(PROJECT_ROOT, "public");
-var AGENT_DIR = path7.join(PROJECT_ROOT, ".pi/agent");
-var VAULT_DIR = path7.join(PROJECT_ROOT, "data", "vault");
-fs7.mkdirSync(AGENT_DIR, { recursive: true });
-init3(PROJECT_ROOT);
-init4(PROJECT_ROOT);
-init5(PROJECT_ROOT);
-init6(PROJECT_ROOT);
+var __dirname = path3.dirname(__filename);
+var PROJECT_ROOT = __filename.includes("/dist/") ? path3.resolve(__dirname, "..") : __dirname;
+var PUBLIC_DIR = path3.join(PROJECT_ROOT, "public");
+var AGENT_DIR = path3.join(PROJECT_ROOT, ".pi/agent");
+var VAULT_DIR = path3.join(PROJECT_ROOT, "data", "vault");
+fs3.mkdirSync(AGENT_DIR, { recursive: true });
 init(VAULT_DIR);
-init7(path7.join(PROJECT_ROOT, "data"));
+init6(path3.join(PROJECT_ROOT, "data"));
 var useLocalVault = isConfigured2();
 setInterval(() => {
   const localAvailable = isConfigured2();
@@ -2782,17 +2945,9 @@ if (useLocalVault) {
 } else {
   console.warn("Knowledge base integration not configured.");
 }
-if (!isConfigured3()) console.warn("Gmail integration not configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET missing).");
-else if (!isConnected()) console.warn("Gmail configured but not yet authorized. Visit /api/gmail/auth to connect.");
-else {
-  getConnectedEmail().then((email) => {
-    if (email) console.log(`[boot] Google account connected: ${email}`);
-  }).catch(() => {
-  });
-}
 if (!APP_PASSWORD) console.warn("APP_PASSWORD is not set \u2014 auth disabled.");
 console.log(`[boot] PORT=${PORT} PUBLIC_DIR=${PUBLIC_DIR} AGENT_DIR=${AGENT_DIR}`);
-console.log(`[boot] public/ exists: ${fs7.existsSync(PUBLIC_DIR)}`);
+console.log(`[boot] public/ exists: ${fs3.existsSync(PUBLIC_DIR)}`);
 function kbList(p) {
   return useLocalVault ? listNotes2(p) : listNotes(p);
 }
@@ -3144,7 +3299,7 @@ function buildTaskTools() {
       }),
       async execute(_toolCallId, params) {
         const { title, ...options } = params;
-        const result = addTask(title, options);
+        const result = await addTask(title, options);
         return { content: [{ type: "text", text: result }], details: {} };
       }
     },
@@ -3158,7 +3313,7 @@ function buildTaskTools() {
         priority: Type.Optional(Type.String({ description: "Filter by priority: 'low', 'medium', 'high'" }))
       }),
       async execute(_toolCallId, params) {
-        const result = listTasks(params);
+        const result = await listTasks(params);
         return { content: [{ type: "text", text: result }], details: {} };
       }
     },
@@ -3170,7 +3325,7 @@ function buildTaskTools() {
         taskId: Type.String({ description: "The task ID to complete" })
       }),
       async execute(_toolCallId, params) {
-        const result = completeTask(params.taskId);
+        const result = await completeTask(params.taskId);
         return { content: [{ type: "text", text: result }], details: {} };
       }
     },
@@ -3182,7 +3337,7 @@ function buildTaskTools() {
         taskId: Type.String({ description: "The task ID to delete" })
       }),
       async execute(_toolCallId, params) {
-        const result = deleteTask(params.taskId);
+        const result = await deleteTask(params.taskId);
         return { content: [{ type: "text", text: result }], details: {} };
       }
     },
@@ -3200,7 +3355,7 @@ function buildTaskTools() {
       }),
       async execute(_toolCallId, params) {
         const { taskId, ...updates } = params;
-        const result = updateTask(taskId, updates);
+        const result = await updateTask(taskId, updates);
         return { content: [{ type: "text", text: result }], details: {} };
       }
     }
@@ -3678,17 +3833,17 @@ setInterval(async () => {
     }
   }
 }, 5 * 60 * 1e3);
-var TUNNEL_URL_FILE = path7.join(PROJECT_ROOT, "data", "tunnel-url.txt");
+var TUNNEL_URL_FILE = path3.join(PROJECT_ROOT, "data", "tunnel-url.txt");
 function loadPersistedTunnelUrl() {
   try {
-    return fs7.readFileSync(TUNNEL_URL_FILE, "utf-8").trim() || null;
+    return fs3.readFileSync(TUNNEL_URL_FILE, "utf-8").trim() || null;
   } catch {
     return null;
   }
 }
 function persistTunnelUrl(url) {
   try {
-    fs7.writeFileSync(TUNNEL_URL_FILE, url, "utf-8");
+    fs3.writeFileSync(TUNNEL_URL_FILE, url, "utf-8");
   } catch {
   }
 }
@@ -3822,9 +3977,9 @@ app.get("/api/gmail/status", async (_req, res) => {
 app.post("/api/session", async (_req, res) => {
   try {
     const sessionId = `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const authStorage = AuthStorage.create(path7.join(AGENT_DIR, "auth.json"));
+    const authStorage = AuthStorage.create(path3.join(AGENT_DIR, "auth.json"));
     authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
-    const modelRegistry = new ModelRegistry(authStorage, path7.join(AGENT_DIR, "models.json"));
+    const modelRegistry = new ModelRegistry(authStorage, path3.join(AGENT_DIR, "models.json"));
     const fullModel = modelRegistry.find("anthropic", FULL_MODEL_ID);
     if (!fullModel) throw new Error(`Model ${FULL_MODEL_ID} not found in registry`);
     const coreTools = [
@@ -4009,9 +4164,9 @@ app.post("/api/session/:id/prompt", async (req, res) => {
   }
   if (chosenModelId !== entry.activeModelName) {
     try {
-      const authStorage = AuthStorage.create(path7.join(AGENT_DIR, "auth.json"));
+      const authStorage = AuthStorage.create(path3.join(AGENT_DIR, "auth.json"));
       authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
-      const modelRegistry = new ModelRegistry(authStorage, path7.join(AGENT_DIR, "models.json"));
+      const modelRegistry = new ModelRegistry(authStorage, path3.join(AGENT_DIR, "models.json"));
       const newModel = modelRegistry.find("anthropic", chosenModelId);
       if (newModel) {
         await entry.session.setModel(newModel);
@@ -4227,7 +4382,7 @@ app.get("/api/glance", async (_req, res) => {
     }
     promises.push((async () => {
       try {
-        const raw = listTasks();
+        const raw = await listTasks();
         if (raw.includes("No open tasks") || raw.includes("No tasks found")) {
           result.tasks = { active: 0 };
         } else {
@@ -4279,7 +4434,7 @@ function getSyncStatus() {
   const logPath = "/tmp/obsidian-sync.log";
   const lastChecked = (/* @__PURE__ */ new Date()).toISOString();
   try {
-    const content = fs7.readFileSync(logPath, "utf-8");
+    const content = fs3.readFileSync(logPath, "utf-8");
     const lines = content.trim().split("\n").filter((l) => l.trim());
     if (lines.length === 0) return { running: false, status: "not_running", lastLine: "", lastChecked };
     const lastLine = lines[lines.length - 1].trim();
@@ -4334,12 +4489,12 @@ app.get("/api/agents", (_req, res) => {
   res.json({ agents: agents2 });
 });
 async function buildVaultTree(dir) {
-  const entries = await fs7.promises.readdir(dir, { withFileTypes: true });
+  const entries = await fs3.promises.readdir(dir, { withFileTypes: true });
   const result = [];
   for (const entry of entries) {
     if (entry.name.startsWith(".")) continue;
     if (entry.isDirectory()) {
-      const children = await buildVaultTree(path7.join(dir, entry.name));
+      const children = await buildVaultTree(path3.join(dir, entry.name));
       result.push({ name: entry.name, type: "folder", children });
     } else {
       result.push({ name: entry.name, type: "file" });
@@ -4443,7 +4598,18 @@ async function waitForPort(port, maxWaitMs = 3e4) {
 }
 async function startServer(maxRetries = 5) {
   await init2();
-  console.log("[boot] Conversations storage ready (PostgreSQL)");
+  await init3();
+  await init4();
+  await init5();
+  console.log("[boot] All PostgreSQL storage initialized (conversations, tasks, alerts, tokens)");
+  if (!isConfigured3()) console.warn("Gmail integration not configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET missing).");
+  else if (!isConnected()) console.warn("Gmail configured but not yet authorized. Visit /api/gmail/auth to connect.");
+  else {
+    getConnectedEmail().then((email) => {
+      if (email) console.log(`[boot] Google account connected: ${email}`);
+    }).catch(() => {
+    });
+  }
   const portReady = await waitForPort(PORT);
   if (!portReady) {
     console.error(`[boot] Port ${PORT} could not be freed after 30s \u2014 exiting`);

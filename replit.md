@@ -16,11 +16,11 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Periodic knowledge base health check (every 30s) with connection status logging
   - Express error-handling middleware for clean JSON error responses
 - **src/obsidian.ts** — Client for the knowledge base REST API (10s timeout, 2 retries on transient failures, health ping)
-- **src/gmail.ts** — Gmail integration via custom Google OAuth (list/read/search emails)
-- **src/calendar.ts** — Google Calendar integration (shares OAuth with Gmail)
+- **src/gmail.ts** — Gmail integration via custom Google OAuth (list/read/search emails). Tokens stored in PostgreSQL (oauth_tokens table)
+- **src/calendar.ts** — Google Calendar integration (shares OAuth tokens with Gmail via PostgreSQL)
 - **src/weather.ts** — Weather via Open-Meteo (free, no API key)
 - **src/websearch.ts** — Web search via DuckDuckGo HTML (free, no API key)
-- **src/tasks.ts** — Local task manager with JSON storage
+- **src/tasks.ts** — Task manager with PostgreSQL storage (tasks table)
 - **src/news.ts** — News headlines via Google News RSS feeds
 - **src/conversations.ts** — Conversation persistence module (save/load/list/delete via PostgreSQL, AI summaries via Haiku, last-conversation context for session start). Uses Replit's built-in PostgreSQL database (DATABASE_URL) so conversations persist across deployments
 - **src/memory-extractor.ts** — Post-conversation fact extraction (profile updates, action items) via Claude Haiku
@@ -31,7 +31,10 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - History panel (slide-out, lists past conversations, view/delete)
   - Confirmation modal before starting new session
 - **dist/** — esbuild output (compiled server)
-- **data/conversations/** — Legacy conversation JSON files (now stored in PostgreSQL)
+- **data/conversations/** — Legacy conversation JSON files (now in PostgreSQL)
+- **data/alerts-config.json** — Legacy alerts config (now in PostgreSQL app_config table)
+- **data/gmail-tokens.json** — Legacy OAuth tokens (now in PostgreSQL oauth_tokens table)
+- **data/tasks.json** — Legacy tasks file (now in PostgreSQL tasks table)
 - **public/manifest.json** — PWA web app manifest (name, icons, display mode)
 - **public/icons/** — App icons (180x180 apple-touch-icon, 192x192, 512x512)
 - **tunnel-setup/** — macOS cloudflared named tunnel startup script with auto-restart loop

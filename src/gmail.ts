@@ -1,19 +1,61 @@
 import { google } from "googleapis";
-import fs from "fs";
-import path from "path";
+import pg from "pg";
 
 const SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/calendar",
 ];
 
-let tokenFilePath = "";
-let projectRoot = "";
+let pool: pg.Pool | null = null;
 
-export function init(root: string) {
-  projectRoot = root;
-  tokenFilePath = path.join(root, "data", "gmail-tokens.json");
-  fs.mkdirSync(path.dirname(tokenFilePath), { recursive: true });
+export async function init(): Promise<void> {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error("[gmail] DATABASE_URL not set");
+  }
+  pool = new pg.Pool({ connectionString, max: 3 });
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS oauth_tokens (
+      service TEXT PRIMARY KEY,
+      tokens JSONB NOT NULL,
+      updated_at BIGINT NOT NULL DEFAULT 0
+    )
+  `);
+
+  const existing = await pool.query(`SELECT tokens FROM oauth_tokens WHERE service = 'google'`);
+  if (existing.rows.length === 0) {
+    try {
+      const fs = await import("fs");
+      const path = await import("path");
+      const legacyPath = path.default.join(process.cwd(), "data", "gmail-tokens.json");
+      if (fs.default.existsSync(legacyPath)) {
+        const tokens = JSON.parse(fs.default.readFileSync(legacyPath, "utf-8"));
+        await pool.query(
+          `INSERT INTO oauth_tokens (service, tokens, updated_at) VALUES ('google', $1, $2)`,
+          [JSON.stringify(tokens), Date.now()]
+        );
+        cachedTokens = tokens;
+        tokensCacheTime = Date.now();
+        console.log("[gmail] Migrated tokens from data/gmail-tokens.json to PostgreSQL");
+      }
+    } catch (err) {
+      console.error("[gmail] Token migration failed:", err);
+    }
+  } else {
+    cachedTokens = existing.rows[0].tokens;
+    tokensCacheTime = Date.now();
+  }
+
+  console.log("[gmail] PostgreSQL token storage initialized");
+}
+
+function db(): pg.Pool {
+  if (!pool) throw new Error("[gmail] Not initialized — call init() first");
+  return pool;
+}
+
+export function getPool(): pg.Pool {
+  return db();
 }
 
 export function isConfigured(): boolean {
@@ -23,10 +65,49 @@ export function isConfigured(): boolean {
 export function isConnected(): boolean {
   if (!isConfigured()) return false;
   try {
-    const tokens = loadTokens();
+    const tokens = loadTokensSync();
     return !!(tokens && tokens.refresh_token);
   } catch {
     return false;
+  }
+}
+
+let cachedTokens: any | null = null;
+let tokensCacheTime = 0;
+
+function loadTokensSync(): any | null {
+  if (cachedTokens && Date.now() - tokensCacheTime < 30000) {
+    return cachedTokens;
+  }
+  return cachedTokens;
+}
+
+async function loadTokens(): Promise<any | null> {
+  try {
+    const result = await db().query(`SELECT tokens FROM oauth_tokens WHERE service = 'google'`);
+    if (result.rows.length > 0) {
+      cachedTokens = result.rows[0].tokens;
+      tokensCacheTime = Date.now();
+      return cachedTokens;
+    }
+  } catch (err) {
+    console.error("[gmail] Failed to load tokens:", err);
+  }
+  return null;
+}
+
+async function saveTokens(tokens: any): Promise<void> {
+  cachedTokens = tokens;
+  tokensCacheTime = Date.now();
+  try {
+    await db().query(
+      `INSERT INTO oauth_tokens (service, tokens, updated_at)
+       VALUES ('google', $1, $2)
+       ON CONFLICT (service) DO UPDATE SET tokens = EXCLUDED.tokens, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(tokens), Date.now()]
+    );
+  } catch (err) {
+    console.error("[gmail] Failed to save tokens:", err);
   }
 }
 
@@ -64,24 +145,11 @@ export function getAuthUrl(): string {
 export async function handleCallback(code: string): Promise<void> {
   const client = getOAuth2Client();
   const { tokens } = await client.getToken(code);
-  saveTokens(tokens);
-}
-
-function saveTokens(tokens: any): void {
-  fs.writeFileSync(tokenFilePath, JSON.stringify(tokens, null, 2));
-}
-
-function loadTokens(): any | null {
-  if (!fs.existsSync(tokenFilePath)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(tokenFilePath, "utf-8"));
-  } catch {
-    return null;
-  }
+  await saveTokens(tokens);
 }
 
 async function getGmailClient() {
-  const tokens = loadTokens();
+  const tokens = await loadTokens();
   if (!tokens || !tokens.refresh_token) {
     throw new Error("Gmail not connected");
   }
@@ -89,9 +157,9 @@ async function getGmailClient() {
   const client = getOAuth2Client();
   client.setCredentials(tokens);
 
-  client.on("tokens", (newTokens: any) => {
+  client.on("tokens", async (newTokens: any) => {
     const merged = { ...tokens, ...newTokens };
-    saveTokens(merged);
+    await saveTokens(merged);
   });
 
   const isExpired = !tokens.expiry_date || Date.now() >= tokens.expiry_date - 60000;
@@ -100,7 +168,7 @@ async function getGmailClient() {
       const { credentials } = await client.refreshAccessToken();
       client.setCredentials(credentials);
       const merged = { ...tokens, ...credentials };
-      saveTokens(merged);
+      await saveTokens(merged);
     } catch (err: any) {
       if (err.message?.includes("invalid_grant")) {
         throw new Error("Gmail authorization expired — need to reconnect");
