@@ -55,7 +55,7 @@ Connection pooling: Single shared `pg.Pool` in `src/db.ts` (max 10 connections),
 
 - **Default port**: 3000 (matches deployment port forwarding)
 - **Local dev**: workflow sets `PORT=5000` inline (webview requires port 5000)
-- **Deployment**: uses `PORT=3000` from `.replit` `[env]`, forwarded to external port 80
+- **Deployment**: VM (always-on) target — required for SSE streaming and in-memory sessions. Uses `PORT=3000` from `.replit` `[env]`, forwarded to external port 80
 - Server reads `process.env.PORT` with `||` (not `??`) to handle empty strings
 
 ## Authentication
