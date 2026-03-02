@@ -60,6 +60,7 @@ body {
   height: 100dvh;
   height: calc(100dvh - var(--keyboard-h));
   position: relative;
+  overflow: hidden;
 }
 
 #header {

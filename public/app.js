@@ -737,7 +737,7 @@ function handleBrief(event) {
   wrapper.appendChild(body);
 
   messages.insertBefore(wrapper, scrollAnchor);
-  wrapper.scrollIntoView({ behavior: "auto", block: "start" });
+  messages.scrollTop = wrapper.offsetTop - messages.offsetTop;
 
   if (document.hidden) {
     playAlertSound();
@@ -1568,7 +1568,7 @@ function stopSyncPolling() {
 
 function scrollToBottom() {
   userHasScrolledUp = false;
-  scrollAnchor.scrollIntoView({ behavior: "auto", block: "end" });
+  messages.scrollTop = messages.scrollHeight;
 }
 
 function throttledScroll() {
