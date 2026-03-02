@@ -1323,7 +1323,10 @@ app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
   }
 
   let chosenModelId = FULL_MODEL_ID;
-  if (entry.modelMode === "fast") {
+  const hasImages = images && images.length > 0;
+  if (hasImages) {
+    chosenModelId = FULL_MODEL_ID;
+  } else if (entry.modelMode === "fast") {
     chosenModelId = FAST_MODEL_ID;
   } else if (entry.modelMode === "auto") {
     const intent = classifyIntent(text);
