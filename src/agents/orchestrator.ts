@@ -67,7 +67,7 @@ export async function runSubAgent(opts: {
   const toolsUsed: string[] = [];
 
   const client = new Anthropic({ apiKey: opts.apiKey });
-  const modelId = agent.model === "default" ? (opts.model || "claude-sonnet-4-20250514") : agent.model;
+  const modelId = agent.model === "default" ? (opts.model || "claude-sonnet-4-6-latest") : agent.model;
 
   let userContent = opts.task;
   if (opts.context) userContent = `Context:\n${opts.context}\n\nTask:\n${opts.task}`;
