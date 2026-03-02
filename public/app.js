@@ -438,16 +438,16 @@ async function pollKbStatus() {
     if (online) {
       kbDot.classList.remove("offline");
       kbDot.title = "Knowledge Vault: connected";
-      if (kbBadge) kbBadge.classList.remove("offline");
+      kbBadge.classList.remove("offline");
     } else {
       kbDot.classList.add("offline");
       kbDot.title = "Knowledge Vault: offline";
-      if (kbBadge) kbBadge.classList.add("offline");
+      kbBadge.classList.add("offline");
     }
   } catch {
     kbDot.classList.add("offline");
     kbDot.title = "Knowledge Vault: unknown";
-    if (kbBadge) kbBadge.classList.add("offline");
+    kbBadge.classList.add("offline");
   }
 }
 pollKbStatus();
@@ -737,7 +737,7 @@ function handleBrief(event) {
   wrapper.appendChild(body);
 
   messages.insertBefore(wrapper, scrollAnchor);
-  messages.scrollTop = wrapper.offsetTop - messages.offsetTop;
+  wrapper.scrollIntoView({ behavior: "auto", block: "start" });
 
   if (document.hidden) {
     playAlertSound();
@@ -1568,7 +1568,7 @@ function stopSyncPolling() {
 
 function scrollToBottom() {
   userHasScrolledUp = false;
-  messages.scrollTop = messages.scrollHeight;
+  scrollAnchor.scrollIntoView({ behavior: "auto", block: "end" });
 }
 
 function throttledScroll() {

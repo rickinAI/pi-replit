@@ -22,12 +22,19 @@
       <div class="header-inner">
         <span class="logo">[RICKIN]</span>
         <div class="badge-stack">
-          <span class="status-dot" id="status-dot" title="Server: connected"></span>
-          <button class="model-badge" id="model-badge" title="Click to cycle: Auto / Fast / Full">
-            <span class="model-mode" id="model-mode">AUTO</span>
-            <span class="model-name" id="model-name">sonnet-4-6</span>
-          </button>
-          <span class="status-dot kb-dot offline" id="kb-dot" title="Knowledge Vault: checking..."></span>
+          <div class="badge-row">
+            <span class="status-dot" id="status-dot" title="Server: connected"></span>
+            <button class="model-badge" id="model-badge" title="Click to cycle: Auto / Fast / Full">
+              <span class="model-mode" id="model-mode">AUTO</span>
+              <span class="model-name" id="model-name">sonnet-4-6</span>
+            </button>
+          </div>
+          <div class="badge-row">
+            <span class="status-dot kb-dot offline" id="kb-dot" title="Knowledge Vault: checking..."></span>
+            <span class="kb-badge offline" id="kb-badge" title="Knowledge Vault: checking...">
+              <span class="kb-label">Knowledge Vault</span>
+            </span>
+          </div>
         </div>
         <div class="header-actions">
           <button class="icon-btn" id="new-session-btn" title="New session">
