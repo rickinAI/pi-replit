@@ -6,7 +6,7 @@ modules = ["python-3.11", "nodejs-22"]
 channel = "stable-25_05"
 
 [deployment]
-run = ["npm", "start"]
+run = ["bash", "-c", "(ob sync --continuous --path ./data/vault > /tmp/obsidian-sync.log 2>&1 &) && npm start"]
 deploymentTarget = "vm"
 build = ["npm", "run", "build"]
 publicDir = "dist"

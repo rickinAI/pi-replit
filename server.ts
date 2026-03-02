@@ -141,8 +141,15 @@ function buildKnowledgeBaseTools(): ToolDefinition[] {
         path: Type.Optional(Type.String({ description: "Directory path inside the knowledge base. Defaults to root." })),
       }),
       async execute(_toolCallId, params) {
-        const result = await kbList(params.path ?? "/");
-        return { content: [{ type: "text" as const, text: result }], details: {} };
+        const p = params.path ?? "/";
+        try {
+          const result = await kbList(p);
+          console.log(`[vault] notes_list OK: ${p}`);
+          return { content: [{ type: "text" as const, text: result }], details: {} };
+        } catch (err: any) {
+          console.error(`[vault] notes_list FAILED: ${p} — ${err.message}`);
+          throw err;
+        }
       },
     },
     {
@@ -153,8 +160,14 @@ function buildKnowledgeBaseTools(): ToolDefinition[] {
         path: Type.String({ description: "Path to the note, e.g. 'Daily Notes/2025-01-15.md'" }),
       }),
       async execute(_toolCallId, params) {
-        const result = await kbRead(params.path);
-        return { content: [{ type: "text" as const, text: result }], details: {} };
+        try {
+          const result = await kbRead(params.path);
+          console.log(`[vault] notes_read OK: ${params.path}`);
+          return { content: [{ type: "text" as const, text: result }], details: {} };
+        } catch (err: any) {
+          console.error(`[vault] notes_read FAILED: ${params.path} — ${err.message}`);
+          throw err;
+        }
       },
     },
     {
@@ -166,8 +179,14 @@ function buildKnowledgeBaseTools(): ToolDefinition[] {
         content: Type.String({ description: "Markdown content for the note" }),
       }),
       async execute(_toolCallId, params) {
-        const result = await kbCreate(params.path, params.content);
-        return { content: [{ type: "text" as const, text: result }], details: {} };
+        try {
+          const result = await kbCreate(params.path, params.content);
+          console.log(`[vault] notes_create OK: ${params.path} (${params.content.length} chars)`);
+          return { content: [{ type: "text" as const, text: result }], details: {} };
+        } catch (err: any) {
+          console.error(`[vault] notes_create FAILED: ${params.path} — ${err.message}`);
+          throw err;
+        }
       },
     },
     {
@@ -179,8 +198,14 @@ function buildKnowledgeBaseTools(): ToolDefinition[] {
         content: Type.String({ description: "Markdown content to append" }),
       }),
       async execute(_toolCallId, params) {
-        const result = await kbAppend(params.path, params.content);
-        return { content: [{ type: "text" as const, text: result }], details: {} };
+        try {
+          const result = await kbAppend(params.path, params.content);
+          console.log(`[vault] notes_append OK: ${params.path} (+${params.content.length} chars)`);
+          return { content: [{ type: "text" as const, text: result }], details: {} };
+        } catch (err: any) {
+          console.error(`[vault] notes_append FAILED: ${params.path} — ${err.message}`);
+          throw err;
+        }
       },
     },
     {
@@ -191,8 +216,15 @@ function buildKnowledgeBaseTools(): ToolDefinition[] {
         query: Type.String({ description: "Search query string" }),
       }),
       async execute(_toolCallId, params) {
-        const result = await kbSearch(params.query);
-        return { content: [{ type: "text" as const, text: result }], details: {} };
+        try {
+          const result = await kbSearch(params.query);
+          const count = JSON.parse(result).length;
+          console.log(`[vault] notes_search OK: "${params.query}" (${count} matches)`);
+          return { content: [{ type: "text" as const, text: result }], details: {} };
+        } catch (err: any) {
+          console.error(`[vault] notes_search FAILED: "${params.query}" — ${err.message}`);
+          throw err;
+        }
       },
     },
     {
@@ -203,8 +235,15 @@ function buildKnowledgeBaseTools(): ToolDefinition[] {
         path: Type.String({ description: "Path to the note to delete (e.g. 'Projects/old-file.md')" }),
       }),
       async execute(_toolCallId, params) {
-        const result = await kbDelete(params.path);
-        return { content: [{ type: "text" as const, text: result }], details: {} };
+        console.log(`[vault] notes_delete: ${params.path}`);
+        try {
+          const result = await kbDelete(params.path);
+          console.log(`[vault] notes_delete OK: ${params.path}`);
+          return { content: [{ type: "text" as const, text: result }], details: {} };
+        } catch (err: any) {
+          console.error(`[vault] notes_delete FAILED: ${params.path} — ${err.message}`);
+          throw err;
+        }
       },
     },
     {
@@ -216,8 +255,15 @@ function buildKnowledgeBaseTools(): ToolDefinition[] {
         to: Type.String({ description: "New path for the note (e.g. 'Projects/Subfolder/new-name.md')" }),
       }),
       async execute(_toolCallId, params) {
-        const result = await kbMove(params.from, params.to);
-        return { content: [{ type: "text" as const, text: result }], details: {} };
+        console.log(`[vault] notes_move: ${params.from} → ${params.to}`);
+        try {
+          const result = await kbMove(params.from, params.to);
+          console.log(`[vault] notes_move OK: ${params.from} → ${params.to}`);
+          return { content: [{ type: "text" as const, text: result }], details: {} };
+        } catch (err: any) {
+          console.error(`[vault] notes_move FAILED: ${params.from} → ${params.to} — ${err.message}`);
+          throw err;
+        }
       },
     },
     {
@@ -229,8 +275,15 @@ function buildKnowledgeBaseTools(): ToolDefinition[] {
         to: Type.String({ description: "New folder path (e.g. 'Projects/New Name')" }),
       }),
       async execute(_toolCallId, params) {
-        const result = await kbRenameFolder(params.from, params.to);
-        return { content: [{ type: "text" as const, text: result }], details: {} };
+        console.log(`[vault] notes_rename_folder: ${params.from} → ${params.to}`);
+        try {
+          const result = await kbRenameFolder(params.from, params.to);
+          console.log(`[vault] notes_rename_folder OK: ${params.from} → ${params.to}`);
+          return { content: [{ type: "text" as const, text: result }], details: {} };
+        } catch (err: any) {
+          console.error(`[vault] notes_rename_folder FAILED: ${params.from} → ${params.to} — ${err.message}`);
+          throw err;
+        }
       },
     },
     {
@@ -241,8 +294,15 @@ function buildKnowledgeBaseTools(): ToolDefinition[] {
         path: Type.String({ description: "Folder path to list recursively (e.g. 'Projects/' or '/')" }),
       }),
       async execute(_toolCallId, params) {
-        const result = await kbListRecursive(params.path);
-        return { content: [{ type: "text" as const, text: result }], details: {} };
+        try {
+          const result = await kbListRecursive(params.path);
+          const count = JSON.parse(result).files?.length ?? 0;
+          console.log(`[vault] notes_list_recursive OK: ${params.path} (${count} items)`);
+          return { content: [{ type: "text" as const, text: result }], details: {} };
+        } catch (err: any) {
+          console.error(`[vault] notes_list_recursive FAILED: ${params.path} — ${err.message}`);
+          throw err;
+        }
       },
     },
     {
@@ -253,8 +313,14 @@ function buildKnowledgeBaseTools(): ToolDefinition[] {
         path: Type.String({ description: "Path to the file or folder (e.g. 'Projects/Research.md')" }),
       }),
       async execute(_toolCallId, params) {
-        const result = await kbFileInfo(params.path);
-        return { content: [{ type: "text" as const, text: result }], details: {} };
+        try {
+          const result = await kbFileInfo(params.path);
+          console.log(`[vault] notes_file_info OK: ${params.path}`);
+          return { content: [{ type: "text" as const, text: result }], details: {} };
+        } catch (err: any) {
+          console.error(`[vault] notes_file_info FAILED: ${params.path} — ${err.message}`);
+          throw err;
+        }
       },
     },
   ];
