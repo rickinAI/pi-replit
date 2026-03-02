@@ -13,7 +13,7 @@
   --surface: #0a0a0a;
   --border: #0a3a0a;
   --font: 'Fira Code', 'SF Mono', 'Courier New', monospace;
-  --header-h: 48px;
+  --header-h: 40px;
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-top: env(safe-area-inset-top, 0px);
   --keyboard-h: 0px;
@@ -60,6 +60,7 @@ body {
   height: 100dvh;
   height: calc(100dvh - var(--keyboard-h));
   position: relative;
+  overflow: hidden;
 }
 
 #header {
@@ -88,14 +89,14 @@ body {
 
 .badge-stack {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 6px;
 }
 
 .badge-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
 
 .badge-row .status-dot {
@@ -707,8 +708,8 @@ input[type="checkbox"]:checked ~ .interview-check::after {
   border-top: 1px solid var(--border);
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 12px calc(8px + var(--safe-bottom));
+  gap: 8px;
+  padding: 6px 12px calc(6px + var(--safe-bottom));
 }
 
 .keyboard-open #input-area {
@@ -716,9 +717,9 @@ input[type="checkbox"]:checked ~ .interview-check::after {
 }
 
 #mic-btn {
-  width: 48px;
-  height: 48px;
-  min-width: 48px;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
   border-radius: 50%;
   border: 1.5px solid var(--green-dim);
   background: rgba(0, 255, 65, 0.04);
@@ -1800,11 +1801,11 @@ body.light-theme .copy-btn:hover {
 }
 
 .glance-collapsed {
-  height: 26px;
+  height: 22px;
   display: flex;
   align-items: center;
-  padding: 0 14px;
-  font-size: 11px;
+  padding: 0 12px;
+  font-size: 10px;
   color: rgba(0, 255, 65, 0.45);
   letter-spacing: 0.3px;
   white-space: nowrap;
