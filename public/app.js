@@ -851,17 +851,49 @@ function fileToBase64(file) {
   });
 }
 
+function compressImage(file, maxDim = 1600, quality = 0.85) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let { width, height } = img;
+      if (width > maxDim || height > maxDim) {
+        const scale = maxDim / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, width, height);
+      const outMime = "image/jpeg";
+      const dataUrl = canvas.toDataURL(outMime, quality);
+      const base64 = dataUrl.split(",")[1];
+      resolve({ mimeType: outMime, data: base64, preview: dataUrl });
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result;
+        const base64 = dataUrl.split(",")[1];
+        resolve({ mimeType: file.type, data: base64, preview: dataUrl });
+      };
+      reader.readAsDataURL(file);
+    };
+    img.src = url;
+  });
+}
+
 function addPendingImage(file) {
   if (!file.type.startsWith("image/")) return;
   if (pendingImages.length >= 5) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    const dataUrl = reader.result;
-    const base64 = dataUrl.split(",")[1];
-    pendingImages.push({ mimeType: file.type, data: base64, preview: dataUrl });
+  compressImage(file).then((result) => {
+    pendingImages.push(result);
     renderImagePreviews();
-  };
-  reader.readAsDataURL(file);
+  });
 }
 
 function renderImagePreviews() {

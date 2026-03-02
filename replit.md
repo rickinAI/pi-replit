@@ -93,6 +93,10 @@ Client-side session resume and background agent support:
 - **Visibility API**: `visibilitychange` listener triggers immediate reconnect + catch-up when user returns to the tab/app (500ms debounce for iOS PWA gestures)
 - **Network recovery**: `online` event triggers SSE reconnect after wifi→cellular or network outage
 - **Server-side tracking**: `isAgentRunning` flag on `SessionEntry` tracks whether agent is mid-response; status endpoint returns full conversation + in-progress text + pending queue count
+- **Image compression**: Client-side canvas resize (max 1600px longest side, JPEG 0.85 quality) in `compressImage()` before upload — reduces iPhone photos from 10MB+ to ~200-400KB
+- **Prompt timeout**: `session.prompt()` wrapped in `Promise.race` with 120s timeout in both direct and queued prompt handlers. On timeout, `isAgentRunning` resets and SSE error sent to client
+- **Agent start event**: `agent_start` SSE event emitted immediately when prompt is received (before calling `session.prompt()`), ensuring typing indicator shows instantly
+- **Prompt diagnostics**: Image count, base64 size, MIME types logged on receipt; prompt completion time logged on success/failure
 - **Agent background work**: The `/prompt` endpoint returns immediately; agent runs asynchronously on the server regardless of client connection state
 - **Message queue**: Users can send messages while the agent is processing. Messages are queued server-side (`pendingMessages` on `SessionEntry`) and auto-processed in order after each `agent_end`. Queue protected by `processingQueue` lock to prevent concurrent `session.prompt` calls. Client shows "Queued — will process next" system message. Send button stays enabled at all times
 - **Port resilience**: `killPort()` uses both `fuser` and `lsof` fallbacks. Workflow command includes pre-start `fuser -k` to clear stale processes

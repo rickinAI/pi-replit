@@ -3743,6 +3743,7 @@ async function processNextPendingMessage(sessionId) {
     } catch {
     }
   }
+  const queuedPromptStart = Date.now();
   try {
     const etNow = (/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" });
     const queueContext = "[Note: This message was sent while the previous task was still running. The previous task has now completed.]\n\n";
@@ -3750,10 +3751,18 @@ async function processNextPendingMessage(sessionId) {
 
 ${queueContext}${pending.text}`;
     const promptImages = pending.images?.map((i) => ({ type: "image", data: i.data, mimeType: i.mimeType }));
-    await entry.session.prompt(augmentedText, promptImages ? { images: promptImages } : void 0);
+    const PROMPT_TIMEOUT = 12e4;
+    const timeoutPromise = new Promise(
+      (_, reject) => setTimeout(() => reject(new Error("Response timed out after 120s")), PROMPT_TIMEOUT)
+    );
+    await Promise.race([
+      entry.session.prompt(augmentedText, promptImages ? { images: promptImages } : void 0),
+      timeoutPromise
+    ]);
+    console.log(`[prompt] queued prompt completed in ${((Date.now() - queuedPromptStart) / 1e3).toFixed(1)}s`);
   } catch (err) {
     entry.isAgentRunning = false;
-    console.error("Queued prompt error:", err);
+    console.error(`[prompt] queued error after ${((Date.now() - queuedPromptStart) / 1e3).toFixed(1)}s:`, err);
     const errEvent = JSON.stringify({ type: "error", error: String(err) });
     for (const sub of entry.subscribers) {
       try {
@@ -4149,6 +4158,22 @@ app.post("/api/session/:id/prompt", async (req, res) => {
   }
   res.json({ ok: true });
   entry.isAgentRunning = true;
+  entry.currentAgentText = "";
+  const startEvent = JSON.stringify({ type: "agent_start" });
+  for (const sub of entry.subscribers) {
+    try {
+      sub.write(`data: ${startEvent}
+
+`);
+    } catch {
+    }
+  }
+  if (hasImages) {
+    const totalB64 = images.reduce((sum, i) => sum + i.data.length, 0);
+    const mimeTypes = images.map((i) => i.mimeType).join(", ");
+    console.log(`[prompt] ${images.length} image(s), ~${Math.round(totalB64 / 1024)}KB base64, types: ${mimeTypes}`);
+  }
+  const promptStart = Date.now();
   try {
     const etNow = (/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" });
     let augmentedText = `[Current date/time in Rickin's timezone (Eastern): ${etNow}]
@@ -4163,10 +4188,18 @@ ${entry.startupContext}
     }
     augmentedText += text;
     const promptImages = images?.map((i) => ({ type: "image", data: i.data, mimeType: i.mimeType }));
-    await entry.session.prompt(augmentedText, promptImages ? { images: promptImages } : void 0);
+    const PROMPT_TIMEOUT = 12e4;
+    const timeoutPromise = new Promise(
+      (_, reject) => setTimeout(() => reject(new Error("Response timed out after 120s")), PROMPT_TIMEOUT)
+    );
+    await Promise.race([
+      entry.session.prompt(augmentedText, promptImages ? { images: promptImages } : void 0),
+      timeoutPromise
+    ]);
+    console.log(`[prompt] completed in ${((Date.now() - promptStart) / 1e3).toFixed(1)}s`);
   } catch (err) {
     entry.isAgentRunning = false;
-    console.error("Prompt error:", err);
+    console.error(`[prompt] error after ${((Date.now() - promptStart) / 1e3).toFixed(1)}s:`, err);
     const errEvent = JSON.stringify({ type: "error", error: String(err) });
     for (const sub of entry.subscribers) {
       try {
