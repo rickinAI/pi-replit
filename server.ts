@@ -1606,6 +1606,50 @@ app.get("/api/kb-status", (_req, res) => {
   res.json({ online: useLocalVault || lastTunnelStatus, mode: useLocalVault ? "local" : "remote" });
 });
 
+function getSyncStatus(): { running: boolean; status: string; lastLine: string; lastChecked: string } {
+  const logPath = "/tmp/obsidian-sync.log";
+  const lastChecked = new Date().toISOString();
+  try {
+    const content = fs.readFileSync(logPath, "utf-8");
+    const lines = content.trim().split("\n").filter(l => l.trim());
+    if (lines.length === 0) return { running: false, status: "not_running", lastLine: "", lastChecked };
+    const lastLine = lines[lines.length - 1].trim();
+    let running = true;
+    let status = "unknown";
+    if (/fully synced/i.test(lastLine)) status = "synced";
+    else if (/upload complete/i.test(lastLine)) status = "synced";
+    else if (/uploading/i.test(lastLine)) status = "uploading";
+    else if (/download complete/i.test(lastLine)) status = "synced";
+    else if (/downloading/i.test(lastLine)) status = "downloading";
+    else if (/connection successful/i.test(lastLine)) status = "connected";
+    else if (/connecting/i.test(lastLine)) status = "connecting";
+    else if (/error|failed|disconnect/i.test(lastLine)) { status = "error"; running = false; }
+    try {
+      const { execSync } = require("child_process");
+      const ps = execSync("pgrep -f 'ob sync' 2>/dev/null", { encoding: "utf-8" }).trim();
+      running = ps.length > 0;
+    } catch { running = false; }
+    return { running, status, lastLine, lastChecked };
+  } catch {
+    return { running: false, status: "not_running", lastLine: "no log file", lastChecked };
+  }
+}
+
+app.get("/api/sync-status", (_req, res) => {
+  res.json(getSyncStatus());
+});
+
+let lastSyncLogStatus = "";
+setInterval(() => {
+  const sync = getSyncStatus();
+  const key = `${sync.running}:${sync.status}`;
+  if (key !== lastSyncLogStatus) {
+    const icon = sync.running ? "●" : "○";
+    console.log(`[sync] ${icon} ob sync ${sync.running ? "running" : "stopped"} — ${sync.status}${sync.status === "error" ? ": " + sync.lastLine : ""}`);
+    lastSyncLogStatus = key;
+  }
+}, 60_000);
+
 app.get("/api/agents", (_req, res) => {
   const agents = agentLoader.getAgents().map(a => ({
     id: a.id,

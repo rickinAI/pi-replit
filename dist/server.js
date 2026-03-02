@@ -1,3 +1,10 @@
+var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
+  get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
+}) : x)(function(x) {
+  if (typeof require !== "undefined") return require.apply(this, arguments);
+  throw Error('Dynamic require of "' + x + '" is not supported');
+});
+
 // server.ts
 import express from "express";
 import cors from "cors";
@@ -4245,6 +4252,52 @@ app.get("/api/glance", async (_req, res) => {
 app.get("/api/kb-status", (_req, res) => {
   res.json({ online: useLocalVault || lastTunnelStatus, mode: useLocalVault ? "local" : "remote" });
 });
+function getSyncStatus() {
+  const logPath = "/tmp/obsidian-sync.log";
+  const lastChecked = (/* @__PURE__ */ new Date()).toISOString();
+  try {
+    const content = fs8.readFileSync(logPath, "utf-8");
+    const lines = content.trim().split("\n").filter((l) => l.trim());
+    if (lines.length === 0) return { running: false, status: "not_running", lastLine: "", lastChecked };
+    const lastLine = lines[lines.length - 1].trim();
+    let running = true;
+    let status = "unknown";
+    if (/fully synced/i.test(lastLine)) status = "synced";
+    else if (/upload complete/i.test(lastLine)) status = "synced";
+    else if (/uploading/i.test(lastLine)) status = "uploading";
+    else if (/download complete/i.test(lastLine)) status = "synced";
+    else if (/downloading/i.test(lastLine)) status = "downloading";
+    else if (/connection successful/i.test(lastLine)) status = "connected";
+    else if (/connecting/i.test(lastLine)) status = "connecting";
+    else if (/error|failed|disconnect/i.test(lastLine)) {
+      status = "error";
+      running = false;
+    }
+    try {
+      const { execSync: execSync2 } = __require("child_process");
+      const ps = execSync2("pgrep -f 'ob sync' 2>/dev/null", { encoding: "utf-8" }).trim();
+      running = ps.length > 0;
+    } catch {
+      running = false;
+    }
+    return { running, status, lastLine, lastChecked };
+  } catch {
+    return { running: false, status: "not_running", lastLine: "no log file", lastChecked };
+  }
+}
+app.get("/api/sync-status", (_req, res) => {
+  res.json(getSyncStatus());
+});
+var lastSyncLogStatus = "";
+setInterval(() => {
+  const sync = getSyncStatus();
+  const key = `${sync.running}:${sync.status}`;
+  if (key !== lastSyncLogStatus) {
+    const icon = sync.running ? "\u25CF" : "\u25CB";
+    console.log(`[sync] ${icon} ob sync ${sync.running ? "running" : "stopped"} \u2014 ${sync.status}${sync.status === "error" ? ": " + sync.lastLine : ""}`);
+    lastSyncLogStatus = key;
+  }
+}, 6e4);
 app.get("/api/agents", (_req, res) => {
   const agents2 = getAgents().map((a) => ({
     id: a.id,
