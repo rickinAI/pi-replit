@@ -141,6 +141,68 @@ async function moveNote(fromPath, toPath) {
   await deleteNote(fromPath);
   return `Moved note: ${fromPath} \u2192 ${toPath}`;
 }
+async function renameFolder(fromPath, toPath) {
+  const listData = await listNotes(fromPath);
+  const parsed = JSON.parse(listData);
+  const items = parsed.files || [];
+  for (const item of items) {
+    const isDir = item.endsWith("/");
+    if (isDir) {
+      const subFrom = item.replace(/\/+$/, "");
+      const subName = subFrom.split("/").pop() || subFrom;
+      await renameFolder(subFrom, `${toPath.replace(/\/+$/, "")}/${subName}`);
+    } else {
+      const fileName = item.split("/").pop() || item;
+      await moveNote(item, `${toPath.replace(/\/+$/, "")}/${fileName}`);
+    }
+  }
+  return `Renamed folder: ${fromPath} \u2192 ${toPath}`;
+}
+async function listRecursive(dirPath = "/") {
+  const files = [];
+  async function walk(dir) {
+    const data = await listNotes(dir);
+    const parsed = JSON.parse(data);
+    const items = parsed.files || [];
+    for (const item of items) {
+      files.push(item);
+      if (item.endsWith("/")) {
+        await walk(item.replace(/\/+$/, ""));
+      }
+    }
+  }
+  await walk(dirPath);
+  return JSON.stringify({ files }, null, 2);
+}
+async function fileInfo(notePath) {
+  try {
+    const content = await readNote(notePath);
+    const size = new TextEncoder().encode(content).length;
+    return JSON.stringify({
+      path: notePath,
+      type: "file",
+      size,
+      sizeHuman: size < 1024 ? `${size} B` : size < 1048576 ? `${(size / 1024).toFixed(1)} KB` : `${(size / 1048576).toFixed(1)} MB`,
+      created: "unknown (API limitation)",
+      modified: "unknown (API limitation)"
+    }, null, 2);
+  } catch {
+    try {
+      const listing = await listNotes(notePath);
+      const parsed = JSON.parse(listing);
+      const count = (parsed.files || []).length;
+      return JSON.stringify({
+        path: notePath,
+        type: "folder",
+        items: count,
+        created: "unknown (API limitation)",
+        modified: "unknown (API limitation)"
+      }, null, 2);
+    } catch {
+      throw new Error(`Not found: ${notePath}`);
+    }
+  }
+}
 async function searchNotes(query) {
   const url = `${baseUrl()}/search/simple/?query=${encodeURIComponent(query)}`;
   const res = await fetchWithRetry(url, { headers: headers() });
@@ -249,6 +311,59 @@ async function moveNote2(fromPath, toPath) {
   }
   nudgeSync(resolvedTo);
   return `Moved note: ${fromPath} \u2192 ${toPath}`;
+}
+async function renameFolder2(fromPath, toPath) {
+  const resolvedFrom = resolvePath(fromPath.replace(/\/+$/, ""));
+  const resolvedTo = resolvePath(toPath.replace(/\/+$/, ""));
+  const stat = await fs.stat(resolvedFrom).catch(() => null);
+  if (!stat || !stat.isDirectory()) throw new Error(`Folder not found: ${fromPath}`);
+  const destParent = path.dirname(resolvedTo);
+  await fs.mkdir(destParent, { recursive: true });
+  await fs.rename(resolvedFrom, resolvedTo);
+  async function nudgeAll(dir) {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) await nudgeAll(full);
+      else nudgeSync(full);
+    }
+  }
+  await nudgeAll(resolvedTo);
+  return `Renamed folder: ${fromPath} \u2192 ${toPath}`;
+}
+async function listRecursive2(dirPath = "/") {
+  const resolved = resolvePath(dirPath);
+  const stat = await fs.stat(resolved).catch(() => null);
+  if (!stat || !stat.isDirectory()) throw new Error(`Folder not found: ${dirPath}`);
+  const files = [];
+  async function walk(dir, relBase) {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+      const rel = relBase ? path.join(relBase, entry.name) : entry.name;
+      if (entry.isDirectory()) {
+        files.push(rel + "/");
+        await walk(path.join(dir, entry.name), rel);
+      } else {
+        files.push(rel);
+      }
+    }
+  }
+  await walk(resolved, dirPath === "/" ? "" : dirPath);
+  return JSON.stringify({ files }, null, 2);
+}
+async function fileInfo2(notePath) {
+  const resolved = resolvePath(notePath);
+  const stat = await fs.stat(resolved).catch(() => null);
+  if (!stat) throw new Error(`Not found: ${notePath}`);
+  return JSON.stringify({
+    path: notePath,
+    type: stat.isDirectory() ? "folder" : "file",
+    size: stat.size,
+    sizeHuman: stat.size < 1024 ? `${stat.size} B` : stat.size < 1048576 ? `${(stat.size / 1024).toFixed(1)} KB` : `${(stat.size / 1048576).toFixed(1)} MB`,
+    created: stat.birthtime.toISOString(),
+    modified: stat.mtime.toISOString()
+  }, null, 2);
 }
 function nudgeSync(filePath2) {
   setTimeout(async () => {
@@ -2669,6 +2784,15 @@ function kbDelete(p) {
 function kbMove(from, to) {
   return useLocalVault ? moveNote2(from, to) : moveNote(from, to);
 }
+function kbRenameFolder(from, to) {
+  return useLocalVault ? renameFolder2(from, to) : renameFolder(from, to);
+}
+function kbListRecursive(p) {
+  return useLocalVault ? listRecursive2(p) : listRecursive(p);
+}
+function kbFileInfo(p) {
+  return useLocalVault ? fileInfo2(p) : fileInfo(p);
+}
 function buildKnowledgeBaseTools() {
   if (!useLocalVault && !isConfigured()) return [];
   return [
@@ -2756,6 +2880,43 @@ function buildKnowledgeBaseTools() {
       }),
       async execute(_toolCallId, params) {
         const result = await kbMove(params.from, params.to);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "notes_rename_folder",
+      label: "Notes Rename Folder",
+      description: "Rename or move an entire folder in the knowledge base. All files and subfolders inside are moved to the new location. Use for reorganizing vault structure.",
+      parameters: Type.Object({
+        from: Type.String({ description: "Current folder path (e.g. 'Projects/Old Name')" }),
+        to: Type.String({ description: "New folder path (e.g. 'Projects/New Name')" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await kbRenameFolder(params.from, params.to);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "notes_list_recursive",
+      label: "Notes List Recursive",
+      description: "List all files and subfolders within a folder recursively. Unlike notes_list which only shows one level, this shows the entire tree. Useful for auditing folder structure.",
+      parameters: Type.Object({
+        path: Type.String({ description: "Folder path to list recursively (e.g. 'Projects/' or '/')" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await kbListRecursive(params.path);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "notes_file_info",
+      label: "Notes File Info",
+      description: "Get metadata about a note or folder: file size, creation date, and last modified date. Use to identify stale or oversized notes.",
+      parameters: Type.Object({
+        path: Type.String({ description: "Path to the file or folder (e.g. 'Projects/Research.md')" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await kbFileInfo(params.path);
         return { content: [{ type: "text", text: result }], details: {} };
       }
     }

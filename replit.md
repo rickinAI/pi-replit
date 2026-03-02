@@ -119,6 +119,11 @@ Client-side session resume and background agent support:
 - `notes_create` — Create or overwrite a note
 - `notes_append` — Append content to an existing note
 - `notes_search` — Full-text search across all notes
+- `notes_delete` — Permanently delete a note (auto-cleans empty parent folders)
+- `notes_move` — Move or rename a note to a new path
+- `notes_rename_folder` — Rename or move an entire folder at once
+- `notes_list_recursive` — List all files/subfolders recursively within a folder
+- `notes_file_info` — Get file metadata (size, created, modified dates)
 
 **Primary: Local vault via Obsidian Headless Sync** (`obsidian-headless` npm package, v1.0.0). Vault files synced to `data/vault/` using `ob sync --continuous` running as a background process alongside the server. Reads files directly from disk via `src/vault-local.ts` — no network dependency. Requires Node.js 22+ (for native WebSocket). Obsidian Sync credentials stored in `~/.config/obsidian-headless/` on the Replit instance.
 

@@ -119,6 +119,15 @@ function kbDelete(p: string): Promise<string> {
 function kbMove(from: string, to: string): Promise<string> {
   return useLocalVault ? vaultLocal.moveNote(from, to) : obsidian.moveNote(from, to);
 }
+function kbRenameFolder(from: string, to: string): Promise<string> {
+  return useLocalVault ? vaultLocal.renameFolder(from, to) : obsidian.renameFolder(from, to);
+}
+function kbListRecursive(p: string): Promise<string> {
+  return useLocalVault ? vaultLocal.listRecursive(p) : obsidian.listRecursive(p);
+}
+function kbFileInfo(p: string): Promise<string> {
+  return useLocalVault ? vaultLocal.fileInfo(p) : obsidian.fileInfo(p);
+}
 
 function buildKnowledgeBaseTools(): ToolDefinition[] {
   if (!useLocalVault && !obsidian.isConfigured()) return [];
@@ -208,6 +217,43 @@ function buildKnowledgeBaseTools(): ToolDefinition[] {
       }),
       async execute(_toolCallId, params) {
         const result = await kbMove(params.from, params.to);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "notes_rename_folder",
+      label: "Notes Rename Folder",
+      description: "Rename or move an entire folder in the knowledge base. All files and subfolders inside are moved to the new location. Use for reorganizing vault structure.",
+      parameters: Type.Object({
+        from: Type.String({ description: "Current folder path (e.g. 'Projects/Old Name')" }),
+        to: Type.String({ description: "New folder path (e.g. 'Projects/New Name')" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await kbRenameFolder(params.from, params.to);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "notes_list_recursive",
+      label: "Notes List Recursive",
+      description: "List all files and subfolders within a folder recursively. Unlike notes_list which only shows one level, this shows the entire tree. Useful for auditing folder structure.",
+      parameters: Type.Object({
+        path: Type.String({ description: "Folder path to list recursively (e.g. 'Projects/' or '/')" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await kbListRecursive(params.path);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "notes_file_info",
+      label: "Notes File Info",
+      description: "Get metadata about a note or folder: file size, creation date, and last modified date. Use to identify stale or oversized notes.",
+      parameters: Type.Object({
+        path: Type.String({ description: "Path to the file or folder (e.g. 'Projects/Research.md')" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await kbFileInfo(params.path);
         return { content: [{ type: "text" as const, text: result }], details: {} };
       },
     },

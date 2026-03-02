@@ -141,6 +141,71 @@ export async function moveNote(fromPath: string, toPath: string): Promise<string
   return `Moved note: ${fromPath} → ${toPath}`;
 }
 
+export async function renameFolder(fromPath: string, toPath: string): Promise<string> {
+  const listData = await listNotes(fromPath);
+  const parsed = JSON.parse(listData);
+  const items: string[] = parsed.files || [];
+  for (const item of items) {
+    const isDir = item.endsWith("/");
+    if (isDir) {
+      const subFrom = item.replace(/\/+$/, "");
+      const subName = subFrom.split("/").pop() || subFrom;
+      await renameFolder(subFrom, `${toPath.replace(/\/+$/, "")}/${subName}`);
+    } else {
+      const fileName = item.split("/").pop() || item;
+      await moveNote(item, `${toPath.replace(/\/+$/, "")}/${fileName}`);
+    }
+  }
+  return `Renamed folder: ${fromPath} → ${toPath}`;
+}
+
+export async function listRecursive(dirPath = "/"): Promise<string> {
+  const files: string[] = [];
+  async function walk(dir: string) {
+    const data = await listNotes(dir);
+    const parsed = JSON.parse(data);
+    const items: string[] = parsed.files || [];
+    for (const item of items) {
+      files.push(item);
+      if (item.endsWith("/")) {
+        await walk(item.replace(/\/+$/, ""));
+      }
+    }
+  }
+  await walk(dirPath);
+  return JSON.stringify({ files }, null, 2);
+}
+
+export async function fileInfo(notePath: string): Promise<string> {
+  try {
+    const content = await readNote(notePath);
+    const size = new TextEncoder().encode(content).length;
+    return JSON.stringify({
+      path: notePath,
+      type: "file",
+      size,
+      sizeHuman: size < 1024 ? `${size} B` : size < 1048576 ? `${(size / 1024).toFixed(1)} KB` : `${(size / 1048576).toFixed(1)} MB`,
+      created: "unknown (API limitation)",
+      modified: "unknown (API limitation)",
+    }, null, 2);
+  } catch {
+    try {
+      const listing = await listNotes(notePath);
+      const parsed = JSON.parse(listing);
+      const count = (parsed.files || []).length;
+      return JSON.stringify({
+        path: notePath,
+        type: "folder",
+        items: count,
+        created: "unknown (API limitation)",
+        modified: "unknown (API limitation)",
+      }, null, 2);
+    } catch {
+      throw new Error(`Not found: ${notePath}`);
+    }
+  }
+}
+
 export async function searchNotes(query: string): Promise<string> {
   const url = `${baseUrl()}/search/simple/?query=${encodeURIComponent(query)}`;
   const res = await fetchWithRetry(url, { headers: headers() });

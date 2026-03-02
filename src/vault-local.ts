@@ -111,6 +111,62 @@ export async function moveNote(fromPath: string, toPath: string): Promise<string
   return `Moved note: ${fromPath} → ${toPath}`;
 }
 
+export async function renameFolder(fromPath: string, toPath: string): Promise<string> {
+  const resolvedFrom = resolvePath(fromPath.replace(/\/+$/, ""));
+  const resolvedTo = resolvePath(toPath.replace(/\/+$/, ""));
+  const stat = await fs.stat(resolvedFrom).catch(() => null);
+  if (!stat || !stat.isDirectory()) throw new Error(`Folder not found: ${fromPath}`);
+  const destParent = path.dirname(resolvedTo);
+  await fs.mkdir(destParent, { recursive: true });
+  await fs.rename(resolvedFrom, resolvedTo);
+  async function nudgeAll(dir: string) {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) await nudgeAll(full);
+      else nudgeSync(full);
+    }
+  }
+  await nudgeAll(resolvedTo);
+  return `Renamed folder: ${fromPath} → ${toPath}`;
+}
+
+export async function listRecursive(dirPath = "/"): Promise<string> {
+  const resolved = resolvePath(dirPath);
+  const stat = await fs.stat(resolved).catch(() => null);
+  if (!stat || !stat.isDirectory()) throw new Error(`Folder not found: ${dirPath}`);
+  const files: string[] = [];
+  async function walk(dir: string, relBase: string) {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+      const rel = relBase ? path.join(relBase, entry.name) : entry.name;
+      if (entry.isDirectory()) {
+        files.push(rel + "/");
+        await walk(path.join(dir, entry.name), rel);
+      } else {
+        files.push(rel);
+      }
+    }
+  }
+  await walk(resolved, dirPath === "/" ? "" : dirPath);
+  return JSON.stringify({ files }, null, 2);
+}
+
+export async function fileInfo(notePath: string): Promise<string> {
+  const resolved = resolvePath(notePath);
+  const stat = await fs.stat(resolved).catch(() => null);
+  if (!stat) throw new Error(`Not found: ${notePath}`);
+  return JSON.stringify({
+    path: notePath,
+    type: stat.isDirectory() ? "folder" : "file",
+    size: stat.size,
+    sizeHuman: stat.size < 1024 ? `${stat.size} B` : stat.size < 1048576 ? `${(stat.size / 1024).toFixed(1)} KB` : `${(stat.size / 1048576).toFixed(1)} MB`,
+    created: stat.birthtime.toISOString(),
+    modified: stat.mtime.toISOString(),
+  }, null, 2);
+}
+
 function nudgeSync(filePath: string) {
   setTimeout(async () => {
     try {
