@@ -180,6 +180,7 @@ async function createNote2(notePath, content) {
   const dir = path.dirname(resolved);
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(resolved, content, "utf-8");
+  nudgeSync(resolved);
   return `Created note: ${notePath}`;
 }
 async function appendToNote2(notePath, content) {
@@ -190,7 +191,17 @@ async function appendToNote2(notePath, content) {
     throw new Error(`Note not found: ${notePath}`);
   }
   await fs.appendFile(resolved, content, "utf-8");
+  nudgeSync(resolved);
   return `Appended to note: ${notePath}`;
+}
+function nudgeSync(filePath2) {
+  setTimeout(async () => {
+    try {
+      const now = /* @__PURE__ */ new Date();
+      await fs.utimes(filePath2, now, now);
+    } catch {
+    }
+  }, 600);
 }
 async function searchNotes2(query) {
   if (!query || query.trim().length === 0) {

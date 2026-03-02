@@ -51,6 +51,7 @@ export async function createNote(notePath: string, content: string): Promise<str
   const dir = path.dirname(resolved);
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(resolved, content, "utf-8");
+  nudgeSync(resolved);
   return `Created note: ${notePath}`;
 }
 
@@ -62,7 +63,17 @@ export async function appendToNote(notePath: string, content: string): Promise<s
     throw new Error(`Note not found: ${notePath}`);
   }
   await fs.appendFile(resolved, content, "utf-8");
+  nudgeSync(resolved);
   return `Appended to note: ${notePath}`;
+}
+
+function nudgeSync(filePath: string) {
+  setTimeout(async () => {
+    try {
+      const now = new Date();
+      await fs.utimes(filePath, now, now);
+    } catch {}
+  }, 600);
 }
 
 export async function searchNotes(query: string): Promise<string> {
