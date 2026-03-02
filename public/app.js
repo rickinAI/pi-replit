@@ -40,7 +40,7 @@ const modelBadge    = document.getElementById("model-badge");
 const modelModeEl   = document.getElementById("model-mode");
 const modelNameEl   = document.getElementById("model-name");
 let currentModelMode = "auto";
-const FULL_MODEL_ID = "claude-sonnet-4-6-latest";
+const FULL_MODEL_ID = "claude-sonnet-4-6";
 
 function checkAuth(res) {
   if (res.status === 401) {
@@ -1388,7 +1388,7 @@ async function saveSettings() {
 
 alertsSettingsBtn.addEventListener("click", toggleSettings);
 
-const FAST_MODEL_ID = "claude-haiku-4-5-latest";
+const FAST_MODEL_ID = "claude-haiku-4-5-20251001";
 const MODEL_DISPLAY = {
   [FAST_MODEL_ID]: "haiku-4.5",
   [FULL_MODEL_ID]: "sonnet-4.6",

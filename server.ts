@@ -835,8 +835,8 @@ interface SessionEntry {
 }
 const sessions = new Map<string, SessionEntry>();
 
-const FAST_MODEL_ID = "claude-haiku-4-5-latest";
-const FULL_MODEL_ID = "claude-sonnet-4-6-latest";
+const FAST_MODEL_ID = "claude-haiku-4-5-20251001";
+const FULL_MODEL_ID = "claude-sonnet-4-6";
 
 const FAST_PATTERNS = [
   /^(hi|hello|hey|yo|sup|good\s*(morning|afternoon|evening)|thanks|thank you|ok|okay|got it|cool|nice|great)\b/i,
