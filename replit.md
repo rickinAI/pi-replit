@@ -28,6 +28,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **.pi/SYSTEM.md** — Agent personality, greeting template, vault structure map, and auto-categorization rules (auto-loaded by SDK from `.pi/SYSTEM.md`)
 - **Vault index injection** — At session creation, a full vault tree (all folders/files) is generated via `buildVaultTree()` / `formatVaultIndex()` and injected into the agent's first prompt via `startupContext`. This gives the agent immediate awareness of all vault contents without needing to call notes_list first
 - **.pi/agent/system-prompt.md** — Synced copy of SYSTEM.md for reference
+- **.pi/agent/models.json** — Custom model registry entries for `-latest` aliases (`claude-sonnet-4-6-latest`, `claude-haiku-4-5-latest`) so the Pi SDK's ModelRegistry can resolve them. All model references across the codebase use `-latest` to auto-track the newest releases
 - **public/** — Static frontend (terminal/hacker aesthetic, branded as "RICKIN")
   - History panel (slide-out, lists past conversations, view/delete)
   - Confirmation modal before starting new session
