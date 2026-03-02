@@ -709,7 +709,7 @@ input[type="checkbox"]:checked ~ .interview-check::after {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 12px calc(8px + var(--safe-bottom));
+  padding: 8px 12px;
 }
 
 .keyboard-open #input-area {
@@ -1581,6 +1581,10 @@ body.light-theme #mic-btn.recording {
     height: calc(100dvh + var(--safe-bottom) - var(--keyboard-h));
     padding-left: env(safe-area-inset-left, 0px);
     padding-right: env(safe-area-inset-right, 0px);
+  }
+
+  #input-area {
+    padding-bottom: calc(8px + var(--safe-bottom));
   }
 }
 
