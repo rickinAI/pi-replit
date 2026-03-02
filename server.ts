@@ -980,9 +980,9 @@ async function processNextPendingMessage(sessionId: string) {
     const augmentedText = `[Current date/time in Rickin's timezone (Eastern): ${etNow}]\n\n${queueContext}${pending.text}`;
     const promptImages = pending.images?.map(i => ({ type: "image" as const, data: i.data, mimeType: i.mimeType }));
 
-    const PROMPT_TIMEOUT = 120_000;
+    const PROMPT_TIMEOUT = 300_000;
     const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("Response timed out after 120s")), PROMPT_TIMEOUT)
+      setTimeout(() => reject(new Error("Response timed out after 5 minutes")), PROMPT_TIMEOUT)
     );
     await Promise.race([
       entry.session.prompt(augmentedText, promptImages ? { images: promptImages } : undefined),
@@ -1394,9 +1394,9 @@ app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
     augmentedText += text;
     const promptImages = images?.map(i => ({ type: "image" as const, data: i.data, mimeType: i.mimeType }));
 
-    const PROMPT_TIMEOUT = 120_000;
+    const PROMPT_TIMEOUT = 300_000;
     const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("Response timed out after 120s")), PROMPT_TIMEOUT)
+      setTimeout(() => reject(new Error("Response timed out after 5 minutes")), PROMPT_TIMEOUT)
     );
     await Promise.race([
       entry.session.prompt(augmentedText, promptImages ? { images: promptImages } : undefined),

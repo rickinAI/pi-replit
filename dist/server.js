@@ -3751,9 +3751,9 @@ async function processNextPendingMessage(sessionId) {
 
 ${queueContext}${pending.text}`;
     const promptImages = pending.images?.map((i) => ({ type: "image", data: i.data, mimeType: i.mimeType }));
-    const PROMPT_TIMEOUT = 12e4;
+    const PROMPT_TIMEOUT = 3e5;
     const timeoutPromise = new Promise(
-      (_, reject) => setTimeout(() => reject(new Error("Response timed out after 120s")), PROMPT_TIMEOUT)
+      (_, reject) => setTimeout(() => reject(new Error("Response timed out after 5 minutes")), PROMPT_TIMEOUT)
     );
     await Promise.race([
       entry.session.prompt(augmentedText, promptImages ? { images: promptImages } : void 0),
@@ -4188,9 +4188,9 @@ ${entry.startupContext}
     }
     augmentedText += text;
     const promptImages = images?.map((i) => ({ type: "image", data: i.data, mimeType: i.mimeType }));
-    const PROMPT_TIMEOUT = 12e4;
+    const PROMPT_TIMEOUT = 3e5;
     const timeoutPromise = new Promise(
-      (_, reject) => setTimeout(() => reject(new Error("Response timed out after 120s")), PROMPT_TIMEOUT)
+      (_, reject) => setTimeout(() => reject(new Error("Response timed out after 5 minutes")), PROMPT_TIMEOUT)
     );
     await Promise.race([
       entry.session.prompt(augmentedText, promptImages ? { images: promptImages } : void 0),
