@@ -329,7 +329,7 @@ async function synthesizeBrief(type: string, rawSections: string): Promise<strin
   try {
     const client = new Anthropic({ apiKey });
     const response = await client.messages.create({
-      model: "claude-haiku-4-5-20241022",
+      model: "claude-haiku-4-5-latest",
       max_tokens: 800,
       messages: [{
         role: "user",

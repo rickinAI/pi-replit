@@ -37,7 +37,7 @@ export async function extractAndFileInsights(
   try {
     const client = new Anthropic({ apiKey });
     const response = await client.messages.create({
-      model: "claude-haiku-4-5-20241022",
+      model: "claude-haiku-4-5-latest",
       max_tokens: 600,
       messages: [{
         role: "user",

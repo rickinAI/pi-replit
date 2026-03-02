@@ -718,7 +718,7 @@ async function generateAISummary(conv) {
   try {
     const client = new Anthropic({ apiKey });
     const response = await client.messages.create({
-      model: "claude-haiku-4-5-20241022",
+      model: "claude-haiku-4-5-latest",
       max_tokens: 800,
       messages: [{
         role: "user",
@@ -2349,7 +2349,7 @@ async function synthesizeBrief(type, rawSections) {
   try {
     const client = new Anthropic2({ apiKey });
     const response = await client.messages.create({
-      model: "claude-haiku-4-5-20241022",
+      model: "claude-haiku-4-5-latest",
       max_tokens: 800,
       messages: [{
         role: "user",
@@ -2821,7 +2821,7 @@ async function extractAndFileInsights(messages, currentProfile) {
   try {
     const client = new Anthropic4({ apiKey });
     const response = await client.messages.create({
-      model: "claude-haiku-4-5-20241022",
+      model: "claude-haiku-4-5-latest",
       max_tokens: 600,
       messages: [{
         role: "user",
