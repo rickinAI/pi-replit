@@ -8,13 +8,14 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Creates agent sessions with Anthropic API
   - Registers custom tools: knowledge base, email, calendar, weather, web search, tasks, news
   - Streams agent events via SSE (Server-Sent Events)
-  - Tracks conversation messages and persists them to JSON files
+  - Tracks conversation messages and persists them to PostgreSQL
   - Auto-saves conversations every 5 minutes; saves on session close/expiry/shutdown
   - Inline interview tool: AI sends structured question forms to user, waits for responses via Promise/SSE
   - Graceful shutdown on SIGHUP/SIGTERM/SIGINT (saves all conversations, releases port)
   - EADDRINUSE auto-recovery: pre-emptive port kill, probes port availability before listen, waits up to 15s with retries
   - Periodic knowledge base health check (every 30s) with connection status logging
   - Express error-handling middleware for clean JSON error responses
+- **src/db.ts** — Shared PostgreSQL connection pool (single `pg.Pool`, max 10 connections). Creates all 4 tables on init (`conversations`, `tasks`, `app_config`, `oauth_tokens`). All other modules import `getPool()` from here
 - **src/obsidian.ts** — Client for the knowledge base REST API (10s timeout, 2 retries on transient failures, health ping)
 - **src/gmail.ts** — Gmail integration via custom Google OAuth (list/read/search emails). Tokens stored in PostgreSQL (oauth_tokens table)
 - **src/calendar.ts** — Google Calendar integration (shares OAuth tokens with Gmail via PostgreSQL)
@@ -31,14 +32,23 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - History panel (slide-out, lists past conversations, view/delete)
   - Confirmation modal before starting new session
 - **dist/** — esbuild output (compiled server)
-- **data/conversations/** — Legacy conversation JSON files (now in PostgreSQL)
-- **data/alerts-config.json** — Legacy alerts config (now in PostgreSQL app_config table)
-- **data/gmail-tokens.json** — Legacy OAuth tokens (now in PostgreSQL oauth_tokens table)
-- **data/tasks.json** — Legacy tasks file (now in PostgreSQL tasks table)
 - **public/manifest.json** — PWA web app manifest (name, icons, display mode)
 - **public/icons/** — App icons (180x180 apple-touch-icon, 192x192, 512x512)
 - **tunnel-setup/** — macOS cloudflared named tunnel startup script with auto-restart loop
 - **data/vault/Replit Agent/** — Self-referencing system documentation in the vault (Architecture, Memory System, Alerts & Briefs, Agent Team, Tools Reference, Rules & Behavior, UI & Frontend, Changelog). Updated on major changes so all DarkNode agents understand the system
+
+## PostgreSQL Storage
+
+All runtime state persists in Replit's built-in PostgreSQL (shared between dev and production via `DATABASE_URL`):
+
+| Table | Module | Purpose |
+|-------|--------|---------|
+| `conversations` | `src/conversations.ts` | Chat history, messages, titles |
+| `tasks` | `src/tasks.ts` | To-do items with priority, due dates, tags |
+| `app_config` | `src/alerts.ts` | Brief schedules, watchlist, last prices, theme (key='alerts') |
+| `oauth_tokens` | `src/gmail.ts` + `src/calendar.ts` | Google OAuth access/refresh tokens (service='google') |
+
+Connection pooling: Single shared `pg.Pool` in `src/db.ts` (max 10 connections), imported by all modules via `getPool()`.
 
 ## Port Configuration
 
@@ -60,7 +70,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **Dark mode** (default): Terminal/hacker aesthetic — green (#0f0) monospace text on black, CRT scanlines, glow effects
 - **Light mode**: Calm, modern palette — warm off-white (#f7f5f2) bg, sage (#5a8a7a) accents, clay (#9a6d4e) agent text, no scanlines/glows
   - Toggle in settings panel (// APPEARANCE section)
-  - Persisted to `localStorage` key `theme` (values: `dark` | `light`) and to `data/alerts-config.json` (`theme` field)
+  - Persisted to `localStorage` key `theme` (values: `dark` | `light`) and to alerts config in PostgreSQL (`theme` field)
   - Applied via `body.light-theme` CSS class; CSS variable overrides in both `style.css` and `login.css`
   - Early `<script>` in `<head>` of index.html/login.html sets `document.documentElement.style.background` to prevent flash
 - Font: Fira Code (dark mode), Inter sans-serif (light mode) — both from Google Fonts. Code blocks, tool pills, and prompt prefix stay in Fira Code in both modes
@@ -139,11 +149,11 @@ Client-side session resume and background agent support:
 - `email_read` — Read full email content by message ID
 - `email_search` — Search emails using Gmail search syntax
 
-Auth via custom OAuth flow using `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`. Tokens stored in `data/gmail-tokens.json`.
+Auth via custom OAuth flow using `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`. Tokens stored in PostgreSQL (`oauth_tokens` table, service='google').
 
 ## Calendar Integration
 
-2 custom tools using Google Calendar API (shares OAuth tokens with Gmail):
+2 custom tools using Google Calendar API (shares OAuth tokens with Gmail via PostgreSQL):
 - `calendar_list` — List upcoming events with date range filtering (queries all visible calendars, not just primary)
 - `calendar_create` — Create new events with time, description, location
 - All date range calculations use proper timezone-aware UTC conversion (handles DST transitions)
@@ -161,7 +171,7 @@ Auth via custom OAuth flow using `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`. To
 
 ## Task Manager
 
-5 custom tools with local JSON storage (`data/tasks.json`):
+5 custom tools with PostgreSQL storage (`tasks` table):
 - `task_add` — Add task with due date, priority, tags
 - `task_list` — List tasks sorted by priority/due date
 - `task_complete` — Mark task as done
@@ -197,7 +207,7 @@ Auth via custom OAuth flow using `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`. To
 
 Proactive background scheduler that pushes briefings and alerts via SSE to all connected clients.
 
-- **src/alerts.ts** — Scheduler module with config persistence (`data/alerts-config.json`)
+- **src/alerts.ts** — Scheduler module with config persistence (PostgreSQL `app_config` table, key='alerts')
 - **Scheduled Briefs** (3x daily, US Eastern timezone):
   - Morning (8:00 AM): Calendar, tasks, weather, news headlines, market watchlist, unread email
   - Afternoon (1:00 PM): Calendar, tasks, email, markets
@@ -231,8 +241,8 @@ Proactive background scheduler that pushes briefings and alerts via SSE to all c
 
 ## Conversation Persistence & Memory Search
 
-- Conversations stored as JSON files in `data/conversations/`
-- Each file: `{ id, title, messages: [{role, text, timestamp, images?}], createdAt, updatedAt, syncedAt? }`
+- Conversations stored in PostgreSQL (`conversations` table)
+- Each row: `{ id, title, messages: [{role, text, timestamp, images?}], createdAt, updatedAt, syncedAt? }`
 - Title auto-derived from first user message (truncated to 60 chars)
 - Auto-save every 5 minutes for crash resilience
 - Saved on session close, 2-hour expiry, and graceful shutdown
@@ -242,7 +252,7 @@ Proactive background scheduler that pushes briefings and alerts via SSE to all c
 - **Auto-sync to vault**: All conversations (1+ user messages) are automatically synced to `Conversations/` folder:
   - Short conversations (<3 user msgs): snippet-based summary (fast, no API call)
   - Longer conversations (3+ user msgs): AI-generated summary via Claude Haiku (overview, decisions, action items, follow-ups)
-  - Prevents duplicates via `syncedAt` marker in conversation JSON
+  - Prevents duplicates via `syncedAt` marker in conversation record
 - **Post-conversation memory extraction**: After syncing longer conversations, `extractAndFileInsights()` runs to:
   - Extract new profile facts → appended to `About Me/My Profile.md`
   - Extract action items → filed to `Tasks & TODOs/Extracted Tasks.md`
@@ -278,9 +288,11 @@ Config-driven specialist agents that RICKIN can delegate complex tasks to. Each 
 - `@anthropic-ai/sdk` — Direct Anthropic API calls for sub-agents (transitive dep from pi-coding-agent)
 - `@sinclair/typebox` — JSON schema for tool parameters
 - `googleapis` — Google APIs client (Gmail, Calendar)
+- `pg` — PostgreSQL client (shared pool via src/db.ts)
 - `express`, `cors`, `cookie-parser`
 
 ## src/ Modules
+- **src/db.ts** — Shared PostgreSQL pool and table initialization
 - **src/twitter.ts** — X/Twitter reader (fxtwitter for profiles/tweets, syndication API for timelines)
 - **src/stocks.ts** — Stock quotes (Yahoo Finance) and crypto prices (CoinGecko)
 - **src/maps.ts** — Directions (Nominatim + OSRM) and place search (Nominatim)
@@ -313,6 +325,7 @@ Automatic model routing to optimize cost and speed:
 - `ANTHROPIC_API_KEY` (secret) — Required for agent sessions
 - `APP_PASSWORD` (secret) — Password for web UI access
 - `SESSION_SECRET` (secret) — Cookie signing key
+- `DATABASE_URL` (env) — Replit's built-in PostgreSQL connection string
 - `OBSIDIAN_API_URL` (env) — Cloudflare Tunnel URL to knowledge base REST API
 - `OBSIDIAN_API_KEY` (secret) — API key from knowledge base REST API plugin
 - `GMAIL_REDIRECT_URI` (env) — OAuth redirect URI for Gmail (overrides auto-detected Replit domain). Must match what's registered in Google Cloud Console.

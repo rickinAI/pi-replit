@@ -1,8 +1,5 @@
 import { google } from "googleapis";
-import * as gmail from "./gmail.js";
-
-export function init() {
-}
+import { getPool } from "./db.js";
 
 function getOAuth2Client() {
   const clientId = process.env.GOOGLE_CLIENT_ID!;
@@ -13,8 +10,7 @@ function getOAuth2Client() {
 
 async function loadTokens(): Promise<any | null> {
   try {
-    const pool = gmail.getPool();
-    const result = await pool.query(`SELECT tokens FROM oauth_tokens WHERE service = 'google'`);
+    const result = await getPool().query(`SELECT tokens FROM oauth_tokens WHERE service = 'google'`);
     if (result.rows.length > 0) {
       return result.rows[0].tokens;
     }
@@ -26,8 +22,7 @@ async function loadTokens(): Promise<any | null> {
 
 async function saveTokens(tokens: any): Promise<void> {
   try {
-    const pool = gmail.getPool();
-    await pool.query(
+    await getPool().query(
       `INSERT INTO oauth_tokens (service, tokens, updated_at)
        VALUES ('google', $1, $2)
        ON CONFLICT (service) DO UPDATE SET tokens = EXCLUDED.tokens, updated_at = EXCLUDED.updated_at`,

@@ -1,5 +1,5 @@
-import pg from "pg";
 import Anthropic from "@anthropic-ai/sdk";
+import { getPool } from "./db.js";
 import * as calendar from "./calendar.js";
 import * as tasks from "./tasks.js";
 import * as weather from "./weather.js";
@@ -89,7 +89,6 @@ const DEFAULT_CONFIG: AlertConfig = {
   lastBriefRun: {},
 };
 
-let pool: pg.Pool | null = null;
 let config: AlertConfig = { ...DEFAULT_CONFIG };
 let broadcastFn: BroadcastFn | null = null;
 let saveBriefFn: SaveBriefFn | null = null;
@@ -103,20 +102,7 @@ let alertRunning = false;
 let lastDedupeReset = "";
 
 export async function init(): Promise<void> {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
-    throw new Error("[alerts] DATABASE_URL not set");
-  }
-  pool = new pg.Pool({ connectionString, max: 3 });
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS app_config (
-      key TEXT PRIMARY KEY,
-      value JSONB NOT NULL,
-      updated_at BIGINT NOT NULL DEFAULT 0
-    )
-  `);
-
-  const existing = await pool.query(`SELECT value FROM app_config WHERE key = 'alerts'`);
+  const existing = await getPool().query(`SELECT value FROM app_config WHERE key = 'alerts'`);
   if (existing.rows.length === 0) {
     try {
       const fs = await import("fs");
@@ -125,7 +111,7 @@ export async function init(): Promise<void> {
       if (fs.default.existsSync(legacyPath)) {
         const raw = JSON.parse(fs.default.readFileSync(legacyPath, "utf-8"));
         const migrated = { ...DEFAULT_CONFIG, ...raw, briefs: { ...DEFAULT_CONFIG.briefs, ...raw.briefs }, alerts: { ...DEFAULT_CONFIG.alerts, ...raw.alerts } };
-        await pool.query(
+        await getPool().query(
           `INSERT INTO app_config (key, value, updated_at) VALUES ('alerts', $1, $2)`,
           [JSON.stringify(migrated), Date.now()]
         );
@@ -140,17 +126,12 @@ export async function init(): Promise<void> {
   if (existing.rows.length > 0) {
     config = await loadConfig();
   }
-  console.log("[alerts] PostgreSQL config initialized");
-}
-
-function db(): pg.Pool {
-  if (!pool) throw new Error("[alerts] Not initialized — call init() first");
-  return pool;
+  console.log("[alerts] initialized");
 }
 
 async function loadConfig(): Promise<AlertConfig> {
   try {
-    const result = await db().query(`SELECT value FROM app_config WHERE key = 'alerts'`);
+    const result = await getPool().query(`SELECT value FROM app_config WHERE key = 'alerts'`);
     if (result.rows.length > 0) {
       const raw = result.rows[0].value;
       return { ...DEFAULT_CONFIG, ...raw, briefs: { ...DEFAULT_CONFIG.briefs, ...raw.briefs }, alerts: { ...DEFAULT_CONFIG.alerts, ...raw.alerts } };
@@ -163,7 +144,7 @@ async function loadConfig(): Promise<AlertConfig> {
 
 async function saveConfig(): Promise<void> {
   try {
-    await db().query(
+    await getPool().query(
       `INSERT INTO app_config (key, value, updated_at)
        VALUES ('alerts', $1, $2)
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,

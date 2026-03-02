@@ -441,16 +441,15 @@ function resolvePath(p) {
   return resolved;
 }
 
-// src/conversations.ts
+// src/db.ts
 import pg from "pg";
-import Anthropic from "@anthropic-ai/sdk";
 var pool = null;
 async function init2() {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
-    throw new Error("[conversations] DATABASE_URL not set");
+    throw new Error("[db] DATABASE_URL not set");
   }
-  pool = new pg.Pool({ connectionString, max: 5 });
+  pool = new pg.Pool({ connectionString, max: 10 });
   await pool.query(`
     CREATE TABLE IF NOT EXISTS conversations (
       id TEXT PRIMARY KEY,
@@ -461,18 +460,50 @@ async function init2() {
       synced_at BIGINT
     )
   `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC)`);
   await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC)
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT,
+      due_date TEXT,
+      priority TEXT NOT NULL DEFAULT 'medium',
+      completed BOOLEAN NOT NULL DEFAULT false,
+      created_at TEXT NOT NULL,
+      completed_at TEXT,
+      tags JSONB DEFAULT '[]'::jsonb
+    )
   `);
-  console.log("[conversations] PostgreSQL storage initialized");
-}
-function db() {
-  if (!pool) throw new Error("[conversations] Not initialized \u2014 call init() first");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_config (
+      key TEXT PRIMARY KEY,
+      value JSONB NOT NULL,
+      updated_at BIGINT NOT NULL DEFAULT 0
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS oauth_tokens (
+      service TEXT PRIMARY KEY,
+      tokens JSONB NOT NULL,
+      updated_at BIGINT NOT NULL DEFAULT 0
+    )
+  `);
+  console.log("[db] PostgreSQL initialized (shared pool, 4 tables)");
   return pool;
+}
+function getPool() {
+  if (!pool) throw new Error("[db] Not initialized \u2014 call init() first");
+  return pool;
+}
+
+// src/conversations.ts
+import Anthropic from "@anthropic-ai/sdk";
+async function init3() {
+  console.log("[conversations] initialized");
 }
 async function save(conv) {
   conv.updatedAt = Date.now();
-  await db().query(
+  await getPool().query(
     `INSERT INTO conversations (id, title, messages, created_at, updated_at, synced_at)
      VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (id) DO UPDATE SET
@@ -484,7 +515,7 @@ async function save(conv) {
   );
 }
 async function load(id) {
-  const result = await db().query(
+  const result = await getPool().query(
     `SELECT id, title, messages, created_at, updated_at, synced_at FROM conversations WHERE id = $1`,
     [id]
   );
@@ -492,7 +523,7 @@ async function load(id) {
   return rowToConversation(result.rows[0]);
 }
 async function list() {
-  const result = await db().query(
+  const result = await getPool().query(
     `SELECT id, title, messages, created_at, updated_at FROM conversations ORDER BY updated_at DESC`
   );
   return result.rows.map((row) => ({
@@ -504,7 +535,7 @@ async function list() {
   }));
 }
 async function remove(id) {
-  const result = await db().query(`DELETE FROM conversations WHERE id = $1`, [id]);
+  const result = await getPool().query(`DELETE FROM conversations WHERE id = $1`, [id]);
   return (result.rowCount ?? 0) > 0;
 }
 async function getRecentSummary(count = 3) {
@@ -522,7 +553,7 @@ async function getRecentSummary(count = 3) {
 ${lines.join("\n")}`;
 }
 async function getLastConversationContext(maxMessages = 10) {
-  const result = await db().query(
+  const result = await getPool().query(
     `SELECT id, title, messages, created_at, updated_at FROM conversations
      WHERE jsonb_array_length(messages) > 0
      ORDER BY updated_at DESC LIMIT 1`
@@ -587,7 +618,7 @@ async function search(query, options) {
     params.push(options.after);
   }
   sql += ` ORDER BY updated_at DESC`;
-  const result = await db().query(sql, params);
+  const result = await getPool().query(sql, params);
   const results = [];
   for (const row of result.rows) {
     const conv = rowToConversation(row);
@@ -745,26 +776,12 @@ function rowToConversation(row) {
 
 // src/gmail.ts
 import { google } from "googleapis";
-import pg2 from "pg";
 var SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/calendar"
 ];
-var pool2 = null;
-async function init3() {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
-    throw new Error("[gmail] DATABASE_URL not set");
-  }
-  pool2 = new pg2.Pool({ connectionString, max: 3 });
-  await pool2.query(`
-    CREATE TABLE IF NOT EXISTS oauth_tokens (
-      service TEXT PRIMARY KEY,
-      tokens JSONB NOT NULL,
-      updated_at BIGINT NOT NULL DEFAULT 0
-    )
-  `);
-  const existing = await pool2.query(`SELECT tokens FROM oauth_tokens WHERE service = 'google'`);
+async function init4() {
+  const existing = await getPool().query(`SELECT tokens FROM oauth_tokens WHERE service = 'google'`);
   if (existing.rows.length === 0) {
     try {
       const fs4 = await import("fs");
@@ -772,7 +789,7 @@ async function init3() {
       const legacyPath = path4.default.join(process.cwd(), "data", "gmail-tokens.json");
       if (fs4.default.existsSync(legacyPath)) {
         const tokens = JSON.parse(fs4.default.readFileSync(legacyPath, "utf-8"));
-        await pool2.query(
+        await getPool().query(
           `INSERT INTO oauth_tokens (service, tokens, updated_at) VALUES ('google', $1, $2)`,
           [JSON.stringify(tokens), Date.now()]
         );
@@ -787,38 +804,20 @@ async function init3() {
     cachedTokens = existing.rows[0].tokens;
     tokensCacheTime = Date.now();
   }
-  console.log("[gmail] PostgreSQL token storage initialized");
-}
-function db2() {
-  if (!pool2) throw new Error("[gmail] Not initialized \u2014 call init() first");
-  return pool2;
-}
-function getPool() {
-  return db2();
+  console.log("[gmail] initialized");
 }
 function isConfigured3() {
   return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
 }
 function isConnected() {
   if (!isConfigured3()) return false;
-  try {
-    const tokens = loadTokensSync();
-    return !!(tokens && tokens.refresh_token);
-  } catch {
-    return false;
-  }
+  return !!(cachedTokens && cachedTokens.refresh_token);
 }
 var cachedTokens = null;
 var tokensCacheTime = 0;
-function loadTokensSync() {
-  if (cachedTokens && Date.now() - tokensCacheTime < 3e4) {
-    return cachedTokens;
-  }
-  return cachedTokens;
-}
 async function loadTokens() {
   try {
-    const result = await db2().query(`SELECT tokens FROM oauth_tokens WHERE service = 'google'`);
+    const result = await getPool().query(`SELECT tokens FROM oauth_tokens WHERE service = 'google'`);
     if (result.rows.length > 0) {
       cachedTokens = result.rows[0].tokens;
       tokensCacheTime = Date.now();
@@ -833,7 +832,7 @@ async function saveTokens(tokens) {
   cachedTokens = tokens;
   tokensCacheTime = Date.now();
   try {
-    await db2().query(
+    await getPool().query(
       `INSERT INTO oauth_tokens (service, tokens, updated_at)
        VALUES ('google', $1, $2)
        ON CONFLICT (service) DO UPDATE SET tokens = EXCLUDED.tokens, updated_at = EXCLUDED.updated_at`,
@@ -1070,8 +1069,7 @@ function getOAuth2Client2() {
 }
 async function loadTokens2() {
   try {
-    const pool5 = getPool();
-    const result = await pool5.query(`SELECT tokens FROM oauth_tokens WHERE service = 'google'`);
+    const result = await getPool().query(`SELECT tokens FROM oauth_tokens WHERE service = 'google'`);
     if (result.rows.length > 0) {
       return result.rows[0].tokens;
     }
@@ -1082,8 +1080,7 @@ async function loadTokens2() {
 }
 async function saveTokens2(tokens) {
   try {
-    const pool5 = getPool();
-    await pool5.query(
+    await getPool().query(
       `INSERT INTO oauth_tokens (service, tokens, updated_at)
        VALUES ('google', $1, $2)
        ON CONFLICT (service) DO UPDATE SET tokens = EXCLUDED.tokens, updated_at = EXCLUDED.updated_at`,
@@ -1398,28 +1395,8 @@ ${lines.join("\n\n")}`;
 }
 
 // src/tasks.ts
-import pg3 from "pg";
-var pool3 = null;
-async function init4() {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
-    throw new Error("[tasks] DATABASE_URL not set");
-  }
-  pool3 = new pg3.Pool({ connectionString, max: 3 });
-  await pool3.query(`
-    CREATE TABLE IF NOT EXISTS tasks (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL,
-      description TEXT,
-      due_date TEXT,
-      priority TEXT NOT NULL DEFAULT 'medium',
-      completed BOOLEAN NOT NULL DEFAULT false,
-      created_at TEXT NOT NULL,
-      completed_at TEXT,
-      tags JSONB DEFAULT '[]'::jsonb
-    )
-  `);
-  const existing = await pool3.query(`SELECT count(*) FROM tasks`);
+async function init5() {
+  const existing = await getPool().query(`SELECT count(*) FROM tasks`);
   if (parseInt(existing.rows[0].count) === 0) {
     try {
       const fs4 = await import("fs");
@@ -1428,7 +1405,7 @@ async function init4() {
       if (fs4.default.existsSync(legacyPath)) {
         const legacyTasks = JSON.parse(fs4.default.readFileSync(legacyPath, "utf-8"));
         for (const t of legacyTasks) {
-          await pool3.query(
+          await getPool().query(
             `INSERT INTO tasks (id, title, description, due_date, priority, completed, created_at, completed_at, tags)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO NOTHING`,
             [t.id, t.title, t.description || null, t.dueDate || null, t.priority || "medium", t.completed || false, t.createdAt, t.completedAt || null, JSON.stringify(t.tags || [])]
@@ -1440,21 +1417,17 @@ async function init4() {
       console.error("[tasks] Task migration failed:", err);
     }
   }
-  console.log("[tasks] PostgreSQL storage initialized");
-}
-function db3() {
-  if (!pool3) throw new Error("[tasks] Not initialized \u2014 call init() first");
-  return pool3;
+  console.log("[tasks] initialized");
 }
 function generateId() {
   return `t_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 }
 async function loadTasks() {
-  const result = await db3().query(`SELECT * FROM tasks ORDER BY created_at DESC`);
+  const result = await getPool().query(`SELECT * FROM tasks ORDER BY created_at DESC`);
   return result.rows.map(rowToTask);
 }
 async function saveTask(task) {
-  await db3().query(
+  await getPool().query(
     `INSERT INTO tasks (id, title, description, due_date, priority, completed, created_at, completed_at, tags)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      ON CONFLICT (id) DO UPDATE SET
@@ -1538,7 +1511,7 @@ async function listTasks(filter) {
 ${lines.join("\n\n")}`;
 }
 async function completeTask(taskId) {
-  const result = await db3().query(`SELECT * FROM tasks WHERE id = $1`, [taskId]);
+  const result = await getPool().query(`SELECT * FROM tasks WHERE id = $1`, [taskId]);
   if (result.rows.length === 0) return `Task not found: ${taskId}`;
   const task = rowToTask(result.rows[0]);
   if (task.completed) return `Task already completed: "${task.title}"`;
@@ -1548,14 +1521,14 @@ async function completeTask(taskId) {
   return `Completed task: "${task.title}"`;
 }
 async function deleteTask(taskId) {
-  const result = await db3().query(`SELECT * FROM tasks WHERE id = $1`, [taskId]);
+  const result = await getPool().query(`SELECT * FROM tasks WHERE id = $1`, [taskId]);
   if (result.rows.length === 0) return `Task not found: ${taskId}`;
   const task = rowToTask(result.rows[0]);
-  await db3().query(`DELETE FROM tasks WHERE id = $1`, [taskId]);
+  await getPool().query(`DELETE FROM tasks WHERE id = $1`, [taskId]);
   return `Deleted task: "${task.title}"`;
 }
 async function updateTask(taskId, updates) {
-  const result = await db3().query(`SELECT * FROM tasks WHERE id = $1`, [taskId]);
+  const result = await getPool().query(`SELECT * FROM tasks WHERE id = $1`, [taskId]);
   if (result.rows.length === 0) return `Task not found: ${taskId}`;
   const task = rowToTask(result.rows[0]);
   if (updates.title) task.title = updates.title;
@@ -2123,7 +2096,6 @@ ${lines.join("\n\n")}`;
 }
 
 // src/alerts.ts
-import pg4 from "pg";
 import Anthropic2 from "@anthropic-ai/sdk";
 var DEFAULT_CONFIG = {
   timezone: "America/New_York",
@@ -2149,7 +2121,6 @@ var DEFAULT_CONFIG = {
   lastPrices: {},
   lastBriefRun: {}
 };
-var pool4 = null;
 var config = { ...DEFAULT_CONFIG };
 var broadcastFn = null;
 var saveBriefFn = null;
@@ -2161,20 +2132,8 @@ var initialAlertCheckDone = false;
 var briefRunning = false;
 var alertRunning = false;
 var lastDedupeReset = "";
-async function init5() {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
-    throw new Error("[alerts] DATABASE_URL not set");
-  }
-  pool4 = new pg4.Pool({ connectionString, max: 3 });
-  await pool4.query(`
-    CREATE TABLE IF NOT EXISTS app_config (
-      key TEXT PRIMARY KEY,
-      value JSONB NOT NULL,
-      updated_at BIGINT NOT NULL DEFAULT 0
-    )
-  `);
-  const existing = await pool4.query(`SELECT value FROM app_config WHERE key = 'alerts'`);
+async function init6() {
+  const existing = await getPool().query(`SELECT value FROM app_config WHERE key = 'alerts'`);
   if (existing.rows.length === 0) {
     try {
       const fs4 = await import("fs");
@@ -2183,7 +2142,7 @@ async function init5() {
       if (fs4.default.existsSync(legacyPath)) {
         const raw = JSON.parse(fs4.default.readFileSync(legacyPath, "utf-8"));
         const migrated = { ...DEFAULT_CONFIG, ...raw, briefs: { ...DEFAULT_CONFIG.briefs, ...raw.briefs }, alerts: { ...DEFAULT_CONFIG.alerts, ...raw.alerts } };
-        await pool4.query(
+        await getPool().query(
           `INSERT INTO app_config (key, value, updated_at) VALUES ('alerts', $1, $2)`,
           [JSON.stringify(migrated), Date.now()]
         );
@@ -2197,15 +2156,11 @@ async function init5() {
   if (existing.rows.length > 0) {
     config = await loadConfig();
   }
-  console.log("[alerts] PostgreSQL config initialized");
-}
-function db4() {
-  if (!pool4) throw new Error("[alerts] Not initialized \u2014 call init() first");
-  return pool4;
+  console.log("[alerts] initialized");
 }
 async function loadConfig() {
   try {
-    const result = await db4().query(`SELECT value FROM app_config WHERE key = 'alerts'`);
+    const result = await getPool().query(`SELECT value FROM app_config WHERE key = 'alerts'`);
     if (result.rows.length > 0) {
       const raw = result.rows[0].value;
       return { ...DEFAULT_CONFIG, ...raw, briefs: { ...DEFAULT_CONFIG.briefs, ...raw.briefs }, alerts: { ...DEFAULT_CONFIG.alerts, ...raw.alerts } };
@@ -2217,7 +2172,7 @@ async function loadConfig() {
 }
 async function saveConfig() {
   try {
-    await db4().query(
+    await getPool().query(
       `INSERT INTO app_config (key, value, updated_at)
        VALUES ('alerts', $1, $2)
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
@@ -2670,7 +2625,7 @@ import fs2 from "fs";
 import path2 from "path";
 var agents = [];
 var configPath = "";
-function init6(dataDir) {
+function init7(dataDir) {
   configPath = path2.join(dataDir, "agents.json");
   loadAgents();
   let reloadTimer = null;
@@ -2921,7 +2876,7 @@ var AGENT_DIR = path3.join(PROJECT_ROOT, ".pi/agent");
 var VAULT_DIR = path3.join(PROJECT_ROOT, "data", "vault");
 fs3.mkdirSync(AGENT_DIR, { recursive: true });
 init(VAULT_DIR);
-init6(path3.join(PROJECT_ROOT, "data"));
+init7(path3.join(PROJECT_ROOT, "data"));
 var useLocalVault = isConfigured2();
 setInterval(() => {
   const localAvailable = isConfigured2();
@@ -4601,7 +4556,8 @@ async function startServer(maxRetries = 5) {
   await init3();
   await init4();
   await init5();
-  console.log("[boot] All PostgreSQL storage initialized (conversations, tasks, alerts, tokens)");
+  await init6();
+  console.log("[boot] PostgreSQL ready (shared pool, 4 tables)");
   if (!isConfigured3()) console.warn("Gmail integration not configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET missing).");
   else if (!isConnected()) console.warn("Gmail configured but not yet authorized. Visit /api/gmail/auth to connect.");
   else {

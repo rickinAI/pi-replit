@@ -1,28 +1,13 @@
 import { google } from "googleapis";
-import pg from "pg";
+import { getPool } from "./db.js";
 
 const SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/calendar",
 ];
 
-let pool: pg.Pool | null = null;
-
 export async function init(): Promise<void> {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
-    throw new Error("[gmail] DATABASE_URL not set");
-  }
-  pool = new pg.Pool({ connectionString, max: 3 });
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS oauth_tokens (
-      service TEXT PRIMARY KEY,
-      tokens JSONB NOT NULL,
-      updated_at BIGINT NOT NULL DEFAULT 0
-    )
-  `);
-
-  const existing = await pool.query(`SELECT tokens FROM oauth_tokens WHERE service = 'google'`);
+  const existing = await getPool().query(`SELECT tokens FROM oauth_tokens WHERE service = 'google'`);
   if (existing.rows.length === 0) {
     try {
       const fs = await import("fs");
@@ -30,7 +15,7 @@ export async function init(): Promise<void> {
       const legacyPath = path.default.join(process.cwd(), "data", "gmail-tokens.json");
       if (fs.default.existsSync(legacyPath)) {
         const tokens = JSON.parse(fs.default.readFileSync(legacyPath, "utf-8"));
-        await pool.query(
+        await getPool().query(
           `INSERT INTO oauth_tokens (service, tokens, updated_at) VALUES ('google', $1, $2)`,
           [JSON.stringify(tokens), Date.now()]
         );
@@ -46,16 +31,7 @@ export async function init(): Promise<void> {
     tokensCacheTime = Date.now();
   }
 
-  console.log("[gmail] PostgreSQL token storage initialized");
-}
-
-function db(): pg.Pool {
-  if (!pool) throw new Error("[gmail] Not initialized — call init() first");
-  return pool;
-}
-
-export function getPool(): pg.Pool {
-  return db();
+  console.log("[gmail] initialized");
 }
 
 export function isConfigured(): boolean {
@@ -64,27 +40,15 @@ export function isConfigured(): boolean {
 
 export function isConnected(): boolean {
   if (!isConfigured()) return false;
-  try {
-    const tokens = loadTokensSync();
-    return !!(tokens && tokens.refresh_token);
-  } catch {
-    return false;
-  }
+  return !!(cachedTokens && cachedTokens.refresh_token);
 }
 
 let cachedTokens: any | null = null;
 let tokensCacheTime = 0;
 
-function loadTokensSync(): any | null {
-  if (cachedTokens && Date.now() - tokensCacheTime < 30000) {
-    return cachedTokens;
-  }
-  return cachedTokens;
-}
-
 async function loadTokens(): Promise<any | null> {
   try {
-    const result = await db().query(`SELECT tokens FROM oauth_tokens WHERE service = 'google'`);
+    const result = await getPool().query(`SELECT tokens FROM oauth_tokens WHERE service = 'google'`);
     if (result.rows.length > 0) {
       cachedTokens = result.rows[0].tokens;
       tokensCacheTime = Date.now();
@@ -100,7 +64,7 @@ async function saveTokens(tokens: any): Promise<void> {
   cachedTokens = tokens;
   tokensCacheTime = Date.now();
   try {
-    await db().query(
+    await getPool().query(
       `INSERT INTO oauth_tokens (service, tokens, updated_at)
        VALUES ('google', $1, $2)
        ON CONFLICT (service) DO UPDATE SET tokens = EXCLUDED.tokens, updated_at = EXCLUDED.updated_at`,

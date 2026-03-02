@@ -1,5 +1,5 @@
-import pg from "pg";
 import Anthropic from "@anthropic-ai/sdk";
+import { getPool } from "./db.js";
 
 export interface ImageAttachment {
   mimeType: string;
@@ -29,38 +29,13 @@ export interface ConversationSummary {
   messageCount: number;
 }
 
-let pool: pg.Pool | null = null;
-
 export async function init(): Promise<void> {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
-    throw new Error("[conversations] DATABASE_URL not set");
-  }
-  pool = new pg.Pool({ connectionString, max: 5 });
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS conversations (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL DEFAULT 'New conversation',
-      messages JSONB NOT NULL DEFAULT '[]'::jsonb,
-      created_at BIGINT NOT NULL,
-      updated_at BIGINT NOT NULL,
-      synced_at BIGINT
-    )
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC)
-  `);
-  console.log("[conversations] PostgreSQL storage initialized");
-}
-
-function db(): pg.Pool {
-  if (!pool) throw new Error("[conversations] Not initialized — call init() first");
-  return pool;
+  console.log("[conversations] initialized");
 }
 
 export async function save(conv: Conversation): Promise<void> {
   conv.updatedAt = Date.now();
-  await db().query(
+  await getPool().query(
     `INSERT INTO conversations (id, title, messages, created_at, updated_at, synced_at)
      VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (id) DO UPDATE SET
@@ -73,7 +48,7 @@ export async function save(conv: Conversation): Promise<void> {
 }
 
 export async function load(id: string): Promise<Conversation | null> {
-  const result = await db().query(
+  const result = await getPool().query(
     `SELECT id, title, messages, created_at, updated_at, synced_at FROM conversations WHERE id = $1`,
     [id]
   );
@@ -82,7 +57,7 @@ export async function load(id: string): Promise<Conversation | null> {
 }
 
 export async function list(): Promise<ConversationSummary[]> {
-  const result = await db().query(
+  const result = await getPool().query(
     `SELECT id, title, messages, created_at, updated_at FROM conversations ORDER BY updated_at DESC`
   );
   return result.rows.map(row => ({
@@ -95,7 +70,7 @@ export async function list(): Promise<ConversationSummary[]> {
 }
 
 export async function remove(id: string): Promise<boolean> {
-  const result = await db().query(`DELETE FROM conversations WHERE id = $1`, [id]);
+  const result = await getPool().query(`DELETE FROM conversations WHERE id = $1`, [id]);
   return (result.rowCount ?? 0) > 0;
 }
 
@@ -116,7 +91,7 @@ export async function getRecentSummary(count: number = 3): Promise<string> {
 }
 
 export async function getLastConversationContext(maxMessages: number = 10): Promise<string> {
-  const result = await db().query(
+  const result = await getPool().query(
     `SELECT id, title, messages, created_at, updated_at FROM conversations
      WHERE jsonb_array_length(messages) > 0
      ORDER BY updated_at DESC LIMIT 1`
@@ -203,7 +178,7 @@ export async function search(query: string, options?: { before?: number; after?:
 
   sql += ` ORDER BY updated_at DESC`;
 
-  const result = await db().query(sql, params);
+  const result = await getPool().query(sql, params);
   const results: SearchResult[] = [];
 
   for (const row of result.rows) {
@@ -363,10 +338,6 @@ ${aiText}
     console.error("[conversations] AI summary failed, falling back to snippet:", err);
     return generateSnippetSummary(conv);
   }
-}
-
-export function generateSummaryMarkdown(conv: Conversation): string {
-  return generateSnippetSummary(conv);
 }
 
 function rowToConversation(row: any): Conversation {

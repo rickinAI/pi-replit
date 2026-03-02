@@ -23,6 +23,7 @@ import { Type } from "@sinclair/typebox";
 
 import * as obsidian from "./src/obsidian.js";
 import * as vaultLocal from "./src/vault-local.js";
+import * as db from "./src/db.js";
 import * as conversations from "./src/conversations.js";
 import * as gmail from "./src/gmail.js";
 import * as calendar from "./src/calendar.js";
@@ -1766,11 +1767,12 @@ async function waitForPort(port: number, maxWaitMs = 30000) {
 }
 
 async function startServer(maxRetries = 5) {
+  await db.init();
   await conversations.init();
   await gmail.init();
   await tasks.init();
   await alerts.init();
-  console.log("[boot] All PostgreSQL storage initialized (conversations, tasks, alerts, tokens)");
+  console.log("[boot] PostgreSQL ready (shared pool, 4 tables)");
 
   if (!gmail.isConfigured()) console.warn("Gmail integration not configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET missing).");
   else if (!gmail.isConnected()) console.warn("Gmail configured but not yet authorized. Visit /api/gmail/auth to connect.");

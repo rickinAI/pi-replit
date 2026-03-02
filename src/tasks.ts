@@ -1,4 +1,4 @@
-import pg from "pg";
+import { getPool } from "./db.js";
 
 interface Task {
   id: string;
@@ -12,29 +12,8 @@ interface Task {
   tags?: string[];
 }
 
-let pool: pg.Pool | null = null;
-
 export async function init(): Promise<void> {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
-    throw new Error("[tasks] DATABASE_URL not set");
-  }
-  pool = new pg.Pool({ connectionString, max: 3 });
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS tasks (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL,
-      description TEXT,
-      due_date TEXT,
-      priority TEXT NOT NULL DEFAULT 'medium',
-      completed BOOLEAN NOT NULL DEFAULT false,
-      created_at TEXT NOT NULL,
-      completed_at TEXT,
-      tags JSONB DEFAULT '[]'::jsonb
-    )
-  `);
-
-  const existing = await pool.query(`SELECT count(*) FROM tasks`);
+  const existing = await getPool().query(`SELECT count(*) FROM tasks`);
   if (parseInt(existing.rows[0].count) === 0) {
     try {
       const fs = await import("fs");
@@ -43,7 +22,7 @@ export async function init(): Promise<void> {
       if (fs.default.existsSync(legacyPath)) {
         const legacyTasks = JSON.parse(fs.default.readFileSync(legacyPath, "utf-8"));
         for (const t of legacyTasks) {
-          await pool.query(
+          await getPool().query(
             `INSERT INTO tasks (id, title, description, due_date, priority, completed, created_at, completed_at, tags)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO NOTHING`,
             [t.id, t.title, t.description || null, t.dueDate || null, t.priority || "medium", t.completed || false, t.createdAt, t.completedAt || null, JSON.stringify(t.tags || [])]
@@ -56,12 +35,7 @@ export async function init(): Promise<void> {
     }
   }
 
-  console.log("[tasks] PostgreSQL storage initialized");
-}
-
-function db(): pg.Pool {
-  if (!pool) throw new Error("[tasks] Not initialized — call init() first");
-  return pool;
+  console.log("[tasks] initialized");
 }
 
 function generateId(): string {
@@ -69,12 +43,12 @@ function generateId(): string {
 }
 
 async function loadTasks(): Promise<Task[]> {
-  const result = await db().query(`SELECT * FROM tasks ORDER BY created_at DESC`);
+  const result = await getPool().query(`SELECT * FROM tasks ORDER BY created_at DESC`);
   return result.rows.map(rowToTask);
 }
 
 async function saveTask(task: Task): Promise<void> {
-  await db().query(
+  await getPool().query(
     `INSERT INTO tasks (id, title, description, due_date, priority, completed, created_at, completed_at, tags)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      ON CONFLICT (id) DO UPDATE SET
@@ -164,7 +138,7 @@ export async function listTasks(filter?: { showCompleted?: boolean; tag?: string
 }
 
 export async function completeTask(taskId: string): Promise<string> {
-  const result = await db().query(`SELECT * FROM tasks WHERE id = $1`, [taskId]);
+  const result = await getPool().query(`SELECT * FROM tasks WHERE id = $1`, [taskId]);
   if (result.rows.length === 0) return `Task not found: ${taskId}`;
   const task = rowToTask(result.rows[0]);
   if (task.completed) return `Task already completed: "${task.title}"`;
@@ -175,15 +149,15 @@ export async function completeTask(taskId: string): Promise<string> {
 }
 
 export async function deleteTask(taskId: string): Promise<string> {
-  const result = await db().query(`SELECT * FROM tasks WHERE id = $1`, [taskId]);
+  const result = await getPool().query(`SELECT * FROM tasks WHERE id = $1`, [taskId]);
   if (result.rows.length === 0) return `Task not found: ${taskId}`;
   const task = rowToTask(result.rows[0]);
-  await db().query(`DELETE FROM tasks WHERE id = $1`, [taskId]);
+  await getPool().query(`DELETE FROM tasks WHERE id = $1`, [taskId]);
   return `Deleted task: "${task.title}"`;
 }
 
 export async function updateTask(taskId: string, updates: { title?: string; description?: string; dueDate?: string; priority?: string; tags?: string[] }): Promise<string> {
-  const result = await db().query(`SELECT * FROM tasks WHERE id = $1`, [taskId]);
+  const result = await getPool().query(`SELECT * FROM tasks WHERE id = $1`, [taskId]);
   if (result.rows.length === 0) return `Task not found: ${taskId}`;
   const task = rowToTask(result.rows[0]);
   if (updates.title) task.title = updates.title;
