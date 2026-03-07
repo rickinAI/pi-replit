@@ -974,28 +974,44 @@ async function processNextPendingMessage(sessionId: string) {
   }
 
   const queuedPromptStart = Date.now();
-  try {
-    const etNow = new Date().toLocaleString("en-US", { timeZone: "America/New_York", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" });
-    const queueContext = "[Note: This message was sent while the previous task was still running. The previous task has now completed.]\n\n";
-    const augmentedText = `[Current date/time in Rickin's timezone (Eastern): ${etNow}]\n\n${queueContext}${pending.text}`;
-    const promptImages = pending.images?.map(i => ({ type: "image" as const, data: i.data, mimeType: i.mimeType }));
+  const etNow = new Date().toLocaleString("en-US", { timeZone: "America/New_York", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" });
+  const queueContext = "[Note: This message was sent while the previous task was still running. The previous task has now completed.]\n\n";
+  const augmentedText = `[Current date/time in Rickin's timezone (Eastern): ${etNow}]\n\n${queueContext}${pending.text}`;
+  const promptImages = pending.images?.map(i => ({ type: "image" as const, data: i.data, mimeType: i.mimeType }));
 
-    const PROMPT_TIMEOUT = 300_000;
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("Response timed out after 5 minutes")), PROMPT_TIMEOUT)
-    );
-    await Promise.race([
-      entry.session.prompt(augmentedText, promptImages ? { images: promptImages } : undefined),
-      timeoutPromise,
-    ]);
+  const PROMPT_TIMEOUT = 300_000;
+  const actualPromise = entry.session.prompt(augmentedText, promptImages ? { images: promptImages } : undefined);
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error("Response timed out after 5 minutes")), PROMPT_TIMEOUT)
+  );
+
+  try {
+    await Promise.race([actualPromise, timeoutPromise]);
     console.log(`[prompt] queued prompt completed in ${((Date.now() - queuedPromptStart) / 1000).toFixed(1)}s`);
   } catch (err) {
-    entry.isAgentRunning = false;
-    console.error(`[prompt] queued error after ${((Date.now() - queuedPromptStart) / 1000).toFixed(1)}s:`, err);
+    const elapsed = ((Date.now() - queuedPromptStart) / 1000).toFixed(1);
+    const isTimeout = String(err).includes("timed out");
+    console.error(`[prompt] queued ${isTimeout ? "timeout" : "error"} after ${elapsed}s:`, err);
     const errEvent = JSON.stringify({ type: "error", error: String(err) });
     for (const sub of entry.subscribers) {
       try { sub.write(`data: ${errEvent}\n\n`); } catch {}
     }
+    if (isTimeout) {
+      console.log(`[prompt] queued agent still running in background — new messages will be queued`);
+      actualPromise.then(() => {
+        console.log(`[prompt] queued background prompt completed after ${((Date.now() - queuedPromptStart) / 1000).toFixed(1)}s total`);
+        entry.isAgentRunning = false;
+        processingQueue.delete(sessionId);
+        processNextPendingMessage(sessionId);
+      }).catch(() => {
+        console.log(`[prompt] queued background prompt failed after ${((Date.now() - queuedPromptStart) / 1000).toFixed(1)}s total`);
+        entry.isAgentRunning = false;
+        processingQueue.delete(sessionId);
+        processNextPendingMessage(sessionId);
+      });
+      return;
+    }
+    entry.isAgentRunning = false;
     processingQueue.delete(sessionId);
     processNextPendingMessage(sessionId);
     return;
@@ -1384,31 +1400,48 @@ app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
   }
 
   const promptStart = Date.now();
-  try {
-    const etNow = new Date().toLocaleString("en-US", { timeZone: "America/New_York", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" });
-    let augmentedText = `[Current date/time in Rickin's timezone (Eastern): ${etNow}]\n\n`;
-    if (entry.startupContext) {
-      augmentedText += `[Session Context]\n${entry.startupContext}\n\n`;
-      entry.startupContext = undefined;
-    }
-    augmentedText += text;
-    const promptImages = images?.map(i => ({ type: "image" as const, data: i.data, mimeType: i.mimeType }));
+  const sessionId = req.params["id"] as string;
+  const etNow = new Date().toLocaleString("en-US", { timeZone: "America/New_York", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" });
+  let augmentedText = `[Current date/time in Rickin's timezone (Eastern): ${etNow}]\n\n`;
+  if (entry.startupContext) {
+    augmentedText += `[Session Context]\n${entry.startupContext}\n\n`;
+    entry.startupContext = undefined;
+  }
+  augmentedText += text;
+  const promptImages = images?.map(i => ({ type: "image" as const, data: i.data, mimeType: i.mimeType }));
 
-    const PROMPT_TIMEOUT = 300_000;
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("Response timed out after 5 minutes")), PROMPT_TIMEOUT)
-    );
-    await Promise.race([
-      entry.session.prompt(augmentedText, promptImages ? { images: promptImages } : undefined),
-      timeoutPromise,
-    ]);
+  const PROMPT_TIMEOUT = 300_000;
+  const actualPromise = entry.session.prompt(augmentedText, promptImages ? { images: promptImages } : undefined);
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error("Response timed out after 5 minutes")), PROMPT_TIMEOUT)
+  );
+
+  try {
+    await Promise.race([actualPromise, timeoutPromise]);
     console.log(`[prompt] completed in ${((Date.now() - promptStart) / 1000).toFixed(1)}s`);
-  } catch (err) {
     entry.isAgentRunning = false;
-    console.error(`[prompt] error after ${((Date.now() - promptStart) / 1000).toFixed(1)}s:`, err);
+    processNextPendingMessage(sessionId);
+  } catch (err) {
+    const elapsed = ((Date.now() - promptStart) / 1000).toFixed(1);
+    const isTimeout = String(err).includes("timed out");
+    console.error(`[prompt] ${isTimeout ? "timeout" : "error"} after ${elapsed}s:`, err);
     const errEvent = JSON.stringify({ type: "error", error: String(err) });
     for (const sub of entry.subscribers) {
       try { sub.write(`data: ${errEvent}\n\n`); } catch {}
+    }
+    if (isTimeout) {
+      console.log(`[prompt] agent still running in background — new messages will be queued`);
+      actualPromise.then(() => {
+        console.log(`[prompt] background prompt finally completed after ${((Date.now() - promptStart) / 1000).toFixed(1)}s total`);
+        entry.isAgentRunning = false;
+        processNextPendingMessage(sessionId);
+      }).catch(() => {
+        console.log(`[prompt] background prompt failed after ${((Date.now() - promptStart) / 1000).toFixed(1)}s total`);
+        entry.isAgentRunning = false;
+        processNextPendingMessage(sessionId);
+      });
+    } else {
+      entry.isAgentRunning = false;
     }
   }
 });
