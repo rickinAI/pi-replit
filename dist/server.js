@@ -2398,6 +2398,47 @@ async function slidesCreate(title) {
   return `Created presentation: "${pres?.title || title}"
 ID: ${pres?.presentationId || "unknown"}`;
 }
+async function slidesAppend(presentationId, title, body) {
+  const slideId = `slide_${Date.now()}`;
+  const createArgs = ["slides", "presentations", "batchUpdate", "--params", JSON.stringify({ presentationId }), "--json", JSON.stringify({
+    requests: [
+      {
+        createSlide: {
+          objectId: slideId,
+          insertionIndex: "999",
+          slideLayoutReference: { predefinedLayout: "TITLE_AND_BODY" }
+        }
+      }
+    ]
+  })];
+  const createResult = await runGws(createArgs);
+  if (!createResult.ok) return createResult.raw;
+  const pageResult = await runGws(["slides", "presentations", "pages", "get", "--params", JSON.stringify({ presentationId, pageObjectId: slideId })]);
+  if (!pageResult.ok) return pageResult.raw;
+  const page = pageResult.data;
+  let titleId = "";
+  let bodyId = "";
+  if (page?.pageElements) {
+    for (const el of page.pageElements) {
+      const phType = el.shape?.placeholder?.type;
+      if (phType === "TITLE" || phType === "CENTERED_TITLE") titleId = el.objectId;
+      else if (phType === "BODY" || phType === "SUBTITLE") bodyId = el.objectId;
+    }
+  }
+  const textRequests = [];
+  if (titleId && title) {
+    textRequests.push({ insertText: { objectId: titleId, text: title, insertionIndex: 0 } });
+  }
+  if (bodyId && body) {
+    textRequests.push({ insertText: { objectId: bodyId, text: body, insertionIndex: 0 } });
+  }
+  if (textRequests.length > 0) {
+    const textArgs = ["slides", "presentations", "batchUpdate", "--params", JSON.stringify({ presentationId }), "--json", JSON.stringify({ requests: textRequests })];
+    const textResult = await runGws(textArgs);
+    if (!textResult.ok) return `Slide created but text insertion failed: ${textResult.raw}`;
+  }
+  return `Added slide "${title}" to presentation ${presentationId}.`;
+}
 
 // src/youtube.ts
 var BASE_URL = "https://www.googleapis.com/youtube/v3";
@@ -4237,6 +4278,20 @@ function buildSlidesTools() {
       }),
       async execute(_toolCallId, params) {
         const result = await slidesCreate(params.title);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "slides_append",
+      label: "Google Slides Add Slide",
+      description: "Add a new slide with a title and body text to an existing Google Slides presentation. The slide uses a Title and Body layout.",
+      parameters: Type.Object({
+        presentationId: Type.String({ description: "The presentation ID (from the URL or drive_list)" }),
+        title: Type.String({ description: "Title text for the new slide" }),
+        body: Type.String({ description: "Body text content for the new slide" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await slidesAppend(params.presentationId, params.title, params.body);
         return { content: [{ type: "text", text: result }], details: {} };
       }
     }

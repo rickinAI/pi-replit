@@ -6,7 +6,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 
 - **server.ts** — Express server wrapping the pi coding agent SDK
   - Creates agent sessions with Anthropic API
-  - Registers custom tools: knowledge base, email, calendar, weather, web search, tasks, news, Google Drive, Google Sheets, Google Docs, Google Slides, YouTube
+  - Registers custom tools (58 total): knowledge base, email, calendar, weather, web search, tasks, news, Google Drive, Google Sheets, Google Docs, Google Slides, YouTube
   - Streams agent events via SSE (Server-Sent Events)
   - Tracks conversation messages and persists them to PostgreSQL
   - Auto-saves conversations every 5 minutes; saves on session close/expiry/shutdown
@@ -36,7 +36,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Retry button on errors (resends last message without retyping)
   - Emoji-labeled tool indicator (🔍🧠📝📅📧 etc.) with elapsed timer after 5s
   - Confirmation modal before starting new session
-- **src/gws.ts** — Google Workspace CLI wrapper. Calls the `gws` binary with the current OAuth access token via `GOOGLE_WORKSPACE_CLI_TOKEN`. Provides Drive (list, get, create folder, move, rename, delete), Sheets (list, read, append, update, create), Docs (list, get, create, append), and Slides (list, get, create) functions
+- **src/gws.ts** — Google Workspace CLI wrapper. Calls the `gws` binary with the current OAuth access token via `GOOGLE_WORKSPACE_CLI_TOKEN`. Provides Drive (list, get, create folder, move, rename, delete), Sheets (list, read, append, update, create), Docs (list, get, create, append), and Slides (list, get, create, append) functions
 - **bin/gws** — Google Workspace CLI binary (v0.8.0, x86_64 Linux). Not an officially supported Google product. Pre-v1.0
 - **dist/** — esbuild output (compiled server)
 - **public/manifest.json** — PWA web app manifest (name, icons, display mode)
@@ -199,10 +199,11 @@ Auth via custom OAuth flow using `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`. To
 
 ## Google Slides
 
-3 custom tools using the `gws` CLI binary (shares OAuth tokens with Gmail):
+4 custom tools using the `gws` CLI binary (shares OAuth tokens with Gmail):
 - `slides_list` — List all presentations in Drive
 - `slides_get` — Read a presentation's content and slide text by ID
 - `slides_create` — Create a new blank presentation
+- `slides_append` — Add a new slide with title and body text to an existing presentation
 
 ## YouTube
 

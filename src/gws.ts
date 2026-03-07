@@ -307,3 +307,51 @@ export async function slidesCreate(title: string): Promise<string> {
   const pres = result.data;
   return `Created presentation: "${pres?.title || title}"\nID: ${pres?.presentationId || "unknown"}`;
 }
+
+export async function slidesAppend(presentationId: string, title: string, body: string): Promise<string> {
+  const slideId = `slide_${Date.now()}`;
+
+  const createArgs = ["slides", "presentations", "batchUpdate", "--params", JSON.stringify({ presentationId }), "--json", JSON.stringify({
+    requests: [
+      {
+        createSlide: {
+          objectId: slideId,
+          insertionIndex: "999",
+          slideLayoutReference: { predefinedLayout: "TITLE_AND_BODY" },
+        },
+      },
+    ],
+  })];
+  const createResult = await runGws(createArgs);
+  if (!createResult.ok) return createResult.raw;
+
+  const pageResult = await runGws(["slides", "presentations", "pages", "get", "--params", JSON.stringify({ presentationId, pageObjectId: slideId })]);
+  if (!pageResult.ok) return pageResult.raw;
+
+  const page = pageResult.data;
+  let titleId = "";
+  let bodyId = "";
+  if (page?.pageElements) {
+    for (const el of page.pageElements) {
+      const phType = el.shape?.placeholder?.type;
+      if (phType === "TITLE" || phType === "CENTERED_TITLE") titleId = el.objectId;
+      else if (phType === "BODY" || phType === "SUBTITLE") bodyId = el.objectId;
+    }
+  }
+
+  const textRequests: any[] = [];
+  if (titleId && title) {
+    textRequests.push({ insertText: { objectId: titleId, text: title, insertionIndex: 0 } });
+  }
+  if (bodyId && body) {
+    textRequests.push({ insertText: { objectId: bodyId, text: body, insertionIndex: 0 } });
+  }
+
+  if (textRequests.length > 0) {
+    const textArgs = ["slides", "presentations", "batchUpdate", "--params", JSON.stringify({ presentationId }), "--json", JSON.stringify({ requests: textRequests })];
+    const textResult = await runGws(textArgs);
+    if (!textResult.ok) return `Slide created but text insertion failed: ${textResult.raw}`;
+  }
+
+  return `Added slide "${title}" to presentation ${presentationId}.`;
+}

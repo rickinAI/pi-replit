@@ -961,6 +961,20 @@ function buildSlidesTools(): ToolDefinition[] {
         return { content: [{ type: "text" as const, text: result }], details: {} };
       },
     },
+    {
+      name: "slides_append",
+      label: "Google Slides Add Slide",
+      description: "Add a new slide with a title and body text to an existing Google Slides presentation. The slide uses a Title and Body layout.",
+      parameters: Type.Object({
+        presentationId: Type.String({ description: "The presentation ID (from the URL or drive_list)" }),
+        title: Type.String({ description: "Title text for the new slide" }),
+        body: Type.String({ description: "Body text content for the new slide" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.slidesAppend(params.presentationId, params.title, params.body);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
   ];
 }
 

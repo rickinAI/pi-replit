@@ -84,6 +84,7 @@ const TOOL_LABELS = {
   slides_list: "📽️ LISTING SLIDES",
   slides_get: "📽️ READING SLIDES",
   slides_create: "📽️ CREATING SLIDES",
+  slides_append: "📽️ ADDING SLIDE",
   youtube_search: "🎬 SEARCHING YOUTUBE",
   youtube_video: "🎬 VIDEO DETAILS",
   youtube_channel: "🎬 CHANNEL INFO",
