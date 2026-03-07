@@ -149,6 +149,40 @@ export function addMessage(conv: Conversation, role: "user" | "agent" | "system"
   conv.updatedAt = Date.now();
 }
 
+export async function generateTitle(conv: Conversation): Promise<string | null> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return null;
+
+  const nonSystem = conv.messages.filter(m => m.role !== "system");
+  if (nonSystem.length < 2) return null;
+
+  const transcript = nonSystem.slice(0, 6).map(m => {
+    const role = m.role === "user" ? "User" : "Assistant";
+    const text = m.text.length > 300 ? m.text.slice(0, 300) + "..." : m.text;
+    return `${role}: ${text}`;
+  }).join("\n");
+
+  try {
+    const client = new Anthropic({ apiKey });
+    const response = await client.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 40,
+      messages: [{
+        role: "user",
+        content: `Write a short title (max 6 words) for this conversation. Just the title, no quotes or punctuation at the end.\n\n${transcript}`,
+      }],
+    });
+    const title = response.content[0]?.type === "text" ? response.content[0].text.trim() : null;
+    if (title && title.length > 0 && title.length <= 80) {
+      conv.title = title;
+      return title;
+    }
+  } catch (err) {
+    console.warn("[conversations] Title generation failed:", err);
+  }
+  return null;
+}
+
 export interface SearchResult {
   id: string;
   title: string;

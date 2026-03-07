@@ -1959,6 +1959,16 @@ app.post("/api/session", async (req: Request, res: Response) => {
         }
         conversations.save(entry.conversation).catch(err => console.error("[conversations] save error:", err));
         syncConversationToVault(entry.conversation);
+
+        const nonSystem = entry.conversation.messages.filter(m => m.role !== "system");
+        if (nonSystem.length >= 2 && nonSystem.length <= 4) {
+          conversations.generateTitle(entry.conversation).then(title => {
+            if (title) {
+              conversations.save(entry.conversation).catch(err => console.error("[conversations] title save error:", err));
+            }
+          }).catch(err => console.warn("[conversations] title generation error:", err));
+        }
+
         processNextPendingMessage(sessionId);
       }
     });

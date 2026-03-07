@@ -602,6 +602,38 @@ function addMessage(conv, role, text, images) {
   }
   conv.updatedAt = Date.now();
 }
+async function generateTitle(conv) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return null;
+  const nonSystem = conv.messages.filter((m) => m.role !== "system");
+  if (nonSystem.length < 2) return null;
+  const transcript = nonSystem.slice(0, 6).map((m) => {
+    const role = m.role === "user" ? "User" : "Assistant";
+    const text = m.text.length > 300 ? m.text.slice(0, 300) + "..." : m.text;
+    return `${role}: ${text}`;
+  }).join("\n");
+  try {
+    const client = new Anthropic({ apiKey });
+    const response = await client.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 40,
+      messages: [{
+        role: "user",
+        content: `Write a short title (max 6 words) for this conversation. Just the title, no quotes or punctuation at the end.
+
+${transcript}`
+      }]
+    });
+    const title = response.content[0]?.type === "text" ? response.content[0].text.trim() : null;
+    if (title && title.length > 0 && title.length <= 80) {
+      conv.title = title;
+      return title;
+    }
+  } catch (err) {
+    console.warn("[conversations] Title generation failed:", err);
+  }
+  return null;
+}
 async function search(query, options) {
   const terms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 0);
   if (terms.length === 0) return [];
@@ -5635,6 +5667,14 @@ app.post("/api/session", async (req, res) => {
         }
         save(entry.conversation).catch((err) => console.error("[conversations] save error:", err));
         syncConversationToVault(entry.conversation);
+        const nonSystem = entry.conversation.messages.filter((m) => m.role !== "system");
+        if (nonSystem.length >= 2 && nonSystem.length <= 4) {
+          generateTitle(entry.conversation).then((title) => {
+            if (title) {
+              save(entry.conversation).catch((err) => console.error("[conversations] title save error:", err));
+            }
+          }).catch((err) => console.warn("[conversations] title generation error:", err));
+        }
         processNextPendingMessage(sessionId);
       }
     });
