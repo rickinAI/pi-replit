@@ -6,8 +6,7 @@ let isAgentRunning = false;
 let scrollThrottleTimer = null;
 let userHasScrolledUp = false;
 let hasMessages = false;
-let viewingHistory = false;
-let savedSessionNodes = null;
+let landingVisible = false;
 let pendingImages = [];
 let reconnectAttempts = 0;
 let reconnectTimer = null;
@@ -26,14 +25,10 @@ const sendBtn       = document.getElementById("send-btn");
 const statusBar     = document.getElementById("status-bar");
 const statusText    = document.getElementById("status-text");
 const newSessionBtn = document.getElementById("new-session-btn");
-const historyBtn    = document.getElementById("history-btn");
 const statusDot     = document.getElementById("status-dot");
 const kbBadge       = document.getElementById("kb-badge");
 const kbDot         = document.getElementById("kb-dot");
 const appEl         = document.getElementById("app");
-const historyPanel  = document.getElementById("history-panel");
-const historyList   = document.getElementById("history-list");
-const historyCloseBtn = document.getElementById("history-close-btn");
 const confirmModal  = document.getElementById("confirm-modal");
 const modalConfirm  = document.getElementById("modal-confirm");
 const modalCancel   = document.getElementById("modal-cancel");
@@ -178,7 +173,6 @@ if (window.visualViewport) {
 }
 
 (async () => {
-  showEmptyState();
   const savedSession = localStorage.getItem("activeSession");
   if (savedSession) {
     try {
@@ -200,6 +194,8 @@ if (window.visualViewport) {
               const lastMsg = msgs[msgs.length - 1];
               if (lastMsg.role === "agent") renderSuggestionChipsFromText(lastMsg.text);
             }
+          } else {
+            showEmptyState();
           }
           if (status.agentRunning) {
             isAgentRunning = true;
@@ -223,7 +219,7 @@ if (window.visualViewport) {
     } catch (err) { console.warn("Session restore failed:", err); }
     localStorage.removeItem("activeSession");
   }
-  await startSession();
+  showLanding();
 })();
 
 async function startSession() {
@@ -235,7 +231,6 @@ async function startSession() {
     const data = await res.json();
     sessionId = data.sessionId;
     hasMessages = false;
-    viewingHistory = false;
     reconnectAttempts = 0;
     localStorage.setItem("activeSession", sessionId);
     updateModeDisplay(currentModelMode);
@@ -255,16 +250,14 @@ async function startSession() {
 }
 
 newSessionBtn.addEventListener("click", () => {
-  if (!hasMessages) {
-    doNewSession();
-    return;
-  }
-  confirmModal.classList.remove("hidden");
+  if (landingVisible) return;
+  stopSyncPolling();
+  if (eventSource) { eventSource.close(); eventSource = null; }
+  showLanding();
 });
 
 modalConfirm.addEventListener("click", () => {
   confirmModal.classList.add("hidden");
-  doNewSession();
 });
 
 modalCancel.addEventListener("click", () => {
@@ -275,148 +268,231 @@ confirmModal.addEventListener("click", (e) => {
   if (e.target === confirmModal) confirmModal.classList.add("hidden");
 });
 
-async function doNewSession() {
+function cleanupCurrentSession() {
   stopSyncPolling();
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   if (eventSource) { eventSource.close(); eventSource = null; }
-  if (sessionId) await fetch(`/api/session/${sessionId}`, { method: "DELETE" }).catch((err) => console.warn("Session delete failed:", err));
-  sessionId = null;
   agentBubble = null;
   agentText = "";
   isAgentRunning = false;
   hasMessages = false;
-  viewingHistory = false;
   reconnectAttempts = 0;
-  localStorage.removeItem("activeSession");
-  clearMessages();
-  showEmptyState();
   setConnected(false);
-  input.disabled = false;
-  sendBtn.disabled = false;
-  await startSession();
 }
 
-historyBtn.addEventListener("click", async () => {
-  historyPanel.classList.toggle("hidden");
-  if (!historyPanel.classList.contains("hidden")) {
-    await loadHistory();
-  }
-});
-
-historyCloseBtn.addEventListener("click", () => {
-  historyPanel.classList.add("hidden");
-});
-
-async function loadHistory() {
-  historyList.innerHTML = '<div class="history-loading">[LOADING...]</div>';
-  try {
-    const res = await fetch("/api/conversations");
-    if (!checkAuth(res)) return;
-    const convos = await res.json();
-    if (convos.length === 0) {
-      historyList.innerHTML = '<div class="history-empty">No saved conversations.</div>';
-      return;
-    }
-    historyList.innerHTML = "";
-    for (const c of convos) {
-      const item = document.createElement("div");
-      item.className = "history-item";
-      const date = new Date(c.createdAt);
-      const dateStr = date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-      const timeStr = date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
-      item.innerHTML = `
-        <div class="history-item-main">
-          <div class="history-title">${escapeHtml(c.title)}</div>
-          <div class="history-meta">${dateStr} ${timeStr} · ${c.messageCount} msgs</div>
-        </div>
-        <button class="history-delete" title="Delete">×</button>
-      `;
-      item.querySelector(".history-item-main").addEventListener("click", () => viewConversation(c.id));
-      item.querySelector(".history-delete").addEventListener("click", (e) => {
-        e.stopPropagation();
-        deleteConversation(c.id, item);
-      });
-      historyList.appendChild(item);
-    }
-  } catch (err) {
-    historyList.innerHTML = `<div class="history-empty">ERR: ${err.message}</div>`;
-  }
+function relativeTime(dateStr) {
+  const now = Date.now();
+  const then = new Date(dateStr).getTime();
+  const diffS = Math.floor((now - then) / 1000);
+  if (diffS < 60) return "just now";
+  const diffM = Math.floor(diffS / 60);
+  if (diffM < 60) return `${diffM}m ago`;
+  const diffH = Math.floor(diffM / 60);
+  if (diffH < 24) return `${diffH}h ago`;
+  const diffD = Math.floor(diffH / 24);
+  if (diffD === 1) return "yesterday";
+  if (diffD < 7) return `${diffD}d ago`;
+  return new Date(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-async function viewConversation(id) {
+let landingInvocationId = 0;
+
+async function showLanding() {
+  landingVisible = true;
+  input.disabled = true;
+  sendBtn.disabled = true;
+
+  const thisInvocation = ++landingInvocationId;
+
+  let landing = document.getElementById("landing");
+  if (landing) landing.remove();
+  landing = document.createElement("div");
+  landing.id = "landing";
+  messages.parentElement.appendChild(landing);
+  landing.innerHTML = '<div class="landing-header"><h2>[MISSION CONTROL]</h2><div class="landing-date"></div></div>';
+
+  const dateEl = landing.querySelector(".landing-date");
+  const now = new Date();
+  dateEl.textContent = now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+
+  let convos = [];
+  let glanceData = null;
   try {
-    const res = await fetch(`/api/conversations/${id}`);
-    if (!checkAuth(res)) return;
-    const conv = await res.json();
-    historyPanel.classList.add("hidden");
+    const [convRes, glanceRes] = await Promise.all([
+      fetch("/api/conversations").then(r => r.ok ? r.json() : []).catch(() => []),
+      fetch("/api/glance").then(r => r.ok ? r.json() : null).catch(() => null),
+    ]);
+    convos = convRes;
+    glanceData = glanceRes;
+  } catch (err) { console.warn("Landing data fetch failed:", err); }
 
-    savedSessionNodes = [];
-    messages.querySelectorAll(".msg, .empty-state").forEach(el => {
-      savedSessionNodes.push(el);
-      el.remove();
-    });
+  if (thisInvocation !== landingInvocationId) return;
 
-    viewingHistory = true;
-    input.disabled = true;
-    sendBtn.disabled = true;
+  if (glanceData) {
+    const items = [];
+    if (glanceData.weather) items.push(glanceData.weather);
+    if (glanceData.email) items.push(glanceData.email);
+    if (glanceData.tasks) items.push(glanceData.tasks);
+    if (glanceData.calendar) items.push(glanceData.calendar);
+    if (items.length > 0) {
+      const strip = document.createElement("div");
+      strip.className = "landing-glance";
+      strip.innerHTML = items.map(i => `<span class="landing-glance-item">${escapeHtml(i)}</span>`).join("");
+      landing.appendChild(strip);
+    }
+  }
 
-    const header = document.createElement("div");
-    header.className = "history-view-header";
-    header.innerHTML = `
-      <span class="history-view-title">[VIEWING: ${escapeHtml(conv.title)}]</span>
-      <div class="history-view-actions">
-        <button class="history-view-resume" id="history-resume-btn">[RESUME THIS CHAT]</button>
-        <button class="history-view-back" id="history-back-btn">[BACK TO CHAT]</button>
-      </div>
-    `;
-    messages.insertBefore(header, scrollAnchor);
-    document.getElementById("history-back-btn").addEventListener("click", exitHistoryView);
-    document.getElementById("history-resume-btn").addEventListener("click", () => resumeConversation(id));
-
-    for (const msg of conv.messages) {
-      const bubble = appendBubble(msg.role, msg.text, msg.timestamp);
-      if (msg.images && msg.images.length > 0) {
-        const imgRow = document.createElement("div");
-        imgRow.className = "msg-images";
-        for (const img of msg.images) {
-          const el = document.createElement("img");
-          el.src = `data:${img.mimeType};base64,${img.data}`;
-          imgRow.appendChild(el);
+  if (convos.length > 0) {
+    const last = convos[0];
+    const lastCard = document.createElement("div");
+    lastCard.className = "landing-last";
+    let previewHtml = "";
+    try {
+      const detailRes = await fetch(`/api/conversations/${last.id}`);
+      if (detailRes.ok) {
+        const detail = await detailRes.json();
+        if (detail.messages && detail.messages.length > 0) {
+          const previews = detail.messages.slice(-2);
+          previewHtml = previews.map(m => {
+            const role = m.role === "user" ? "you" : "rickin";
+            const text = (m.text || "").slice(0, 100) + ((m.text || "").length > 100 ? "..." : "");
+            return `<span class="preview-role">${role}:</span> ${escapeHtml(text)}`;
+          }).join("<br>");
         }
-        bubble.querySelector(".bubble").prepend(imgRow);
       }
+    } catch (err) { console.warn("Preview fetch failed:", err); }
+    lastCard.innerHTML = `
+      <div class="landing-last-label">Last conversation</div>
+      <div class="landing-last-title">${escapeHtml(last.title)}</div>
+      <div class="landing-last-meta">${relativeTime(last.updatedAt || last.createdAt)} · ${last.messageCount} msgs</div>
+      ${previewHtml ? `<div class="landing-last-preview">${previewHtml}</div>` : ""}
+      <button class="landing-resume-btn">[RESUME]</button>
+    `;
+    lastCard.querySelector(".landing-resume-btn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      hideLandingAndRun(() => resumeConversation(last.id));
+    });
+    landing.appendChild(lastCard);
+  }
+
+  const newBtn = document.createElement("button");
+  newBtn.className = "landing-new-btn";
+  newBtn.textContent = "[NEW MISSION]";
+  newBtn.addEventListener("click", () => {
+    hideLandingAndRun(async () => {
+      if (sessionId) {
+        await fetch(`/api/session/${sessionId}`, { method: "DELETE" }).catch(() => {});
+        localStorage.removeItem("activeSession");
+        sessionId = null;
+      }
+      cleanupCurrentSession();
+      clearMessages();
+      showEmptyState();
+      await startSession();
+    });
+  });
+  landing.appendChild(newBtn);
+
+  if (convos.length > 1) {
+    const label = document.createElement("div");
+    label.className = "landing-section-label";
+    label.textContent = "Recent";
+    landing.appendChild(label);
+
+    const recentContainer = document.createElement("div");
+    recentContainer.className = "landing-recent";
+    const initialShow = Math.min(convos.length, 5);
+    for (let i = 1; i < initialShow; i++) {
+      recentContainer.appendChild(createLandingCard(convos[i]));
     }
-    scrollToBottom();
-  } catch (err) {
-    showSystemMsg("ERR: " + err.message);
+    landing.appendChild(recentContainer);
+
+    if (convos.length > 5) {
+      const viewAllBtn = document.createElement("button");
+      viewAllBtn.className = "landing-view-all";
+      viewAllBtn.textContent = "VIEW ALL";
+      let expanded = false;
+      viewAllBtn.addEventListener("click", async () => {
+        if (expanded) {
+          while (recentContainer.children.length > initialShow - 1) {
+            recentContainer.lastChild.remove();
+          }
+          viewAllBtn.textContent = "VIEW ALL";
+          expanded = false;
+          return;
+        }
+        viewAllBtn.textContent = "LOADING...";
+        try {
+          const allRes = await fetch("/api/conversations");
+          const allConvos = allRes.ok ? await allRes.json() : convos;
+          while (recentContainer.children.length > 0) recentContainer.lastChild.remove();
+          for (let i = 1; i < allConvos.length; i++) {
+            recentContainer.appendChild(createLandingCard(allConvos[i]));
+          }
+          viewAllBtn.textContent = "SHOW LESS";
+          expanded = true;
+        } catch (err) {
+          console.warn("View all fetch failed:", err);
+          viewAllBtn.textContent = "VIEW ALL";
+        }
+      });
+      landing.appendChild(viewAllBtn);
+    }
+  }
+
+  if (convos.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "landing-empty";
+    empty.textContent = "No previous missions.";
+    landing.appendChild(empty);
   }
 }
 
-function exitHistoryView() {
-  viewingHistory = false;
-  input.disabled = false;
-  sendBtn.disabled = false;
-  clearMessages();
+function createLandingCard(convo) {
+  const card = document.createElement("div");
+  card.className = "landing-card";
+  card.innerHTML = `
+    <div class="landing-card-main">
+      <div class="landing-card-title">${escapeHtml(convo.title)}</div>
+      <div class="landing-card-meta">${relativeTime(convo.updatedAt || convo.createdAt)} · ${convo.messageCount} msgs</div>
+    </div>
+    <button class="landing-card-delete" title="Delete">×</button>
+  `;
+  card.querySelector(".landing-card-main").addEventListener("click", () => {
+    hideLandingAndRun(() => resumeConversation(convo.id));
+  });
+  card.querySelector(".landing-card-delete").addEventListener("click", async (e) => {
+    e.stopPropagation();
+    try {
+      await fetch(`/api/conversations/${convo.id}`, { method: "DELETE" });
+      card.remove();
+    } catch (err) { console.warn("Delete conversation failed:", err); }
+  });
+  return card;
+}
 
-  if (savedSessionNodes && savedSessionNodes.length > 0) {
-    for (const node of savedSessionNodes) {
-      messages.insertBefore(node, scrollAnchor);
-    }
+function hideLandingAndRun(fn) {
+  const landing = document.getElementById("landing");
+  if (landing) {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      landing.remove();
+      landingVisible = false;
+      input.disabled = false;
+      sendBtn.disabled = false;
+      fn();
+    };
+    landing.classList.add("landing-hidden");
+    landing.addEventListener("transitionend", finish, { once: true });
+    setTimeout(finish, 500);
   } else {
-    showEmptyState();
+    landingVisible = false;
+    input.disabled = false;
+    sendBtn.disabled = false;
+    fn();
   }
-  savedSessionNodes = null;
-  scrollToBottom();
-}
-
-async function deleteConversation(id, el) {
-  try {
-    await fetch(`/api/conversations/${id}`, { method: "DELETE" });
-    el.remove();
-    if (historyList.children.length === 0) {
-      historyList.innerHTML = '<div class="history-empty">No saved conversations.</div>';
-    }
-  } catch (err) { console.warn("Delete conversation failed:", err); }
 }
 
 function openEventStream(id) {
@@ -1087,7 +1163,7 @@ async function sendMessage() {
   removeLastRetryError();
   const text = input.value.trim();
   const images = pendingImages.map(i => ({ mimeType: i.mimeType, data: i.data }));
-  if ((!text && images.length === 0) || !sessionId || viewingHistory) return;
+  if ((!text && images.length === 0) || !sessionId || landingVisible) return;
 
   lastSentMessage = { text, images: images.length > 0 ? images : null };
   removeEmptyState();
@@ -1758,11 +1834,9 @@ function removeLastRetryError() {
 }
 
 async function resumeConversation(conversationId) {
-  exitHistoryView();
-
   if (sessionId) {
     try { await fetch(`/api/session/${sessionId}`, { method: "DELETE" }); } catch (err) { console.warn("Session delete on resume failed:", err); }
-    if (eventSource) eventSource.close();
+    cleanupCurrentSession();
     localStorage.removeItem("activeSession");
     sessionId = null;
   }

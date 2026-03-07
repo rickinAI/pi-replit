@@ -30,12 +30,12 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **.pi/agent/system-prompt.md** — Synced copy of SYSTEM.md for reference
 - **.pi/agent/models.json** — Custom model registry entries (`claude-sonnet-4-6`, `claude-haiku-4-5-20251001`) so the Pi SDK's ModelRegistry can resolve them. These must match exact Anthropic API model IDs (no `-latest` aliases — Anthropic doesn't support them)
 - **public/** — Static frontend (terminal/hacker aesthetic, branded as "RICKIN")
-  - History panel (slide-out, lists past conversations, view/delete, resume)
-  - Resume conversation from history (creates new session with old messages + context)
+  - Landing screen: "Mission Control" full-screen overlay on fresh load (no active session). Shows date, glance strip (weather/email/tasks/calendar from `/api/glance`), last conversation card with preview + RESUME button, NEW MISSION button, recent conversation cards with delete, VIEW ALL to expand full history inline
+  - 3 header buttons: New (+) returns to landing mid-chat, Brief, Settings (history button removed — landing replaces it)
+  - Resume conversation from landing cards (creates new session with old messages + context)
   - Scroll-to-bottom floating button (appears when scrolled up)
   - Retry button on errors (resends last message without retyping)
   - Emoji-labeled tool indicator (🔍🧠📝📅📧 etc.) with elapsed timer after 5s
-  - Confirmation modal before starting new session
 - **src/gws.ts** — Google Workspace CLI wrapper. Calls the `gws` binary with the current OAuth access token via `GOOGLE_WORKSPACE_CLI_TOKEN`. Provides Drive (6 tools), Sheets (13 tools: CRUD + formatting, sorting, merging, tabs, auto-resize, batch), Docs (12 tools: CRUD + insert text/heading/table/image, format, find-replace, delete content, batch), Slides (12 tools: CRUD + insert table/image/shape, format text, duplicate/delete slide, find-replace, batch)
 - **bin/gws** — Google Workspace CLI binary (v0.8.0, x86_64 Linux). Not an officially supported Google product. Pre-v1.0
 - **dist/** — esbuild output (compiled server)
