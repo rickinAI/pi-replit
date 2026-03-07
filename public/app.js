@@ -1957,6 +1957,22 @@ function renderMarkdown(text) {
     }
     if (headerEnd < 1) return block;
 
+    const renderCell = (text) => {
+      let s = text;
+      s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, (_, label, url) => {
+        const href = url.replace(/&amp;/g, '&');
+        return `<a href="${href}" target="_blank" rel="noopener">${label}</a>`;
+      });
+      s = s.replace(/(^|[\s>])((https?:\/\/)[^\s<"'\]]+)/g, (match, prefix, url) => {
+        if (match.includes('href=')) return match;
+        let cleanUrl = url.replace(/[.,;:!?)]+$/, '');
+        const trailing = url.slice(cleanUrl.length);
+        cleanUrl = cleanUrl.replace(/&amp;/g, '&');
+        return `${prefix}<a href="${cleanUrl}" target="_blank" rel="noopener">${cleanUrl}</a>${trailing}`;
+      });
+      return s;
+    };
     const parseRow = (line) => line.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map(c => c.trim());
     const sepCells = parseRow(lines[headerEnd]);
     const aligns = sepCells.map(c => {
@@ -1972,12 +1988,12 @@ function renderMarkdown(text) {
     html += '<thead>';
     for (const hr of headerRows) {
       const cells = parseRow(hr);
-      html += '<tr>' + cells.map((c, i) => `<th style="text-align:${aligns[i] || 'left'}">${c}</th>`).join('') + '</tr>';
+      html += '<tr>' + cells.map((c, i) => `<th style="text-align:${aligns[i] || 'left'}">${renderCell(c)}</th>`).join('') + '</tr>';
     }
     html += '</thead><tbody>';
     for (const dr of dataRows) {
       const cells = parseRow(dr);
-      html += '<tr>' + cells.map((c, i) => `<td style="text-align:${aligns[i] || 'left'}">${c}</td>`).join('') + '</tr>';
+      html += '<tr>' + cells.map((c, i) => `<td style="text-align:${aligns[i] || 'left'}">${renderCell(c)}</td>`).join('') + '</tr>';
     }
     html += '</tbody></table></div>';
 
