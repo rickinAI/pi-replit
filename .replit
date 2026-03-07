@@ -32,7 +32,12 @@ integrations = ["google-mail:1.0.0"]
 [userenv.shared]
 OBSIDIAN_API_URL = "https://obsidian.rickin.live"
 PORT = ""
+
+[userenv.development]
 GMAIL_REDIRECT_URI = "https://51b59722-ef80-4e2b-b64d-6dc467d8bb0f-00-17dz1kfqdyzrd.janeway.replit.dev/api/gmail/callback"
+
+[userenv.production]
+GMAIL_REDIRECT_URI = "https://rickin.live/api/gmail/callback"
 
 [workflows]
 runButton = "Project"
