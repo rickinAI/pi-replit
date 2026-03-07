@@ -337,10 +337,21 @@ async function showLanding() {
 
   if (glanceData) {
     const items = [];
-    if (glanceData.weather) items.push(glanceData.weather);
-    if (glanceData.email) items.push(glanceData.email);
-    if (glanceData.tasks) items.push(glanceData.tasks);
-    if (glanceData.calendar) items.push(glanceData.calendar);
+    if (glanceData.weather) {
+      const w = glanceData.weather;
+      const tempF = Math.round(w.tempC * 9 / 5 + 32);
+      items.push(`${w.icon || "🌡️"} ${tempF}°F ${w.condition || ""}`);
+    }
+    if (glanceData.emails) {
+      items.push(`📧 ${glanceData.emails.unread} unread`);
+    }
+    if (glanceData.tasks) {
+      items.push(`✅ ${glanceData.tasks.active} task${glanceData.tasks.active !== 1 ? "s" : ""}`);
+    }
+    if (glanceData.nextEvent) {
+      const ev = glanceData.nextEvent;
+      items.push(`📅 ${ev.title}${ev.time ? " · " + ev.time : ""}`);
+    }
     if (items.length > 0) {
       const strip = document.createElement("div");
       strip.className = "landing-glance";
