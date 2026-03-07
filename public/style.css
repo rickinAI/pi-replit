@@ -454,6 +454,37 @@ body {
   animation: pulse 1.2s infinite;
 }
 
+.scroll-bottom-btn {
+  position: absolute;
+  bottom: 100px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  background: var(--surface);
+  border: 1px solid var(--green-dim);
+  border-radius: 50%;
+  color: var(--green);
+  width: 36px;
+  height: 36px;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.85;
+  transition: opacity 0.2s, box-shadow 0.2s;
+  touch-action: manipulation;
+}
+
+.scroll-bottom-btn:active {
+  opacity: 1;
+  box-shadow: 0 0 8px var(--green-glow);
+}
+
+.scroll-bottom-btn.hidden {
+  display: none;
+}
+
 #status-bar {
   flex-shrink: 0;
   display: flex;
@@ -466,6 +497,12 @@ body {
   color: var(--green-dim);
   transform: translateY(0);
   transition: transform 0.2s ease, opacity 0.2s ease;
+  animation: statusPulse 2s ease-in-out infinite;
+}
+
+@keyframes statusPulse {
+  0%, 100% { border-top-color: var(--border); }
+  50% { border-top-color: var(--green-dim); }
 }
 
 #status-bar.hidden {
@@ -474,6 +511,7 @@ body {
   pointer-events: none;
   position: absolute;
   bottom: 0;
+  animation: none;
 }
 
 .spinner {
@@ -483,6 +521,26 @@ body {
   border-top-color: var(--green);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
+}
+
+.retry-btn {
+  background: none;
+  border: 1px solid var(--green-dim);
+  border-radius: 2px;
+  color: var(--green);
+  font-family: var(--font);
+  font-size: 10px;
+  padding: 4px 12px;
+  cursor: pointer;
+  margin-top: 6px;
+  transition: all 0.15s;
+  min-height: 32px;
+  touch-action: manipulation;
+}
+
+.retry-btn:active {
+  background: var(--green-subtle);
+  box-shadow: 0 0 6px var(--green-glow);
 }
 
 .interview-card {
@@ -1106,14 +1164,22 @@ body.light-theme #mic-btn.recording {
   margin-bottom: 8px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .history-view-title {
   font-size: 11px;
   color: var(--green-dim);
+  width: 100%;
 }
 
-.history-view-back {
+.history-view-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.history-view-back, .history-view-resume {
   background: none;
   border: 1px solid var(--border);
   border-radius: 2px;
@@ -1123,11 +1189,25 @@ body.light-theme #mic-btn.recording {
   padding: 4px 10px;
   cursor: pointer;
   transition: all 0.15s;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
 }
 
-.history-view-back:hover {
+.history-view-back:hover, .history-view-resume:hover {
   background: var(--green-subtle);
   box-shadow: 0 0 6px var(--green-glow);
+}
+
+.history-view-resume {
+  border-color: var(--green);
+  color: var(--bg);
+  background: var(--green);
+  font-weight: 600;
+}
+
+.history-view-resume:hover {
+  background: var(--green-bright);
 }
 
 .modal {

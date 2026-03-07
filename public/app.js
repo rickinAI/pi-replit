@@ -15,6 +15,9 @@ let catchUpInProgress = false;
 let syncPollTimer = null;
 let isSyncingToCloud = false;
 let textOffsetAfterCatchUp = 0;
+let lastSentMessage = null;
+let thinkingStartTime = null;
+let thinkingTimerInterval = null;
 
 const messages      = document.getElementById("messages");
 const scrollAnchor  = document.getElementById("scroll-anchor");
@@ -39,8 +42,47 @@ const generateBriefBtn = document.getElementById("generate-brief-btn");
 const modelBadge    = document.getElementById("model-badge");
 const modelModeEl   = document.getElementById("model-mode");
 const modelNameEl   = document.getElementById("model-name");
+const scrollBottomBtn = document.getElementById("scroll-bottom-btn");
 let currentModelMode = "auto";
 const FULL_MODEL_ID = "claude-sonnet-4-6";
+
+const TOOL_LABELS = {
+  web_search: "🔍 SEARCHING THE WEB",
+  notes_create: "📝 WRITING TO VAULT",
+  notes_update: "📝 UPDATING VAULT",
+  notes_read: "📖 READING VAULT",
+  notes_search: "📖 SEARCHING VAULT",
+  notes_list: "📖 BROWSING VAULT",
+  notes_list_recursive: "📖 BROWSING VAULT",
+  notes_delete: "🗑️ VAULT CLEANUP",
+  notes_rename: "📝 RENAMING IN VAULT",
+  notes_rename_folder: "📝 RENAMING FOLDER",
+  notes_file_info: "📖 CHECKING FILE INFO",
+  calendar_events: "📅 CHECKING CALENDAR",
+  calendar_create: "📅 CREATING EVENT",
+  calendar_update: "📅 UPDATING EVENT",
+  calendar_delete: "📅 REMOVING EVENT",
+  gmail_search: "📧 SEARCHING EMAIL",
+  gmail_read: "📧 READING EMAIL",
+  gmail_send: "📧 SENDING EMAIL",
+  gmail_reply: "📧 REPLYING TO EMAIL",
+  gmail_draft: "📧 DRAFTING EMAIL",
+  weather: "🌤️ CHECKING WEATHER",
+  delegate: "🤖 CONSULTING SPECIALIST",
+  stock_price: "📈 CHECKING STOCKS",
+  stock_chart: "📈 LOADING CHART",
+  task_list: "✅ CHECKING TASKS",
+  task_create: "✅ CREATING TASK",
+  task_update: "✅ UPDATING TASK",
+  task_complete: "✅ COMPLETING TASK",
+  news_search: "📰 SEARCHING NEWS",
+  news_top: "📰 TOP HEADLINES",
+  twitter_search: "🐦 SEARCHING TWITTER",
+  maps_search: "🗺️ SEARCHING MAPS",
+  maps_directions: "🗺️ GETTING DIRECTIONS",
+  conversation_search: "💬 SEARCHING HISTORY",
+  interview: "📋 PREPARING FORM",
+};
 
 function checkAuth(res) {
   if (res.status === 401) {
@@ -54,7 +96,17 @@ messages.addEventListener("scroll", () => {
   const threshold = 80;
   const atBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < threshold;
   userHasScrolledUp = !atBottom;
+  if (scrollBottomBtn) {
+    scrollBottomBtn.classList.toggle("hidden", atBottom);
+  }
 });
+
+if (scrollBottomBtn) {
+  scrollBottomBtn.addEventListener("click", () => {
+    messages.scrollTo({ top: messages.scrollHeight, behavior: "smooth" });
+    scrollBottomBtn.classList.add("hidden");
+  });
+}
 
 if (window.visualViewport) {
   const vv = window.visualViewport;
@@ -130,7 +182,7 @@ if (window.visualViewport) {
 async function startSession() {
   try {
     showStatus("[INITIALIZING...]");
-    const res = await fetch("/api/session", { method: "POST" });
+    const res = await fetch("/api/session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
     if (!checkAuth(res)) return;
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
@@ -265,10 +317,14 @@ async function viewConversation(id) {
     header.className = "history-view-header";
     header.innerHTML = `
       <span class="history-view-title">[VIEWING: ${escapeHtml(conv.title)}]</span>
-      <button class="history-view-back" id="history-back-btn">[BACK TO CHAT]</button>
+      <div class="history-view-actions">
+        <button class="history-view-resume" id="history-resume-btn">[RESUME THIS CHAT]</button>
+        <button class="history-view-back" id="history-back-btn">[BACK TO CHAT]</button>
+      </div>
     `;
     messages.insertBefore(header, scrollAnchor);
     document.getElementById("history-back-btn").addEventListener("click", exitHistoryView);
+    document.getElementById("history-resume-btn").addEventListener("click", () => resumeConversation(id));
 
     for (const msg of conv.messages) {
       const bubble = appendBubble(msg.role, msg.text, msg.timestamp);
@@ -401,7 +457,8 @@ async function catchUpSession(sid) {
         textOffsetAfterCatchUp = 0;
       }
       isAgentRunning = true;
-      showStatus(status.pendingCount > 0 ? `[PROCESSING... ${status.pendingCount} QUEUED]` : "[PROCESSING...]");
+      if (!thinkingStartTime) startThinkingTimer();
+      showStatus(status.pendingCount > 0 ? `🧠 THINKING... ${status.pendingCount} QUEUED` : "🧠 THINKING...");
     } else {
       isAgentRunning = false;
       agentBubble = null;
@@ -485,7 +542,8 @@ function handleAgentEvent(event) {
       agentText = "";
       textOffsetAfterCatchUp = 0;
       removeSuggestionChips();
-      showStatus("[PROCESSING...]");
+      startThinkingTimer();
+      showStatus("🧠 THINKING...");
       break;
 
     case "message_queued":
@@ -529,11 +587,13 @@ function handleAgentEvent(event) {
 
     case "tool_execution_start": {
       const name = event.toolName ?? "tool";
-      showStatus(`[RUNNING ${name.toUpperCase()}...]`);
+      const label = TOOL_LABELS[name] || `⚙️ RUNNING ${name.toUpperCase()}`;
+      showStatusWithTimer(label);
       break;
     }
 
     case "tool_execution_end": {
+      showStatusWithTimer("🧠 THINKING...");
       break;
     }
 
@@ -585,13 +645,16 @@ function handleAgentEvent(event) {
       isAgentRunning = false;
       agentBubble = null;
       agentText = "";
+      stopThinkingTimer();
       hideStatus();
       input.focus();
       throttledScroll();
       break;
 
     case "error":
-      showSystemMsg("ERR: " + event.error);
+      stopThinkingTimer();
+      removeLastRetryError();
+      showErrorWithRetry(event.error);
       isAgentRunning = false;
       hideStatus();
       break;
@@ -973,10 +1036,12 @@ function renderSuggestionChipsFromText(rawText) {
 
 async function sendMessage() {
   removeSuggestionChips();
+  removeLastRetryError();
   const text = input.value.trim();
   const images = pendingImages.map(i => ({ mimeType: i.mimeType, data: i.data }));
   if ((!text && images.length === 0) || !sessionId || viewingHistory) return;
 
+  lastSentMessage = { text, images: images.length > 0 ? images : null };
   removeEmptyState();
   hasMessages = true;
   const bubble = appendBubble("user", text || "(image attached)");
@@ -1569,12 +1634,122 @@ function showStatus(text) {
   statusBar.classList.remove("hidden");
 }
 
+function showStatusWithTimer(label) {
+  if (!thinkingStartTime) return showStatus(label);
+  const elapsed = Math.floor((Date.now() - thinkingStartTime) / 1000);
+  if (elapsed >= 5) {
+    showStatus(`${label} ${elapsed}s`);
+  } else {
+    showStatus(label);
+  }
+}
+
+function startThinkingTimer() {
+  thinkingStartTime = Date.now();
+  if (thinkingTimerInterval) clearInterval(thinkingTimerInterval);
+  thinkingTimerInterval = setInterval(() => {
+    if (!isAgentRunning || !thinkingStartTime) { stopThinkingTimer(); return; }
+    const elapsed = Math.floor((Date.now() - thinkingStartTime) / 1000);
+    if (elapsed >= 5) {
+      const currentLabel = statusText.textContent.replace(/\s+\d+s$/, "");
+      showStatus(`${currentLabel} ${elapsed}s`);
+    }
+  }, 1000);
+}
+
+function stopThinkingTimer() {
+  thinkingStartTime = null;
+  if (thinkingTimerInterval) { clearInterval(thinkingTimerInterval); thinkingTimerInterval = null; }
+}
+
 function hideStatus() {
   if (isSyncingToCloud && !isAgentRunning && reconnectAttempts === 0) {
     showStatus("[SYNCING TO CLOUD...]");
     return;
   }
   statusBar.classList.add("hidden");
+}
+
+function showErrorWithRetry(errorText) {
+  const msg = document.createElement("div");
+  msg.className = "msg system retry-error";
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  bubble.textContent = "ERR: " + errorText;
+  msg.appendChild(bubble);
+
+  if (lastSentMessage) {
+    const retryBtn = document.createElement("button");
+    retryBtn.className = "retry-btn";
+    retryBtn.textContent = "RETRY";
+    retryBtn.addEventListener("click", () => {
+      removeLastRetryError();
+      if (!lastSentMessage || !sessionId) return;
+      const body = { message: lastSentMessage.text || undefined };
+      if (lastSentMessage.images && lastSentMessage.images.length > 0) body.images = lastSentMessage.images;
+      fetch(`/api/session/${sessionId}/prompt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }).catch(err => showSystemMsg("ERR: " + err.message));
+    });
+    msg.appendChild(retryBtn);
+  }
+
+  const time = document.createElement("span");
+  time.className = "msg-time";
+  time.textContent = formatTime(new Date());
+  msg.appendChild(time);
+
+  messages.insertBefore(msg, scrollAnchor);
+  scrollToBottom();
+}
+
+function removeLastRetryError() {
+  messages.querySelectorAll(".retry-error").forEach(el => el.remove());
+}
+
+async function resumeConversation(conversationId) {
+  exitHistoryView();
+
+  if (sessionId) {
+    try { await fetch(`/api/session/${sessionId}`, { method: "DELETE" }); } catch {}
+    if (eventSource) eventSource.close();
+    localStorage.removeItem("activeSession");
+    sessionId = null;
+  }
+
+  showSystemMsg("RESUMING CONVERSATION...");
+
+  try {
+    const res = await fetch("/api/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ resumeConversationId: conversationId }),
+    });
+    if (!checkAuth(res)) return;
+    const data = await res.json();
+    sessionId = data.sessionId;
+    localStorage.setItem("activeSession", sessionId);
+
+    clearMessages();
+    removeEmptyState();
+    if (data.messages && data.messages.length > 0) {
+      for (const msg of data.messages) {
+        if (msg.role === "user") appendBubble("user", msg.text, msg.timestamp);
+        else if (msg.role === "agent") appendBubble("agent", msg.text, msg.timestamp);
+      }
+      hasMessages = true;
+    }
+
+    openEventStream(sessionId);
+    startSyncPolling();
+    showSystemMsg("CONVERSATION RESUMED — CONTEXT LOADED");
+    scrollToBottom();
+  } catch (err) {
+    showSystemMsg("ERR: Failed to resume — " + err.message);
+    await startSession();
+  }
 }
 
 function startSyncPolling() {

@@ -3953,8 +3953,9 @@ app.get("/api/gmail/status", async (_req, res) => {
   }
   res.json(status);
 });
-app.post("/api/session", async (_req, res) => {
+app.post("/api/session", async (req, res) => {
   try {
+    const { resumeConversationId } = req.body || {};
     const sessionId = `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const authStorage = AuthStorage.create(path3.join(AGENT_DIR, "auth.json"));
     authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
@@ -4001,6 +4002,18 @@ app.post("/api/session", async (_req, res) => {
       customTools: allTools
     });
     const conv = createConversation(sessionId);
+    let resumedMessages = [];
+    if (resumeConversationId) {
+      const oldConv = await load(resumeConversationId);
+      if (oldConv && oldConv.messages.length > 0) {
+        for (const msg of oldConv.messages) {
+          addMessage(conv, msg.role, msg.text);
+        }
+        resumedMessages = oldConv.messages;
+        conv.title = oldConv.title;
+        console.log(`[session] Resuming conversation "${oldConv.title}" with ${oldConv.messages.length} messages`);
+      }
+    }
     const entry = {
       session,
       subscribers: /* @__PURE__ */ new Set(),
@@ -4040,12 +4053,23 @@ app.post("/api/session", async (_req, res) => {
         processNextPendingMessage(sessionId);
       }
     });
-    const recentSummary = await getRecentSummary(5);
-    const lastConvoContext = await getLastConversationContext(10);
-    const vaultIndex = await getVaultIndex();
-    const combinedContext = [lastConvoContext, recentSummary, vaultIndex].filter(Boolean).join("\n\n---\n\n") || null;
+    let combinedContext;
+    if (resumeConversationId && resumedMessages.length > 0) {
+      const last10 = resumedMessages.slice(-10);
+      const resumeContext = `[RESUMED CONVERSATION: "${conv.title}"]
+The user is resuming a previous conversation. Here are the last ${last10.length} messages for context:
+
+` + last10.map((m) => `${m.role.toUpperCase()}: ${m.text}`).join("\n\n");
+      const vaultIndex = await getVaultIndex();
+      combinedContext = [resumeContext, vaultIndex].filter(Boolean).join("\n\n---\n\n");
+    } else {
+      const recentSummary = await getRecentSummary(5);
+      const lastConvoContext = await getLastConversationContext(10);
+      const vaultIndex = await getVaultIndex();
+      combinedContext = [lastConvoContext, recentSummary, vaultIndex].filter(Boolean).join("\n\n---\n\n") || null;
+    }
     entry.startupContext = combinedContext || void 0;
-    res.json({ sessionId, recentContext: combinedContext });
+    res.json({ sessionId, recentContext: combinedContext, messages: resumedMessages });
   } catch (err) {
     console.error("Failed to create session:", err);
     res.status(500).json({ error: String(err) });

@@ -30,7 +30,11 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **.pi/agent/system-prompt.md** — Synced copy of SYSTEM.md for reference
 - **.pi/agent/models.json** — Custom model registry entries (`claude-sonnet-4-6`, `claude-haiku-4-5-20251001`) so the Pi SDK's ModelRegistry can resolve them. These must match exact Anthropic API model IDs (no `-latest` aliases — Anthropic doesn't support them)
 - **public/** — Static frontend (terminal/hacker aesthetic, branded as "RICKIN")
-  - History panel (slide-out, lists past conversations, view/delete)
+  - History panel (slide-out, lists past conversations, view/delete, resume)
+  - Resume conversation from history (creates new session with old messages + context)
+  - Scroll-to-bottom floating button (appears when scrolled up)
+  - Retry button on errors (resends last message without retyping)
+  - Emoji-labeled tool indicator (🔍🧠📝📅📧 etc.) with elapsed timer after 5s
   - Confirmation modal before starting new session
 - **dist/** — esbuild output (compiled server)
 - **public/manifest.json** — PWA web app manifest (name, icons, display mode)
