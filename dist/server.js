@@ -5352,10 +5352,10 @@ async function processNextPendingMessage(sessionId) {
 
 ${queueContext}${pending.text}`;
   const promptImages = pending.images?.map((i) => ({ type: "image", data: i.data, mimeType: i.mimeType }));
-  const PROMPT_TIMEOUT = 3e5;
+  const PROMPT_TIMEOUT = 9e5;
   const actualPromise = entry.session.prompt(augmentedText, promptImages ? { images: promptImages } : void 0);
   const timeoutPromise = new Promise(
-    (_, reject) => setTimeout(() => reject(new Error("Response timed out after 5 minutes")), PROMPT_TIMEOUT)
+    (_, reject) => setTimeout(() => reject(new Error("Response timed out after 15 minutes")), PROMPT_TIMEOUT)
   );
   try {
     await Promise.race([actualPromise, timeoutPromise]);
@@ -5364,7 +5364,7 @@ ${queueContext}${pending.text}`;
     const elapsed = ((Date.now() - queuedPromptStart) / 1e3).toFixed(1);
     const isTimeout = String(err).includes("timed out");
     console.error(`[prompt] queued ${isTimeout ? "timeout" : "error"} after ${elapsed}s:`, err);
-    const errEvent = JSON.stringify({ type: "error", error: String(err) });
+    const errEvent = JSON.stringify({ type: isTimeout ? "timeout" : "error", error: String(err) });
     for (const sub of entry.subscribers) {
       try {
         sub.write(`data: ${errEvent}
@@ -5852,10 +5852,10 @@ ${entry.startupContext}
   }
   augmentedText += text;
   const promptImages = images?.map((i) => ({ type: "image", data: i.data, mimeType: i.mimeType }));
-  const PROMPT_TIMEOUT = 3e5;
+  const PROMPT_TIMEOUT = 9e5;
   const actualPromise = entry.session.prompt(augmentedText, promptImages ? { images: promptImages } : void 0);
   const timeoutPromise = new Promise(
-    (_, reject) => setTimeout(() => reject(new Error("Response timed out after 5 minutes")), PROMPT_TIMEOUT)
+    (_, reject) => setTimeout(() => reject(new Error("Response timed out after 15 minutes")), PROMPT_TIMEOUT)
   );
   try {
     await Promise.race([actualPromise, timeoutPromise]);
@@ -5866,7 +5866,7 @@ ${entry.startupContext}
     const elapsed = ((Date.now() - promptStart) / 1e3).toFixed(1);
     const isTimeout = String(err).includes("timed out");
     console.error(`[prompt] ${isTimeout ? "timeout" : "error"} after ${elapsed}s:`, err);
-    const errEvent = JSON.stringify({ type: "error", error: String(err) });
+    const errEvent = JSON.stringify({ type: isTimeout ? "timeout" : "error", error: String(err) });
     for (const sub of entry.subscribers) {
       try {
         sub.write(`data: ${errEvent}

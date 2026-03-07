@@ -1647,10 +1647,10 @@ async function processNextPendingMessage(sessionId: string) {
   const augmentedText = `[Current date/time in Rickin's timezone (Eastern): ${etNow}]\n\n${queueContext}${pending.text}`;
   const promptImages = pending.images?.map(i => ({ type: "image" as const, data: i.data, mimeType: i.mimeType }));
 
-  const PROMPT_TIMEOUT = 300_000;
+  const PROMPT_TIMEOUT = 900_000;
   const actualPromise = entry.session.prompt(augmentedText, promptImages ? { images: promptImages } : undefined);
   const timeoutPromise = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error("Response timed out after 5 minutes")), PROMPT_TIMEOUT)
+    setTimeout(() => reject(new Error("Response timed out after 15 minutes")), PROMPT_TIMEOUT)
   );
 
   try {
@@ -1660,7 +1660,7 @@ async function processNextPendingMessage(sessionId: string) {
     const elapsed = ((Date.now() - queuedPromptStart) / 1000).toFixed(1);
     const isTimeout = String(err).includes("timed out");
     console.error(`[prompt] queued ${isTimeout ? "timeout" : "error"} after ${elapsed}s:`, err);
-    const errEvent = JSON.stringify({ type: "error", error: String(err) });
+    const errEvent = JSON.stringify({ type: isTimeout ? "timeout" : "error", error: String(err) });
     for (const sub of entry.subscribers) {
       try { sub.write(`data: ${errEvent}\n\n`); } catch {}
     }
@@ -2129,10 +2129,10 @@ app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
   augmentedText += text;
   const promptImages = images?.map(i => ({ type: "image" as const, data: i.data, mimeType: i.mimeType }));
 
-  const PROMPT_TIMEOUT = 300_000;
+  const PROMPT_TIMEOUT = 900_000;
   const actualPromise = entry.session.prompt(augmentedText, promptImages ? { images: promptImages } : undefined);
   const timeoutPromise = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error("Response timed out after 5 minutes")), PROMPT_TIMEOUT)
+    setTimeout(() => reject(new Error("Response timed out after 15 minutes")), PROMPT_TIMEOUT)
   );
 
   try {
@@ -2144,7 +2144,7 @@ app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
     const elapsed = ((Date.now() - promptStart) / 1000).toFixed(1);
     const isTimeout = String(err).includes("timed out");
     console.error(`[prompt] ${isTimeout ? "timeout" : "error"} after ${elapsed}s:`, err);
-    const errEvent = JSON.stringify({ type: "error", error: String(err) });
+    const errEvent = JSON.stringify({ type: isTimeout ? "timeout" : "error", error: String(err) });
     for (const sub of entry.subscribers) {
       try { sub.write(`data: ${errEvent}\n\n`); } catch {}
     }

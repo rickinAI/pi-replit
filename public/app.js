@@ -16,6 +16,7 @@ let syncPollTimer = null;
 let isSyncingToCloud = false;
 let textOffsetAfterCatchUp = 0;
 let lastSentMessage = null;
+let timeoutRetryCount = 0;
 let thinkingStartTime = null;
 let thinkingTimerInterval = null;
 
@@ -813,6 +814,31 @@ function handleAgentEvent(event) {
       throttledScroll();
       break;
 
+    case "timeout":
+      stopThinkingTimer();
+      removeLastRetryError();
+      if (timeoutRetryCount < 1 && lastSentMessage) {
+        timeoutRetryCount++;
+        showSystemMsg("TIMEOUT — RETRYING...");
+        hideStatus();
+        isAgentRunning = false;
+        setTimeout(() => {
+          if (!lastSentMessage || !sessionId) return;
+          const body = { message: lastSentMessage.text || undefined };
+          if (lastSentMessage.images && lastSentMessage.images.length > 0) body.images = lastSentMessage.images;
+          fetch(`/api/session/${sessionId}/prompt`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          }).then(r => { if (!checkAuth(r)) return; }).catch(err => showSystemMsg("ERR: " + err.message));
+        }, 2000);
+      } else {
+        showErrorWithRetry(event.error);
+        isAgentRunning = false;
+        hideStatus();
+      }
+      break;
+
     case "error":
       stopThinkingTimer();
       removeLastRetryError();
@@ -1204,6 +1230,7 @@ async function sendMessage() {
   if ((!text && images.length === 0) || !sessionId || landingVisible) return;
 
   lastSentMessage = { text, images: images.length > 0 ? images : null };
+  timeoutRetryCount = 0;
   removeEmptyState();
   hasMessages = true;
   const bubble = appendBubble("user", text || "(image attached)");
