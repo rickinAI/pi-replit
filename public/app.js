@@ -360,8 +360,7 @@ async function showLanding() {
     const items = [];
     if (glanceData.weather) {
       const w = glanceData.weather;
-      const tempF = Math.round(w.tempC * 9 / 5 + 32);
-      items.push(`${w.icon || "🌡️"} ${tempF}°F ${w.condition || ""}`);
+      items.push(`${w.icon || "🌡️"} ${w.tempC}°C ${w.condition || ""}`);
     }
     if (glanceData.emails) {
       items.push(`📧 ${glanceData.emails.unread} unread`);
