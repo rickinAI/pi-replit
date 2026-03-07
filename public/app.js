@@ -1984,7 +1984,7 @@ function renderMarkdown(text) {
     const headerRows = lines.slice(0, headerEnd);
     const dataRows = lines.slice(headerEnd + 1);
 
-    let html = '<div class="md-table-wrap"><button class="md-table-copy" onclick="copyTable(this)" title="Copy table">⧉ Copy</button><table class="md-table">';
+    let html = '<div class="md-table-wrap"><div class="md-table-bar"><button class="md-table-copy" onclick="copyTable(this)" title="Copy table">⧉ Copy</button></div><div class="md-table-scroll"><table class="md-table">';
     html += '<thead>';
     for (const hr of headerRows) {
       const cells = parseRow(hr);
@@ -1995,7 +1995,7 @@ function renderMarkdown(text) {
       const cells = parseRow(dr);
       html += '<tr>' + cells.map((c, i) => `<td style="text-align:${aligns[i] || 'left'}">${renderCell(c)}</td>`).join('') + '</tr>';
     }
-    html += '</tbody></table></div>';
+    html += '</tbody></table></div></div>';
 
     const idx = tablePlaceholders.length;
     tablePlaceholders.push(html);
