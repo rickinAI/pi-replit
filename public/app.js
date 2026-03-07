@@ -1909,6 +1909,21 @@ function initGlance() {
 
 initGlance();
 
+const isStandalone = window.navigator.standalone || window.matchMedia('(display-mode: standalone)').matches;
+document.getElementById("messages").addEventListener("click", (e) => {
+  const link = e.target.closest("a[href]");
+  if (!link) return;
+  const href = link.getAttribute("href");
+  if (!href || href.startsWith("/") || href.startsWith("#")) return;
+
+  e.preventDefault();
+  if (isStandalone) {
+    window.open(href, "_blank");
+  } else {
+    window.open(href, "_blank", "noopener");
+  }
+});
+
 function renderMarkdown(text) {
   const codeBlocks = [];
   const inlineCodes = [];
@@ -1974,12 +1989,16 @@ function renderMarkdown(text) {
   escaped = escaped.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>');
 
   escaped = escaped.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, (_, label, url) => {
-    return `<a href="${url}" target="_blank" rel="noopener">${label}</a>`;
+    const href = url.replace(/&amp;/g, '&');
+    return `<a href="${href}" target="_blank" rel="noopener">${label}</a>`;
   });
 
-  escaped = escaped.replace(/(^|[\s>])((https?:\/\/)[^\s<"')\]]+)/gm, (match, prefix, url) => {
+  escaped = escaped.replace(/(^|[\s>])((https?:\/\/)[^\s<"'\]]+)/gm, (match, prefix, url) => {
     if (match.includes('href=')) return match;
-    return `${prefix}<a href="${url}" target="_blank" rel="noopener">${url}</a>`;
+    let cleanUrl = url.replace(/[.,;:!?)]+$/, '');
+    const trailing = url.slice(cleanUrl.length);
+    cleanUrl = cleanUrl.replace(/&amp;/g, '&');
+    return `${prefix}<a href="${cleanUrl}" target="_blank" rel="noopener">${cleanUrl}</a>${trailing}`;
   });
 
   escaped = escaped.replace(/^(\d+)\.\s+(.+)$/gm, '<li class="ol-item"><span class="list-num">$1.</span> $2</li>');

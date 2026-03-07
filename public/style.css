@@ -345,11 +345,20 @@ body {
 .msg.agent .bubble a {
   color: var(--amber);
   text-decoration: underline;
-  text-underline-offset: 2px;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+  padding: 2px 0;
+  word-break: break-all;
 }
 
-.msg.agent .bubble a:hover {
-  text-shadow: 0 0 6px var(--amber-glow);
+.msg.agent .bubble a:active {
+  opacity: 0.7;
+}
+
+@media (hover: hover) {
+  .msg.agent .bubble a:hover {
+    text-shadow: 0 0 6px var(--amber-glow);
+  }
 }
 
 .bubble strong {
