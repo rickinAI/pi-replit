@@ -1767,6 +1767,14 @@ function authMiddleware(req: Request, res: Response, next: NextFunction) {
   const token = req.signedCookies?.auth;
   if (token === "authenticated") { next(); return; }
 
+  const devToken = process.env.DEV_TOKEN;
+  if (devToken && req.query.dev_token === devToken) {
+    const isSecure = req.secure || req.headers["x-forwarded-proto"] === "https";
+    res.cookie("auth", "authenticated", { signed: true, httpOnly: true, secure: isSecure, maxAge: 7 * 24 * 60 * 60 * 1000 });
+    next();
+    return;
+  }
+
   if (req.path === "/" && !req.headers.accept?.includes("text/html")) {
     res.status(200).send("ok");
   } else if (req.headers.accept?.includes("text/html") || req.path === "/") {

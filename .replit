@@ -35,6 +35,7 @@ PORT = ""
 
 [userenv.development]
 GMAIL_REDIRECT_URI = "https://51b59722-ef80-4e2b-b64d-6dc467d8bb0f-00-17dz1kfqdyzrd.janeway.replit.dev/api/gmail/callback"
+DEV_TOKEN = "7b6e45ad4e6f6113d41daf0e77910f8d"
 
 [userenv.production]
 GMAIL_REDIRECT_URI = "https://rickin.live/api/gmail/callback"
