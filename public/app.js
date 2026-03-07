@@ -380,6 +380,24 @@ async function showLanding() {
     }
   }
 
+  const newBtn = document.createElement("button");
+  newBtn.className = "landing-new-btn";
+  newBtn.textContent = "[NEW MISSION]";
+  newBtn.addEventListener("click", () => {
+    hideLandingAndRun(async () => {
+      if (sessionId) {
+        await fetch(`/api/session/${sessionId}`, { method: "DELETE" }).catch(() => {});
+        localStorage.removeItem("activeSession");
+        sessionId = null;
+      }
+      cleanupCurrentSession();
+      clearMessages();
+      showEmptyState();
+      await startSession();
+    });
+  });
+  landing.appendChild(newBtn);
+
   if (convos.length > 0) {
     const last = convos[0];
     const lastCard = document.createElement("div");
@@ -412,24 +430,6 @@ async function showLanding() {
     });
     landing.appendChild(lastCard);
   }
-
-  const newBtn = document.createElement("button");
-  newBtn.className = "landing-new-btn";
-  newBtn.textContent = "[NEW MISSION]";
-  newBtn.addEventListener("click", () => {
-    hideLandingAndRun(async () => {
-      if (sessionId) {
-        await fetch(`/api/session/${sessionId}`, { method: "DELETE" }).catch(() => {});
-        localStorage.removeItem("activeSession");
-        sessionId = null;
-      }
-      cleanupCurrentSession();
-      clearMessages();
-      showEmptyState();
-      await startSession();
-    });
-  });
-  landing.appendChild(newBtn);
 
   if (convos.length > 1) {
     const label = document.createElement("div");
