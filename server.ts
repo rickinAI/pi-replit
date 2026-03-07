@@ -34,6 +34,7 @@ import * as news from "./src/news.js";
 import * as twitter from "./src/twitter.js";
 import * as stocks from "./src/stocks.js";
 import * as maps from "./src/maps.js";
+import * as gws from "./src/gws.js";
 import * as alerts from "./src/alerts.js";
 import * as agentLoader from "./src/agents/loader.js";
 import { runSubAgent } from "./src/agents/orchestrator.js";
@@ -723,6 +724,154 @@ function buildInterviewTool(sessionId: string): ToolDefinition[] {
   ];
 }
 
+function buildDriveTools(): ToolDefinition[] {
+  return [
+    {
+      name: "drive_list",
+      label: "Google Drive List",
+      description: "List or search files in Google Drive. Use query parameter for Drive search syntax (e.g. \"name contains 'report'\", \"mimeType='application/vnd.google-apps.folder'\", \"'FOLDER_ID' in parents\"). Without query, returns most recently modified files.",
+      parameters: Type.Object({
+        query: Type.Optional(Type.String({ description: "Google Drive search query (Drive API q parameter syntax)" })),
+        maxResults: Type.Optional(Type.Number({ description: "Max files to return (default 20)" })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.driveList(params.query, params.maxResults || 20);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "drive_get",
+      label: "Google Drive Get",
+      description: "Get detailed metadata for a specific file or folder in Google Drive by its ID.",
+      parameters: Type.Object({
+        fileId: Type.String({ description: "The Google Drive file ID" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.driveGet(params.fileId);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "drive_create_folder",
+      label: "Google Drive Create Folder",
+      description: "Create a new folder in Google Drive. Optionally specify a parent folder ID to create it inside an existing folder.",
+      parameters: Type.Object({
+        name: Type.String({ description: "Name for the new folder" }),
+        parentId: Type.Optional(Type.String({ description: "Parent folder ID (creates at root if omitted)" })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.driveCreateFolder(params.name, params.parentId);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "drive_move",
+      label: "Google Drive Move",
+      description: "Move a file or folder to a different folder in Google Drive.",
+      parameters: Type.Object({
+        fileId: Type.String({ description: "ID of the file/folder to move" }),
+        newParentId: Type.String({ description: "ID of the destination folder" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.driveMove(params.fileId, params.newParentId);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "drive_rename",
+      label: "Google Drive Rename",
+      description: "Rename a file or folder in Google Drive.",
+      parameters: Type.Object({
+        fileId: Type.String({ description: "ID of the file/folder to rename" }),
+        newName: Type.String({ description: "New name for the file/folder" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.driveRename(params.fileId, params.newName);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "drive_delete",
+      label: "Google Drive Delete",
+      description: "Move a file or folder to trash in Google Drive. This does not permanently delete — it can be recovered from trash.",
+      parameters: Type.Object({
+        fileId: Type.String({ description: "ID of the file/folder to trash" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.driveDelete(params.fileId);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+  ];
+}
+
+function buildSheetsTools(): ToolDefinition[] {
+  return [
+    {
+      name: "sheets_list",
+      label: "Google Sheets List",
+      description: "List all Google Sheets spreadsheets in Drive.",
+      parameters: Type.Object({}),
+      async execute() {
+        const result = await gws.sheetsList();
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "sheets_read",
+      label: "Google Sheets Read",
+      description: "Read data from a Google Sheets spreadsheet. Specify a range like 'Sheet1!A1:D10' or just 'Sheet1' for the whole sheet.",
+      parameters: Type.Object({
+        spreadsheetId: Type.String({ description: "The spreadsheet ID (from the URL or drive_list)" }),
+        range: Type.String({ description: "Cell range to read, e.g. 'Sheet1!A1:D10' or 'Sheet1'" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.sheetsRead(params.spreadsheetId, params.range);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "sheets_append",
+      label: "Google Sheets Append",
+      description: "Append one or more rows to a Google Sheets spreadsheet. Each row is an array of cell values.",
+      parameters: Type.Object({
+        spreadsheetId: Type.String({ description: "The spreadsheet ID" }),
+        values: Type.Array(Type.Array(Type.String()), { description: "Array of rows, each row is an array of cell values. Example: [[\"Name\", \"Age\"], [\"Alice\", \"30\"]]" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.sheetsAppend(params.spreadsheetId, params.values);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "sheets_update",
+      label: "Google Sheets Update",
+      description: "Update specific cells in a Google Sheets spreadsheet. Specify the range and new values.",
+      parameters: Type.Object({
+        spreadsheetId: Type.String({ description: "The spreadsheet ID" }),
+        range: Type.String({ description: "Cell range to update, e.g. 'Sheet1!A1:B2'" }),
+        values: Type.Array(Type.Array(Type.String()), { description: "Array of rows with new values" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.sheetsUpdate(params.spreadsheetId, params.range, params.values);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "sheets_create",
+      label: "Google Sheets Create",
+      description: "Create a new Google Sheets spreadsheet.",
+      parameters: Type.Object({
+        title: Type.String({ description: "Title for the new spreadsheet" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.sheetsCreate(params.title);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+  ];
+}
+
 function buildConversationTools(): ToolDefinition[] {
   return [
     {
@@ -1195,6 +1344,8 @@ app.post("/api/session", async (req: Request, res: Response) => {
       ...buildTwitterTools(),
       ...buildStockTools(),
       ...buildMapsTools(),
+      ...buildDriveTools(),
+      ...buildSheetsTools(),
       ...buildConversationTools(),
       ...buildInterviewTool(sessionId),
     ];
@@ -1909,13 +2060,10 @@ async function startServer(maxRetries = 5) {
   await alerts.init();
   console.log("[boot] PostgreSQL ready (shared pool, 4 tables)");
 
-  if (!gmail.isConfigured()) console.warn("Gmail integration not configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET missing).");
-  else if (!gmail.isConnected()) console.warn("Gmail configured but not yet authorized. Visit /api/gmail/auth to connect.");
-  else {
-    gmail.getConnectedEmail().then(email => {
-      if (email) console.log(`[boot] Google account connected: ${email}`);
-    }).catch(() => {});
-  }
+  gmail.checkConnectionStatus().then(status => {
+    if (status.connected) console.log(`[boot] Google connected: ${status.email} (Gmail, Calendar, Drive, Sheets)`);
+    else console.warn(`[boot] Google not connected: ${status.error}`);
+  }).catch(() => {});
 
   const portReady = await waitForPort(PORT);
   if (!portReady) {

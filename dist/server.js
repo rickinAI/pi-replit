@@ -10,7 +10,7 @@ import express from "express";
 import cors from "cors";
 import { createServer } from "http";
 import { fileURLToPath } from "url";
-import path3 from "path";
+import path4 from "path";
 import fs3 from "fs";
 import { execSync, spawn } from "child_process";
 import cookieParser from "cookie-parser";
@@ -778,15 +778,17 @@ function rowToConversation(row) {
 import { google } from "googleapis";
 var SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
-  "https://www.googleapis.com/auth/calendar"
+  "https://www.googleapis.com/auth/calendar",
+  "https://www.googleapis.com/auth/drive",
+  "https://www.googleapis.com/auth/spreadsheets"
 ];
 async function init4() {
   const existing = await getPool().query(`SELECT tokens FROM oauth_tokens WHERE service = 'google'`);
   if (existing.rows.length === 0) {
     try {
       const fs4 = await import("fs");
-      const path4 = await import("path");
-      const legacyPath = path4.default.join(process.cwd(), "data", "gmail-tokens.json");
+      const path5 = await import("path");
+      const legacyPath = path5.default.join(process.cwd(), "data", "gmail-tokens.json");
       if (fs4.default.existsSync(legacyPath)) {
         const tokens = JSON.parse(fs4.default.readFileSync(legacyPath, "utf-8"));
         await getPool().query(
@@ -1056,6 +1058,37 @@ async function getConnectedEmail() {
     return profile.data.emailAddress || null;
   } catch {
     return null;
+  }
+}
+async function getAccessToken() {
+  try {
+    const tokens = await loadTokens();
+    if (!tokens || !tokens.refresh_token) return null;
+    const client = getOAuth2Client();
+    client.setCredentials(tokens);
+    const isExpired = !tokens.expiry_date || Date.now() >= tokens.expiry_date - 6e4;
+    if (isExpired) {
+      const { credentials } = await client.refreshAccessToken();
+      client.setCredentials(credentials);
+      const merged = { ...tokens, ...credentials };
+      await saveTokens(merged);
+      return credentials.access_token || null;
+    }
+    return tokens.access_token || null;
+  } catch (err) {
+    console.error("[gmail] Failed to get access token:", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+async function checkConnectionStatus() {
+  if (!isConfigured3()) return { connected: false, error: "GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET not set" };
+  if (!isConnected()) return { connected: false, error: "No OAuth tokens \u2014 visit /api/gmail/auth to connect" };
+  try {
+    const email = await getConnectedEmail();
+    if (email) return { connected: true, email };
+    return { connected: false, error: "Token invalid \u2014 visit /api/gmail/auth to reconnect" };
+  } catch (err) {
+    return { connected: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -2095,6 +2128,180 @@ ${lines.join("\n\n")}`;
   }
 }
 
+// src/gws.ts
+import { execFile } from "child_process";
+import path2 from "path";
+var GWS_BIN = path2.join(process.cwd(), "bin", "gws");
+var TIMEOUT_MS4 = 15e3;
+async function runGws(args) {
+  const token = await getAccessToken();
+  if (!token) {
+    return { ok: false, data: null, raw: "Google not connected \u2014 visit /api/gmail/auth to connect" };
+  }
+  return new Promise((resolve) => {
+    const env = { ...process.env, GOOGLE_WORKSPACE_CLI_TOKEN: token };
+    execFile(GWS_BIN, args, { env, timeout: TIMEOUT_MS4, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) {
+        const errMsg = stderr || err.message || "Unknown error";
+        console.error(`[gws] Error running: gws ${args.join(" ")}`, errMsg);
+        if (errMsg.includes("401") || errMsg.includes("Unauthorized") || errMsg.includes("invalid_credentials")) {
+          resolve({ ok: false, data: null, raw: "Google authorization expired \u2014 visit /api/gmail/auth to reconnect" });
+          return;
+        }
+        if (errMsg.includes("403") || errMsg.includes("Forbidden") || errMsg.includes("insufficient")) {
+          resolve({ ok: false, data: null, raw: "Insufficient permissions \u2014 visit /api/gmail/auth to reconnect with required scopes" });
+          return;
+        }
+        resolve({ ok: false, data: null, raw: `Error: ${errMsg.slice(0, 500)}` });
+        return;
+      }
+      const output = stdout.trim();
+      try {
+        const data = JSON.parse(output);
+        resolve({ ok: true, data, raw: output });
+      } catch {
+        resolve({ ok: true, data: null, raw: output });
+      }
+    });
+  });
+}
+async function driveList(query, pageSize = 20) {
+  const params = {
+    pageSize,
+    fields: "files(id,name,mimeType,modifiedTime,size,parents,webViewLink)",
+    orderBy: "modifiedTime desc"
+  };
+  if (query) params.q = query;
+  const args = ["drive", "files", "list", "--params", JSON.stringify(params)];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  const files = result.data?.files;
+  if (!files || files.length === 0) return query ? `No files found matching query.` : "No files in Drive.";
+  const lines = files.map((f, i) => {
+    const type = f.mimeType === "application/vnd.google-apps.folder" ? "\u{1F4C1}" : f.mimeType === "application/vnd.google-apps.spreadsheet" ? "\u{1F4CA}" : f.mimeType === "application/vnd.google-apps.document" ? "\u{1F4C4}" : f.mimeType === "application/vnd.google-apps.presentation" ? "\u{1F4FD}\uFE0F" : "\u{1F4CE}";
+    const modified = f.modifiedTime ? new Date(f.modifiedTime).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "";
+    return `${i + 1}. ${type} ${f.name}
+   ID: ${f.id}
+   Modified: ${modified}${f.webViewLink ? `
+   Link: ${f.webViewLink}` : ""}`;
+  });
+  return `Drive files (${files.length}):
+
+${lines.join("\n\n")}`;
+}
+async function driveGet(fileId) {
+  const args = ["drive", "files", "get", "--params", JSON.stringify({ fileId, fields: "id,name,mimeType,modifiedTime,size,parents,webViewLink,description,owners,shared" })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  const f = result.data;
+  if (!f) return "File not found.";
+  const lines = [
+    `Name: ${f.name}`,
+    `ID: ${f.id}`,
+    `Type: ${f.mimeType}`,
+    f.size ? `Size: ${(parseInt(f.size) / 1024).toFixed(1)} KB` : null,
+    f.modifiedTime ? `Modified: ${new Date(f.modifiedTime).toLocaleString("en-US", { timeZone: "America/New_York" })}` : null,
+    f.owners ? `Owner: ${f.owners.map((o) => o.displayName || o.emailAddress).join(", ")}` : null,
+    f.shared !== void 0 ? `Shared: ${f.shared}` : null,
+    f.webViewLink ? `Link: ${f.webViewLink}` : null,
+    f.description ? `Description: ${f.description}` : null,
+    f.parents ? `Parent folder ID: ${f.parents.join(", ")}` : null
+  ].filter(Boolean);
+  return lines.join("\n");
+}
+async function driveCreateFolder(name, parentId) {
+  const body = {
+    name,
+    mimeType: "application/vnd.google-apps.folder"
+  };
+  if (parentId) body.parents = [parentId];
+  const args = ["drive", "files", "create", "--json", JSON.stringify(body), "--params", JSON.stringify({ fields: "id,name,webViewLink" })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  const f = result.data;
+  return `Created folder: "${f?.name || name}"
+ID: ${f?.id || "unknown"}${f?.webViewLink ? `
+Link: ${f.webViewLink}` : ""}`;
+}
+async function driveMove(fileId, newParentId) {
+  const getResult = await runGws(["drive", "files", "get", "--params", JSON.stringify({ fileId, fields: "id,name,parents" })]);
+  if (!getResult.ok) return getResult.raw;
+  const currentParents = getResult.data?.parents?.join(",") || "";
+  const args = ["drive", "files", "update", "--params", JSON.stringify({
+    fileId,
+    addParents: newParentId,
+    removeParents: currentParents,
+    fields: "id,name,parents"
+  })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Moved "${result.data?.name || fileId}" to folder ${newParentId}`;
+}
+async function driveRename(fileId, newName) {
+  const args = ["drive", "files", "update", "--params", JSON.stringify({ fileId }), "--json", JSON.stringify({ name: newName })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Renamed to: "${result.data?.name || newName}"`;
+}
+async function driveDelete(fileId) {
+  const args = ["drive", "files", "update", "--params", JSON.stringify({ fileId }), "--json", JSON.stringify({ trashed: true })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Moved "${result.data?.name || fileId}" to trash.`;
+}
+async function sheetsRead(spreadsheetId, range) {
+  const args = ["sheets", "+read", "--spreadsheet", spreadsheetId, "--range", range];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  if (result.data?.values) {
+    const rows = result.data.values;
+    if (rows.length === 0) return "No data in the specified range.";
+    const formatted = rows.map((row, i) => `Row ${i + 1}: ${row.join(" | ")}`).join("\n");
+    return `${range} (${rows.length} rows):
+
+${formatted}`;
+  }
+  return result.raw || "No data returned.";
+}
+async function sheetsList() {
+  return driveList("mimeType='application/vnd.google-apps.spreadsheet'");
+}
+async function sheetsAppend(spreadsheetId, values) {
+  const jsonValues = JSON.stringify(values);
+  const args = ["sheets", "+append", "--spreadsheet", spreadsheetId, "--json-values", jsonValues];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Appended ${values.length} row(s) to spreadsheet.`;
+}
+async function sheetsUpdate(spreadsheetId, range, values) {
+  const args = [
+    "sheets",
+    "spreadsheets",
+    "values",
+    "update",
+    "--params",
+    JSON.stringify({
+      spreadsheetId,
+      range,
+      valueInputOption: "USER_ENTERED"
+    }),
+    "--json",
+    JSON.stringify({ values })
+  ];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Updated ${range} with ${values.length} row(s).`;
+}
+async function sheetsCreate(title) {
+  const args = ["sheets", "spreadsheets", "create", "--json", JSON.stringify({ properties: { title } })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  const s = result.data;
+  return `Created spreadsheet: "${s?.properties?.title || title}"
+ID: ${s?.spreadsheetId || "unknown"}
+URL: ${s?.spreadsheetUrl || ""}`;
+}
+
 // src/alerts.ts
 import Anthropic2 from "@anthropic-ai/sdk";
 var DEFAULT_CONFIG = {
@@ -2137,8 +2344,8 @@ async function init6() {
   if (existing.rows.length === 0) {
     try {
       const fs4 = await import("fs");
-      const path4 = await import("path");
-      const legacyPath = path4.default.join(process.cwd(), "data", "alerts-config.json");
+      const path5 = await import("path");
+      const legacyPath = path5.default.join(process.cwd(), "data", "alerts-config.json");
       if (fs4.default.existsSync(legacyPath)) {
         const raw = JSON.parse(fs4.default.readFileSync(legacyPath, "utf-8"));
         const migrated = { ...DEFAULT_CONFIG, ...raw, briefs: { ...DEFAULT_CONFIG.briefs, ...raw.briefs }, alerts: { ...DEFAULT_CONFIG.alerts, ...raw.alerts } };
@@ -2622,11 +2829,11 @@ async function triggerBrief(type) {
 
 // src/agents/loader.ts
 import fs2 from "fs";
-import path2 from "path";
+import path3 from "path";
 var agents = [];
 var configPath = "";
 function init7(dataDir) {
-  configPath = path2.join(dataDir, "agents.json");
+  configPath = path3.join(dataDir, "agents.json");
   loadAgents();
   let reloadTimer = null;
   try {
@@ -2869,14 +3076,14 @@ var ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
 var APP_PASSWORD = process.env.APP_PASSWORD || "";
 var SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path3.dirname(__filename);
-var PROJECT_ROOT = __filename.includes("/dist/") ? path3.resolve(__dirname, "..") : __dirname;
-var PUBLIC_DIR = path3.join(PROJECT_ROOT, "public");
-var AGENT_DIR = path3.join(PROJECT_ROOT, ".pi/agent");
-var VAULT_DIR = path3.join(PROJECT_ROOT, "data", "vault");
+var __dirname = path4.dirname(__filename);
+var PROJECT_ROOT = __filename.includes("/dist/") ? path4.resolve(__dirname, "..") : __dirname;
+var PUBLIC_DIR = path4.join(PROJECT_ROOT, "public");
+var AGENT_DIR = path4.join(PROJECT_ROOT, ".pi/agent");
+var VAULT_DIR = path4.join(PROJECT_ROOT, "data", "vault");
 fs3.mkdirSync(AGENT_DIR, { recursive: true });
 init(VAULT_DIR);
-init7(path3.join(PROJECT_ROOT, "data"));
+init7(path4.join(PROJECT_ROOT, "data"));
 var useLocalVault = isConfigured2();
 setInterval(() => {
   const localAvailable = isConfigured2();
@@ -3527,6 +3734,152 @@ function buildInterviewTool(sessionId) {
     }
   ];
 }
+function buildDriveTools() {
+  return [
+    {
+      name: "drive_list",
+      label: "Google Drive List",
+      description: `List or search files in Google Drive. Use query parameter for Drive search syntax (e.g. "name contains 'report'", "mimeType='application/vnd.google-apps.folder'", "'FOLDER_ID' in parents"). Without query, returns most recently modified files.`,
+      parameters: Type.Object({
+        query: Type.Optional(Type.String({ description: "Google Drive search query (Drive API q parameter syntax)" })),
+        maxResults: Type.Optional(Type.Number({ description: "Max files to return (default 20)" }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = await driveList(params.query, params.maxResults || 20);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "drive_get",
+      label: "Google Drive Get",
+      description: "Get detailed metadata for a specific file or folder in Google Drive by its ID.",
+      parameters: Type.Object({
+        fileId: Type.String({ description: "The Google Drive file ID" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await driveGet(params.fileId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "drive_create_folder",
+      label: "Google Drive Create Folder",
+      description: "Create a new folder in Google Drive. Optionally specify a parent folder ID to create it inside an existing folder.",
+      parameters: Type.Object({
+        name: Type.String({ description: "Name for the new folder" }),
+        parentId: Type.Optional(Type.String({ description: "Parent folder ID (creates at root if omitted)" }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = await driveCreateFolder(params.name, params.parentId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "drive_move",
+      label: "Google Drive Move",
+      description: "Move a file or folder to a different folder in Google Drive.",
+      parameters: Type.Object({
+        fileId: Type.String({ description: "ID of the file/folder to move" }),
+        newParentId: Type.String({ description: "ID of the destination folder" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await driveMove(params.fileId, params.newParentId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "drive_rename",
+      label: "Google Drive Rename",
+      description: "Rename a file or folder in Google Drive.",
+      parameters: Type.Object({
+        fileId: Type.String({ description: "ID of the file/folder to rename" }),
+        newName: Type.String({ description: "New name for the file/folder" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await driveRename(params.fileId, params.newName);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "drive_delete",
+      label: "Google Drive Delete",
+      description: "Move a file or folder to trash in Google Drive. This does not permanently delete \u2014 it can be recovered from trash.",
+      parameters: Type.Object({
+        fileId: Type.String({ description: "ID of the file/folder to trash" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await driveDelete(params.fileId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    }
+  ];
+}
+function buildSheetsTools() {
+  return [
+    {
+      name: "sheets_list",
+      label: "Google Sheets List",
+      description: "List all Google Sheets spreadsheets in Drive.",
+      parameters: Type.Object({}),
+      async execute() {
+        const result = await sheetsList();
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "sheets_read",
+      label: "Google Sheets Read",
+      description: "Read data from a Google Sheets spreadsheet. Specify a range like 'Sheet1!A1:D10' or just 'Sheet1' for the whole sheet.",
+      parameters: Type.Object({
+        spreadsheetId: Type.String({ description: "The spreadsheet ID (from the URL or drive_list)" }),
+        range: Type.String({ description: "Cell range to read, e.g. 'Sheet1!A1:D10' or 'Sheet1'" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await sheetsRead(params.spreadsheetId, params.range);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "sheets_append",
+      label: "Google Sheets Append",
+      description: "Append one or more rows to a Google Sheets spreadsheet. Each row is an array of cell values.",
+      parameters: Type.Object({
+        spreadsheetId: Type.String({ description: "The spreadsheet ID" }),
+        values: Type.Array(Type.Array(Type.String()), { description: 'Array of rows, each row is an array of cell values. Example: [["Name", "Age"], ["Alice", "30"]]' })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await sheetsAppend(params.spreadsheetId, params.values);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "sheets_update",
+      label: "Google Sheets Update",
+      description: "Update specific cells in a Google Sheets spreadsheet. Specify the range and new values.",
+      parameters: Type.Object({
+        spreadsheetId: Type.String({ description: "The spreadsheet ID" }),
+        range: Type.String({ description: "Cell range to update, e.g. 'Sheet1!A1:B2'" }),
+        values: Type.Array(Type.Array(Type.String()), { description: "Array of rows with new values" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await sheetsUpdate(params.spreadsheetId, params.range, params.values);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "sheets_create",
+      label: "Google Sheets Create",
+      description: "Create a new Google Sheets spreadsheet.",
+      parameters: Type.Object({
+        title: Type.String({ description: "Title for the new spreadsheet" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await sheetsCreate(params.title);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    }
+  ];
+}
 function buildConversationTools() {
   return [
     {
@@ -3812,7 +4165,7 @@ setInterval(async () => {
     }
   }
 }, 5 * 60 * 1e3);
-var TUNNEL_URL_FILE = path3.join(PROJECT_ROOT, "data", "tunnel-url.txt");
+var TUNNEL_URL_FILE = path4.join(PROJECT_ROOT, "data", "tunnel-url.txt");
 function loadPersistedTunnelUrl() {
   try {
     return fs3.readFileSync(TUNNEL_URL_FILE, "utf-8").trim() || null;
@@ -3957,9 +4310,9 @@ app.post("/api/session", async (req, res) => {
   try {
     const { resumeConversationId } = req.body || {};
     const sessionId = `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const authStorage = AuthStorage.create(path3.join(AGENT_DIR, "auth.json"));
+    const authStorage = AuthStorage.create(path4.join(AGENT_DIR, "auth.json"));
     authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
-    const modelRegistry = new ModelRegistry(authStorage, path3.join(AGENT_DIR, "models.json"));
+    const modelRegistry = new ModelRegistry(authStorage, path4.join(AGENT_DIR, "models.json"));
     const fullModel = modelRegistry.find("anthropic", FULL_MODEL_ID);
     if (!fullModel) throw new Error(`Model ${FULL_MODEL_ID} not found in registry`);
     const coreTools = [
@@ -3973,6 +4326,8 @@ app.post("/api/session", async (req, res) => {
       ...buildTwitterTools(),
       ...buildStockTools(),
       ...buildMapsTools(),
+      ...buildDriveTools(),
+      ...buildSheetsTools(),
       ...buildConversationTools(),
       ...buildInterviewTool(sessionId)
     ];
@@ -4170,9 +4525,9 @@ app.post("/api/session/:id/prompt", async (req, res) => {
   }
   if (chosenModelId !== entry.activeModelName) {
     try {
-      const authStorage = AuthStorage.create(path3.join(AGENT_DIR, "auth.json"));
+      const authStorage = AuthStorage.create(path4.join(AGENT_DIR, "auth.json"));
       authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
-      const modelRegistry = new ModelRegistry(authStorage, path3.join(AGENT_DIR, "models.json"));
+      const modelRegistry = new ModelRegistry(authStorage, path4.join(AGENT_DIR, "models.json"));
       const newModel = modelRegistry.find("anthropic", chosenModelId);
       if (newModel) {
         await entry.session.setModel(newModel);
@@ -4478,7 +4833,7 @@ app.get("/api/kb-status", (_req, res) => {
 });
 var obSyncProcess = null;
 function startObSync() {
-  const vaultPath2 = path3.join(process.cwd(), "data", "vault");
+  const vaultPath2 = path4.join(process.cwd(), "data", "vault");
   const logPath = "/tmp/obsidian-sync.log";
   if (obSyncProcess) {
     try {
@@ -4574,7 +4929,7 @@ async function buildVaultTree(dir) {
   for (const entry of entries) {
     if (entry.name.startsWith(".")) continue;
     if (entry.isDirectory()) {
-      const children = await buildVaultTree(path3.join(dir, entry.name));
+      const children = await buildVaultTree(path4.join(dir, entry.name));
       result.push({ name: entry.name, type: "folder", children });
     } else {
       result.push({ name: entry.name, type: "file" });
@@ -4690,14 +5045,11 @@ async function startServer(maxRetries = 5) {
   await init5();
   await init6();
   console.log("[boot] PostgreSQL ready (shared pool, 4 tables)");
-  if (!isConfigured3()) console.warn("Gmail integration not configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET missing).");
-  else if (!isConnected()) console.warn("Gmail configured but not yet authorized. Visit /api/gmail/auth to connect.");
-  else {
-    getConnectedEmail().then((email) => {
-      if (email) console.log(`[boot] Google account connected: ${email}`);
-    }).catch(() => {
-    });
-  }
+  checkConnectionStatus().then((status) => {
+    if (status.connected) console.log(`[boot] Google connected: ${status.email} (Gmail, Calendar, Drive, Sheets)`);
+    else console.warn(`[boot] Google not connected: ${status.error}`);
+  }).catch(() => {
+  });
   const portReady = await waitForPort(PORT);
   if (!portReady) {
     console.error(`[boot] Port ${PORT} could not be freed after 30s \u2014 exiting`);

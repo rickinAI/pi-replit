@@ -4,6 +4,8 @@ import { getPool } from "./db.js";
 const SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/calendar",
+  "https://www.googleapis.com/auth/drive",
+  "https://www.googleapis.com/auth/spreadsheets",
 ];
 
 export async function init(): Promise<void> {
@@ -302,5 +304,41 @@ export async function getConnectedEmail(): Promise<string | null> {
     return profile.data.emailAddress || null;
   } catch {
     return null;
+  }
+}
+
+export async function getAccessToken(): Promise<string | null> {
+  try {
+    const tokens = await loadTokens();
+    if (!tokens || !tokens.refresh_token) return null;
+
+    const client = getOAuth2Client();
+    client.setCredentials(tokens);
+
+    const isExpired = !tokens.expiry_date || Date.now() >= tokens.expiry_date - 60000;
+    if (isExpired) {
+      const { credentials } = await client.refreshAccessToken();
+      client.setCredentials(credentials);
+      const merged = { ...tokens, ...credentials };
+      await saveTokens(merged);
+      return credentials.access_token || null;
+    }
+
+    return tokens.access_token || null;
+  } catch (err) {
+    console.error("[gmail] Failed to get access token:", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+export async function checkConnectionStatus(): Promise<{ connected: boolean; email?: string; error?: string }> {
+  if (!isConfigured()) return { connected: false, error: "GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET not set" };
+  if (!isConnected()) return { connected: false, error: "No OAuth tokens — visit /api/gmail/auth to connect" };
+  try {
+    const email = await getConnectedEmail();
+    if (email) return { connected: true, email };
+    return { connected: false, error: "Token invalid — visit /api/gmail/auth to reconnect" };
+  } catch (err) {
+    return { connected: false, error: err instanceof Error ? err.message : String(err) };
   }
 }

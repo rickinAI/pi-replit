@@ -17,7 +17,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Express error-handling middleware for clean JSON error responses
 - **src/db.ts** — Shared PostgreSQL connection pool (single `pg.Pool`, max 10 connections). Creates all 4 tables on init (`conversations`, `tasks`, `app_config`, `oauth_tokens`). All other modules import `getPool()` from here
 - **src/obsidian.ts** — Client for the knowledge base REST API (10s timeout, 2 retries on transient failures, health ping)
-- **src/gmail.ts** — Gmail integration via custom Google OAuth (list/read/search emails). Tokens stored in PostgreSQL (oauth_tokens table)
+- **src/gmail.ts** — Gmail integration via custom Google OAuth (list/read/search emails). Tokens stored in PostgreSQL (oauth_tokens table). OAuth scopes: gmail.readonly, calendar, drive, spreadsheets. Also exports `getAccessToken()` for gws CLI
 - **src/calendar.ts** — Google Calendar integration (shares OAuth tokens with Gmail via PostgreSQL)
 - **src/weather.ts** — Weather via Open-Meteo (free, no API key)
 - **src/websearch.ts** — Web search via DuckDuckGo HTML (free, no API key)
@@ -36,6 +36,8 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Retry button on errors (resends last message without retyping)
   - Emoji-labeled tool indicator (🔍🧠📝📅📧 etc.) with elapsed timer after 5s
   - Confirmation modal before starting new session
+- **src/gws.ts** — Google Workspace CLI wrapper. Calls the `gws` binary with the current OAuth access token via `GOOGLE_WORKSPACE_CLI_TOKEN`. Provides Drive (list, get, create folder, move, rename, delete) and Sheets (list, read, append, update, create) functions
+- **bin/gws** — Google Workspace CLI binary (v0.8.0, x86_64 Linux). Not an officially supported Google product. Pre-v1.0
 - **dist/** — esbuild output (compiled server)
 - **public/manifest.json** — PWA web app manifest (name, icons, display mode)
 - **public/icons/** — App icons (180x180 apple-touch-icon, 192x192, 512x512)
@@ -167,6 +169,25 @@ Auth via custom OAuth flow using `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`. To
 - `calendar_create` — Create new events with time, description, location
 - All date range calculations use proper timezone-aware UTC conversion (handles DST transitions)
 - Connected Google account logged at boot and visible via `/api/gmail/status` (includes email address)
+
+## Google Drive Integration
+
+6 custom tools using the `gws` CLI binary (shares OAuth tokens with Gmail):
+- `drive_list` — List/search files in Drive (supports Drive API query syntax)
+- `drive_get` — Get file metadata by ID
+- `drive_create_folder` — Create folders (optionally nested)
+- `drive_move` — Move files/folders between folders
+- `drive_rename` — Rename files/folders
+- `drive_delete` — Move files/folders to trash
+
+## Google Sheets Integration
+
+5 custom tools using the `gws` CLI binary (shares OAuth tokens with Gmail):
+- `sheets_list` — List all spreadsheets in Drive
+- `sheets_read` — Read cell ranges from a spreadsheet
+- `sheets_append` — Append rows to a spreadsheet
+- `sheets_update` — Update specific cells in a spreadsheet
+- `sheets_create` — Create a new spreadsheet
 
 ## Weather
 

@@ -82,6 +82,17 @@ const TOOL_LABELS = {
   maps_directions: "🗺️ GETTING DIRECTIONS",
   conversation_search: "💬 SEARCHING HISTORY",
   interview: "📋 PREPARING FORM",
+  drive_list: "📁 BROWSING DRIVE",
+  drive_get: "📁 CHECKING FILE",
+  drive_create_folder: "📁 CREATING FOLDER",
+  drive_move: "📁 MOVING FILE",
+  drive_rename: "📁 RENAMING FILE",
+  drive_delete: "🗑️ TRASHING FILE",
+  sheets_list: "📊 LISTING SHEETS",
+  sheets_read: "📊 READING SHEET",
+  sheets_append: "📊 ADDING ROWS",
+  sheets_update: "📊 UPDATING SHEET",
+  sheets_create: "📊 CREATING SHEET",
 };
 
 function checkAuth(res) {
