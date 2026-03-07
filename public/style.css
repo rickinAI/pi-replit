@@ -497,6 +497,10 @@ body {
   opacity: 1;
 }
 
+.bubble:has(.md-table-wrap) ~ .copy-btn {
+  display: none;
+}
+
 .copy-btn:hover {
   color: var(--green);
   border-color: var(--green-dim);
