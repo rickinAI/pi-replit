@@ -16,7 +16,7 @@ export async function runGws(args: string[]): Promise<{ ok: boolean; data: any; 
 
     execFile(GWS_BIN, args, { env, timeout: TIMEOUT_MS, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
-        const errMsg = stderr || err.message || "Unknown error";
+        const errMsg = [stderr, stdout, err.message].filter(Boolean).join("\n").trim() || "Unknown error";
         console.error(`[gws] Error running: gws ${args.join(" ")}`, errMsg);
 
         if (errMsg.includes("401") || errMsg.includes("Unauthorized") || errMsg.includes("invalid_credentials")) {
@@ -28,7 +28,7 @@ export async function runGws(args: string[]): Promise<{ ok: boolean; data: any; 
           return;
         }
 
-        resolve({ ok: false, data: null, raw: `Error: ${errMsg.slice(0, 500)}` });
+        resolve({ ok: false, data: null, raw: `Error: ${errMsg.slice(0, 1000)}` });
         return;
       }
 

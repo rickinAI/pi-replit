@@ -35,6 +35,7 @@ import * as twitter from "./src/twitter.js";
 import * as stocks from "./src/stocks.js";
 import * as maps from "./src/maps.js";
 import * as gws from "./src/gws.js";
+import * as youtube from "./src/youtube.js";
 import * as alerts from "./src/alerts.js";
 import * as agentLoader from "./src/agents/loader.js";
 import { runSubAgent } from "./src/agents/orchestrator.js";
@@ -963,6 +964,61 @@ function buildSlidesTools(): ToolDefinition[] {
   ];
 }
 
+function buildYouTubeTools(): ToolDefinition[] {
+  return [
+    {
+      name: "youtube_search",
+      label: "YouTube Search",
+      description: "Search for YouTube videos by keyword. Returns video titles, channels, publish dates, and URLs.",
+      parameters: Type.Object({
+        query: Type.String({ description: "Search keywords (e.g. 'TypeScript tutorial', 'SpaceX launch')" }),
+        maxResults: Type.Optional(Type.Number({ description: "Max videos to return (default 10, max 25)" })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await youtube.youtubeSearch(params.query, params.maxResults || 10);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "youtube_video",
+      label: "YouTube Video Details",
+      description: "Get detailed information about a YouTube video — title, channel, views, likes, comments, duration, and description. Requires the video ID (the part after v= in the URL).",
+      parameters: Type.Object({
+        videoId: Type.String({ description: "YouTube video ID (e.g. 'dQw4w9WgXcQ' from youtube.com/watch?v=dQw4w9WgXcQ)" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await youtube.youtubeVideoDetails(params.videoId);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "youtube_channel",
+      label: "YouTube Channel Info",
+      description: "Get information about a YouTube channel — name, subscriber count, video count, total views, and description. Accepts a channel ID (starts with UC) or channel name to search for.",
+      parameters: Type.Object({
+        channel: Type.String({ description: "Channel ID (e.g. 'UCBcRF18a7Qf58cCRy5xuWwQ') or channel name to search for (e.g. 'MKBHD')" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await youtube.youtubeChannelInfo(params.channel);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "youtube_trending",
+      label: "YouTube Trending",
+      description: "Get currently trending/popular videos on YouTube. Optionally specify a country code.",
+      parameters: Type.Object({
+        regionCode: Type.Optional(Type.String({ description: "ISO 3166-1 alpha-2 country code (default 'US', e.g. 'GB', 'IN', 'JP')" })),
+        maxResults: Type.Optional(Type.Number({ description: "Max videos to return (default 10, max 25)" })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await youtube.youtubeTrending(params.regionCode || "US", params.maxResults || 10);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+  ];
+}
+
 function buildConversationTools(): ToolDefinition[] {
   return [
     {
@@ -1439,6 +1495,7 @@ app.post("/api/session", async (req: Request, res: Response) => {
       ...buildSheetsTools(),
       ...buildDocsTools(),
       ...buildSlidesTools(),
+      ...buildYouTubeTools(),
       ...buildConversationTools(),
       ...buildInterviewTool(sessionId),
     ];

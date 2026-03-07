@@ -6,7 +6,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 
 - **server.ts** — Express server wrapping the pi coding agent SDK
   - Creates agent sessions with Anthropic API
-  - Registers custom tools: knowledge base, email, calendar, weather, web search, tasks, news, Google Drive, Google Sheets, Google Docs, Google Slides
+  - Registers custom tools: knowledge base, email, calendar, weather, web search, tasks, news, Google Drive, Google Sheets, Google Docs, Google Slides, YouTube
   - Streams agent events via SSE (Server-Sent Events)
   - Tracks conversation messages and persists them to PostgreSQL
   - Auto-saves conversations every 5 minutes; saves on session close/expiry/shutdown
@@ -17,7 +17,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Express error-handling middleware for clean JSON error responses
 - **src/db.ts** — Shared PostgreSQL connection pool (single `pg.Pool`, max 10 connections). Creates all 4 tables on init (`conversations`, `tasks`, `app_config`, `oauth_tokens`). All other modules import `getPool()` from here
 - **src/obsidian.ts** — Client for the knowledge base REST API (10s timeout, 2 retries on transient failures, health ping)
-- **src/gmail.ts** — Gmail integration via custom Google OAuth (list/read/search emails). Tokens stored in PostgreSQL (oauth_tokens table). OAuth scopes: gmail.readonly, calendar, drive, spreadsheets, documents, presentations. Also exports `getAccessToken()` for gws CLI
+- **src/gmail.ts** — Gmail integration via custom Google OAuth (list/read/search emails). Tokens stored in PostgreSQL (oauth_tokens table). OAuth scopes: gmail.readonly, calendar, drive, spreadsheets, documents, presentations, youtube.readonly. Also exports `getAccessToken()` for gws CLI and YouTube API
 - **src/calendar.ts** — Google Calendar integration (shares OAuth tokens with Gmail via PostgreSQL)
 - **src/weather.ts** — Weather via Open-Meteo (free, no API key)
 - **src/websearch.ts** — Web search via DuckDuckGo HTML (free, no API key)
@@ -204,6 +204,14 @@ Auth via custom OAuth flow using `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`. To
 - `slides_get` — Read a presentation's content and slide text by ID
 - `slides_create` — Create a new blank presentation
 
+## YouTube
+
+4 custom tools using YouTube Data API v3 (shares OAuth tokens with Gmail):
+- `youtube_search` — Search for YouTube videos by query
+- `youtube_video` — Get video details (title, views, likes, duration, description)
+- `youtube_channel` — Get channel info (subscribers, video count, description)
+- `youtube_trending` — Get trending/popular videos by region
+
 ## Weather
 
 1 custom tool using Open-Meteo API (free, no API key):
@@ -341,6 +349,7 @@ Config-driven specialist agents that RICKIN can delegate complex tasks to. Each 
 - **src/twitter.ts** — X/Twitter reader (fxtwitter for profiles/tweets, syndication API for timelines)
 - **src/stocks.ts** — Stock quotes (Yahoo Finance) and crypto prices (CoinGecko)
 - **src/maps.ts** — Directions (Nominatim + OSRM) and place search (Nominatim)
+- **src/youtube.ts** — YouTube Data API v3 integration (search, video details, channel info, trending)
 - **src/alerts.ts** — Alert & briefing scheduler (background checks, brief generation, SSE broadcast)
 - **src/agents/loader.ts** — Agent config loader with hot-reload
 - **src/agents/orchestrator.ts** — Sub-agent execution engine
