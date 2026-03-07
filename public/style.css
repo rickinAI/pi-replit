@@ -387,6 +387,76 @@ body {
   margin-right: 2px;
 }
 
+.md-table-wrap {
+  position: relative;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 8px -4px;
+  padding: 0 4px;
+  max-width: 100%;
+}
+
+.md-table-copy {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--green-dim);
+  border: 1px solid var(--green-dim);
+  border-radius: 4px;
+  font-family: var(--font);
+  font-size: 10px;
+  padding: 2px 6px;
+  cursor: pointer;
+  z-index: 2;
+  opacity: 0.7;
+  transition: opacity 0.2s, color 0.2s, border-color 0.2s;
+}
+
+.md-table-copy:hover,
+.md-table-copy:active {
+  opacity: 1;
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.md-table-copy.copied {
+  color: var(--green);
+  border-color: var(--green);
+  opacity: 1;
+}
+
+.md-table {
+  border-collapse: collapse;
+  font-size: 11px;
+  white-space: nowrap;
+  margin: 4px 0;
+  width: auto;
+  min-width: 100%;
+}
+
+.md-table th,
+.md-table td {
+  border: 1px solid rgba(255, 176, 0, 0.2);
+  padding: 4px 8px;
+  line-height: 1.4;
+}
+
+.md-table th {
+  font-weight: 700;
+  color: var(--green);
+  background: rgba(255, 176, 0, 0.08);
+  border-bottom: 2px solid rgba(255, 176, 0, 0.3);
+}
+
+.md-table td {
+  color: var(--green-dim);
+}
+
+.md-table tbody tr:hover {
+  background: rgba(255, 176, 0, 0.05);
+}
+
 .msg {
   position: relative;
 }

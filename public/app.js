@@ -1916,6 +1916,49 @@ function renderMarkdown(text) {
     return `\x00IC${idx}\x00`;
   });
 
+  const tablePlaceholders = [];
+  escaped = escaped.replace(/((?:^[ \t]*\|.+\|[ \t]*$\n?){2,})/gm, (block) => {
+    const lines = block.trim().split('\n').filter(l => l.trim());
+    if (lines.length < 2) return block;
+    const isSep = (line) => {
+      const cells = line.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|');
+      return cells.every(c => /^\s*:?-{2,}:?\s*$/.test(c));
+    };
+    let headerEnd = -1;
+    for (let i = 0; i < Math.min(3, lines.length); i++) {
+      if (isSep(lines[i])) { headerEnd = i; break; }
+    }
+    if (headerEnd < 1) return block;
+
+    const parseRow = (line) => line.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map(c => c.trim());
+    const sepCells = parseRow(lines[headerEnd]);
+    const aligns = sepCells.map(c => {
+      if (c.startsWith(':') && c.endsWith(':')) return 'center';
+      if (c.endsWith(':')) return 'right';
+      return 'left';
+    });
+
+    const headerRows = lines.slice(0, headerEnd);
+    const dataRows = lines.slice(headerEnd + 1);
+
+    let html = '<div class="md-table-wrap"><button class="md-table-copy" onclick="copyTable(this)" title="Copy table">⧉ Copy</button><table class="md-table">';
+    html += '<thead>';
+    for (const hr of headerRows) {
+      const cells = parseRow(hr);
+      html += '<tr>' + cells.map((c, i) => `<th style="text-align:${aligns[i] || 'left'}">${c}</th>`).join('') + '</tr>';
+    }
+    html += '</thead><tbody>';
+    for (const dr of dataRows) {
+      const cells = parseRow(dr);
+      html += '<tr>' + cells.map((c, i) => `<td style="text-align:${aligns[i] || 'left'}">${c}</td>`).join('') + '</tr>';
+    }
+    html += '</tbody></table></div>';
+
+    const idx = tablePlaceholders.length;
+    tablePlaceholders.push(html);
+    return `\x00TB${idx}\x00`;
+  });
+
   escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   escaped = escaped.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>');
 
@@ -1938,10 +1981,42 @@ function renderMarkdown(text) {
   escaped = escaped.replace(/^## (.+)$/gm, '<strong class="md-h2">$1</strong>');
   escaped = escaped.replace(/^---$/gm, '<hr class="md-hr">');
 
+  escaped = escaped.replace(/\x00TB(\d+)\x00/g, (_, idx) => tablePlaceholders[parseInt(idx)]);
   escaped = escaped.replace(/\x00CB(\d+)\x00/g, (_, idx) => codeBlocks[parseInt(idx)]);
   escaped = escaped.replace(/\x00IC(\d+)\x00/g, (_, idx) => inlineCodes[parseInt(idx)]);
 
   return escaped;
+}
+
+function copyTable(btn) {
+  const wrap = btn.closest('.md-table-wrap');
+  const table = wrap.querySelector('table');
+  if (!table) return;
+  const rows = [];
+  table.querySelectorAll('tr').forEach(tr => {
+    const cells = [];
+    tr.querySelectorAll('th, td').forEach(cell => cells.push(cell.textContent.trim()));
+    rows.push(cells.join('\t'));
+  });
+  const tsv = rows.join('\n');
+  navigator.clipboard.writeText(tsv).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = '✓ Copied';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1500);
+  }).catch(() => {
+    const ta = document.createElement('textarea');
+    ta.value = tsv;
+    ta.style.cssText = 'position:fixed;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    const orig = btn.textContent;
+    btn.textContent = '✓ Copied';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1500);
+  });
 }
 
 function formatTime(date) {
