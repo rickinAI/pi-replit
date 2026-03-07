@@ -870,6 +870,126 @@ function buildSheetsTools(): ToolDefinition[] {
         return { content: [{ type: "text" as const, text: result }], details: {} };
       },
     },
+    {
+      name: "sheets_add_sheet",
+      label: "Google Sheets Add Sheet",
+      description: "Add a new sheet (tab) to an existing Google Sheets spreadsheet.",
+      parameters: Type.Object({
+        spreadsheetId: Type.String({ description: "The spreadsheet ID" }),
+        title: Type.String({ description: "Title for the new sheet tab" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.sheetsAddSheet(params.spreadsheetId, params.title);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "sheets_delete_sheet",
+      label: "Google Sheets Delete Sheet",
+      description: "Delete a sheet (tab) from a Google Sheets spreadsheet by its numeric sheet ID.",
+      parameters: Type.Object({
+        spreadsheetId: Type.String({ description: "The spreadsheet ID" }),
+        sheetId: Type.Number({ description: "The numeric sheet ID to delete (from sheets_read or sheets_add_sheet)" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.sheetsDeleteSheet(params.spreadsheetId, params.sheetId);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "sheets_clear",
+      label: "Google Sheets Clear",
+      description: "Clear all values from a specified range in a Google Sheets spreadsheet without removing formatting.",
+      parameters: Type.Object({
+        spreadsheetId: Type.String({ description: "The spreadsheet ID" }),
+        range: Type.String({ description: "Cell range to clear, e.g. 'Sheet1!A1:D10'" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.sheetsClear(params.spreadsheetId, params.range);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "sheets_format_cells",
+      label: "Google Sheets Format",
+      description: "Format cells in a Google Sheets spreadsheet. Set bold, background color, text color, and font size for a range of cells.",
+      parameters: Type.Object({
+        spreadsheetId: Type.String({ description: "The spreadsheet ID" }),
+        sheetId: Type.Number({ description: "The numeric sheet ID (0 for the first sheet)" }),
+        startRow: Type.Number({ description: "Start row index (0-based)" }),
+        endRow: Type.Number({ description: "End row index (exclusive, 0-based)" }),
+        startCol: Type.Number({ description: "Start column index (0-based)" }),
+        endCol: Type.Number({ description: "End column index (exclusive, 0-based)" }),
+        bold: Type.Optional(Type.Boolean({ description: "Whether to bold the text" })),
+        bgColor: Type.Optional(Type.Object({ red: Type.Optional(Type.Number()), green: Type.Optional(Type.Number()), blue: Type.Optional(Type.Number()) }, { description: "Background color as RGB values 0-1" })),
+        textColor: Type.Optional(Type.Object({ red: Type.Optional(Type.Number()), green: Type.Optional(Type.Number()), blue: Type.Optional(Type.Number()) }, { description: "Text color as RGB values 0-1" })),
+        fontSize: Type.Optional(Type.Number({ description: "Font size in points" })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.sheetsFormatCells(params.spreadsheetId, params.sheetId, params.startRow, params.endRow, params.startCol, params.endCol, params.bold, params.bgColor, params.textColor, params.fontSize);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "sheets_auto_resize",
+      label: "Google Sheets Auto Resize",
+      description: "Auto-resize columns in a Google Sheets spreadsheet to fit their content.",
+      parameters: Type.Object({
+        spreadsheetId: Type.String({ description: "The spreadsheet ID" }),
+        sheetId: Type.Number({ description: "The numeric sheet ID (0 for the first sheet)" }),
+        startCol: Type.Optional(Type.Number({ description: "Start column index (0-based, optional)" })),
+        endCol: Type.Optional(Type.Number({ description: "End column index (exclusive, 0-based, optional)" })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.sheetsAutoResize(params.spreadsheetId, params.sheetId, params.startCol, params.endCol);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "sheets_merge_cells",
+      label: "Google Sheets Merge",
+      description: "Merge a range of cells in a Google Sheets spreadsheet.",
+      parameters: Type.Object({
+        spreadsheetId: Type.String({ description: "The spreadsheet ID" }),
+        sheetId: Type.Number({ description: "The numeric sheet ID (0 for the first sheet)" }),
+        startRow: Type.Number({ description: "Start row index (0-based)" }),
+        endRow: Type.Number({ description: "End row index (exclusive, 0-based)" }),
+        startCol: Type.Number({ description: "Start column index (0-based)" }),
+        endCol: Type.Number({ description: "End column index (exclusive, 0-based)" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.sheetsMergeCells(params.spreadsheetId, params.sheetId, params.startRow, params.endRow, params.startCol, params.endCol);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "sheets_batch_update",
+      label: "Google Sheets Batch Update",
+      description: "Execute a raw batchUpdate on a Google Sheets spreadsheet. Accepts an array of Sheets API request objects for complex multi-step operations.",
+      parameters: Type.Object({
+        spreadsheetId: Type.String({ description: "The spreadsheet ID" }),
+        requests: Type.Array(Type.Any(), { description: "Array of Sheets API request objects (e.g. addSheet, mergeCells, updateBorders, etc.)" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.sheetsBatchUpdate(params.spreadsheetId, params.requests);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "sheets_sort",
+      label: "Google Sheets Sort",
+      description: "Sort a sheet by a specific column.",
+      parameters: Type.Object({
+        spreadsheetId: Type.String({ description: "The spreadsheet ID" }),
+        sheetId: Type.Number({ description: "The numeric sheet ID (0 for the first sheet)" }),
+        sortCol: Type.Number({ description: "Column index to sort by (0-based)" }),
+        ascending: Type.Optional(Type.Boolean({ description: "Sort ascending (default true). Set false for descending." })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.sheetsSort(params.spreadsheetId, params.sheetId, params.sortCol, params.ascending);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
   ];
 }
 
@@ -919,6 +1039,121 @@ function buildDocsTools(): ToolDefinition[] {
       }),
       async execute(_toolCallId, params) {
         const result = await gws.docsAppend(params.documentId, params.text);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "docs_insert_text",
+      label: "Google Docs Insert Text",
+      description: "Insert text at a specific position in a Google Doc. If no index is provided, inserts at the end of the document.",
+      parameters: Type.Object({
+        documentId: Type.String({ description: "The Google Doc document ID" }),
+        text: Type.String({ description: "Text to insert" }),
+        index: Type.Optional(Type.Number({ description: "Character index to insert at (1-based). Omit to insert at end." })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.docsInsertText(params.documentId, params.text, params.index);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "docs_delete_content",
+      label: "Google Docs Delete Content",
+      description: "Delete a range of content from a Google Doc by start and end character index.",
+      parameters: Type.Object({
+        documentId: Type.String({ description: "The Google Doc document ID" }),
+        startIndex: Type.Number({ description: "Start character index (1-based, inclusive)" }),
+        endIndex: Type.Number({ description: "End character index (exclusive)" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.docsDeleteContent(params.documentId, params.startIndex, params.endIndex);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "docs_insert_table",
+      label: "Google Docs Insert Table",
+      description: "Insert an empty table at the end of a Google Doc.",
+      parameters: Type.Object({
+        documentId: Type.String({ description: "The Google Doc document ID" }),
+        rows: Type.Number({ description: "Number of rows" }),
+        cols: Type.Number({ description: "Number of columns" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.docsInsertTable(params.documentId, params.rows, params.cols);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "docs_format_text",
+      label: "Google Docs Format Text",
+      description: "Apply formatting (bold, italic, font size, color) to a range of text in a Google Doc.",
+      parameters: Type.Object({
+        documentId: Type.String({ description: "The Google Doc document ID" }),
+        startIndex: Type.Number({ description: "Start character index (1-based, inclusive)" }),
+        endIndex: Type.Number({ description: "End character index (exclusive)" }),
+        bold: Type.Optional(Type.Boolean({ description: "Set text bold" })),
+        italic: Type.Optional(Type.Boolean({ description: "Set text italic" })),
+        fontSize: Type.Optional(Type.Number({ description: "Font size in points (e.g. 12, 18, 24)" })),
+        foregroundColor: Type.Optional(Type.String({ description: "Text color as hex string (e.g. '#FF0000' for red)" })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.docsFormatText(params.documentId, params.startIndex, params.endIndex, params.bold, params.italic, params.fontSize, params.foregroundColor);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "docs_insert_image",
+      label: "Google Docs Insert Image",
+      description: "Insert an inline image into a Google Doc from a URL.",
+      parameters: Type.Object({
+        documentId: Type.String({ description: "The Google Doc document ID" }),
+        imageUri: Type.String({ description: "Public URL of the image to insert" }),
+        index: Type.Optional(Type.Number({ description: "Character index to insert at. Omit to insert at end." })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.docsInsertImage(params.documentId, params.imageUri, params.index);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "docs_replace_text",
+      label: "Google Docs Replace Text",
+      description: "Find and replace all occurrences of a text string in a Google Doc.",
+      parameters: Type.Object({
+        documentId: Type.String({ description: "The Google Doc document ID" }),
+        findText: Type.String({ description: "Text to find" }),
+        replaceText: Type.String({ description: "Replacement text" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.docsReplaceText(params.documentId, params.findText, params.replaceText);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "docs_insert_heading",
+      label: "Google Docs Insert Heading",
+      description: "Insert a heading (H1–H6) at the end of a Google Doc.",
+      parameters: Type.Object({
+        documentId: Type.String({ description: "The Google Doc document ID" }),
+        text: Type.String({ description: "Heading text" }),
+        level: Type.Number({ description: "Heading level 1–6 (1 = largest)" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.docsInsertHeading(params.documentId, params.text, params.level);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "docs_batch_update",
+      label: "Google Docs Batch Update",
+      description: "Send a raw batchUpdate request to the Google Docs API. Use for complex multi-step document operations not covered by other tools.",
+      parameters: Type.Object({
+        documentId: Type.String({ description: "The Google Doc document ID" }),
+        requests: Type.Array(Type.Any(), { description: "Array of Google Docs API request objects (e.g. insertText, updateTextStyle, etc.)" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.docsBatchUpdate(params.documentId, params.requests);
         return { content: [{ type: "text" as const, text: result }], details: {} };
       },
     },
@@ -972,6 +1207,129 @@ function buildSlidesTools(): ToolDefinition[] {
       }),
       async execute(_toolCallId, params) {
         const result = await gws.slidesAppend(params.presentationId, params.title, params.body);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "slides_insert_table",
+      label: "Google Slides Insert Table",
+      description: "Insert a table on a slide. Optionally populate cells with data.",
+      parameters: Type.Object({
+        presentationId: Type.String({ description: "The presentation ID" }),
+        slideObjectId: Type.String({ description: "The slide object ID to insert the table on" }),
+        rows: Type.Number({ description: "Number of rows" }),
+        cols: Type.Number({ description: "Number of columns" }),
+        data: Type.Optional(Type.Array(Type.Array(Type.String()), { description: "2D array of cell values, e.g. [[\"Header1\",\"Header2\"],[\"A\",\"B\"]]" })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.slidesInsertTable(params.presentationId, params.slideObjectId, params.rows, params.cols, params.data);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "slides_insert_image",
+      label: "Google Slides Insert Image",
+      description: "Insert an image on a slide from a public URL.",
+      parameters: Type.Object({
+        presentationId: Type.String({ description: "The presentation ID" }),
+        slideObjectId: Type.String({ description: "The slide object ID to insert the image on" }),
+        imageUrl: Type.String({ description: "Public URL of the image to insert" }),
+        width: Type.Optional(Type.Number({ description: "Image width in EMU (default 3000000). 914400 EMU = 1 inch." })),
+        height: Type.Optional(Type.Number({ description: "Image height in EMU (default 3000000)" })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.slidesInsertImage(params.presentationId, params.slideObjectId, params.imageUrl, params.width, params.height);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "slides_insert_shape",
+      label: "Google Slides Insert Shape",
+      description: "Insert a shape (rectangle, ellipse, etc.) with optional text on a slide. Positions and sizes are in EMU (914400 EMU = 1 inch).",
+      parameters: Type.Object({
+        presentationId: Type.String({ description: "The presentation ID" }),
+        slideObjectId: Type.String({ description: "The slide object ID" }),
+        shapeType: Type.String({ description: "Shape type: TEXT_BOX, RECTANGLE, ROUND_RECTANGLE, ELLIPSE, TRIANGLE, ARROW_NORTH, ARROW_EAST, STAR_5, etc." }),
+        text: Type.Optional(Type.String({ description: "Text to insert inside the shape" })),
+        left: Type.Number({ description: "Left position in EMU" }),
+        top: Type.Number({ description: "Top position in EMU" }),
+        width: Type.Number({ description: "Shape width in EMU" }),
+        height: Type.Number({ description: "Shape height in EMU" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.slidesInsertShape(params.presentationId, params.slideObjectId, params.shapeType, params.text, params.left, params.top, params.width, params.height);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "slides_format_text",
+      label: "Google Slides Format Text",
+      description: "Format text within a shape or text box on a slide. Specify character range and styling options.",
+      parameters: Type.Object({
+        presentationId: Type.String({ description: "The presentation ID" }),
+        objectId: Type.String({ description: "The shape/text box object ID containing the text" }),
+        startIndex: Type.Number({ description: "Start character index (0-based)" }),
+        endIndex: Type.Number({ description: "End character index (exclusive)" }),
+        bold: Type.Optional(Type.Boolean({ description: "Set bold" })),
+        italic: Type.Optional(Type.Boolean({ description: "Set italic" })),
+        fontSize: Type.Optional(Type.Number({ description: "Font size in points" })),
+        color: Type.Optional(Type.String({ description: "Text color as hex string, e.g. '#FF0000'" })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.slidesFormatText(params.presentationId, params.objectId, params.startIndex, params.endIndex, params.bold, params.italic, params.fontSize, params.color);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "slides_delete_slide",
+      label: "Google Slides Delete Slide",
+      description: "Delete a slide from a presentation by its slide object ID.",
+      parameters: Type.Object({
+        presentationId: Type.String({ description: "The presentation ID" }),
+        slideObjectId: Type.String({ description: "The object ID of the slide to delete" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.slidesDeleteSlide(params.presentationId, params.slideObjectId);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "slides_duplicate_slide",
+      label: "Google Slides Duplicate Slide",
+      description: "Duplicate an existing slide in a presentation. Returns the new slide's object ID.",
+      parameters: Type.Object({
+        presentationId: Type.String({ description: "The presentation ID" }),
+        slideObjectId: Type.String({ description: "The object ID of the slide to duplicate" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.slidesDuplicateSlide(params.presentationId, params.slideObjectId);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "slides_replace_text",
+      label: "Google Slides Replace Text",
+      description: "Find and replace text across all slides in a presentation.",
+      parameters: Type.Object({
+        presentationId: Type.String({ description: "The presentation ID" }),
+        findText: Type.String({ description: "Text to find" }),
+        replaceText: Type.String({ description: "Replacement text" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.slidesReplaceText(params.presentationId, params.findText, params.replaceText);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "slides_batch_update",
+      label: "Google Slides Batch Update",
+      description: "Execute raw batch update requests against the Google Slides API. For complex multi-step operations not covered by other slides tools. See Google Slides API batchUpdate documentation for request format.",
+      parameters: Type.Object({
+        presentationId: Type.String({ description: "The presentation ID" }),
+        requests: Type.Array(Type.Any(), { description: "Array of Slides API request objects" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.slidesBatchUpdate(params.presentationId, params.requests);
         return { content: [{ type: "text" as const, text: result }], details: {} };
       },
     },

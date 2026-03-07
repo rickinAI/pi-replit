@@ -2304,6 +2304,109 @@ async function sheetsCreate(title) {
 ID: ${s?.spreadsheetId || "unknown"}
 URL: ${s?.spreadsheetUrl || ""}`;
 }
+async function sheetsAddSheet(spreadsheetId, title) {
+  const args = ["sheets", "spreadsheets", "batchUpdate", "--params", JSON.stringify({ spreadsheetId }), "--json", JSON.stringify({
+    requests: [{ addSheet: { properties: { title } } }]
+  })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  const reply = result.data?.replies?.[0]?.addSheet;
+  const sheetId = reply?.properties?.sheetId ?? "unknown";
+  return `Added sheet "${title}" (sheetId: ${sheetId}) to spreadsheet ${spreadsheetId}.`;
+}
+async function sheetsDeleteSheet(spreadsheetId, sheetId) {
+  const args = ["sheets", "spreadsheets", "batchUpdate", "--params", JSON.stringify({ spreadsheetId }), "--json", JSON.stringify({
+    requests: [{ deleteSheet: { sheetId } }]
+  })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Deleted sheet ${sheetId} from spreadsheet ${spreadsheetId}.`;
+}
+async function sheetsClear(spreadsheetId, range) {
+  const args = ["sheets", "spreadsheets", "values", "clear", "--params", JSON.stringify({ spreadsheetId, range }), "--json", JSON.stringify({})];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Cleared range ${range} in spreadsheet ${spreadsheetId}.`;
+}
+async function sheetsFormatCells(spreadsheetId, sheetId, startRow, endRow, startCol, endCol, bold, bgColor, textColor, fontSize) {
+  const cellFormat = {};
+  const fields = [];
+  if (bold !== void 0) {
+    cellFormat.textFormat = { ...cellFormat.textFormat, bold };
+    fields.push("userEnteredFormat.textFormat.bold");
+  }
+  if (fontSize !== void 0) {
+    cellFormat.textFormat = { ...cellFormat.textFormat, fontSize };
+    fields.push("userEnteredFormat.textFormat.fontSize");
+  }
+  if (bgColor) {
+    cellFormat.backgroundColor = bgColor;
+    fields.push("userEnteredFormat.backgroundColor");
+  }
+  if (textColor) {
+    cellFormat.textFormat = { ...cellFormat.textFormat, foregroundColor: textColor };
+    fields.push("userEnteredFormat.textFormat.foregroundColor");
+  }
+  if (fields.length === 0) return "Error: At least one formatting option (bold, fontSize, bgColor, textColor) must be specified.";
+  const args = ["sheets", "spreadsheets", "batchUpdate", "--params", JSON.stringify({ spreadsheetId }), "--json", JSON.stringify({
+    requests: [{
+      repeatCell: {
+        range: { sheetId, startRowIndex: startRow, endRowIndex: endRow, startColumnIndex: startCol, endColumnIndex: endCol },
+        cell: { userEnteredFormat: cellFormat },
+        fields: fields.join(",")
+      }
+    }]
+  })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Formatted cells [${startRow}:${endRow}, ${startCol}:${endCol}] in sheet ${sheetId}.`;
+}
+async function sheetsAutoResize(spreadsheetId, sheetId, startCol, endCol) {
+  const dimension = { sheetId, dimension: "COLUMNS" };
+  if (startCol !== void 0) dimension.startIndex = startCol;
+  if (endCol !== void 0) dimension.endIndex = endCol;
+  const args = ["sheets", "spreadsheets", "batchUpdate", "--params", JSON.stringify({ spreadsheetId }), "--json", JSON.stringify({
+    requests: [{ autoResizeDimensions: { dimensions: dimension } }]
+  })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Auto-resized columns in sheet ${sheetId}.`;
+}
+async function sheetsMergeCells(spreadsheetId, sheetId, startRow, endRow, startCol, endCol) {
+  const args = ["sheets", "spreadsheets", "batchUpdate", "--params", JSON.stringify({ spreadsheetId }), "--json", JSON.stringify({
+    requests: [{
+      mergeCells: {
+        range: { sheetId, startRowIndex: startRow, endRowIndex: endRow, startColumnIndex: startCol, endColumnIndex: endCol },
+        mergeType: "MERGE_ALL"
+      }
+    }]
+  })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Merged cells [${startRow}:${endRow}, ${startCol}:${endCol}] in sheet ${sheetId}.`;
+}
+async function sheetsBatchUpdate(spreadsheetId, requests) {
+  const args = ["sheets", "spreadsheets", "batchUpdate", "--params", JSON.stringify({ spreadsheetId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  const replyCount = result.data?.replies?.length ?? 0;
+  return `Batch update completed: ${requests.length} request(s) sent, ${replyCount} reply(ies) received.
+
+${result.raw}`;
+}
+async function sheetsSort(spreadsheetId, sheetId, sortCol, ascending) {
+  const args = ["sheets", "spreadsheets", "batchUpdate", "--params", JSON.stringify({ spreadsheetId }), "--json", JSON.stringify({
+    requests: [{
+      sortRange: {
+        range: { sheetId },
+        sortSpecs: [{ dimensionIndex: sortCol, sortOrder: ascending === false ? "DESCENDING" : "ASCENDING" }]
+      }
+    }]
+  })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Sorted sheet ${sheetId} by column ${sortCol} (${ascending === false ? "descending" : "ascending"}).`;
+}
 async function docsList() {
   return driveList("mimeType='application/vnd.google-apps.document'");
 }
@@ -2350,6 +2453,105 @@ async function docsAppend(documentId, text) {
   const result = await runGws(args);
   if (!result.ok) return result.raw;
   return `Appended text to document ${documentId}.`;
+}
+async function docsInsertText(documentId, text, index) {
+  const requests = [];
+  if (index !== void 0) {
+    requests.push({ insertText: { location: { index }, text } });
+  } else {
+    requests.push({ insertText: { endOfSegmentLocation: {}, text } });
+  }
+  const args = ["docs", "documents", "batchUpdate", "--params", JSON.stringify({ documentId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Inserted text into document ${documentId}${index !== void 0 ? ` at index ${index}` : " at end"}.`;
+}
+async function docsDeleteContent(documentId, startIndex, endIndex) {
+  const requests = [{ deleteContentRange: { range: { startIndex, endIndex } } }];
+  const args = ["docs", "documents", "batchUpdate", "--params", JSON.stringify({ documentId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Deleted content from index ${startIndex} to ${endIndex} in document ${documentId}.`;
+}
+async function docsInsertTable(documentId, rows, cols) {
+  const requests = [{ insertTable: { rows, columns: cols, endOfSegmentLocation: {} } }];
+  const args = ["docs", "documents", "batchUpdate", "--params", JSON.stringify({ documentId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Inserted ${rows}\xD7${cols} table into document ${documentId}.`;
+}
+async function docsFormatText(documentId, startIndex, endIndex, bold, italic, fontSize, foregroundColor) {
+  const textStyle = {};
+  const fields = [];
+  if (bold !== void 0) {
+    textStyle.bold = bold;
+    fields.push("bold");
+  }
+  if (italic !== void 0) {
+    textStyle.italic = italic;
+    fields.push("italic");
+  }
+  if (fontSize !== void 0) {
+    textStyle.fontSize = { magnitude: fontSize, unit: "PT" };
+    fields.push("fontSize");
+  }
+  if (foregroundColor) {
+    const r = parseInt(foregroundColor.slice(1, 3), 16) / 255;
+    const g = parseInt(foregroundColor.slice(3, 5), 16) / 255;
+    const b = parseInt(foregroundColor.slice(5, 7), 16) / 255;
+    textStyle.foregroundColor = { color: { rgbColor: { red: r, green: g, blue: b } } };
+    fields.push("foregroundColor");
+  }
+  if (fields.length === 0) return "Error: At least one formatting option (bold, italic, fontSize, foregroundColor) must be specified.";
+  const requests = [{ updateTextStyle: { range: { startIndex, endIndex }, textStyle, fields: fields.join(",") } }];
+  const args = ["docs", "documents", "batchUpdate", "--params", JSON.stringify({ documentId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Formatted text (index ${startIndex}\u2013${endIndex}) in document ${documentId}.`;
+}
+async function docsInsertImage(documentId, imageUri, index) {
+  const request = { insertInlineImage: { uri: imageUri } };
+  if (index !== void 0) {
+    request.insertInlineImage.location = { index };
+  } else {
+    request.insertInlineImage.endOfSegmentLocation = {};
+  }
+  const args = ["docs", "documents", "batchUpdate", "--params", JSON.stringify({ documentId }), "--json", JSON.stringify({ requests: [request] })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Inserted image into document ${documentId}.`;
+}
+async function docsReplaceText(documentId, findText, replaceText) {
+  const requests = [{ replaceAllText: { containsText: { text: findText, matchCase: true }, replaceText } }];
+  const args = ["docs", "documents", "batchUpdate", "--params", JSON.stringify({ documentId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  const count = result.data?.replies?.[0]?.replaceAllText?.occurrencesChanged || 0;
+  return `Replaced ${count} occurrence(s) of "${findText}" with "${replaceText}" in document ${documentId}.`;
+}
+async function docsInsertHeading(documentId, text, level) {
+  const headingStyle = `HEADING_${Math.min(Math.max(level, 1), 6)}`;
+  const getArgs = ["docs", "documents", "get", "--params", JSON.stringify({ documentId })];
+  const getResult = await runGws(getArgs);
+  if (!getResult.ok) return getResult.raw;
+  const body = getResult.data?.body?.content;
+  const endIndex = body && body.length > 0 ? (body[body.length - 1]?.endIndex || 1) - 1 : 1;
+  const insertAt = Math.max(endIndex, 1);
+  const requests = [
+    { insertText: { location: { index: insertAt }, text: text + "\n" } },
+    { updateParagraphStyle: { range: { startIndex: insertAt, endIndex: insertAt + text.length + 1 }, paragraphStyle: { namedStyleType: headingStyle }, fields: "namedStyleType" } }
+  ];
+  const args = ["docs", "documents", "batchUpdate", "--params", JSON.stringify({ documentId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Inserted heading (H${level}) "${text}" into document ${documentId}.`;
+}
+async function docsBatchUpdate(documentId, requests) {
+  const args = ["docs", "documents", "batchUpdate", "--params", JSON.stringify({ documentId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Batch update applied ${requests.length} request(s) to document ${documentId}.
+${JSON.stringify(result.data?.replies || [], null, 2)}`;
 }
 async function slidesList() {
   return driveList("mimeType='application/vnd.google-apps.presentation'");
@@ -2437,6 +2639,191 @@ async function slidesAppend(presentationId, title, body) {
     if (!textResult.ok) return `Slide created but text insertion failed: ${textResult.raw}`;
   }
   return `Added slide "${title}" to presentation ${presentationId}.`;
+}
+async function slidesInsertTable(presentationId, slideObjectId, rows, cols, data) {
+  const tableId = `table_${Date.now()}`;
+  const requests = [
+    {
+      createTable: {
+        objectId: tableId,
+        elementProperties: {
+          pageObjectId: slideObjectId,
+          size: {
+            width: { magnitude: 72e5, unit: "EMU" },
+            height: { magnitude: rows * 4e5, unit: "EMU" }
+          },
+          transform: {
+            scaleX: 1,
+            scaleY: 1,
+            translateX: 4e5,
+            translateY: 15e5,
+            unit: "EMU"
+          }
+        },
+        rows,
+        columns: cols
+      }
+    }
+  ];
+  if (data) {
+    for (let r = 0; r < Math.min(data.length, rows); r++) {
+      for (let c = 0; c < Math.min(data[r].length, cols); c++) {
+        if (data[r][c]) {
+          requests.push({
+            insertText: {
+              objectId: tableId,
+              cellLocation: { rowIndex: r, columnIndex: c },
+              text: data[r][c],
+              insertionIndex: 0
+            }
+          });
+        }
+      }
+    }
+  }
+  const args = ["slides", "presentations", "batchUpdate", "--params", JSON.stringify({ presentationId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Inserted ${rows}\xD7${cols} table on slide ${slideObjectId}.`;
+}
+async function slidesInsertImage(presentationId, slideObjectId, imageUrl, width, height) {
+  const requests = [
+    {
+      createImage: {
+        url: imageUrl,
+        elementProperties: {
+          pageObjectId: slideObjectId,
+          size: {
+            width: { magnitude: width || 3e6, unit: "EMU" },
+            height: { magnitude: height || 3e6, unit: "EMU" }
+          },
+          transform: {
+            scaleX: 1,
+            scaleY: 1,
+            translateX: 2e6,
+            translateY: 15e5,
+            unit: "EMU"
+          }
+        }
+      }
+    }
+  ];
+  const args = ["slides", "presentations", "batchUpdate", "--params", JSON.stringify({ presentationId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Inserted image on slide ${slideObjectId}.`;
+}
+async function slidesInsertShape(presentationId, slideObjectId, shapeType, text, left, top, width, height) {
+  const shapeId = `shape_${Date.now()}`;
+  const requests = [
+    {
+      createShape: {
+        objectId: shapeId,
+        shapeType,
+        elementProperties: {
+          pageObjectId: slideObjectId,
+          size: {
+            width: { magnitude: width, unit: "EMU" },
+            height: { magnitude: height, unit: "EMU" }
+          },
+          transform: {
+            scaleX: 1,
+            scaleY: 1,
+            translateX: left,
+            translateY: top,
+            unit: "EMU"
+          }
+        }
+      }
+    }
+  ];
+  if (text) {
+    requests.push({
+      insertText: {
+        objectId: shapeId,
+        text,
+        insertionIndex: 0
+      }
+    });
+  }
+  const args = ["slides", "presentations", "batchUpdate", "--params", JSON.stringify({ presentationId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Inserted ${shapeType} shape on slide ${slideObjectId}. Shape ID: ${shapeId}`;
+}
+async function slidesFormatText(presentationId, objectId, startIndex, endIndex, bold, italic, fontSize, color) {
+  const style = {};
+  const fields = [];
+  if (bold !== void 0) {
+    style.bold = bold;
+    fields.push("bold");
+  }
+  if (italic !== void 0) {
+    style.italic = italic;
+    fields.push("italic");
+  }
+  if (fontSize !== void 0) {
+    style.fontSize = { magnitude: fontSize, unit: "PT" };
+    fields.push("fontSize");
+  }
+  if (color) {
+    const r = parseInt(color.slice(1, 3), 16) / 255;
+    const g = parseInt(color.slice(3, 5), 16) / 255;
+    const b = parseInt(color.slice(5, 7), 16) / 255;
+    style.foregroundColor = { opaqueColor: { rgbColor: { red: r, green: g, blue: b } } };
+    fields.push("foregroundColor");
+  }
+  if (fields.length === 0) return "Error: At least one formatting option (bold, italic, fontSize, color) must be specified.";
+  const requests = [
+    {
+      updateTextStyle: {
+        objectId,
+        textRange: { type: "FIXED_RANGE", startIndex, endIndex },
+        style,
+        fields: fields.join(",")
+      }
+    }
+  ];
+  const args = ["slides", "presentations", "batchUpdate", "--params", JSON.stringify({ presentationId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Formatted text in object ${objectId} (chars ${startIndex}-${endIndex}).`;
+}
+async function slidesDeleteSlide(presentationId, slideObjectId) {
+  const requests = [{ deleteObject: { objectId: slideObjectId } }];
+  const args = ["slides", "presentations", "batchUpdate", "--params", JSON.stringify({ presentationId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Deleted slide ${slideObjectId} from presentation ${presentationId}.`;
+}
+async function slidesDuplicateSlide(presentationId, slideObjectId) {
+  const requests = [{ duplicateObject: { objectId: slideObjectId } }];
+  const args = ["slides", "presentations", "batchUpdate", "--params", JSON.stringify({ presentationId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  const newId = result.data?.replies?.[0]?.duplicateObject?.objectId || "unknown";
+  return `Duplicated slide ${slideObjectId}. New slide ID: ${newId}`;
+}
+async function slidesReplaceText(presentationId, findText, replaceText) {
+  const requests = [
+    {
+      replaceAllText: {
+        containsText: { text: findText, matchCase: true },
+        replaceText
+      }
+    }
+  ];
+  const args = ["slides", "presentations", "batchUpdate", "--params", JSON.stringify({ presentationId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  const count = result.data?.replies?.[0]?.replaceAllText?.occurrencesChanged || 0;
+  return `Replaced ${count} occurrence(s) of "${findText}" with "${replaceText}".`;
+}
+async function slidesBatchUpdate(presentationId, requests) {
+  const args = ["slides", "presentations", "batchUpdate", "--params", JSON.stringify({ presentationId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Batch update completed (${requests.length} request(s)). Response: ${JSON.stringify(result.data?.replies || []).slice(0, 2e3)}`;
 }
 
 // src/youtube.ts
@@ -4190,6 +4577,126 @@ function buildSheetsTools() {
         const result = await sheetsCreate(params.title);
         return { content: [{ type: "text", text: result }], details: {} };
       }
+    },
+    {
+      name: "sheets_add_sheet",
+      label: "Google Sheets Add Sheet",
+      description: "Add a new sheet (tab) to an existing Google Sheets spreadsheet.",
+      parameters: Type.Object({
+        spreadsheetId: Type.String({ description: "The spreadsheet ID" }),
+        title: Type.String({ description: "Title for the new sheet tab" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await sheetsAddSheet(params.spreadsheetId, params.title);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "sheets_delete_sheet",
+      label: "Google Sheets Delete Sheet",
+      description: "Delete a sheet (tab) from a Google Sheets spreadsheet by its numeric sheet ID.",
+      parameters: Type.Object({
+        spreadsheetId: Type.String({ description: "The spreadsheet ID" }),
+        sheetId: Type.Number({ description: "The numeric sheet ID to delete (from sheets_read or sheets_add_sheet)" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await sheetsDeleteSheet(params.spreadsheetId, params.sheetId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "sheets_clear",
+      label: "Google Sheets Clear",
+      description: "Clear all values from a specified range in a Google Sheets spreadsheet without removing formatting.",
+      parameters: Type.Object({
+        spreadsheetId: Type.String({ description: "The spreadsheet ID" }),
+        range: Type.String({ description: "Cell range to clear, e.g. 'Sheet1!A1:D10'" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await sheetsClear(params.spreadsheetId, params.range);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "sheets_format_cells",
+      label: "Google Sheets Format",
+      description: "Format cells in a Google Sheets spreadsheet. Set bold, background color, text color, and font size for a range of cells.",
+      parameters: Type.Object({
+        spreadsheetId: Type.String({ description: "The spreadsheet ID" }),
+        sheetId: Type.Number({ description: "The numeric sheet ID (0 for the first sheet)" }),
+        startRow: Type.Number({ description: "Start row index (0-based)" }),
+        endRow: Type.Number({ description: "End row index (exclusive, 0-based)" }),
+        startCol: Type.Number({ description: "Start column index (0-based)" }),
+        endCol: Type.Number({ description: "End column index (exclusive, 0-based)" }),
+        bold: Type.Optional(Type.Boolean({ description: "Whether to bold the text" })),
+        bgColor: Type.Optional(Type.Object({ red: Type.Optional(Type.Number()), green: Type.Optional(Type.Number()), blue: Type.Optional(Type.Number()) }, { description: "Background color as RGB values 0-1" })),
+        textColor: Type.Optional(Type.Object({ red: Type.Optional(Type.Number()), green: Type.Optional(Type.Number()), blue: Type.Optional(Type.Number()) }, { description: "Text color as RGB values 0-1" })),
+        fontSize: Type.Optional(Type.Number({ description: "Font size in points" }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = await sheetsFormatCells(params.spreadsheetId, params.sheetId, params.startRow, params.endRow, params.startCol, params.endCol, params.bold, params.bgColor, params.textColor, params.fontSize);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "sheets_auto_resize",
+      label: "Google Sheets Auto Resize",
+      description: "Auto-resize columns in a Google Sheets spreadsheet to fit their content.",
+      parameters: Type.Object({
+        spreadsheetId: Type.String({ description: "The spreadsheet ID" }),
+        sheetId: Type.Number({ description: "The numeric sheet ID (0 for the first sheet)" }),
+        startCol: Type.Optional(Type.Number({ description: "Start column index (0-based, optional)" })),
+        endCol: Type.Optional(Type.Number({ description: "End column index (exclusive, 0-based, optional)" }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = await sheetsAutoResize(params.spreadsheetId, params.sheetId, params.startCol, params.endCol);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "sheets_merge_cells",
+      label: "Google Sheets Merge",
+      description: "Merge a range of cells in a Google Sheets spreadsheet.",
+      parameters: Type.Object({
+        spreadsheetId: Type.String({ description: "The spreadsheet ID" }),
+        sheetId: Type.Number({ description: "The numeric sheet ID (0 for the first sheet)" }),
+        startRow: Type.Number({ description: "Start row index (0-based)" }),
+        endRow: Type.Number({ description: "End row index (exclusive, 0-based)" }),
+        startCol: Type.Number({ description: "Start column index (0-based)" }),
+        endCol: Type.Number({ description: "End column index (exclusive, 0-based)" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await sheetsMergeCells(params.spreadsheetId, params.sheetId, params.startRow, params.endRow, params.startCol, params.endCol);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "sheets_batch_update",
+      label: "Google Sheets Batch Update",
+      description: "Execute a raw batchUpdate on a Google Sheets spreadsheet. Accepts an array of Sheets API request objects for complex multi-step operations.",
+      parameters: Type.Object({
+        spreadsheetId: Type.String({ description: "The spreadsheet ID" }),
+        requests: Type.Array(Type.Any(), { description: "Array of Sheets API request objects (e.g. addSheet, mergeCells, updateBorders, etc.)" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await sheetsBatchUpdate(params.spreadsheetId, params.requests);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "sheets_sort",
+      label: "Google Sheets Sort",
+      description: "Sort a sheet by a specific column.",
+      parameters: Type.Object({
+        spreadsheetId: Type.String({ description: "The spreadsheet ID" }),
+        sheetId: Type.Number({ description: "The numeric sheet ID (0 for the first sheet)" }),
+        sortCol: Type.Number({ description: "Column index to sort by (0-based)" }),
+        ascending: Type.Optional(Type.Boolean({ description: "Sort ascending (default true). Set false for descending." }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = await sheetsSort(params.spreadsheetId, params.sheetId, params.sortCol, params.ascending);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
     }
   ];
 }
@@ -4239,6 +4746,121 @@ function buildDocsTools() {
       }),
       async execute(_toolCallId, params) {
         const result = await docsAppend(params.documentId, params.text);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "docs_insert_text",
+      label: "Google Docs Insert Text",
+      description: "Insert text at a specific position in a Google Doc. If no index is provided, inserts at the end of the document.",
+      parameters: Type.Object({
+        documentId: Type.String({ description: "The Google Doc document ID" }),
+        text: Type.String({ description: "Text to insert" }),
+        index: Type.Optional(Type.Number({ description: "Character index to insert at (1-based). Omit to insert at end." }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = await docsInsertText(params.documentId, params.text, params.index);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "docs_delete_content",
+      label: "Google Docs Delete Content",
+      description: "Delete a range of content from a Google Doc by start and end character index.",
+      parameters: Type.Object({
+        documentId: Type.String({ description: "The Google Doc document ID" }),
+        startIndex: Type.Number({ description: "Start character index (1-based, inclusive)" }),
+        endIndex: Type.Number({ description: "End character index (exclusive)" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await docsDeleteContent(params.documentId, params.startIndex, params.endIndex);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "docs_insert_table",
+      label: "Google Docs Insert Table",
+      description: "Insert an empty table at the end of a Google Doc.",
+      parameters: Type.Object({
+        documentId: Type.String({ description: "The Google Doc document ID" }),
+        rows: Type.Number({ description: "Number of rows" }),
+        cols: Type.Number({ description: "Number of columns" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await docsInsertTable(params.documentId, params.rows, params.cols);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "docs_format_text",
+      label: "Google Docs Format Text",
+      description: "Apply formatting (bold, italic, font size, color) to a range of text in a Google Doc.",
+      parameters: Type.Object({
+        documentId: Type.String({ description: "The Google Doc document ID" }),
+        startIndex: Type.Number({ description: "Start character index (1-based, inclusive)" }),
+        endIndex: Type.Number({ description: "End character index (exclusive)" }),
+        bold: Type.Optional(Type.Boolean({ description: "Set text bold" })),
+        italic: Type.Optional(Type.Boolean({ description: "Set text italic" })),
+        fontSize: Type.Optional(Type.Number({ description: "Font size in points (e.g. 12, 18, 24)" })),
+        foregroundColor: Type.Optional(Type.String({ description: "Text color as hex string (e.g. '#FF0000' for red)" }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = await docsFormatText(params.documentId, params.startIndex, params.endIndex, params.bold, params.italic, params.fontSize, params.foregroundColor);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "docs_insert_image",
+      label: "Google Docs Insert Image",
+      description: "Insert an inline image into a Google Doc from a URL.",
+      parameters: Type.Object({
+        documentId: Type.String({ description: "The Google Doc document ID" }),
+        imageUri: Type.String({ description: "Public URL of the image to insert" }),
+        index: Type.Optional(Type.Number({ description: "Character index to insert at. Omit to insert at end." }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = await docsInsertImage(params.documentId, params.imageUri, params.index);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "docs_replace_text",
+      label: "Google Docs Replace Text",
+      description: "Find and replace all occurrences of a text string in a Google Doc.",
+      parameters: Type.Object({
+        documentId: Type.String({ description: "The Google Doc document ID" }),
+        findText: Type.String({ description: "Text to find" }),
+        replaceText: Type.String({ description: "Replacement text" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await docsReplaceText(params.documentId, params.findText, params.replaceText);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "docs_insert_heading",
+      label: "Google Docs Insert Heading",
+      description: "Insert a heading (H1\u2013H6) at the end of a Google Doc.",
+      parameters: Type.Object({
+        documentId: Type.String({ description: "The Google Doc document ID" }),
+        text: Type.String({ description: "Heading text" }),
+        level: Type.Number({ description: "Heading level 1\u20136 (1 = largest)" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await docsInsertHeading(params.documentId, params.text, params.level);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "docs_batch_update",
+      label: "Google Docs Batch Update",
+      description: "Send a raw batchUpdate request to the Google Docs API. Use for complex multi-step document operations not covered by other tools.",
+      parameters: Type.Object({
+        documentId: Type.String({ description: "The Google Doc document ID" }),
+        requests: Type.Array(Type.Any(), { description: "Array of Google Docs API request objects (e.g. insertText, updateTextStyle, etc.)" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await docsBatchUpdate(params.documentId, params.requests);
         return { content: [{ type: "text", text: result }], details: {} };
       }
     }
@@ -4291,6 +4913,129 @@ function buildSlidesTools() {
       }),
       async execute(_toolCallId, params) {
         const result = await slidesAppend(params.presentationId, params.title, params.body);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "slides_insert_table",
+      label: "Google Slides Insert Table",
+      description: "Insert a table on a slide. Optionally populate cells with data.",
+      parameters: Type.Object({
+        presentationId: Type.String({ description: "The presentation ID" }),
+        slideObjectId: Type.String({ description: "The slide object ID to insert the table on" }),
+        rows: Type.Number({ description: "Number of rows" }),
+        cols: Type.Number({ description: "Number of columns" }),
+        data: Type.Optional(Type.Array(Type.Array(Type.String()), { description: '2D array of cell values, e.g. [["Header1","Header2"],["A","B"]]' }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = await slidesInsertTable(params.presentationId, params.slideObjectId, params.rows, params.cols, params.data);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "slides_insert_image",
+      label: "Google Slides Insert Image",
+      description: "Insert an image on a slide from a public URL.",
+      parameters: Type.Object({
+        presentationId: Type.String({ description: "The presentation ID" }),
+        slideObjectId: Type.String({ description: "The slide object ID to insert the image on" }),
+        imageUrl: Type.String({ description: "Public URL of the image to insert" }),
+        width: Type.Optional(Type.Number({ description: "Image width in EMU (default 3000000). 914400 EMU = 1 inch." })),
+        height: Type.Optional(Type.Number({ description: "Image height in EMU (default 3000000)" }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = await slidesInsertImage(params.presentationId, params.slideObjectId, params.imageUrl, params.width, params.height);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "slides_insert_shape",
+      label: "Google Slides Insert Shape",
+      description: "Insert a shape (rectangle, ellipse, etc.) with optional text on a slide. Positions and sizes are in EMU (914400 EMU = 1 inch).",
+      parameters: Type.Object({
+        presentationId: Type.String({ description: "The presentation ID" }),
+        slideObjectId: Type.String({ description: "The slide object ID" }),
+        shapeType: Type.String({ description: "Shape type: TEXT_BOX, RECTANGLE, ROUND_RECTANGLE, ELLIPSE, TRIANGLE, ARROW_NORTH, ARROW_EAST, STAR_5, etc." }),
+        text: Type.Optional(Type.String({ description: "Text to insert inside the shape" })),
+        left: Type.Number({ description: "Left position in EMU" }),
+        top: Type.Number({ description: "Top position in EMU" }),
+        width: Type.Number({ description: "Shape width in EMU" }),
+        height: Type.Number({ description: "Shape height in EMU" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await slidesInsertShape(params.presentationId, params.slideObjectId, params.shapeType, params.text, params.left, params.top, params.width, params.height);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "slides_format_text",
+      label: "Google Slides Format Text",
+      description: "Format text within a shape or text box on a slide. Specify character range and styling options.",
+      parameters: Type.Object({
+        presentationId: Type.String({ description: "The presentation ID" }),
+        objectId: Type.String({ description: "The shape/text box object ID containing the text" }),
+        startIndex: Type.Number({ description: "Start character index (0-based)" }),
+        endIndex: Type.Number({ description: "End character index (exclusive)" }),
+        bold: Type.Optional(Type.Boolean({ description: "Set bold" })),
+        italic: Type.Optional(Type.Boolean({ description: "Set italic" })),
+        fontSize: Type.Optional(Type.Number({ description: "Font size in points" })),
+        color: Type.Optional(Type.String({ description: "Text color as hex string, e.g. '#FF0000'" }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = await slidesFormatText(params.presentationId, params.objectId, params.startIndex, params.endIndex, params.bold, params.italic, params.fontSize, params.color);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "slides_delete_slide",
+      label: "Google Slides Delete Slide",
+      description: "Delete a slide from a presentation by its slide object ID.",
+      parameters: Type.Object({
+        presentationId: Type.String({ description: "The presentation ID" }),
+        slideObjectId: Type.String({ description: "The object ID of the slide to delete" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await slidesDeleteSlide(params.presentationId, params.slideObjectId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "slides_duplicate_slide",
+      label: "Google Slides Duplicate Slide",
+      description: "Duplicate an existing slide in a presentation. Returns the new slide's object ID.",
+      parameters: Type.Object({
+        presentationId: Type.String({ description: "The presentation ID" }),
+        slideObjectId: Type.String({ description: "The object ID of the slide to duplicate" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await slidesDuplicateSlide(params.presentationId, params.slideObjectId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "slides_replace_text",
+      label: "Google Slides Replace Text",
+      description: "Find and replace text across all slides in a presentation.",
+      parameters: Type.Object({
+        presentationId: Type.String({ description: "The presentation ID" }),
+        findText: Type.String({ description: "Text to find" }),
+        replaceText: Type.String({ description: "Replacement text" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await slidesReplaceText(params.presentationId, params.findText, params.replaceText);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "slides_batch_update",
+      label: "Google Slides Batch Update",
+      description: "Execute raw batch update requests against the Google Slides API. For complex multi-step operations not covered by other slides tools. See Google Slides API batchUpdate documentation for request format.",
+      parameters: Type.Object({
+        presentationId: Type.String({ description: "The presentation ID" }),
+        requests: Type.Array(Type.Any(), { description: "Array of Slides API request objects" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await slidesBatchUpdate(params.presentationId, params.requests);
         return { content: [{ type: "text", text: result }], details: {} };
       }
     }

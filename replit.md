@@ -6,7 +6,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 
 - **server.ts** — Express server wrapping the pi coding agent SDK
   - Creates agent sessions with Anthropic API
-  - Registers custom tools (58 total): knowledge base, email, calendar, weather, web search, tasks, news, Google Drive, Google Sheets, Google Docs, Google Slides, YouTube
+  - Registers custom tools (82 total): knowledge base, email, calendar, weather, web search, tasks, news, Google Drive, Google Sheets (13 tools), Google Docs (12 tools), Google Slides (12 tools), YouTube
   - Streams agent events via SSE (Server-Sent Events)
   - Tracks conversation messages and persists them to PostgreSQL
   - Auto-saves conversations every 5 minutes; saves on session close/expiry/shutdown
@@ -36,7 +36,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Retry button on errors (resends last message without retyping)
   - Emoji-labeled tool indicator (🔍🧠📝📅📧 etc.) with elapsed timer after 5s
   - Confirmation modal before starting new session
-- **src/gws.ts** — Google Workspace CLI wrapper. Calls the `gws` binary with the current OAuth access token via `GOOGLE_WORKSPACE_CLI_TOKEN`. Provides Drive (list, get, create folder, move, rename, delete), Sheets (list, read, append, update, create), Docs (list, get, create, append), and Slides (list, get, create, append) functions
+- **src/gws.ts** — Google Workspace CLI wrapper. Calls the `gws` binary with the current OAuth access token via `GOOGLE_WORKSPACE_CLI_TOKEN`. Provides Drive (6 tools), Sheets (13 tools: CRUD + formatting, sorting, merging, tabs, auto-resize, batch), Docs (12 tools: CRUD + insert text/heading/table/image, format, find-replace, delete content, batch), Slides (12 tools: CRUD + insert table/image/shape, format text, duplicate/delete slide, find-replace, batch)
 - **bin/gws** — Google Workspace CLI binary (v0.8.0, x86_64 Linux). Not an officially supported Google product. Pre-v1.0
 - **dist/** — esbuild output (compiled server)
 - **public/manifest.json** — PWA web app manifest (name, icons, display mode)
@@ -182,28 +182,52 @@ Auth via custom OAuth flow using `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`. To
 
 ## Google Sheets Integration
 
-5 custom tools using the `gws` CLI binary (shares OAuth tokens with Gmail):
+13 custom tools using the `gws` CLI binary (shares OAuth tokens with Gmail):
 - `sheets_list` — List all spreadsheets in Drive
 - `sheets_read` — Read cell ranges from a spreadsheet
 - `sheets_append` — Append rows to a spreadsheet
 - `sheets_update` — Update specific cells in a spreadsheet
 - `sheets_create` — Create a new spreadsheet
+- `sheets_add_sheet` — Add a new sheet tab
+- `sheets_delete_sheet` — Delete a sheet tab by ID
+- `sheets_clear` — Clear values from a cell range
+- `sheets_format_cells` — Format cells (bold, colors, font size)
+- `sheets_auto_resize` — Auto-resize columns to fit content
+- `sheets_merge_cells` — Merge a range of cells
+- `sheets_sort` — Sort sheet data by column
+- `sheets_batch_update` — Raw batchUpdate passthrough for complex operations
 
 ## Google Docs
 
-4 custom tools using the `gws` CLI binary (shares OAuth tokens with Gmail):
+12 custom tools using the `gws` CLI binary (shares OAuth tokens with Gmail):
 - `docs_list` — List all Google Docs in Drive
 - `docs_get` — Read a document's full content by ID
 - `docs_create` — Create a new blank document
 - `docs_append` — Append text to an existing document
+- `docs_insert_text` — Insert text at a specific position
+- `docs_delete_content` — Delete a range of content by index
+- `docs_insert_table` — Insert an empty table (rows × cols)
+- `docs_format_text` — Format text (bold, italic, font size, color)
+- `docs_insert_image` — Insert an inline image from URL
+- `docs_replace_text` — Find and replace text across the document
+- `docs_insert_heading` — Insert a heading (H1–H6) with text
+- `docs_batch_update` — Raw batchUpdate passthrough for complex operations
 
 ## Google Slides
 
-4 custom tools using the `gws` CLI binary (shares OAuth tokens with Gmail):
+12 custom tools using the `gws` CLI binary (shares OAuth tokens with Gmail):
 - `slides_list` — List all presentations in Drive
 - `slides_get` — Read a presentation's content and slide text by ID
 - `slides_create` — Create a new blank presentation
 - `slides_append` — Add a new slide with title and body text to an existing presentation
+- `slides_insert_table` — Insert a table with data on a slide
+- `slides_insert_image` — Insert an image from URL on a slide
+- `slides_insert_shape` — Add a shape with text (rectangle, circle, arrow, etc.)
+- `slides_format_text` — Format text on a slide (bold, italic, font size, color)
+- `slides_delete_slide` — Delete a slide by ID
+- `slides_duplicate_slide` — Duplicate an existing slide
+- `slides_replace_text` — Find and replace text across all slides
+- `slides_batch_update` — Raw batchUpdate passthrough for complex operations
 
 ## YouTube
 

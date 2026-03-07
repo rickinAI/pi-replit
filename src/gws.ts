@@ -197,6 +197,127 @@ export async function sheetsCreate(title: string): Promise<string> {
   return `Created spreadsheet: "${s?.properties?.title || title}"\nID: ${s?.spreadsheetId || "unknown"}\nURL: ${s?.spreadsheetUrl || ""}`;
 }
 
+export async function sheetsAddSheet(spreadsheetId: string, title: string): Promise<string> {
+  const args = ["sheets", "spreadsheets", "batchUpdate", "--params", JSON.stringify({ spreadsheetId }), "--json", JSON.stringify({
+    requests: [{ addSheet: { properties: { title } } }],
+  })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+
+  const reply = result.data?.replies?.[0]?.addSheet;
+  const sheetId = reply?.properties?.sheetId ?? "unknown";
+  return `Added sheet "${title}" (sheetId: ${sheetId}) to spreadsheet ${spreadsheetId}.`;
+}
+
+export async function sheetsDeleteSheet(spreadsheetId: string, sheetId: number): Promise<string> {
+  const args = ["sheets", "spreadsheets", "batchUpdate", "--params", JSON.stringify({ spreadsheetId }), "--json", JSON.stringify({
+    requests: [{ deleteSheet: { sheetId } }],
+  })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+
+  return `Deleted sheet ${sheetId} from spreadsheet ${spreadsheetId}.`;
+}
+
+export async function sheetsClear(spreadsheetId: string, range: string): Promise<string> {
+  const args = ["sheets", "spreadsheets", "values", "clear", "--params", JSON.stringify({ spreadsheetId, range }), "--json", JSON.stringify({})];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+
+  return `Cleared range ${range} in spreadsheet ${spreadsheetId}.`;
+}
+
+export async function sheetsFormatCells(spreadsheetId: string, sheetId: number, startRow: number, endRow: number, startCol: number, endCol: number, bold?: boolean, bgColor?: { red?: number; green?: number; blue?: number }, textColor?: { red?: number; green?: number; blue?: number }, fontSize?: number): Promise<string> {
+  const cellFormat: any = {};
+  const fields: string[] = [];
+
+  if (bold !== undefined) {
+    cellFormat.textFormat = { ...cellFormat.textFormat, bold };
+    fields.push("userEnteredFormat.textFormat.bold");
+  }
+  if (fontSize !== undefined) {
+    cellFormat.textFormat = { ...cellFormat.textFormat, fontSize };
+    fields.push("userEnteredFormat.textFormat.fontSize");
+  }
+  if (bgColor) {
+    cellFormat.backgroundColor = bgColor;
+    fields.push("userEnteredFormat.backgroundColor");
+  }
+  if (textColor) {
+    cellFormat.textFormat = { ...cellFormat.textFormat, foregroundColor: textColor };
+    fields.push("userEnteredFormat.textFormat.foregroundColor");
+  }
+
+  if (fields.length === 0) return "Error: At least one formatting option (bold, fontSize, bgColor, textColor) must be specified.";
+
+  const args = ["sheets", "spreadsheets", "batchUpdate", "--params", JSON.stringify({ spreadsheetId }), "--json", JSON.stringify({
+    requests: [{
+      repeatCell: {
+        range: { sheetId, startRowIndex: startRow, endRowIndex: endRow, startColumnIndex: startCol, endColumnIndex: endCol },
+        cell: { userEnteredFormat: cellFormat },
+        fields: fields.join(","),
+      },
+    }],
+  })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+
+  return `Formatted cells [${startRow}:${endRow}, ${startCol}:${endCol}] in sheet ${sheetId}.`;
+}
+
+export async function sheetsAutoResize(spreadsheetId: string, sheetId: number, startCol?: number, endCol?: number): Promise<string> {
+  const dimension: any = { sheetId, dimension: "COLUMNS" };
+  if (startCol !== undefined) dimension.startIndex = startCol;
+  if (endCol !== undefined) dimension.endIndex = endCol;
+
+  const args = ["sheets", "spreadsheets", "batchUpdate", "--params", JSON.stringify({ spreadsheetId }), "--json", JSON.stringify({
+    requests: [{ autoResizeDimensions: { dimensions: dimension } }],
+  })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+
+  return `Auto-resized columns in sheet ${sheetId}.`;
+}
+
+export async function sheetsMergeCells(spreadsheetId: string, sheetId: number, startRow: number, endRow: number, startCol: number, endCol: number): Promise<string> {
+  const args = ["sheets", "spreadsheets", "batchUpdate", "--params", JSON.stringify({ spreadsheetId }), "--json", JSON.stringify({
+    requests: [{
+      mergeCells: {
+        range: { sheetId, startRowIndex: startRow, endRowIndex: endRow, startColumnIndex: startCol, endColumnIndex: endCol },
+        mergeType: "MERGE_ALL",
+      },
+    }],
+  })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+
+  return `Merged cells [${startRow}:${endRow}, ${startCol}:${endCol}] in sheet ${sheetId}.`;
+}
+
+export async function sheetsBatchUpdate(spreadsheetId: string, requests: any[]): Promise<string> {
+  const args = ["sheets", "spreadsheets", "batchUpdate", "--params", JSON.stringify({ spreadsheetId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+
+  const replyCount = result.data?.replies?.length ?? 0;
+  return `Batch update completed: ${requests.length} request(s) sent, ${replyCount} reply(ies) received.\n\n${result.raw}`;
+}
+
+export async function sheetsSort(spreadsheetId: string, sheetId: number, sortCol: number, ascending?: boolean): Promise<string> {
+  const args = ["sheets", "spreadsheets", "batchUpdate", "--params", JSON.stringify({ spreadsheetId }), "--json", JSON.stringify({
+    requests: [{
+      sortRange: {
+        range: { sheetId },
+        sortSpecs: [{ dimensionIndex: sortCol, sortOrder: ascending === false ? "DESCENDING" : "ASCENDING" }],
+      },
+    }],
+  })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+
+  return `Sorted sheet ${sheetId} by column ${sortCol} (${ascending === false ? "descending" : "ascending"}).`;
+}
+
 export async function docsList(): Promise<string> {
   return driveList("mimeType='application/vnd.google-apps.document'");
 }
@@ -252,6 +373,106 @@ export async function docsAppend(documentId: string, text: string): Promise<stri
   if (!result.ok) return result.raw;
 
   return `Appended text to document ${documentId}.`;
+}
+
+export async function docsInsertText(documentId: string, text: string, index?: number): Promise<string> {
+  const requests: any[] = [];
+  if (index !== undefined) {
+    requests.push({ insertText: { location: { index }, text } });
+  } else {
+    requests.push({ insertText: { endOfSegmentLocation: {}, text } });
+  }
+  const args = ["docs", "documents", "batchUpdate", "--params", JSON.stringify({ documentId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Inserted text into document ${documentId}${index !== undefined ? ` at index ${index}` : " at end"}.`;
+}
+
+export async function docsDeleteContent(documentId: string, startIndex: number, endIndex: number): Promise<string> {
+  const requests = [{ deleteContentRange: { range: { startIndex, endIndex } } }];
+  const args = ["docs", "documents", "batchUpdate", "--params", JSON.stringify({ documentId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Deleted content from index ${startIndex} to ${endIndex} in document ${documentId}.`;
+}
+
+export async function docsInsertTable(documentId: string, rows: number, cols: number): Promise<string> {
+  const requests = [{ insertTable: { rows, columns: cols, endOfSegmentLocation: {} } }];
+  const args = ["docs", "documents", "batchUpdate", "--params", JSON.stringify({ documentId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Inserted ${rows}×${cols} table into document ${documentId}.`;
+}
+
+export async function docsFormatText(documentId: string, startIndex: number, endIndex: number, bold?: boolean, italic?: boolean, fontSize?: number, foregroundColor?: string): Promise<string> {
+  const textStyle: any = {};
+  const fields: string[] = [];
+  if (bold !== undefined) { textStyle.bold = bold; fields.push("bold"); }
+  if (italic !== undefined) { textStyle.italic = italic; fields.push("italic"); }
+  if (fontSize !== undefined) { textStyle.fontSize = { magnitude: fontSize, unit: "PT" }; fields.push("fontSize"); }
+  if (foregroundColor) {
+    const r = parseInt(foregroundColor.slice(1, 3), 16) / 255;
+    const g = parseInt(foregroundColor.slice(3, 5), 16) / 255;
+    const b = parseInt(foregroundColor.slice(5, 7), 16) / 255;
+    textStyle.foregroundColor = { color: { rgbColor: { red: r, green: g, blue: b } } };
+    fields.push("foregroundColor");
+  }
+  if (fields.length === 0) return "Error: At least one formatting option (bold, italic, fontSize, foregroundColor) must be specified.";
+  const requests = [{ updateTextStyle: { range: { startIndex, endIndex }, textStyle, fields: fields.join(",") } }];
+  const args = ["docs", "documents", "batchUpdate", "--params", JSON.stringify({ documentId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Formatted text (index ${startIndex}–${endIndex}) in document ${documentId}.`;
+}
+
+export async function docsInsertImage(documentId: string, imageUri: string, index?: number): Promise<string> {
+  const request: any = { insertInlineImage: { uri: imageUri } };
+  if (index !== undefined) {
+    request.insertInlineImage.location = { index };
+  } else {
+    request.insertInlineImage.endOfSegmentLocation = {};
+  }
+  const args = ["docs", "documents", "batchUpdate", "--params", JSON.stringify({ documentId }), "--json", JSON.stringify({ requests: [request] })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Inserted image into document ${documentId}.`;
+}
+
+export async function docsReplaceText(documentId: string, findText: string, replaceText: string): Promise<string> {
+  const requests = [{ replaceAllText: { containsText: { text: findText, matchCase: true }, replaceText } }];
+  const args = ["docs", "documents", "batchUpdate", "--params", JSON.stringify({ documentId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  const count = result.data?.replies?.[0]?.replaceAllText?.occurrencesChanged || 0;
+  return `Replaced ${count} occurrence(s) of "${findText}" with "${replaceText}" in document ${documentId}.`;
+}
+
+export async function docsInsertHeading(documentId: string, text: string, level: number): Promise<string> {
+  const headingStyle = `HEADING_${Math.min(Math.max(level, 1), 6)}`;
+
+  const getArgs = ["docs", "documents", "get", "--params", JSON.stringify({ documentId })];
+  const getResult = await runGws(getArgs);
+  if (!getResult.ok) return getResult.raw;
+
+  const body = getResult.data?.body?.content;
+  const endIndex = body && body.length > 0 ? (body[body.length - 1]?.endIndex || 1) - 1 : 1;
+  const insertAt = Math.max(endIndex, 1);
+
+  const requests = [
+    { insertText: { location: { index: insertAt }, text: text + "\n" } },
+    { updateParagraphStyle: { range: { startIndex: insertAt, endIndex: insertAt + text.length + 1 }, paragraphStyle: { namedStyleType: headingStyle }, fields: "namedStyleType" } },
+  ];
+  const args = ["docs", "documents", "batchUpdate", "--params", JSON.stringify({ documentId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Inserted heading (H${level}) "${text}" into document ${documentId}.`;
+}
+
+export async function docsBatchUpdate(documentId: string, requests: any[]): Promise<string> {
+  const args = ["docs", "documents", "batchUpdate", "--params", JSON.stringify({ documentId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Batch update applied ${requests.length} request(s) to document ${documentId}.\n${JSON.stringify(result.data?.replies || [], null, 2)}`;
 }
 
 export async function slidesList(): Promise<string> {
@@ -353,4 +574,194 @@ export async function slidesAppend(presentationId: string, title: string, body: 
   }
 
   return `Added slide "${title}" to presentation ${presentationId}.`;
+}
+
+export async function slidesInsertTable(presentationId: string, slideObjectId: string, rows: number, cols: number, data?: string[][]): Promise<string> {
+  const tableId = `table_${Date.now()}`;
+  const requests: any[] = [
+    {
+      createTable: {
+        objectId: tableId,
+        elementProperties: {
+          pageObjectId: slideObjectId,
+          size: {
+            width: { magnitude: 7200000, unit: "EMU" },
+            height: { magnitude: rows * 400000, unit: "EMU" },
+          },
+          transform: {
+            scaleX: 1, scaleY: 1, translateX: 400000, translateY: 1500000, unit: "EMU",
+          },
+        },
+        rows,
+        columns: cols,
+      },
+    },
+  ];
+
+  if (data) {
+    for (let r = 0; r < Math.min(data.length, rows); r++) {
+      for (let c = 0; c < Math.min(data[r].length, cols); c++) {
+        if (data[r][c]) {
+          requests.push({
+            insertText: {
+              objectId: tableId,
+              cellLocation: { rowIndex: r, columnIndex: c },
+              text: data[r][c],
+              insertionIndex: 0,
+            },
+          });
+        }
+      }
+    }
+  }
+
+  const args = ["slides", "presentations", "batchUpdate", "--params", JSON.stringify({ presentationId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+
+  return `Inserted ${rows}×${cols} table on slide ${slideObjectId}.`;
+}
+
+export async function slidesInsertImage(presentationId: string, slideObjectId: string, imageUrl: string, width?: number, height?: number): Promise<string> {
+  const requests = [
+    {
+      createImage: {
+        url: imageUrl,
+        elementProperties: {
+          pageObjectId: slideObjectId,
+          size: {
+            width: { magnitude: width || 3000000, unit: "EMU" },
+            height: { magnitude: height || 3000000, unit: "EMU" },
+          },
+          transform: {
+            scaleX: 1, scaleY: 1, translateX: 2000000, translateY: 1500000, unit: "EMU",
+          },
+        },
+      },
+    },
+  ];
+
+  const args = ["slides", "presentations", "batchUpdate", "--params", JSON.stringify({ presentationId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+
+  return `Inserted image on slide ${slideObjectId}.`;
+}
+
+export async function slidesInsertShape(presentationId: string, slideObjectId: string, shapeType: string, text: string, left: number, top: number, width: number, height: number): Promise<string> {
+  const shapeId = `shape_${Date.now()}`;
+  const requests: any[] = [
+    {
+      createShape: {
+        objectId: shapeId,
+        shapeType,
+        elementProperties: {
+          pageObjectId: slideObjectId,
+          size: {
+            width: { magnitude: width, unit: "EMU" },
+            height: { magnitude: height, unit: "EMU" },
+          },
+          transform: {
+            scaleX: 1, scaleY: 1, translateX: left, translateY: top, unit: "EMU",
+          },
+        },
+      },
+    },
+  ];
+
+  if (text) {
+    requests.push({
+      insertText: {
+        objectId: shapeId,
+        text,
+        insertionIndex: 0,
+      },
+    });
+  }
+
+  const args = ["slides", "presentations", "batchUpdate", "--params", JSON.stringify({ presentationId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+
+  return `Inserted ${shapeType} shape on slide ${slideObjectId}. Shape ID: ${shapeId}`;
+}
+
+export async function slidesFormatText(presentationId: string, objectId: string, startIndex: number, endIndex: number, bold?: boolean, italic?: boolean, fontSize?: number, color?: string): Promise<string> {
+  const style: any = {};
+  const fields: string[] = [];
+
+  if (bold !== undefined) { style.bold = bold; fields.push("bold"); }
+  if (italic !== undefined) { style.italic = italic; fields.push("italic"); }
+  if (fontSize !== undefined) { style.fontSize = { magnitude: fontSize, unit: "PT" }; fields.push("fontSize"); }
+  if (color) {
+    const r = parseInt(color.slice(1, 3), 16) / 255;
+    const g = parseInt(color.slice(3, 5), 16) / 255;
+    const b = parseInt(color.slice(5, 7), 16) / 255;
+    style.foregroundColor = { opaqueColor: { rgbColor: { red: r, green: g, blue: b } } };
+    fields.push("foregroundColor");
+  }
+
+  if (fields.length === 0) return "Error: At least one formatting option (bold, italic, fontSize, color) must be specified.";
+
+  const requests = [
+    {
+      updateTextStyle: {
+        objectId,
+        textRange: { type: "FIXED_RANGE", startIndex, endIndex },
+        style,
+        fields: fields.join(","),
+      },
+    },
+  ];
+
+  const args = ["slides", "presentations", "batchUpdate", "--params", JSON.stringify({ presentationId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+
+  return `Formatted text in object ${objectId} (chars ${startIndex}-${endIndex}).`;
+}
+
+export async function slidesDeleteSlide(presentationId: string, slideObjectId: string): Promise<string> {
+  const requests = [{ deleteObject: { objectId: slideObjectId } }];
+  const args = ["slides", "presentations", "batchUpdate", "--params", JSON.stringify({ presentationId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+
+  return `Deleted slide ${slideObjectId} from presentation ${presentationId}.`;
+}
+
+export async function slidesDuplicateSlide(presentationId: string, slideObjectId: string): Promise<string> {
+  const requests = [{ duplicateObject: { objectId: slideObjectId } }];
+  const args = ["slides", "presentations", "batchUpdate", "--params", JSON.stringify({ presentationId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+
+  const newId = result.data?.replies?.[0]?.duplicateObject?.objectId || "unknown";
+  return `Duplicated slide ${slideObjectId}. New slide ID: ${newId}`;
+}
+
+export async function slidesReplaceText(presentationId: string, findText: string, replaceText: string): Promise<string> {
+  const requests = [
+    {
+      replaceAllText: {
+        containsText: { text: findText, matchCase: true },
+        replaceText,
+      },
+    },
+  ];
+
+  const args = ["slides", "presentations", "batchUpdate", "--params", JSON.stringify({ presentationId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+
+  const count = result.data?.replies?.[0]?.replaceAllText?.occurrencesChanged || 0;
+  return `Replaced ${count} occurrence(s) of "${findText}" with "${replaceText}".`;
+}
+
+export async function slidesBatchUpdate(presentationId: string, requests: any[]): Promise<string> {
+  const args = ["slides", "presentations", "batchUpdate", "--params", JSON.stringify({ presentationId }), "--json", JSON.stringify({ requests })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+
+  return `Batch update completed (${requests.length} request(s)). Response: ${JSON.stringify(result.data?.replies || []).slice(0, 2000)}`;
 }
