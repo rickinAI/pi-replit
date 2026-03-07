@@ -7,6 +7,7 @@ let scrollThrottleTimer = null;
 let userHasScrolledUp = false;
 let hasMessages = false;
 let landingVisible = false;
+let landingInvocationId = 0;
 let pendingImages = [];
 let reconnectAttempts = 0;
 let reconnectTimer = null;
@@ -249,6 +250,14 @@ async function startSession() {
   }
 }
 
+const homeBtn = document.getElementById("home-btn");
+homeBtn.addEventListener("click", () => {
+  if (landingVisible) return;
+  stopSyncPolling();
+  if (eventSource) { eventSource.close(); eventSource = null; }
+  showLanding();
+});
+
 newSessionBtn.addEventListener("click", () => {
   if (landingVisible) return;
   stopSyncPolling();
@@ -294,8 +303,6 @@ function relativeTime(dateStr) {
   if (diffD < 7) return `${diffD}d ago`;
   return new Date(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
-
-let landingInvocationId = 0;
 
 async function showLanding() {
   landingVisible = true;
