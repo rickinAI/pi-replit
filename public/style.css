@@ -1172,6 +1172,7 @@ body.light-theme #mic-btn.recording {
 .landing-header {
   text-align: center;
   padding: 8px 0;
+  position: relative;
 }
 
 .landing-header h2 {
@@ -1185,6 +1186,39 @@ body.light-theme #mic-btn.recording {
 .landing-header .landing-date {
   font-size: 11px;
   color: var(--green-muted);
+}
+
+.landing-header-actions {
+  position: absolute;
+  top: 8px;
+  right: 0;
+  display: flex;
+  gap: 6px;
+}
+
+.landing-header-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--green-muted);
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  text-decoration: none;
+}
+
+.landing-header-btn:active {
+  color: var(--green);
+  border-color: var(--green-muted);
+}
+
+.landing-off-btn:active {
+  color: var(--red);
+  border-color: var(--red);
 }
 
 .landing-glance {
