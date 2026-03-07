@@ -2405,7 +2405,6 @@ async function slidesAppend(presentationId, title, body) {
       {
         createSlide: {
           objectId: slideId,
-          insertionIndex: 999,
           slideLayoutReference: { predefinedLayout: "TITLE_AND_BODY" }
         }
       }

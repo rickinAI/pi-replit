@@ -316,7 +316,6 @@ export async function slidesAppend(presentationId: string, title: string, body: 
       {
         createSlide: {
           objectId: slideId,
-          insertionIndex: 999,
           slideLayoutReference: { predefinedLayout: "TITLE_AND_BODY" },
         },
       },
