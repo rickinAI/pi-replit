@@ -6,7 +6,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 
 - **server.ts** — Express server wrapping the pi coding agent SDK
   - Creates agent sessions with Anthropic API
-  - Registers custom tools: knowledge base, email, calendar, weather, web search, tasks, news
+  - Registers custom tools: knowledge base, email, calendar, weather, web search, tasks, news, Google Drive, Google Sheets, Google Docs, Google Slides
   - Streams agent events via SSE (Server-Sent Events)
   - Tracks conversation messages and persists them to PostgreSQL
   - Auto-saves conversations every 5 minutes; saves on session close/expiry/shutdown
@@ -17,7 +17,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Express error-handling middleware for clean JSON error responses
 - **src/db.ts** — Shared PostgreSQL connection pool (single `pg.Pool`, max 10 connections). Creates all 4 tables on init (`conversations`, `tasks`, `app_config`, `oauth_tokens`). All other modules import `getPool()` from here
 - **src/obsidian.ts** — Client for the knowledge base REST API (10s timeout, 2 retries on transient failures, health ping)
-- **src/gmail.ts** — Gmail integration via custom Google OAuth (list/read/search emails). Tokens stored in PostgreSQL (oauth_tokens table). OAuth scopes: gmail.readonly, calendar, drive, spreadsheets. Also exports `getAccessToken()` for gws CLI
+- **src/gmail.ts** — Gmail integration via custom Google OAuth (list/read/search emails). Tokens stored in PostgreSQL (oauth_tokens table). OAuth scopes: gmail.readonly, calendar, drive, spreadsheets, documents, presentations. Also exports `getAccessToken()` for gws CLI
 - **src/calendar.ts** — Google Calendar integration (shares OAuth tokens with Gmail via PostgreSQL)
 - **src/weather.ts** — Weather via Open-Meteo (free, no API key)
 - **src/websearch.ts** — Web search via DuckDuckGo HTML (free, no API key)
@@ -36,7 +36,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Retry button on errors (resends last message without retyping)
   - Emoji-labeled tool indicator (🔍🧠📝📅📧 etc.) with elapsed timer after 5s
   - Confirmation modal before starting new session
-- **src/gws.ts** — Google Workspace CLI wrapper. Calls the `gws` binary with the current OAuth access token via `GOOGLE_WORKSPACE_CLI_TOKEN`. Provides Drive (list, get, create folder, move, rename, delete) and Sheets (list, read, append, update, create) functions
+- **src/gws.ts** — Google Workspace CLI wrapper. Calls the `gws` binary with the current OAuth access token via `GOOGLE_WORKSPACE_CLI_TOKEN`. Provides Drive (list, get, create folder, move, rename, delete), Sheets (list, read, append, update, create), Docs (list, get, create, append), and Slides (list, get, create) functions
 - **bin/gws** — Google Workspace CLI binary (v0.8.0, x86_64 Linux). Not an officially supported Google product. Pre-v1.0
 - **dist/** — esbuild output (compiled server)
 - **public/manifest.json** — PWA web app manifest (name, icons, display mode)
@@ -188,6 +188,21 @@ Auth via custom OAuth flow using `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`. To
 - `sheets_append` — Append rows to a spreadsheet
 - `sheets_update` — Update specific cells in a spreadsheet
 - `sheets_create` — Create a new spreadsheet
+
+## Google Docs
+
+4 custom tools using the `gws` CLI binary (shares OAuth tokens with Gmail):
+- `docs_list` — List all Google Docs in Drive
+- `docs_get` — Read a document's full content by ID
+- `docs_create` — Create a new blank document
+- `docs_append` — Append text to an existing document
+
+## Google Slides
+
+3 custom tools using the `gws` CLI binary (shares OAuth tokens with Gmail):
+- `slides_list` — List all presentations in Drive
+- `slides_get` — Read a presentation's content and slide text by ID
+- `slides_create` — Create a new blank presentation
 
 ## Weather
 

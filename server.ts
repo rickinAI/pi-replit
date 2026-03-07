@@ -872,6 +872,97 @@ function buildSheetsTools(): ToolDefinition[] {
   ];
 }
 
+function buildDocsTools(): ToolDefinition[] {
+  return [
+    {
+      name: "docs_list",
+      label: "Google Docs List",
+      description: "List all Google Docs documents in Drive. Returns most recently modified documents.",
+      parameters: Type.Object({}),
+      async execute() {
+        const result = await gws.docsList();
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "docs_get",
+      label: "Google Docs Read",
+      description: "Read the full content of a Google Doc by its document ID. Returns the title and extracted text content.",
+      parameters: Type.Object({
+        documentId: Type.String({ description: "The Google Doc document ID (from the URL or drive_list)" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.docsGet(params.documentId);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "docs_create",
+      label: "Google Docs Create",
+      description: "Create a new blank Google Doc with the given title.",
+      parameters: Type.Object({
+        title: Type.String({ description: "Title for the new document" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.docsCreate(params.title);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "docs_append",
+      label: "Google Docs Append",
+      description: "Append text to the end of an existing Google Doc. For rich formatting, this uses plain text insertion.",
+      parameters: Type.Object({
+        documentId: Type.String({ description: "The Google Doc document ID" }),
+        text: Type.String({ description: "Text to append to the document" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.docsAppend(params.documentId, params.text);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+  ];
+}
+
+function buildSlidesTools(): ToolDefinition[] {
+  return [
+    {
+      name: "slides_list",
+      label: "Google Slides List",
+      description: "List all Google Slides presentations in Drive. Returns most recently modified presentations.",
+      parameters: Type.Object({}),
+      async execute() {
+        const result = await gws.slidesList();
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "slides_get",
+      label: "Google Slides Read",
+      description: "Read the content of a Google Slides presentation by ID. Returns slide count, page size, and text content from each slide.",
+      parameters: Type.Object({
+        presentationId: Type.String({ description: "The presentation ID (from the URL or drive_list)" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.slidesGet(params.presentationId);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "slides_create",
+      label: "Google Slides Create",
+      description: "Create a new blank Google Slides presentation with the given title.",
+      parameters: Type.Object({
+        title: Type.String({ description: "Title for the new presentation" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gws.slidesCreate(params.title);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+  ];
+}
+
 function buildConversationTools(): ToolDefinition[] {
   return [
     {
@@ -1346,6 +1437,8 @@ app.post("/api/session", async (req: Request, res: Response) => {
       ...buildMapsTools(),
       ...buildDriveTools(),
       ...buildSheetsTools(),
+      ...buildDocsTools(),
+      ...buildSlidesTools(),
       ...buildConversationTools(),
       ...buildInterviewTool(sessionId),
     ];

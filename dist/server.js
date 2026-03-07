@@ -780,7 +780,9 @@ var SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/calendar",
   "https://www.googleapis.com/auth/drive",
-  "https://www.googleapis.com/auth/spreadsheets"
+  "https://www.googleapis.com/auth/spreadsheets",
+  "https://www.googleapis.com/auth/documents",
+  "https://www.googleapis.com/auth/presentations"
 ];
 async function init4() {
   const existing = await getPool().query(`SELECT tokens FROM oauth_tokens WHERE service = 'google'`);
@@ -2300,6 +2302,100 @@ async function sheetsCreate(title) {
   return `Created spreadsheet: "${s?.properties?.title || title}"
 ID: ${s?.spreadsheetId || "unknown"}
 URL: ${s?.spreadsheetUrl || ""}`;
+}
+async function docsList() {
+  return driveList("mimeType='application/vnd.google-apps.document'");
+}
+async function docsGet(documentId) {
+  const args = ["docs", "documents", "get", "--params", JSON.stringify({ documentId })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  const doc = result.data;
+  if (!doc) return "Document not found.";
+  const title = doc.title || "Untitled";
+  const docId = doc.documentId || documentId;
+  let textContent = "";
+  if (doc.body?.content) {
+    for (const element of doc.body.content) {
+      if (element.paragraph?.elements) {
+        for (const el of element.paragraph.elements) {
+          if (el.textRun?.content) textContent += el.textRun.content;
+        }
+      }
+      if (element.table) {
+        textContent += "[Table]\n";
+      }
+    }
+  }
+  const lines = [
+    `Title: ${title}`,
+    `ID: ${docId}`,
+    ``,
+    `--- Content ---`,
+    textContent.trim() || "(empty document)"
+  ];
+  return lines.join("\n");
+}
+async function docsCreate(title) {
+  const args = ["docs", "documents", "create", "--json", JSON.stringify({ title })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  const doc = result.data;
+  return `Created document: "${doc?.title || title}"
+ID: ${doc?.documentId || "unknown"}`;
+}
+async function docsAppend(documentId, text) {
+  const args = ["docs", "+write", "--document", documentId, "--text", text];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  return `Appended text to document ${documentId}.`;
+}
+async function slidesList() {
+  return driveList("mimeType='application/vnd.google-apps.presentation'");
+}
+async function slidesGet(presentationId) {
+  const args = ["slides", "presentations", "get", "--params", JSON.stringify({ presentationId })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  const pres = result.data;
+  if (!pres) return "Presentation not found.";
+  const title = pres.title || "Untitled";
+  const presId = pres.presentationId || presentationId;
+  const slideCount = pres.slides?.length || 0;
+  const lines = [
+    `Title: ${title}`,
+    `ID: ${presId}`,
+    `Slides: ${slideCount}`,
+    `Page size: ${pres.pageSize?.width?.magnitude || "?"}\xD7${pres.pageSize?.height?.magnitude || "?"} ${pres.pageSize?.width?.unit || ""}`
+  ];
+  if (pres.slides) {
+    lines.push("", "--- Slides ---");
+    for (let i = 0; i < pres.slides.length; i++) {
+      const slide = pres.slides[i];
+      let slideText = "";
+      if (slide.pageElements) {
+        for (const el of slide.pageElements) {
+          if (el.shape?.text?.textElements) {
+            for (const te of el.shape.text.textElements) {
+              if (te.textRun?.content) slideText += te.textRun.content;
+            }
+          }
+        }
+      }
+      lines.push(`
+Slide ${i + 1} (${slide.objectId}):`);
+      lines.push(slideText.trim() || "(no text)");
+    }
+  }
+  return lines.join("\n");
+}
+async function slidesCreate(title) {
+  const args = ["slides", "presentations", "create", "--json", JSON.stringify({ title })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+  const pres = result.data;
+  return `Created presentation: "${pres?.title || title}"
+ID: ${pres?.presentationId || "unknown"}`;
 }
 
 // src/alerts.ts
@@ -3880,6 +3976,95 @@ function buildSheetsTools() {
     }
   ];
 }
+function buildDocsTools() {
+  return [
+    {
+      name: "docs_list",
+      label: "Google Docs List",
+      description: "List all Google Docs documents in Drive. Returns most recently modified documents.",
+      parameters: Type.Object({}),
+      async execute() {
+        const result = await docsList();
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "docs_get",
+      label: "Google Docs Read",
+      description: "Read the full content of a Google Doc by its document ID. Returns the title and extracted text content.",
+      parameters: Type.Object({
+        documentId: Type.String({ description: "The Google Doc document ID (from the URL or drive_list)" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await docsGet(params.documentId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "docs_create",
+      label: "Google Docs Create",
+      description: "Create a new blank Google Doc with the given title.",
+      parameters: Type.Object({
+        title: Type.String({ description: "Title for the new document" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await docsCreate(params.title);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "docs_append",
+      label: "Google Docs Append",
+      description: "Append text to the end of an existing Google Doc. For rich formatting, this uses plain text insertion.",
+      parameters: Type.Object({
+        documentId: Type.String({ description: "The Google Doc document ID" }),
+        text: Type.String({ description: "Text to append to the document" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await docsAppend(params.documentId, params.text);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    }
+  ];
+}
+function buildSlidesTools() {
+  return [
+    {
+      name: "slides_list",
+      label: "Google Slides List",
+      description: "List all Google Slides presentations in Drive. Returns most recently modified presentations.",
+      parameters: Type.Object({}),
+      async execute() {
+        const result = await slidesList();
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "slides_get",
+      label: "Google Slides Read",
+      description: "Read the content of a Google Slides presentation by ID. Returns slide count, page size, and text content from each slide.",
+      parameters: Type.Object({
+        presentationId: Type.String({ description: "The presentation ID (from the URL or drive_list)" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await slidesGet(params.presentationId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "slides_create",
+      label: "Google Slides Create",
+      description: "Create a new blank Google Slides presentation with the given title.",
+      parameters: Type.Object({
+        title: Type.String({ description: "Title for the new presentation" })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await slidesCreate(params.title);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    }
+  ];
+}
 function buildConversationTools() {
   return [
     {
@@ -4328,6 +4513,8 @@ app.post("/api/session", async (req, res) => {
       ...buildMapsTools(),
       ...buildDriveTools(),
       ...buildSheetsTools(),
+      ...buildDocsTools(),
+      ...buildSlidesTools(),
       ...buildConversationTools(),
       ...buildInterviewTool(sessionId)
     ];

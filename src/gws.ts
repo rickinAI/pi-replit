@@ -196,3 +196,114 @@ export async function sheetsCreate(title: string): Promise<string> {
   const s = result.data;
   return `Created spreadsheet: "${s?.properties?.title || title}"\nID: ${s?.spreadsheetId || "unknown"}\nURL: ${s?.spreadsheetUrl || ""}`;
 }
+
+export async function docsList(): Promise<string> {
+  return driveList("mimeType='application/vnd.google-apps.document'");
+}
+
+export async function docsGet(documentId: string): Promise<string> {
+  const args = ["docs", "documents", "get", "--params", JSON.stringify({ documentId })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+
+  const doc = result.data;
+  if (!doc) return "Document not found.";
+
+  const title = doc.title || "Untitled";
+  const docId = doc.documentId || documentId;
+
+  let textContent = "";
+  if (doc.body?.content) {
+    for (const element of doc.body.content) {
+      if (element.paragraph?.elements) {
+        for (const el of element.paragraph.elements) {
+          if (el.textRun?.content) textContent += el.textRun.content;
+        }
+      }
+      if (element.table) {
+        textContent += "[Table]\n";
+      }
+    }
+  }
+
+  const lines = [
+    `Title: ${title}`,
+    `ID: ${docId}`,
+    ``,
+    `--- Content ---`,
+    textContent.trim() || "(empty document)",
+  ];
+
+  return lines.join("\n");
+}
+
+export async function docsCreate(title: string): Promise<string> {
+  const args = ["docs", "documents", "create", "--json", JSON.stringify({ title })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+
+  const doc = result.data;
+  return `Created document: "${doc?.title || title}"\nID: ${doc?.documentId || "unknown"}`;
+}
+
+export async function docsAppend(documentId: string, text: string): Promise<string> {
+  const args = ["docs", "+write", "--document", documentId, "--text", text];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+
+  return `Appended text to document ${documentId}.`;
+}
+
+export async function slidesList(): Promise<string> {
+  return driveList("mimeType='application/vnd.google-apps.presentation'");
+}
+
+export async function slidesGet(presentationId: string): Promise<string> {
+  const args = ["slides", "presentations", "get", "--params", JSON.stringify({ presentationId })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+
+  const pres = result.data;
+  if (!pres) return "Presentation not found.";
+
+  const title = pres.title || "Untitled";
+  const presId = pres.presentationId || presentationId;
+  const slideCount = pres.slides?.length || 0;
+
+  const lines = [
+    `Title: ${title}`,
+    `ID: ${presId}`,
+    `Slides: ${slideCount}`,
+    `Page size: ${pres.pageSize?.width?.magnitude || "?"}×${pres.pageSize?.height?.magnitude || "?"} ${pres.pageSize?.width?.unit || ""}`,
+  ];
+
+  if (pres.slides) {
+    lines.push("", "--- Slides ---");
+    for (let i = 0; i < pres.slides.length; i++) {
+      const slide = pres.slides[i];
+      let slideText = "";
+      if (slide.pageElements) {
+        for (const el of slide.pageElements) {
+          if (el.shape?.text?.textElements) {
+            for (const te of el.shape.text.textElements) {
+              if (te.textRun?.content) slideText += te.textRun.content;
+            }
+          }
+        }
+      }
+      lines.push(`\nSlide ${i + 1} (${slide.objectId}):`);
+      lines.push(slideText.trim() || "(no text)");
+    }
+  }
+
+  return lines.join("\n");
+}
+
+export async function slidesCreate(title: string): Promise<string> {
+  const args = ["slides", "presentations", "create", "--json", JSON.stringify({ title })];
+  const result = await runGws(args);
+  if (!result.ok) return result.raw;
+
+  const pres = result.data;
+  return `Created presentation: "${pres?.title || title}"\nID: ${pres?.presentationId || "unknown"}`;
+}
