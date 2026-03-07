@@ -220,7 +220,7 @@ if (window.visualViewport) {
           return;
         }
       }
-    } catch {}
+    } catch (err) { console.warn("Session restore failed:", err); }
     localStorage.removeItem("activeSession");
   }
   await startSession();
@@ -247,7 +247,7 @@ async function startSession() {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode: currentModelMode }),
-    }).catch(() => {});
+    }).catch((err) => console.warn("Initial model-mode sync failed:", err));
   } catch (err) {
     showSystemMsg("ERR: " + err.message);
     hideStatus();
@@ -279,7 +279,7 @@ async function doNewSession() {
   stopSyncPolling();
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   if (eventSource) { eventSource.close(); eventSource = null; }
-  if (sessionId) await fetch(`/api/session/${sessionId}`, { method: "DELETE" }).catch(() => {});
+  if (sessionId) await fetch(`/api/session/${sessionId}`, { method: "DELETE" }).catch((err) => console.warn("Session delete failed:", err));
   sessionId = null;
   agentBubble = null;
   agentText = "";
@@ -416,7 +416,7 @@ async function deleteConversation(id, el) {
     if (historyList.children.length === 0) {
       historyList.innerHTML = '<div class="history-empty">No saved conversations.</div>';
     }
-  } catch {}
+  } catch (err) { console.warn("Delete conversation failed:", err); }
 }
 
 function openEventStream(id) {
@@ -557,27 +557,28 @@ async function pollKbStatus() {
 pollKbStatus();
 setInterval(pollKbStatus, 2 * 60 * 1000);
 
+function attemptReconnect() {
+  if (!sessionId) return;
+  if (!eventSource || eventSource.readyState !== EventSource.OPEN) {
+    reconnectAttempts = 0;
+    openEventStream(sessionId);
+  } else {
+    catchUpSession(sessionId);
+  }
+}
+
 let visibilityDebounce = null;
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible" || !sessionId) return;
   if (visibilityDebounce) clearTimeout(visibilityDebounce);
   visibilityDebounce = setTimeout(() => {
     visibilityDebounce = null;
-    if (eventSource && eventSource.readyState === EventSource.CLOSED) {
-      reconnectAttempts = 0;
-      openEventStream(sessionId);
-    } else {
-      catchUpSession(sessionId);
-    }
+    attemptReconnect();
   }, 500);
 });
 
 window.addEventListener("online", () => {
-  if (!sessionId) return;
-  if (!eventSource || eventSource.readyState !== EventSource.OPEN) {
-    reconnectAttempts = 0;
-    openEventStream(sessionId);
-  }
+  attemptReconnect();
 });
 
 function handleAgentEvent(event) {
@@ -935,7 +936,7 @@ function playAlertSound() {
     osc.start();
     gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
     osc.stop(ctx.currentTime + 0.15);
-  } catch {}
+  } catch (err) { console.warn("Notification sound failed:", err); }
 }
 
 function showBrowserNotification(title, body) {
@@ -1401,7 +1402,7 @@ async function loadSettingsConfig() {
     }
     const themeToggle = panel.querySelector("#theme-toggle");
     if (themeToggle) themeToggle.checked = (localStorage.getItem("theme") || cfg.theme) === "light";
-  } catch {}
+  } catch (err) { console.warn("Load settings failed:", err); }
 }
 
 function renderWatchlist(items) {
@@ -1495,7 +1496,7 @@ async function saveSettings() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(config),
     });
-  } catch {}
+  } catch (err) { console.warn("Save settings failed:", err); }
 }
 
 alertsSettingsBtn.addEventListener("click", toggleSettings);
@@ -1539,7 +1540,7 @@ modelBadge.addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode: next }),
     });
-  } catch {}
+  } catch (err) { console.warn("Model mode switch failed:", err); }
 });
 
 generateBriefBtn.addEventListener("click", async () => {
@@ -1549,7 +1550,7 @@ generateBriefBtn.addEventListener("click", async () => {
   generateBriefBtn.classList.add("loading");
   try {
     await fetch(`/api/alerts/trigger/${type}`, { method: "POST" });
-  } catch {}
+  } catch (err) { console.warn("Generate brief failed:", err); }
   generateBriefBtn.disabled = false;
   generateBriefBtn.classList.remove("loading");
 });
@@ -1760,7 +1761,7 @@ async function resumeConversation(conversationId) {
   exitHistoryView();
 
   if (sessionId) {
-    try { await fetch(`/api/session/${sessionId}`, { method: "DELETE" }); } catch {}
+    try { await fetch(`/api/session/${sessionId}`, { method: "DELETE" }); } catch (err) { console.warn("Session delete on resume failed:", err); }
     if (eventSource) eventSource.close();
     localStorage.removeItem("activeSession");
     sessionId = null;
@@ -1813,7 +1814,7 @@ function startSyncPolling() {
       } else if (!isSyncingToCloud && wasSync && !isAgentRunning && reconnectAttempts === 0) {
         hideStatus();
       }
-    } catch {}
+    } catch (err) { console.warn("Sync poll failed:", err); }
   }, 10_000);
 }
 

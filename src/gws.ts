@@ -5,6 +5,14 @@ import path from "path";
 const GWS_BIN = path.join(process.cwd(), "bin", "gws");
 const TIMEOUT_MS = 15000;
 
+function parseHexColor(hex: string): { red: number; green: number; blue: number } {
+  return {
+    red: parseInt(hex.slice(1, 3), 16) / 255,
+    green: parseInt(hex.slice(3, 5), 16) / 255,
+    blue: parseInt(hex.slice(5, 7), 16) / 255,
+  };
+}
+
 export async function runGws(args: string[]): Promise<{ ok: boolean; data: any; raw: string }> {
   const token = await getAccessToken();
   if (!token) {
@@ -37,7 +45,7 @@ export async function runGws(args: string[]): Promise<{ ok: boolean; data: any; 
         const data = JSON.parse(output);
         resolve({ ok: true, data, raw: output });
       } catch {
-        resolve({ ok: true, data: null, raw: output });
+        resolve({ ok: false, data: null, raw: output });
       }
     });
   });
@@ -333,19 +341,20 @@ export async function docsGet(documentId: string): Promise<string> {
   const title = doc.title || "Untitled";
   const docId = doc.documentId || documentId;
 
-  let textContent = "";
+  const textParts: string[] = [];
   if (doc.body?.content) {
     for (const element of doc.body.content) {
       if (element.paragraph?.elements) {
         for (const el of element.paragraph.elements) {
-          if (el.textRun?.content) textContent += el.textRun.content;
+          if (el.textRun?.content) textParts.push(el.textRun.content);
         }
       }
       if (element.table) {
-        textContent += "[Table]\n";
+        textParts.push("[Table]\n");
       }
     }
   }
+  const textContent = textParts.join("");
 
   const lines = [
     `Title: ${title}`,
@@ -411,10 +420,7 @@ export async function docsFormatText(documentId: string, startIndex: number, end
   if (italic !== undefined) { textStyle.italic = italic; fields.push("italic"); }
   if (fontSize !== undefined) { textStyle.fontSize = { magnitude: fontSize, unit: "PT" }; fields.push("fontSize"); }
   if (foregroundColor) {
-    const r = parseInt(foregroundColor.slice(1, 3), 16) / 255;
-    const g = parseInt(foregroundColor.slice(3, 5), 16) / 255;
-    const b = parseInt(foregroundColor.slice(5, 7), 16) / 255;
-    textStyle.foregroundColor = { color: { rgbColor: { red: r, green: g, blue: b } } };
+    textStyle.foregroundColor = { color: { rgbColor: parseHexColor(foregroundColor) } };
     fields.push("foregroundColor");
   }
   if (fields.length === 0) return "Error: At least one formatting option (bold, italic, fontSize, foregroundColor) must be specified.";
@@ -694,10 +700,7 @@ export async function slidesFormatText(presentationId: string, objectId: string,
   if (italic !== undefined) { style.italic = italic; fields.push("italic"); }
   if (fontSize !== undefined) { style.fontSize = { magnitude: fontSize, unit: "PT" }; fields.push("fontSize"); }
   if (color) {
-    const r = parseInt(color.slice(1, 3), 16) / 255;
-    const g = parseInt(color.slice(3, 5), 16) / 255;
-    const b = parseInt(color.slice(5, 7), 16) / 255;
-    style.foregroundColor = { opaqueColor: { rgbColor: { red: r, green: g, blue: b } } };
+    style.foregroundColor = { opaqueColor: { rgbColor: parseHexColor(color) } };
     fields.push("foregroundColor");
   }
 

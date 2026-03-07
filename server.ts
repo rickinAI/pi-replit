@@ -1840,6 +1840,24 @@ app.get("/api/gmail/status", async (_req: Request, res: Response) => {
   res.json(status);
 });
 
+const cachedStaticTools: ToolDefinition[] = [
+  ...buildGmailTools(),
+  ...buildCalendarTools(),
+  ...buildWeatherTools(),
+  ...buildSearchTools(),
+  ...buildTaskTools(),
+  ...buildNewsTools(),
+  ...buildTwitterTools(),
+  ...buildStockTools(),
+  ...buildMapsTools(),
+  ...buildDriveTools(),
+  ...buildSheetsTools(),
+  ...buildDocsTools(),
+  ...buildSlidesTools(),
+  ...buildYouTubeTools(),
+  ...buildConversationTools(),
+];
+
 app.post("/api/session", async (req: Request, res: Response) => {
   try {
     const { resumeConversationId } = req.body as { resumeConversationId?: string } || {};
@@ -1854,21 +1872,7 @@ app.post("/api/session", async (req: Request, res: Response) => {
 
     const coreTools = [
       ...buildKnowledgeBaseTools(),
-      ...buildGmailTools(),
-      ...buildCalendarTools(),
-      ...buildWeatherTools(),
-      ...buildSearchTools(),
-      ...buildTaskTools(),
-      ...buildNewsTools(),
-      ...buildTwitterTools(),
-      ...buildStockTools(),
-      ...buildMapsTools(),
-      ...buildDriveTools(),
-      ...buildSheetsTools(),
-      ...buildDocsTools(),
-      ...buildSlidesTools(),
-      ...buildYouTubeTools(),
-      ...buildConversationTools(),
+      ...cachedStaticTools,
       ...buildInterviewTool(sessionId),
     ];
     const allTools = [

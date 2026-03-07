@@ -13,7 +13,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Inline interview tool: AI sends structured question forms to user, waits for responses via Promise/SSE
   - Graceful shutdown on SIGHUP/SIGTERM/SIGINT (saves all conversations, releases port)
   - EADDRINUSE auto-recovery: pre-emptive port kill, probes port availability before listen, waits up to 15s with retries
-  - Periodic knowledge base health check (every 30s) with connection status logging
+  - Periodic knowledge base health check (every 15s) with connection status logging
   - Express error-handling middleware for clean JSON error responses
 - **src/db.ts** — Shared PostgreSQL connection pool (single `pg.Pool`, max 10 connections). Creates all 4 tables on init (`conversations`, `tasks`, `app_config`, `oauth_tokens`). All other modules import `getPool()` from here
 - **src/obsidian.ts** — Client for the knowledge base REST API (10s timeout, 2 retries on transient failures, health ping)
