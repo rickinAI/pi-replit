@@ -2276,6 +2276,25 @@ app.delete("/api/tasks/:id", async (req: Request, res: Response) => {
   }
 });
 
+app.get("/api/tasks/completed", async (_req: Request, res: Response) => {
+  try {
+    const completed = await tasks.getCompletedTasks();
+    res.json(completed);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.patch("/api/tasks/:id/restore", async (req: Request, res: Response) => {
+  try {
+    const result = await tasks.restoreTask(req.params["id"] as string);
+    glanceCache = null;
+    res.json({ ok: true, result });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 app.post("/api/config/tunnel-url", (req: Request, res: Response) => {
   const auth = req.headers.authorization;
   if (!auth || auth !== `Bearer ${process.env.OBSIDIAN_API_KEY}`) {

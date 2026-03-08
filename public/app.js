@@ -401,6 +401,66 @@ async function showLanding() {
   const taskList = document.createElement("div");
   taskList.className = "landing-task-list";
 
+  const completedWrap = document.createElement("div");
+  completedWrap.className = "completed-tasks-wrap";
+  let completedLoaded = false;
+  let completedListEl = null;
+
+  function formatCompletedDate(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    const now = new Date();
+    const diff = now - d;
+    if (diff < 60000) return "just now";
+    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+    if (diff < 604800000) return `${Math.floor(diff / 86400000)}d ago`;
+    return d.toLocaleDateString();
+  }
+
+  function renderCompletedItem(t) {
+    const item = document.createElement("div");
+    item.className = "completed-task-item";
+    item.dataset.id = t.id;
+    item.innerHTML = `
+      <span class="completed-task-title">${escapeHtml(t.title)}</span>
+      <span class="completed-task-date">${formatCompletedDate(t.completedAt)}</span>
+      <button class="task-restore">Restore</button>
+    `;
+    item.querySelector(".task-restore").addEventListener("click", async (e) => {
+      e.stopPropagation();
+      item.classList.add("task-restoring");
+      try {
+        const res = await fetch(`/api/tasks/${t.id}/restore`, { method: "PATCH" });
+        if (!res.ok) throw new Error("failed");
+        setTimeout(() => {
+          item.remove();
+          const emptyMsg = taskList.querySelector(".landing-tasks-empty");
+          if (emptyMsg) emptyMsg.remove();
+          taskList.appendChild(renderTaskItem({ id: t.id, title: t.title, priority: t.priority }));
+          const countEl = taskSection.querySelector(".landing-tasks-count");
+          if (countEl) countEl.textContent = taskList.querySelectorAll(".landing-task-item").length;
+          updateCompletedToggleCount();
+        }, 350);
+      } catch {
+        item.classList.remove("task-restoring");
+      }
+    });
+    return item;
+  }
+
+  function updateCompletedToggleCount() {
+    const toggle = completedWrap.querySelector(".completed-tasks-toggle");
+    if (toggle && completedListEl) {
+      const count = completedListEl.querySelectorAll(".completed-task-item").length;
+      toggle.querySelector(".completed-toggle-text").textContent = `Completed (${count})`;
+      if (count === 0) {
+        completedWrap.innerHTML = "";
+        completedLoaded = false;
+      }
+    }
+  }
+
   function renderTaskItem(t) {
     const item = document.createElement("div");
     item.className = "landing-task-item";
@@ -426,6 +486,25 @@ async function showLanding() {
           if (countEl) countEl.textContent = remaining;
           if (remaining === 0) {
             taskList.innerHTML = `<div class="landing-tasks-empty">All clear</div>`;
+          }
+          if (completedLoaded && completedListEl) {
+            completedListEl.prepend(renderCompletedItem({ id: t.id, title: t.title, priority: t.priority, completedAt: new Date().toISOString() }));
+            updateCompletedToggleCount();
+          } else if (!completedLoaded) {
+            const toggle = document.createElement("button");
+            toggle.className = "completed-tasks-toggle";
+            toggle.innerHTML = `<span class="completed-tasks-chevron">▶</span> <span class="completed-toggle-text">Completed (1)</span>`;
+            completedListEl = document.createElement("div");
+            completedListEl.className = "completed-task-list";
+            completedListEl.style.display = "none";
+            completedListEl.appendChild(renderCompletedItem({ id: t.id, title: t.title, priority: t.priority, completedAt: new Date().toISOString() }));
+            toggle.addEventListener("click", () => {
+              toggle.classList.toggle("expanded");
+              completedListEl.style.display = toggle.classList.contains("expanded") ? "flex" : "none";
+            });
+            completedWrap.appendChild(toggle);
+            completedWrap.appendChild(completedListEl);
+            completedLoaded = true;
           }
         }, 500);
       } catch {
@@ -510,6 +589,31 @@ async function showLanding() {
     if (e.key === "Enter") submitTask();
   });
   taskSection.appendChild(addTaskWrap);
+
+  (async () => {
+    try {
+      const res = await fetch("/api/tasks/completed");
+      if (!res.ok) return;
+      const completed = await res.json();
+      if (completed.length === 0) return;
+      const toggle = document.createElement("button");
+      toggle.className = "completed-tasks-toggle";
+      toggle.innerHTML = `<span class="completed-tasks-chevron">▶</span> <span class="completed-toggle-text">Completed (${completed.length})</span>`;
+      completedListEl = document.createElement("div");
+      completedListEl.className = "completed-task-list";
+      completedListEl.style.display = "none";
+      completed.forEach(t => completedListEl.appendChild(renderCompletedItem(t)));
+      toggle.addEventListener("click", () => {
+        toggle.classList.toggle("expanded");
+        completedListEl.style.display = toggle.classList.contains("expanded") ? "flex" : "none";
+      });
+      completedWrap.appendChild(toggle);
+      completedWrap.appendChild(completedListEl);
+      completedLoaded = true;
+    } catch {}
+  })();
+
+  taskSection.appendChild(completedWrap);
   landing.appendChild(taskSection);
 
   const newBtn = document.createElement("button");

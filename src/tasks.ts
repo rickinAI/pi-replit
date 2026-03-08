@@ -142,6 +142,22 @@ export async function listTasks(filter?: { showCompleted?: boolean; tag?: string
   return `${header}\n\n${lines.join("\n\n")}`;
 }
 
+export async function getCompletedTasks(): Promise<{ id: string; title: string; priority: string; completedAt?: string }[]> {
+  const result = await getPool().query(`SELECT * FROM tasks WHERE completed = true ORDER BY completed_at DESC`);
+  return result.rows.map(rowToTask).map(t => ({ id: t.id, title: t.title, priority: t.priority, completedAt: t.completedAt }));
+}
+
+export async function restoreTask(taskId: string): Promise<string> {
+  const result = await getPool().query(`SELECT * FROM tasks WHERE id = $1`, [taskId]);
+  if (result.rows.length === 0) return `Task not found: ${taskId}`;
+  const task = rowToTask(result.rows[0]);
+  if (!task.completed) return `Task is already active: "${task.title}"`;
+  task.completed = false;
+  task.completedAt = undefined;
+  await saveTask(task);
+  return `Restored task: "${task.title}"`;
+}
+
 export async function completeTask(taskId: string): Promise<string> {
   const result = await getPool().query(`SELECT * FROM tasks WHERE id = $1`, [taskId]);
   if (result.rows.length === 0) return `Task not found: ${taskId}`;

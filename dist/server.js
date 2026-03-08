@@ -1585,6 +1585,20 @@ async function listTasks(filter) {
 
 ${lines.join("\n\n")}`;
 }
+async function getCompletedTasks() {
+  const result = await getPool().query(`SELECT * FROM tasks WHERE completed = true ORDER BY completed_at DESC`);
+  return result.rows.map(rowToTask).map((t) => ({ id: t.id, title: t.title, priority: t.priority, completedAt: t.completedAt }));
+}
+async function restoreTask(taskId) {
+  const result = await getPool().query(`SELECT * FROM tasks WHERE id = $1`, [taskId]);
+  if (result.rows.length === 0) return `Task not found: ${taskId}`;
+  const task = rowToTask(result.rows[0]);
+  if (!task.completed) return `Task is already active: "${task.title}"`;
+  task.completed = false;
+  task.completedAt = void 0;
+  await saveTask(task);
+  return `Restored task: "${task.title}"`;
+}
 async function completeTask(taskId) {
   const result = await getPool().query(`SELECT * FROM tasks WHERE id = $1`, [taskId]);
   if (result.rows.length === 0) return `Task not found: ${taskId}`;
@@ -6007,6 +6021,23 @@ app.patch("/api/tasks/:id/complete", async (req, res) => {
 app.delete("/api/tasks/:id", async (req, res) => {
   try {
     const result = await deleteTask(req.params["id"]);
+    glanceCache = null;
+    res.json({ ok: true, result });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+app.get("/api/tasks/completed", async (_req, res) => {
+  try {
+    const completed = await getCompletedTasks();
+    res.json(completed);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+app.patch("/api/tasks/:id/restore", async (req, res) => {
+  try {
+    const result = await restoreTask(req.params["id"]);
     glanceCache = null;
     res.json({ ok: true, result });
   } catch (err) {

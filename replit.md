@@ -136,6 +136,8 @@ Client-side session resume and background agent support:
 | `/api/tasks` | POST | Create a new task (body: title, priority?, dueDate?) — returns created task object |
 | `/api/tasks/:id/complete` | PATCH | Mark task as completed |
 | `/api/tasks/:id` | DELETE | Delete a task |
+| `/api/tasks/completed` | GET | List completed tasks (id, title, priority, completedAt) sorted by most recent |
+| `/api/tasks/:id/restore` | PATCH | Restore a completed task back to active |
 | `/api/glance` | GET | Day-at-a-glance summary (weather, emails, tasks, calendar) — 5min server cache |
 | `/health` | GET | Health check |
 | `/api/session/:id/interview-response` | POST | Submit interview form responses |
