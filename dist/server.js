@@ -3628,6 +3628,136 @@ Save the compiled brief to "Scheduled Reports/Daily News.md" (overwrite previous
 Save the report to "Scheduled Reports/Market Summary.md" (overwrite previous).`,
     schedule: { type: "daily", hour: 7, minute: 30 },
     enabled: false
+  },
+  {
+    id: "moodys-daily-intel",
+    name: "Moody's Intelligence Brief",
+    agentId: "moodys",
+    prompt: `Compile a comprehensive daily intelligence brief covering 5 categories. For each item, tag relevance: \u{1F534} High (directly impacts Moody's Banking), \u{1F7E1} Medium (industry trend worth watching), \u{1F7E2} Low (background context). Include source URLs for every item.
+
+CATEGORY 1 \u2014 Moody's Corporate News:
+Search site:moodys.com and news for "Moody's" for any press releases, product announcements, leadership changes, earnings, or strategic moves. Focus on Banking Solutions, Lending, KYC, Risk Analytics, and data products.
+
+CATEGORY 2 \u2014 Banking Segment Specifics:
+Search for news about Moody's banking products: Credit Lens, Moody's Analytics banking, OnlineALM, Orbis, BvD. Include customer wins, partnerships, or product launches in the banking vertical.
+
+CATEGORY 3 \u2014 Competitor Intelligence:
+Search for latest news from ALL of these competitors:
+
+Credit Rating & Data Peers:
+- Bloomberg \u2014 Bloomberg Data, Enterprise Data, AI initiatives
+- S&P Global \u2014 Market Intelligence, Capital IQ, data strategy
+- Fitch \u2014 Fitch Ratings, Fitch Solutions, banking analytics, data products
+- Nasdaq \u2014 Nasdaq Financial Technology, AxiomSL, Calypso, risk/regulatory tech
+
+Banking Tech / Lending Platforms:
+- nCino \u2014 Bank operating system, lending automation, AI in banking
+- QRM \u2014 Credit risk, ALM, FTP, balance sheet management (direct Credit Lens competitor)
+- Empyrean (Emperion) \u2014 Lending technology, credit decisioning, banking analytics
+
+Data & AI Infrastructure:
+- Quantexa \u2014 Entity resolution, knowledge graph, agentic AI, banking deals
+- Databricks \u2014 Financial services, lakehouse for banking, Delta Sharing
+
+Regulatory & Compliance Partners:
+- Regnology \u2014 Regulatory reporting tech
+- FinregE \u2014 Regulatory intelligence automation
+- ValidMind \u2014 Model risk management, AI governance
+
+CATEGORY 4 \u2014 Enterprise AI Trends:
+Search for: agentic AI in banking/financial services, enterprise LLM deployments in regulated industries, AI governance and regulation (EU AI Act, US banking regulators), MCP (Model Context Protocol) enterprise adoption, CDM/data standards in financial services.
+
+CATEGORY 5 \u2014 Industry Analyst Coverage:
+Search site:celent.com for mentions of Moody's, Credit Lens, lending tech, risk analytics, ALM, banking AI, and competitors.
+Search site:chartis-research.com for RiskTech100, quadrant reports, credit risk, market risk, model risk, RegTech rankings.
+Search for reports from Forrester, Gartner, and IDC on banking technology, risk analytics, or enterprise AI in financial services.
+
+OUTPUT FORMAT \u2014 Save using notes_create to "Scheduled Reports/{today's date YYYY-MM-DD}-Moodys-Intelligence-Brief.md":
+
+# Moody's Intelligence Brief \u2014 {today's date}
+
+## \u{1F3E2} Moody's Corporate
+- {bullet summaries with source URLs and relevance tags}
+
+## \u{1F3E6} Banking Segment
+- {bullet summaries with source URLs and relevance tags}
+
+## \u{1F50D} Competitor Watch
+### Credit Rating & Data Peers
+#### Bloomberg
+#### S&P Global
+#### Fitch
+#### Nasdaq
+### Banking Tech & Lending
+#### nCino
+#### QRM
+#### Empyrean
+### Data & AI Infrastructure
+#### Quantexa
+#### Databricks
+### Regulatory & Compliance
+#### Regnology / FinregE / ValidMind
+- {bullet summaries with source URLs and relevance tags}
+
+## \u{1F916} Enterprise AI Trends
+- {bullet summaries with source URLs and relevance tags}
+
+## \u{1F4CA} Industry Analyst Coverage
+### Celent
+### Chartis Research
+### Other Analysts (Forrester / Gartner / IDC)
+- {bullet summaries with source URLs and relevance tags}
+
+## \u26A1 Key Takeaways
+- {3-5 bullet executive summary of what matters most for Moody's Banking Solutions positioning}
+
+If a search returns no new results for a category, note "No new developments" rather than omitting the section.`,
+    schedule: { type: "daily", hour: 6, minute: 0 },
+    enabled: true
+  },
+  {
+    id: "moodys-weekly-digest",
+    name: "Moody's Weekly Strategic Digest",
+    agentId: "moodys",
+    prompt: `Generate the weekly Moody's strategic digest by reading and synthesising all daily intelligence briefs from this past week.
+
+STEP 1: List files in "Scheduled Reports/" folder using notes_list.
+STEP 2: Read every file matching "*-Moodys-Intelligence-Brief.md" from the last 7 days.
+STEP 3: Synthesise all daily briefs into the weekly digest format below.
+
+Save using notes_create to "Scheduled Reports/{today's date YYYY-MM-DD}-Moodys-Weekly-Digest.md":
+
+# Moody's Weekly Strategic Digest \u2014 Week of {date}
+
+## \u{1F4C8} Week in Review
+- {3-5 sentence executive summary of the most important developments}
+
+## \u{1F3E2} Moody's Moves This Week
+- {consolidated list of Moody's news, deduplicated across daily briefs}
+
+## \u{1F50D} Competitor Patterns
+- {trends across competitors \u2014 who's gaining, who's shipping, strategic shifts}
+- {any new partnerships, acquisitions, or product launches}
+
+## \u{1F916} AI & Tech Trajectory
+- {emerging patterns in enterprise AI, agentic AI, banking tech}
+- {regulatory developments that impact Moody's strategy}
+
+## \u{1F4CA} Analyst Signals
+- {any new rankings, quadrant reports, or vendor assessments}
+- {shifts in analyst sentiment toward Moody's or competitors}
+
+## \u26A0\uFE0F Strategic Implications for Moody's Banking
+- {what these developments mean for Rickin's data moat strategy}
+- {opportunities to exploit or threats to watch}
+- {specific actions or talking points for the coming week}
+
+## \u{1F3AF} Recommended Focus This Week
+- {top 3 things to pay attention to or act on}
+
+Be thorough in reading all available daily briefs. If fewer than 7 daily briefs exist, work with what's available.`,
+    schedule: { type: "weekly", hour: 7, minute: 0, daysOfWeek: [0] },
+    enabled: true
   }
 ];
 var config2 = {

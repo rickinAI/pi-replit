@@ -36,6 +36,10 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - All sub-agents default to Opus (`data/agents.json` model field + orchestrator fallback)
   - All sub-agents get Anthropic native `web_search_20260209` and `web_fetch_20260209` server tools automatically (no DuckDuckGo scraping)
   - Orchestrator fallback summary: if agent loop ends with no response, makes one final API call for summary
+- **Moody's Intelligence Pipeline** — Two scheduled jobs using the moodys agent:
+  - Daily Intelligence Brief at 6:00 AM ET — 5 categories: Corporate News, Banking Segment, Competitor Watch (12 competitors), Enterprise AI Trends, Analyst Coverage (Celent, Chartis, Forrester, Gartner, IDC). Saves to `Scheduled Reports/YYYY-MM-DD-Moodys-Intelligence-Brief.md`
+  - Weekly Strategic Digest on Sundays at 7:00 AM ET — synthesises daily briefs into strategic analysis. Saves to `Scheduled Reports/YYYY-MM-DD-Moodys-Weekly-Digest.md`
+  - Moody's agent auto-reads latest briefs before any task (4-step mandatory pre-read). Timeout: 300s
 - **public/** — Static frontend (terminal/hacker aesthetic, branded as "RICKIN")
   - Landing screen: "Mission Control" full-screen overlay on fresh load (no active session). Shows date, glance strip (weather/email/tasks/calendar from `/api/glance`), interactive task section (checklist with checkboxes, priority dots, "Go" quick-launch, inline add-task form), last conversation card with preview + RESUME button, NEW MISSION button, recent conversation cards with delete, VIEW ALL to expand full history inline
   - Conversation search: search input on landing screen filters conversations by title in real-time

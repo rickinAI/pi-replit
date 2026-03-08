@@ -73,6 +73,136 @@ Save the report to "Scheduled Reports/Market Summary.md" (overwrite previous).`,
     schedule: { type: "daily", hour: 7, minute: 30 },
     enabled: false,
   },
+  {
+    id: "moodys-daily-intel",
+    name: "Moody's Intelligence Brief",
+    agentId: "moodys",
+    prompt: `Compile a comprehensive daily intelligence brief covering 5 categories. For each item, tag relevance: 🔴 High (directly impacts Moody's Banking), 🟡 Medium (industry trend worth watching), 🟢 Low (background context). Include source URLs for every item.
+
+CATEGORY 1 — Moody's Corporate News:
+Search site:moodys.com and news for "Moody's" for any press releases, product announcements, leadership changes, earnings, or strategic moves. Focus on Banking Solutions, Lending, KYC, Risk Analytics, and data products.
+
+CATEGORY 2 — Banking Segment Specifics:
+Search for news about Moody's banking products: Credit Lens, Moody's Analytics banking, OnlineALM, Orbis, BvD. Include customer wins, partnerships, or product launches in the banking vertical.
+
+CATEGORY 3 — Competitor Intelligence:
+Search for latest news from ALL of these competitors:
+
+Credit Rating & Data Peers:
+- Bloomberg — Bloomberg Data, Enterprise Data, AI initiatives
+- S&P Global — Market Intelligence, Capital IQ, data strategy
+- Fitch — Fitch Ratings, Fitch Solutions, banking analytics, data products
+- Nasdaq — Nasdaq Financial Technology, AxiomSL, Calypso, risk/regulatory tech
+
+Banking Tech / Lending Platforms:
+- nCino — Bank operating system, lending automation, AI in banking
+- QRM — Credit risk, ALM, FTP, balance sheet management (direct Credit Lens competitor)
+- Empyrean (Emperion) — Lending technology, credit decisioning, banking analytics
+
+Data & AI Infrastructure:
+- Quantexa — Entity resolution, knowledge graph, agentic AI, banking deals
+- Databricks — Financial services, lakehouse for banking, Delta Sharing
+
+Regulatory & Compliance Partners:
+- Regnology — Regulatory reporting tech
+- FinregE — Regulatory intelligence automation
+- ValidMind — Model risk management, AI governance
+
+CATEGORY 4 — Enterprise AI Trends:
+Search for: agentic AI in banking/financial services, enterprise LLM deployments in regulated industries, AI governance and regulation (EU AI Act, US banking regulators), MCP (Model Context Protocol) enterprise adoption, CDM/data standards in financial services.
+
+CATEGORY 5 — Industry Analyst Coverage:
+Search site:celent.com for mentions of Moody's, Credit Lens, lending tech, risk analytics, ALM, banking AI, and competitors.
+Search site:chartis-research.com for RiskTech100, quadrant reports, credit risk, market risk, model risk, RegTech rankings.
+Search for reports from Forrester, Gartner, and IDC on banking technology, risk analytics, or enterprise AI in financial services.
+
+OUTPUT FORMAT — Save using notes_create to "Scheduled Reports/{today's date YYYY-MM-DD}-Moodys-Intelligence-Brief.md":
+
+# Moody's Intelligence Brief — {today's date}
+
+## 🏢 Moody's Corporate
+- {bullet summaries with source URLs and relevance tags}
+
+## 🏦 Banking Segment
+- {bullet summaries with source URLs and relevance tags}
+
+## 🔍 Competitor Watch
+### Credit Rating & Data Peers
+#### Bloomberg
+#### S&P Global
+#### Fitch
+#### Nasdaq
+### Banking Tech & Lending
+#### nCino
+#### QRM
+#### Empyrean
+### Data & AI Infrastructure
+#### Quantexa
+#### Databricks
+### Regulatory & Compliance
+#### Regnology / FinregE / ValidMind
+- {bullet summaries with source URLs and relevance tags}
+
+## 🤖 Enterprise AI Trends
+- {bullet summaries with source URLs and relevance tags}
+
+## 📊 Industry Analyst Coverage
+### Celent
+### Chartis Research
+### Other Analysts (Forrester / Gartner / IDC)
+- {bullet summaries with source URLs and relevance tags}
+
+## ⚡ Key Takeaways
+- {3-5 bullet executive summary of what matters most for Moody's Banking Solutions positioning}
+
+If a search returns no new results for a category, note "No new developments" rather than omitting the section.`,
+    schedule: { type: "daily", hour: 6, minute: 0 },
+    enabled: true,
+  },
+  {
+    id: "moodys-weekly-digest",
+    name: "Moody's Weekly Strategic Digest",
+    agentId: "moodys",
+    prompt: `Generate the weekly Moody's strategic digest by reading and synthesising all daily intelligence briefs from this past week.
+
+STEP 1: List files in "Scheduled Reports/" folder using notes_list.
+STEP 2: Read every file matching "*-Moodys-Intelligence-Brief.md" from the last 7 days.
+STEP 3: Synthesise all daily briefs into the weekly digest format below.
+
+Save using notes_create to "Scheduled Reports/{today's date YYYY-MM-DD}-Moodys-Weekly-Digest.md":
+
+# Moody's Weekly Strategic Digest — Week of {date}
+
+## 📈 Week in Review
+- {3-5 sentence executive summary of the most important developments}
+
+## 🏢 Moody's Moves This Week
+- {consolidated list of Moody's news, deduplicated across daily briefs}
+
+## 🔍 Competitor Patterns
+- {trends across competitors — who's gaining, who's shipping, strategic shifts}
+- {any new partnerships, acquisitions, or product launches}
+
+## 🤖 AI & Tech Trajectory
+- {emerging patterns in enterprise AI, agentic AI, banking tech}
+- {regulatory developments that impact Moody's strategy}
+
+## 📊 Analyst Signals
+- {any new rankings, quadrant reports, or vendor assessments}
+- {shifts in analyst sentiment toward Moody's or competitors}
+
+## ⚠️ Strategic Implications for Moody's Banking
+- {what these developments mean for Rickin's data moat strategy}
+- {opportunities to exploit or threats to watch}
+- {specific actions or talking points for the coming week}
+
+## 🎯 Recommended Focus This Week
+- {top 3 things to pay attention to or act on}
+
+Be thorough in reading all available daily briefs. If fewer than 7 daily briefs exist, work with what's available.`,
+    schedule: { type: "weekly", hour: 7, minute: 0, daysOfWeek: [0] },
+    enabled: true,
+  },
 ];
 
 let config: ScheduledJobsConfig = {
