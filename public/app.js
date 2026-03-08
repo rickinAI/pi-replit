@@ -2175,7 +2175,16 @@ async function fetchGlance() {
     if (d.time) detailRows.push(row("time", e(d.time)));
     if (d.weather) detailRows.push(row("weather", `${e(d.weather.icon)} ${e(String(d.weather.tempC))}°C — ${e(d.weather.condition)}`));
     if (d.emails) detailRows.push(row("email", d.emails.unread === 0 ? "Inbox clear" : `${d.emails.unread} new emails`));
-    if (d.tasks) detailRows.push(row("tasks", d.tasks.active === 0 ? "All clear" : `${d.tasks.active} open`));
+    if (d.tasks) {
+      if (d.tasks.active === 0) {
+        detailRows.push(row("tasks", "All clear"));
+      } else if (d.tasks.items && d.tasks.items.length > 0) {
+        const taskList = d.tasks.items.map(t => e(t.title)).join("; ");
+        detailRows.push(row("tasks", `${d.tasks.active} open — ${taskList}`));
+      } else {
+        detailRows.push(row("tasks", `${d.tasks.active} open`));
+      }
+    }
     if (d.upcomingEvents && d.upcomingEvents.length > 0) {
       const evList = d.upcomingEvents.map(ev => {
         const t = (ev.time || "").replace(/^.*?,\s*/, "");

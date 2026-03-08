@@ -1495,6 +1495,10 @@ async function loadTasks() {
   const result = await getPool().query(`SELECT * FROM tasks ORDER BY created_at DESC`);
   return result.rows.map(rowToTask);
 }
+async function getActiveTasks() {
+  const all = await loadTasks();
+  return all.filter((t) => !t.completed).map((t) => ({ title: t.title, priority: t.priority, dueDate: t.dueDate }));
+}
 async function saveTask(task) {
   await getPool().query(
     `INSERT INTO tasks (id, title, description, due_date, priority, completed, created_at, completed_at, tags)
@@ -6055,13 +6059,8 @@ app.get("/api/glance", async (_req, res) => {
     }
     promises.push((async () => {
       try {
-        const raw = await listTasks();
-        if (raw.includes("No open tasks") || raw.includes("No tasks found")) {
-          result.tasks = { active: 0 };
-        } else {
-          const countMatch = raw.match(/(\d+)\s*open/);
-          result.tasks = { active: countMatch ? parseInt(countMatch[1]) : 0 };
-        }
+        const active = await getActiveTasks();
+        result.tasks = { active: active.length, items: active };
       } catch {
       }
     })());

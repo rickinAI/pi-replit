@@ -47,6 +47,11 @@ async function loadTasks(): Promise<Task[]> {
   return result.rows.map(rowToTask);
 }
 
+export async function getActiveTasks(): Promise<{ title: string; priority: string; dueDate?: string }[]> {
+  const all = await loadTasks();
+  return all.filter(t => !t.completed).map(t => ({ title: t.title, priority: t.priority, dueDate: t.dueDate }));
+}
+
 async function saveTask(task: Task): Promise<void> {
   await getPool().query(
     `INSERT INTO tasks (id, title, description, due_date, priority, completed, created_at, completed_at, tags)

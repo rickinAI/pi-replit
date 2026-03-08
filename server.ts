@@ -2332,13 +2332,8 @@ app.get("/api/glance", async (_req: Request, res: Response) => {
 
     promises.push((async () => {
       try {
-        const raw = await tasks.listTasks();
-        if (raw.includes("No open tasks") || raw.includes("No tasks found")) {
-          result.tasks = { active: 0 };
-        } else {
-          const countMatch = raw.match(/(\d+)\s*open/);
-          result.tasks = { active: countMatch ? parseInt(countMatch[1]) : 0 };
-        }
+        const active = await tasks.getActiveTasks();
+        result.tasks = { active: active.length, items: active };
       } catch {}
     })());
 
