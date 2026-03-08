@@ -29,9 +29,10 @@ type KbCreateFn = (path: string, content: string) => Promise<any>;
 type KbListFn = (path: string) => Promise<string>;
 type KbMoveFn = (from: string, to: string) => Promise<string>;
 
-function getMoodysJobSavePath(jobId: string, dateStr: string, safeName: string): string {
+function getJobSavePath(jobId: string, dateStr: string, safeName: string): string {
   if (jobId === "moodys-daily-intel") return `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief.md`;
   if (jobId === "moodys-weekly-digest") return `Scheduled Reports/Moody's Intelligence/Weekly/${dateStr}-Digest.md`;
+  if (jobId === "real-estate-daily-scan") return `Scheduled Reports/Real Estate/${dateStr}-Property-Scan.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 
@@ -218,6 +219,77 @@ Be thorough in reading all available daily briefs. If fewer than 7 daily briefs 
     schedule: { type: "weekly", hour: 7, minute: 0, daysOfWeek: [0] },
     enabled: true,
   },
+  {
+    id: "real-estate-daily-scan",
+    name: "Daily Property Scan",
+    agentId: "real-estate",
+    prompt: `You are running the daily property scan. First read "Real Estate/Search Criteria.md" for full criteria and target areas.
+
+For each of the 6 target areas, search for hidden gem properties matching: $1.5M–$2M, 5+ bedrooms, 3+ bathrooms, Houses.
+
+SEARCH EACH AREA — Use property_search with these locations (one call per area):
+1. "Upper Saddle River, NJ" (also try "Ridgewood, NJ", "Ho-Ho-Kus, NJ")
+2. "Montclair, NJ" (also try "Glen Ridge, NJ")
+3. "Princeton, NJ" (also try "West Windsor, NJ")
+4. "Garden City, NY" (also try "Manhasset, NY", "Great Neck, NY", "Cold Spring Harbor, NY")
+5. "Tarrytown, NY" (also try "Scarsdale, NY", "Chappaqua, NY", "Bronxville, NY")
+6. "Westport, CT" (also try "Darien, CT", "Stamford, CT")
+
+For each search: set minPrice=1500000, maxPrice=2000000, minBeds=5, minBaths=3, sort="Newest".
+
+For the top 3-5 most interesting properties per area, use property_details (with zpid) to get:
+- School ratings and nearby schools
+- Full features (garage, pool, fireplace, basement)
+- Price history and tax data
+- Property description
+
+For each property include: address, price, beds/baths, sqft, lot size, year built, key features, school district + rating, estimated commute to Brookfield Place (route + transfers + time from Search Criteria), days on market, Zillow listing URL, and WHY it's interesting (1-2 sentences on character/charm/value).
+
+Focus on:
+- New listings (< 7 days on market)
+- Price reductions
+- Back-on-market properties
+- Hidden gems: unique architecture, mature landscaping, walkable location, overlooked value
+
+Flag ⭐ standout properties (great schools + walkable + good commute + character) and save each to "Real Estate/Favorites/{Address slug}.md" with full details using notes_create.
+
+OUTPUT — Save using notes_create to "Scheduled Reports/Real Estate/{today's date YYYY-MM-DD}-Property-Scan.md":
+
+# Daily Property Scan — {today's date}
+
+## ⚡ Executive Summary
+- Total new listings found across all areas
+- Top gems of the day (⭐ properties)
+- Price trends or market observations
+- Commute comparison across areas
+
+## 🏡 Upper Saddle River / Bergen County, NJ
+{property listings with full details}
+
+## 🏡 Montclair, NJ
+{property listings with full details}
+
+## 🏡 Princeton, NJ
+{property listings with full details}
+
+## 🏡 Long Island, NY
+{property listings with full details}
+
+## 🏡 Hudson Valley / Upstate NY
+{property listings with full details}
+
+## 🏡 Stamford–Westport, CT
+{property listings with full details}
+
+## 🎯 Top Gems Today
+{ranked list of ⭐ properties with one-line reasons}
+
+After saving the scan, append any notable new listings to the corresponding area file in "Real Estate/Areas/" using notes_append with a date-stamped header (### YYYY-MM-DD).
+
+If no properties are found in an area, note "No new listings matching criteria" rather than omitting the section.`,
+    schedule: { type: "daily", hour: 7, minute: 30 },
+    enabled: true,
+  },
 ];
 
 let config: ScheduledJobsConfig = {
@@ -234,7 +306,7 @@ let kbCreateFn: KbCreateFn | null = null;
 let kbListFn: KbListFn | null = null;
 let kbMoveFn: KbMoveFn | null = null;
 
-async function archiveOldBriefs(): Promise<void> {
+async function archiveOldReports(): Promise<void> {
   if (!kbListFn || !kbMoveFn) return;
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - 30);
@@ -243,6 +315,7 @@ async function archiveOldBriefs(): Promise<void> {
   const folders = [
     { src: "Scheduled Reports/Moody's Intelligence/Daily", dest: "Archive/Moody's Intelligence/Daily" },
     { src: "Scheduled Reports/Moody's Intelligence/Weekly", dest: "Archive/Moody's Intelligence/Weekly" },
+    { src: "Scheduled Reports/Real Estate", dest: "Archive/Real Estate" },
   ];
 
   let archived = 0;
@@ -428,7 +501,7 @@ async function checkJobs(): Promise<void> {
       const safeName = job.name.replace(/[^a-zA-Z0-9 ]/g, "").replace(/\s+/g, "-");
       if (kbCreateFn) {
         try {
-          const savePath = getMoodysJobSavePath(job.id, dateStr, safeName);
+          const savePath = getJobSavePath(job.id, dateStr, safeName);
           await kbCreateFn(savePath, `# ${job.name}\n*Generated: ${new Date().toLocaleString("en-US", { timeZone: config.timezone })}*\n\n${result}`);
         } catch (e) {
           console.error(`[scheduled-jobs] Failed to save to vault:`, e);
@@ -447,8 +520,8 @@ async function checkJobs(): Promise<void> {
 
       console.log(`[scheduled-jobs] Job completed: ${job.name}`);
 
-      if (job.id.startsWith("moodys") && kbListFn && kbMoveFn) {
-        await archiveOldBriefs();
+      if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate")) && kbListFn && kbMoveFn) {
+        await archiveOldReports();
       }
     } catch (err) {
       job.lastRun = new Date().toISOString();
@@ -522,13 +595,13 @@ export async function triggerJob(jobId: string): Promise<string> {
     const safeName = job.name.replace(/[^a-zA-Z0-9 ]/g, "").replace(/\s+/g, "-");
     if (kbCreateFn) {
       try {
-        const savePath = getMoodysJobSavePath(job.id, todayKey, safeName);
+        const savePath = getJobSavePath(job.id, todayKey, safeName);
         await kbCreateFn(savePath, `# ${job.name}\n*Generated: ${new Date().toLocaleString("en-US", { timeZone: config.timezone })}*\n\n${result}`);
       } catch {}
     }
 
-    if (job.id.startsWith("moodys") && kbListFn && kbMoveFn) {
-      await archiveOldBriefs();
+    if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate")) && kbListFn && kbMoveFn) {
+      await archiveOldReports();
     }
 
     if (broadcastFn) {

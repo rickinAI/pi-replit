@@ -3583,9 +3583,10 @@ async function triggerBrief(type) {
 }
 
 // src/scheduled-jobs.ts
-function getMoodysJobSavePath(jobId, dateStr, safeName) {
+function getJobSavePath(jobId, dateStr, safeName) {
   if (jobId === "moodys-daily-intel") return `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief.md`;
   if (jobId === "moodys-weekly-digest") return `Scheduled Reports/Moody's Intelligence/Weekly/${dateStr}-Digest.md`;
+  if (jobId === "real-estate-daily-scan") return `Scheduled Reports/Real Estate/${dateStr}-Property-Scan.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 var DEFAULT_JOBS = [
@@ -3770,6 +3771,77 @@ Save using notes_create to "Scheduled Reports/Moody's Intelligence/Weekly/{today
 Be thorough in reading all available daily briefs. If fewer than 7 daily briefs exist, work with what's available.`,
     schedule: { type: "weekly", hour: 7, minute: 0, daysOfWeek: [0] },
     enabled: true
+  },
+  {
+    id: "real-estate-daily-scan",
+    name: "Daily Property Scan",
+    agentId: "real-estate",
+    prompt: `You are running the daily property scan. First read "Real Estate/Search Criteria.md" for full criteria and target areas.
+
+For each of the 6 target areas, search for hidden gem properties matching: $1.5M\u2013$2M, 5+ bedrooms, 3+ bathrooms, Houses.
+
+SEARCH EACH AREA \u2014 Use property_search with these locations (one call per area):
+1. "Upper Saddle River, NJ" (also try "Ridgewood, NJ", "Ho-Ho-Kus, NJ")
+2. "Montclair, NJ" (also try "Glen Ridge, NJ")
+3. "Princeton, NJ" (also try "West Windsor, NJ")
+4. "Garden City, NY" (also try "Manhasset, NY", "Great Neck, NY", "Cold Spring Harbor, NY")
+5. "Tarrytown, NY" (also try "Scarsdale, NY", "Chappaqua, NY", "Bronxville, NY")
+6. "Westport, CT" (also try "Darien, CT", "Stamford, CT")
+
+For each search: set minPrice=1500000, maxPrice=2000000, minBeds=5, minBaths=3, sort="Newest".
+
+For the top 3-5 most interesting properties per area, use property_details (with zpid) to get:
+- School ratings and nearby schools
+- Full features (garage, pool, fireplace, basement)
+- Price history and tax data
+- Property description
+
+For each property include: address, price, beds/baths, sqft, lot size, year built, key features, school district + rating, estimated commute to Brookfield Place (route + transfers + time from Search Criteria), days on market, Zillow listing URL, and WHY it's interesting (1-2 sentences on character/charm/value).
+
+Focus on:
+- New listings (< 7 days on market)
+- Price reductions
+- Back-on-market properties
+- Hidden gems: unique architecture, mature landscaping, walkable location, overlooked value
+
+Flag \u2B50 standout properties (great schools + walkable + good commute + character) and save each to "Real Estate/Favorites/{Address slug}.md" with full details using notes_create.
+
+OUTPUT \u2014 Save using notes_create to "Scheduled Reports/Real Estate/{today's date YYYY-MM-DD}-Property-Scan.md":
+
+# Daily Property Scan \u2014 {today's date}
+
+## \u26A1 Executive Summary
+- Total new listings found across all areas
+- Top gems of the day (\u2B50 properties)
+- Price trends or market observations
+- Commute comparison across areas
+
+## \u{1F3E1} Upper Saddle River / Bergen County, NJ
+{property listings with full details}
+
+## \u{1F3E1} Montclair, NJ
+{property listings with full details}
+
+## \u{1F3E1} Princeton, NJ
+{property listings with full details}
+
+## \u{1F3E1} Long Island, NY
+{property listings with full details}
+
+## \u{1F3E1} Hudson Valley / Upstate NY
+{property listings with full details}
+
+## \u{1F3E1} Stamford\u2013Westport, CT
+{property listings with full details}
+
+## \u{1F3AF} Top Gems Today
+{ranked list of \u2B50 properties with one-line reasons}
+
+After saving the scan, append any notable new listings to the corresponding area file in "Real Estate/Areas/" using notes_append with a date-stamped header (### YYYY-MM-DD).
+
+If no properties are found in an area, note "No new listings matching criteria" rather than omitting the section.`,
+    schedule: { type: "daily", hour: 7, minute: 30 },
+    enabled: true
   }
 ];
 var config2 = {
@@ -3784,14 +3856,15 @@ var broadcastFn2 = null;
 var kbCreateFn = null;
 var kbListFn = null;
 var kbMoveFn = null;
-async function archiveOldBriefs() {
+async function archiveOldReports() {
   if (!kbListFn || !kbMoveFn) return;
   const cutoff = /* @__PURE__ */ new Date();
   cutoff.setDate(cutoff.getDate() - 30);
   const cutoffStr = cutoff.toISOString().slice(0, 10);
   const folders = [
     { src: "Scheduled Reports/Moody's Intelligence/Daily", dest: "Archive/Moody's Intelligence/Daily" },
-    { src: "Scheduled Reports/Moody's Intelligence/Weekly", dest: "Archive/Moody's Intelligence/Weekly" }
+    { src: "Scheduled Reports/Moody's Intelligence/Weekly", dest: "Archive/Moody's Intelligence/Weekly" },
+    { src: "Scheduled Reports/Real Estate", dest: "Archive/Real Estate" }
   ];
   let archived = 0;
   for (const { src, dest } of folders) {
@@ -3952,7 +4025,7 @@ async function checkJobs() {
       const safeName = job.name.replace(/[^a-zA-Z0-9 ]/g, "").replace(/\s+/g, "-");
       if (kbCreateFn) {
         try {
-          const savePath = getMoodysJobSavePath(job.id, dateStr, safeName);
+          const savePath = getJobSavePath(job.id, dateStr, safeName);
           await kbCreateFn(savePath, `# ${job.name}
 *Generated: ${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: config2.timezone })}*
 
@@ -3971,8 +4044,8 @@ ${result}`);
         });
       }
       console.log(`[scheduled-jobs] Job completed: ${job.name}`);
-      if (job.id.startsWith("moodys") && kbListFn && kbMoveFn) {
-        await archiveOldBriefs();
+      if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate")) && kbListFn && kbMoveFn) {
+        await archiveOldReports();
       }
     } catch (err) {
       job.lastRun = (/* @__PURE__ */ new Date()).toISOString();
@@ -4029,7 +4102,7 @@ async function triggerJob(jobId) {
     const safeName = job.name.replace(/[^a-zA-Z0-9 ]/g, "").replace(/\s+/g, "-");
     if (kbCreateFn) {
       try {
-        const savePath = getMoodysJobSavePath(job.id, todayKey, safeName);
+        const savePath = getJobSavePath(job.id, todayKey, safeName);
         await kbCreateFn(savePath, `# ${job.name}
 *Generated: ${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: config2.timezone })}*
 
@@ -4037,8 +4110,8 @@ ${result}`);
       } catch {
       }
     }
-    if (job.id.startsWith("moodys") && kbListFn && kbMoveFn) {
-      await archiveOldBriefs();
+    if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate")) && kbListFn && kbMoveFn) {
+      await archiveOldReports();
     }
     if (broadcastFn2) {
       broadcastFn2({
@@ -4894,6 +4967,161 @@ function buildStockTools() {
       async execute(_toolCallId, params) {
         const result = await getCryptoPrice(params.coin);
         return { content: [{ type: "text", text: result }], details: {} };
+      }
+    }
+  ];
+}
+var RAPIDAPI_KEY = process.env.RAPIDAPI_KEY || "";
+function buildRealEstateTools() {
+  if (!RAPIDAPI_KEY) return [];
+  return [
+    {
+      name: "property_search",
+      label: "Property Search",
+      description: "Search Zillow for property listings by location with filters. Returns structured listing data including address, price, beds, baths, sqft, and listing URLs.",
+      parameters: Type.Object({
+        location: Type.String({ description: "Location to search \u2014 city and state, zip code, or neighborhood (e.g. 'Montclair, NJ', '07042', 'Garden City, NY')" }),
+        minPrice: Type.Optional(Type.Number({ description: "Minimum price filter (e.g. 1500000)" })),
+        maxPrice: Type.Optional(Type.Number({ description: "Maximum price filter (e.g. 2000000)" })),
+        minBeds: Type.Optional(Type.Number({ description: "Minimum bedrooms (e.g. 5)" })),
+        minBaths: Type.Optional(Type.Number({ description: "Minimum bathrooms (e.g. 3)" })),
+        sort: Type.Optional(Type.String({ description: "Sort order: 'Newest', 'Price_High_Low', 'Price_Low_High', 'Bedrooms', 'Bathrooms'" })),
+        page: Type.Optional(Type.Number({ description: "Page number for pagination (default 1)" }))
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const queryParams = { location: params.location, status_type: "ForSale" };
+          if (params.minPrice) queryParams.minPrice = String(params.minPrice);
+          if (params.maxPrice) queryParams.maxPrice = String(params.maxPrice);
+          if (params.minBeds) queryParams.bedsMin = String(params.minBeds);
+          if (params.minBaths) queryParams.bathsMin = String(params.minBaths);
+          if (params.sort) queryParams.sort = params.sort;
+          if (params.page) queryParams.page = String(params.page);
+          queryParams.home_type = "Houses";
+          const url = `https://zillow-com1.p.rapidapi.com/propertyExtendedSearch?${new URLSearchParams(queryParams)}`;
+          const resp = await fetch(url, {
+            headers: { "X-RapidAPI-Key": RAPIDAPI_KEY, "X-RapidAPI-Host": "zillow-com1.p.rapidapi.com" }
+          });
+          if (!resp.ok) return { content: [{ type: "text", text: `API error: ${resp.status} ${resp.statusText}` }], details: {} };
+          const data = await resp.json();
+          const props = data.props || [];
+          if (props.length === 0) return { content: [{ type: "text", text: `No properties found in ${params.location} matching criteria. Try broadening filters or checking the location name.` }], details: {} };
+          const summary = props.slice(0, 20).map((p) => ({
+            address: p.address,
+            price: p.price ? `$${p.price.toLocaleString()}` : "N/A",
+            beds: p.bedrooms,
+            baths: p.bathrooms,
+            sqft: p.livingArea,
+            lotSize: p.lotAreaValue ? `${p.lotAreaValue} ${p.lotAreaUnit || "sqft"}` : "N/A",
+            zpid: p.zpid,
+            daysOnZillow: p.daysOnZillow,
+            listingUrl: p.detailUrl ? `https://www.zillow.com${p.detailUrl}` : null,
+            propertyType: p.propertyType,
+            listingStatus: p.listingStatus
+          }));
+          return { content: [{ type: "text", text: JSON.stringify({ totalResults: data.totalResultCount || props.length, resultsReturned: summary.length, properties: summary }, null, 2) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: `Property search failed: ${err.message}` }], details: {} };
+        }
+      }
+    },
+    {
+      name: "property_details",
+      label: "Property Details",
+      description: "Get detailed information about a specific property from Zillow including school ratings, price history, tax history, and full features. Requires a Zillow property ID (zpid) from property_search results.",
+      parameters: Type.Object({
+        zpid: Type.Number({ description: "Zillow property ID (from property_search results)" })
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const url = `https://zillow-com1.p.rapidapi.com/property?zpid=${params.zpid}`;
+          const resp = await fetch(url, {
+            headers: { "X-RapidAPI-Key": RAPIDAPI_KEY, "X-RapidAPI-Host": "zillow-com1.p.rapidapi.com" }
+          });
+          if (!resp.ok) return { content: [{ type: "text", text: `API error: ${resp.status} ${resp.statusText}` }], details: {} };
+          const data = await resp.json();
+          const details = {
+            address: data.address,
+            price: data.price ? `$${data.price.toLocaleString()}` : "N/A",
+            beds: data.bedrooms,
+            baths: data.bathrooms,
+            sqft: data.livingArea,
+            lotSize: data.lotSize,
+            yearBuilt: data.yearBuilt,
+            propertyType: data.homeType,
+            description: data.description,
+            daysOnZillow: data.daysOnZillow,
+            listingUrl: data.url,
+            zestimate: data.zestimate ? `$${data.zestimate.toLocaleString()}` : "N/A",
+            rentZestimate: data.rentZestimate ? `$${data.rentZestimate.toLocaleString()}/mo` : "N/A"
+          };
+          if (data.schools && data.schools.length > 0) {
+            details.schools = data.schools.map((s) => ({
+              name: s.name,
+              rating: s.rating,
+              distance: s.distance,
+              type: s.type,
+              grades: s.grades
+            }));
+          }
+          if (data.priceHistory && data.priceHistory.length > 0) {
+            details.priceHistory = data.priceHistory.slice(0, 5).map((h) => ({
+              date: h.date,
+              event: h.event,
+              price: h.price ? `$${h.price.toLocaleString()}` : "N/A"
+            }));
+          }
+          if (data.taxHistory && data.taxHistory.length > 0) {
+            details.annualTax = data.taxHistory[0].taxPaid ? `$${data.taxHistory[0].taxPaid.toLocaleString()}` : "N/A";
+          }
+          details.features = [];
+          if (data.resoFacts) {
+            const f = data.resoFacts;
+            if (f.garageSpaces) details.features.push(`Garage: ${f.garageSpaces} spaces`);
+            if (f.hasPool) details.features.push("Pool");
+            if (f.hasFireplace) details.features.push("Fireplace");
+            if (f.hasCentralAir || f.cooling) details.features.push("Central AC");
+            if (f.basement) details.features.push(`Basement: ${f.basement}`);
+            if (f.stories) details.features.push(`Stories: ${f.stories}`);
+          }
+          return { content: [{ type: "text", text: JSON.stringify(details, null, 2) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: `Property details failed: ${err.message}` }], details: {} };
+        }
+      }
+    },
+    {
+      name: "neighborhood_search",
+      label: "Neighborhood Search",
+      description: "Search for neighborhood information including demographics, school ratings, and nearby amenities for a given location. Useful for evaluating walkability, schools, and community character.",
+      parameters: Type.Object({
+        location: Type.String({ description: "Location to research \u2014 city and state or zip code (e.g. 'Montclair, NJ', '07042')" })
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const url = `https://zillow-com1.p.rapidapi.com/propertyExtendedSearch?${new URLSearchParams({ location: params.location, status_type: "ForSale" })}`;
+          const resp = await fetch(url, {
+            headers: { "X-RapidAPI-Key": RAPIDAPI_KEY, "X-RapidAPI-Host": "zillow-com1.p.rapidapi.com" }
+          });
+          if (!resp.ok) return { content: [{ type: "text", text: `API error: ${resp.status} ${resp.statusText}` }], details: {} };
+          const data = await resp.json();
+          const result = {
+            location: params.location,
+            totalListings: data.totalResultCount || 0,
+            medianPrice: null
+          };
+          const props = data.props || [];
+          if (props.length > 0) {
+            const prices = props.filter((p) => p.price).map((p) => p.price).sort((a, b) => a - b);
+            if (prices.length > 0) result.medianPrice = `$${prices[Math.floor(prices.length / 2)].toLocaleString()}`;
+            const avgSqft = props.filter((p) => p.livingArea && p.price).map((p) => p.price / p.livingArea);
+            if (avgSqft.length > 0) result.avgPricePerSqft = `$${Math.round(avgSqft.reduce((a, b) => a + b, 0) / avgSqft.length)}`;
+          }
+          result.note = "Use web_search for detailed school ratings (GreatSchools), walkability scores, and neighborhood character. Use property_details with a specific zpid for school data near a property.";
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: `Neighborhood search failed: ${err.message}` }], details: {} };
+        }
       }
     }
   ];
@@ -6140,6 +6368,7 @@ var cachedStaticTools = [
   ...buildDocsTools(),
   ...buildSlidesTools(),
   ...buildYouTubeTools(),
+  ...buildRealEstateTools(),
   ...buildConversationTools()
 ];
 app.post("/api/session", async (req, res) => {

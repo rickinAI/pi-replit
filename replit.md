@@ -39,8 +39,14 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **Moody's Intelligence Pipeline** — Two scheduled jobs using the moodys agent:
   - Daily Intelligence Brief at 6:00 AM ET — 5 categories: Corporate News, Banking Segment, Competitor Watch (12 competitors), Enterprise AI Trends, Analyst Coverage (Celent, Chartis, Forrester, Gartner, IDC). Saves to `Scheduled Reports/Moody's Intelligence/Daily/YYYY-MM-DD-Brief.md`. Also appends date-stamped findings to competitor/analyst profiles in `Projects/Moody's/Competitive Intelligence/`
   - Weekly Strategic Digest on Sundays at 7:00 AM ET — reads from `Daily/`, synthesises into strategic analysis. Saves to `Scheduled Reports/Moody's Intelligence/Weekly/YYYY-MM-DD-Digest.md`
-  - Auto-archive: briefs older than 30 days move to `Archive/Moody's Intelligence/Daily/` and `Weekly/`
+  - Auto-archive: reports older than 30 days move to corresponding `Archive/` subfolders
   - Moody's agent auto-reads latest briefs before any task (5-step mandatory pre-read including Competitive Intelligence folder). Timeout: 300s
+- **Real Estate Property Scout** — Daily property scan using the real-estate agent:
+  - Daily Property Scan at 7:30 AM ET — searches 6 areas (Upper Saddle River NJ, Montclair NJ, Princeton NJ, Long Island NY, Hudson Valley NY, Stamford-Westport CT) via Zillow API
+  - Criteria: $1.5M–$2M, 5+ bed / 3+ bath, modern, garage, good schools, walkable. Commute to Brookfield Place (Battery Park City)
+  - 3 RapidAPI tools: `property_search` (Zillow listing search with filters), `property_details` (full property data + schools), `neighborhood_search` (market stats)
+  - Saves to `Scheduled Reports/Real Estate/YYYY-MM-DD-Property-Scan.md`, appends to `Real Estate/Areas/`, saves ⭐ gems to `Real Estate/Favorites/`
+  - Auto-archive >30 days to `Archive/Real Estate/`. Agent pre-reads Search Criteria + area files. Timeout: 300s
 - **public/** — Static frontend (terminal/hacker aesthetic, branded as "RICKIN")
   - Landing screen: "Mission Control" full-screen overlay on fresh load (no active session). Shows date, glance strip (weather/email/tasks/calendar from `/api/glance`), interactive task section (checklist with checkboxes, priority dots, "Go" quick-launch, inline add-task form), last conversation card with preview + RESUME button, NEW MISSION button, recent conversation cards with delete, VIEW ALL to expand full history inline
   - Conversation search: search input on landing screen filters conversations by title in real-time

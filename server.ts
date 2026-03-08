@@ -611,6 +611,163 @@ function buildStockTools(): ToolDefinition[] {
   ];
 }
 
+const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY || "";
+
+function buildRealEstateTools(): ToolDefinition[] {
+  if (!RAPIDAPI_KEY) return [];
+  return [
+    {
+      name: "property_search",
+      label: "Property Search",
+      description: "Search Zillow for property listings by location with filters. Returns structured listing data including address, price, beds, baths, sqft, and listing URLs.",
+      parameters: Type.Object({
+        location: Type.String({ description: "Location to search — city and state, zip code, or neighborhood (e.g. 'Montclair, NJ', '07042', 'Garden City, NY')" }),
+        minPrice: Type.Optional(Type.Number({ description: "Minimum price filter (e.g. 1500000)" })),
+        maxPrice: Type.Optional(Type.Number({ description: "Maximum price filter (e.g. 2000000)" })),
+        minBeds: Type.Optional(Type.Number({ description: "Minimum bedrooms (e.g. 5)" })),
+        minBaths: Type.Optional(Type.Number({ description: "Minimum bathrooms (e.g. 3)" })),
+        sort: Type.Optional(Type.String({ description: "Sort order: 'Newest', 'Price_High_Low', 'Price_Low_High', 'Bedrooms', 'Bathrooms'" })),
+        page: Type.Optional(Type.Number({ description: "Page number for pagination (default 1)" })),
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const queryParams: Record<string, string> = { location: params.location, status_type: "ForSale" };
+          if (params.minPrice) queryParams.minPrice = String(params.minPrice);
+          if (params.maxPrice) queryParams.maxPrice = String(params.maxPrice);
+          if (params.minBeds) queryParams.bedsMin = String(params.minBeds);
+          if (params.minBaths) queryParams.bathsMin = String(params.minBaths);
+          if (params.sort) queryParams.sort = params.sort;
+          if (params.page) queryParams.page = String(params.page);
+          queryParams.home_type = "Houses";
+          const url = `https://zillow-com1.p.rapidapi.com/propertyExtendedSearch?${new URLSearchParams(queryParams)}`;
+          const resp = await fetch(url, {
+            headers: { "X-RapidAPI-Key": RAPIDAPI_KEY, "X-RapidAPI-Host": "zillow-com1.p.rapidapi.com" },
+          });
+          if (!resp.ok) return { content: [{ type: "text" as const, text: `API error: ${resp.status} ${resp.statusText}` }], details: {} };
+          const data = await resp.json();
+          const props = data.props || [];
+          if (props.length === 0) return { content: [{ type: "text" as const, text: `No properties found in ${params.location} matching criteria. Try broadening filters or checking the location name.` }], details: {} };
+          const summary = props.slice(0, 20).map((p: any) => ({
+            address: p.address,
+            price: p.price ? `$${p.price.toLocaleString()}` : "N/A",
+            beds: p.bedrooms,
+            baths: p.bathrooms,
+            sqft: p.livingArea,
+            lotSize: p.lotAreaValue ? `${p.lotAreaValue} ${p.lotAreaUnit || "sqft"}` : "N/A",
+            zpid: p.zpid,
+            daysOnZillow: p.daysOnZillow,
+            listingUrl: p.detailUrl ? `https://www.zillow.com${p.detailUrl}` : null,
+            propertyType: p.propertyType,
+            listingStatus: p.listingStatus,
+          }));
+          return { content: [{ type: "text" as const, text: JSON.stringify({ totalResults: data.totalResultCount || props.length, resultsReturned: summary.length, properties: summary }, null, 2) }], details: {} };
+        } catch (err: any) {
+          return { content: [{ type: "text" as const, text: `Property search failed: ${err.message}` }], details: {} };
+        }
+      },
+    },
+    {
+      name: "property_details",
+      label: "Property Details",
+      description: "Get detailed information about a specific property from Zillow including school ratings, price history, tax history, and full features. Requires a Zillow property ID (zpid) from property_search results.",
+      parameters: Type.Object({
+        zpid: Type.Number({ description: "Zillow property ID (from property_search results)" }),
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const url = `https://zillow-com1.p.rapidapi.com/property?zpid=${params.zpid}`;
+          const resp = await fetch(url, {
+            headers: { "X-RapidAPI-Key": RAPIDAPI_KEY, "X-RapidAPI-Host": "zillow-com1.p.rapidapi.com" },
+          });
+          if (!resp.ok) return { content: [{ type: "text" as const, text: `API error: ${resp.status} ${resp.statusText}` }], details: {} };
+          const data = await resp.json();
+          const details: any = {
+            address: data.address,
+            price: data.price ? `$${data.price.toLocaleString()}` : "N/A",
+            beds: data.bedrooms,
+            baths: data.bathrooms,
+            sqft: data.livingArea,
+            lotSize: data.lotSize,
+            yearBuilt: data.yearBuilt,
+            propertyType: data.homeType,
+            description: data.description,
+            daysOnZillow: data.daysOnZillow,
+            listingUrl: data.url,
+            zestimate: data.zestimate ? `$${data.zestimate.toLocaleString()}` : "N/A",
+            rentZestimate: data.rentZestimate ? `$${data.rentZestimate.toLocaleString()}/mo` : "N/A",
+          };
+          if (data.schools && data.schools.length > 0) {
+            details.schools = data.schools.map((s: any) => ({
+              name: s.name,
+              rating: s.rating,
+              distance: s.distance,
+              type: s.type,
+              grades: s.grades,
+            }));
+          }
+          if (data.priceHistory && data.priceHistory.length > 0) {
+            details.priceHistory = data.priceHistory.slice(0, 5).map((h: any) => ({
+              date: h.date,
+              event: h.event,
+              price: h.price ? `$${h.price.toLocaleString()}` : "N/A",
+            }));
+          }
+          if (data.taxHistory && data.taxHistory.length > 0) {
+            details.annualTax = data.taxHistory[0].taxPaid ? `$${data.taxHistory[0].taxPaid.toLocaleString()}` : "N/A";
+          }
+          details.features = [];
+          if (data.resoFacts) {
+            const f = data.resoFacts;
+            if (f.garageSpaces) details.features.push(`Garage: ${f.garageSpaces} spaces`);
+            if (f.hasPool) details.features.push("Pool");
+            if (f.hasFireplace) details.features.push("Fireplace");
+            if (f.hasCentralAir || f.cooling) details.features.push("Central AC");
+            if (f.basement) details.features.push(`Basement: ${f.basement}`);
+            if (f.stories) details.features.push(`Stories: ${f.stories}`);
+          }
+          return { content: [{ type: "text" as const, text: JSON.stringify(details, null, 2) }], details: {} };
+        } catch (err: any) {
+          return { content: [{ type: "text" as const, text: `Property details failed: ${err.message}` }], details: {} };
+        }
+      },
+    },
+    {
+      name: "neighborhood_search",
+      label: "Neighborhood Search",
+      description: "Search for neighborhood information including demographics, school ratings, and nearby amenities for a given location. Useful for evaluating walkability, schools, and community character.",
+      parameters: Type.Object({
+        location: Type.String({ description: "Location to research — city and state or zip code (e.g. 'Montclair, NJ', '07042')" }),
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const url = `https://zillow-com1.p.rapidapi.com/propertyExtendedSearch?${new URLSearchParams({ location: params.location, status_type: "ForSale" })}`;
+          const resp = await fetch(url, {
+            headers: { "X-RapidAPI-Key": RAPIDAPI_KEY, "X-RapidAPI-Host": "zillow-com1.p.rapidapi.com" },
+          });
+          if (!resp.ok) return { content: [{ type: "text" as const, text: `API error: ${resp.status} ${resp.statusText}` }], details: {} };
+          const data = await resp.json();
+          const result: any = {
+            location: params.location,
+            totalListings: data.totalResultCount || 0,
+            medianPrice: null as string | null,
+          };
+          const props = data.props || [];
+          if (props.length > 0) {
+            const prices = props.filter((p: any) => p.price).map((p: any) => p.price).sort((a: number, b: number) => a - b);
+            if (prices.length > 0) result.medianPrice = `$${prices[Math.floor(prices.length / 2)].toLocaleString()}`;
+            const avgSqft = props.filter((p: any) => p.livingArea && p.price).map((p: any) => p.price / p.livingArea);
+            if (avgSqft.length > 0) result.avgPricePerSqft = `$${Math.round(avgSqft.reduce((a: number, b: number) => a + b, 0) / avgSqft.length)}`;
+          }
+          result.note = "Use web_search for detailed school ratings (GreatSchools), walkability scores, and neighborhood character. Use property_details with a specific zpid for school data near a property.";
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }], details: {} };
+        } catch (err: any) {
+          return { content: [{ type: "text" as const, text: `Neighborhood search failed: ${err.message}` }], details: {} };
+        }
+      },
+    },
+  ];
+}
+
 function buildMapsTools(): ToolDefinition[] {
   return [
     {
@@ -1884,6 +2041,7 @@ const cachedStaticTools: ToolDefinition[] = [
   ...buildDocsTools(),
   ...buildSlidesTools(),
   ...buildYouTubeTools(),
+  ...buildRealEstateTools(),
   ...buildConversationTools(),
 ];
 
