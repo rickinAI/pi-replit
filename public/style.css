@@ -1888,7 +1888,7 @@ body.light-theme #mic-btn.recording {
   }
 
   #input-area {
-    padding-bottom: var(--safe-bottom);
+    padding-bottom: calc(var(--safe-bottom) / 2);
   }
 }
 
