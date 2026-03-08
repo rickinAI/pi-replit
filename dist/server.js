@@ -524,15 +524,18 @@ async function load(id) {
 }
 async function list() {
   const result = await getPool().query(
-    `SELECT id, title, messages, created_at, updated_at FROM conversations ORDER BY updated_at DESC`
+    `SELECT DISTINCT ON (title) id, title, messages, created_at, updated_at
+     FROM conversations ORDER BY title, updated_at DESC`
   );
-  return result.rows.map((row) => ({
+  const rows = result.rows.map((row) => ({
     id: row.id,
     title: row.title,
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
     messageCount: Array.isArray(row.messages) ? row.messages.length : 0
   }));
+  rows.sort((a, b) => b.updatedAt - a.updatedAt);
+  return rows;
 }
 async function remove(id) {
   const result = await getPool().query(`DELETE FROM conversations WHERE id = $1`, [id]);

@@ -58,15 +58,18 @@ export async function load(id: string): Promise<Conversation | null> {
 
 export async function list(): Promise<ConversationSummary[]> {
   const result = await getPool().query(
-    `SELECT id, title, messages, created_at, updated_at FROM conversations ORDER BY updated_at DESC`
+    `SELECT DISTINCT ON (title) id, title, messages, created_at, updated_at
+     FROM conversations ORDER BY title, updated_at DESC`
   );
-  return result.rows.map(row => ({
+  const rows = result.rows.map(row => ({
     id: row.id,
     title: row.title,
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
     messageCount: Array.isArray(row.messages) ? row.messages.length : 0,
   }));
+  rows.sort((a, b) => b.updatedAt - a.updatedAt);
+  return rows;
 }
 
 export async function remove(id: string): Promise<boolean> {
