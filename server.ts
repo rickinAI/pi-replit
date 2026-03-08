@@ -1922,6 +1922,7 @@ app.post("/api/session", async (req: Request, res: Response) => {
         resumedMessages = oldConv.messages;
         conv.title = oldConv.title;
         console.log(`[session] Resuming conversation "${oldConv.title}" with ${oldConv.messages.length} messages`);
+        await conversations.remove(resumeConversationId);
       }
     }
 

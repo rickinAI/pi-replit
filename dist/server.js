@@ -5629,6 +5629,7 @@ app.post("/api/session", async (req, res) => {
         resumedMessages = oldConv.messages;
         conv.title = oldConv.title;
         console.log(`[session] Resuming conversation "${oldConv.title}" with ${oldConv.messages.length} messages`);
+        await remove(resumeConversationId);
       }
     }
     const entry = {
