@@ -2017,15 +2017,15 @@ function renderScheduledJobs() {
 
     card.querySelector(".job-run-btn").addEventListener("click", async () => {
       const btn = card.querySelector(".job-run-btn");
-      btn.textContent = "Running...";
+      btn.textContent = "Active";
       btn.disabled = true;
       try {
         await fetch(`/api/scheduled-jobs/${job.id}/trigger`, { method: "POST" });
-        btn.textContent = "Started";
-        setTimeout(() => { btn.textContent = "Run"; btn.disabled = false; }, 3000);
+        setTimeout(() => { btn.textContent = "Done"; }, 6000);
+        setTimeout(() => { btn.textContent = "Run"; btn.disabled = false; }, 9000);
       } catch {
         btn.textContent = "Failed";
-        setTimeout(() => { btn.textContent = "Run"; btn.disabled = false; }, 2000);
+        setTimeout(() => { btn.textContent = "Run"; btn.disabled = false; }, 3000);
       }
     });
 
