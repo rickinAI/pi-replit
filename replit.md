@@ -7,6 +7,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **server.ts** — Express server wrapping the pi coding agent SDK
   - Creates agent sessions with Anthropic API
   - Registers custom tools (82 total): knowledge base, email, calendar, weather, web search, tasks, news, Google Drive, Google Sheets (13 tools), Google Docs (12 tools), Google Slides (12 tools), YouTube
+  - Multi-agent system with 9 specialist agents defined in `data/agents.json` (hot-reloaded on file change)
   - Streams agent events via SSE (Server-Sent Events)
   - Tracks conversation messages and persists them to PostgreSQL
   - Auto-saves conversations every 5 minutes; saves on session close/expiry/shutdown
@@ -22,7 +23,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **src/weather.ts** — Weather via Open-Meteo (free, no API key)
 - **src/websearch.ts** — Web search via DuckDuckGo HTML (free, no API key)
 - **src/tasks.ts** — Task manager with PostgreSQL storage (tasks table)
-- **src/scheduled-jobs.ts** — Scheduled agent jobs system. Runs agents autonomously on configurable schedules. 3 default presets (KB Organizer 2AM, Daily News Brief 6:30AM, Market Summary 7:30AM), all disabled by default. Config stored in `app_config` key='scheduled_jobs'. 60s check loop with run-key dedup. Custom jobs can be added from Settings. API: GET/PUT/DELETE `/api/scheduled-jobs`, PUT `/api/scheduled-jobs/:id`, POST `/api/scheduled-jobs/:id/trigger`
+- **src/scheduled-jobs.ts** — Scheduled agent jobs system. Runs agents autonomously on configurable schedules. 3 default presets (KB Audit 2AM — audit/report-only mode, Daily News Brief 6:30AM, Market Summary 7:30AM), all disabled by default. Config stored in `app_config` key='scheduled_jobs'. 60s check loop with run-key dedup. Custom jobs can be added from Settings. API: GET/PUT/DELETE `/api/scheduled-jobs`, PUT `/api/scheduled-jobs/:id`, POST `/api/scheduled-jobs/:id/trigger`
 - **src/news.ts** — News headlines via Google News RSS feeds
 - **src/conversations.ts** — Conversation persistence module (save/load/list/delete via PostgreSQL, AI summaries via Haiku, last-conversation context for session start). Uses Replit's built-in PostgreSQL database (DATABASE_URL) so conversations persist across deployments
 - **src/memory-extractor.ts** — Post-conversation fact extraction (profile updates, action items) via Claude Haiku
@@ -47,6 +48,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **public/manifest.json** — PWA web app manifest (name, icons, display mode)
 - **public/icons/** — App icons (180x180 apple-touch-icon, 192x192, 512x512)
 - **tunnel-setup/** — macOS cloudflared named tunnel startup script with auto-restart loop
+- **data/agents.json** — Agent definitions (9 agents: deep-researcher, project-planner, email-drafter, analyst, real-estate, nutritionist, moodys, family-planner, knowledge-organizer). Hot-reloaded on file change via `src/agents/loader.ts`
 - **data/vault/Replit Agent/** — Self-referencing system documentation in the vault (Architecture, Memory System, Alerts & Briefs, Agent Team, Tools Reference, Rules & Behavior, UI & Frontend, Changelog). Updated on major changes so all DarkNode agents understand the system
 
 ## PostgreSQL Storage
@@ -315,7 +317,7 @@ Proactive background scheduler that pushes briefings and alerts via SSE to all c
   - Briefs render as full-width styled messages with `// MORNING BRIEF — 8:00 AM` header
   - Alerts show dismissible banner (auto-dismiss 30s) + persistent chat line
   - Browser notifications + audio beep when tab is hidden
-  - Settings panel (gear icon in header) for configuring briefs, watchlist, alert thresholds
+  - Settings panel (gear icon in header) with sections: Appearance (theme toggle), Alert Settings (calendar reminders, stock moves, task deadlines, important emails), Scheduled Agents (job cards with enable/disable toggles, hour/minute pickers, Run button, custom job form), Watchlist (stock/crypto tickers), Logout
   - Settings auto-save with 500ms debounce
 
 ## Image / Screenshot Support
