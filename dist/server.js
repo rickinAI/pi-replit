@@ -3968,7 +3968,7 @@ async function runSubAgent(opts) {
   const anthropicTools = convertToolsToAnthropicFormat(filteredTools);
   const toolsUsed = [];
   const client = new Anthropic3({ apiKey: opts.apiKey });
-  const modelId = agent.model === "default" ? opts.model || "claude-sonnet-4-6" : agent.model;
+  const modelId = agent.model === "default" ? opts.model || "claude-opus-4-6" : agent.model;
   let userContent = opts.task;
   if (opts.context) userContent = `Context:
 ${opts.context}

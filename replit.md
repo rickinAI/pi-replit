@@ -12,7 +12,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Tracks conversation messages and persists them to PostgreSQL
   - Auto-saves conversations every 5 minutes; saves on session close/expiry/shutdown
   - Inline interview tool: AI sends structured question forms to user, waits for responses via Promise/SSE
-  - Graceful shutdown on SIGHUP/SIGTERM/SIGINT (saves all conversations, releases port)
+  - Graceful shutdown on SIGHUP/SIGTERM/SIGINT (awaits all conversation saves via Promise.allSettled before exit, 5s timeout, releases port)
   - EADDRINUSE auto-recovery: pre-emptive port kill, probes port availability before listen, waits up to 15s with retries
   - Periodic knowledge base health check (every 15s) with connection status logging
   - Express error-handling middleware for clean JSON error responses
@@ -30,7 +30,10 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **.pi/SYSTEM.md** — Agent personality, greeting template, vault structure map, and auto-categorization rules (auto-loaded by SDK from `.pi/SYSTEM.md`)
 - **Vault index injection** — At session creation, a full vault tree (all folders/files) is generated via `buildVaultTree()` / `formatVaultIndex()` and injected into the agent's first prompt via `startupContext`. This gives the agent immediate awareness of all vault contents without needing to call notes_list first
 - **.pi/agent/system-prompt.md** — Synced copy of SYSTEM.md for reference
-- **.pi/agent/models.json** — Custom model registry entries (`claude-sonnet-4-6`, `claude-haiku-4-5-20251001`) so the Pi SDK's ModelRegistry can resolve them. These must match exact Anthropic API model IDs (no `-latest` aliases — Anthropic doesn't support them)
+- **.pi/agent/models.json** — Custom model registry entries (`claude-sonnet-4-6`, `claude-haiku-4-5-20251001`, `claude-opus-4-6`) so the Pi SDK's ModelRegistry can resolve them. These must match exact Anthropic API model IDs (no `-latest` aliases — Anthropic doesn't support them)
+  - Three-tier model system with 4 modes: Auto (routes fast/full/max by intent), Fast (Haiku), Full (Sonnet), Max (Opus)
+  - Auto mode uses MAX_PATTERNS to detect work/project keywords and route to Opus
+  - All sub-agents default to Opus (`data/agents.json` model field + orchestrator fallback)
 - **public/** — Static frontend (terminal/hacker aesthetic, branded as "RICKIN")
   - Landing screen: "Mission Control" full-screen overlay on fresh load (no active session). Shows date, glance strip (weather/email/tasks/calendar from `/api/glance`), interactive task section (checklist with checkboxes, priority dots, "Go" quick-launch, inline add-task form), last conversation card with preview + RESUME button, NEW MISSION button, recent conversation cards with delete, VIEW ALL to expand full history inline
   - Conversation search: search input on landing screen filters conversations by title in real-time
