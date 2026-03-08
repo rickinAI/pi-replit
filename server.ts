@@ -1430,7 +1430,7 @@ function buildAgentTools(allToolsFn: () => ToolDefinition[], sessionId: string):
       description:
         "Delegate a complex task to a specialist agent. The agent will work independently using its own tools and return a comprehensive result. Use this for multi-step research, project planning, deep analysis, email drafting, or vault organization.",
       parameters: Type.Object({
-        agent: Type.String({ description: "The specialist agent ID (e.g. 'deep-researcher', 'project-planner', 'analyst', 'email-drafter', 'knowledge-organizer')" }),
+        agent: Type.String({ description: "The specialist agent ID. Available agents: 'deep-researcher' (web research), 'project-planner' (project plans), 'email-drafter' (compose emails), 'analyst' (markets/stocks), 'moodys' (Moody's/ValidMind/work projects — use for ANY work-related task), 'real-estate' (property search), 'nutritionist' (meal planning), 'family-planner' (financial/legal planning), 'knowledge-organizer' (vault management)" }),
         task: Type.String({ description: "Clear description of what the agent should do" }),
         context: Type.Optional(Type.String({ description: "Additional context the agent needs (e.g. previous conversation details, specific requirements)" })),
       }),
