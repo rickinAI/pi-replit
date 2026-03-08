@@ -2047,8 +2047,9 @@ function setupCustomJobForm() {
     `;
 
     const agentSel = wrap.querySelector("#custom-job-agent");
-    fetch("/api/agents").then(r => r.json()).then(agents => {
-      agents.forEach(a => {
+    fetch("/api/agents").then(r => r.json()).then(data => {
+      const list = data.agents || data;
+      list.forEach(a => {
         const opt = document.createElement("option");
         opt.value = a.id;
         opt.textContent = a.name || a.id;
@@ -2082,7 +2083,7 @@ function setupCustomJobForm() {
       const prompt = wrap.querySelector("#custom-job-prompt").value.trim();
       const hour = parseInt(wrap.querySelector("#custom-job-hour").value);
       const minute = parseInt(wrap.querySelector("#custom-job-min").value);
-      if (!name || !prompt) return;
+      if (!name || !agentId || !prompt) return;
       try {
         const res = await fetch("/api/scheduled-jobs", {
           method: "POST",
