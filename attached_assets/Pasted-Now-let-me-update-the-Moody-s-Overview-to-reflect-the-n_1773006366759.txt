@@ -1,0 +1,41 @@
+Now let me update the Moody's Overview to reflect the new structure:Let me verify the final structure:Done. Here's the restructured Moody's vault:
+
+### New Folder Structure
+
+```
+Projects/Moody's/
+├── Agent-Ready Data/          (5 files — unchanged)
+├── Agentic Orchestration/     (5 files — unchanged)
+├── Banking Products Research/  (4 files — unchanged)
+├── Competitive Intelligence/   ← NEW
+│   ├── Competitor Profiles/    (12 profiles)
+│   │   Bloomberg, S&P Global, Fitch, Nasdaq,
+│   │   nCino, QRM, Empyrean, Quantexa,
+│   │   Databricks, Regnology, FinregE, ValidMind
+│   ├── Industry Analysts/      (5 profiles)
+│   │   Celent, Chartis, Forrester, Gartner, IDC
+│   └── Existing intel reports (3 files moved from Data Moat)
+├── Corp Dev/                   ← NEW (2 files moved from Data Moat)
+│   ValidMind Acquisition Memo + Continuous Compliance
+├── Data Moat Strategy/        (11 files — slimmed from 22)
+├── Outcome-Based Messaging/    (5 files — unchanged)
+├── Partnerships/               ← NEW (2 files moved from Data Moat)
+│   Partnership Ecosystem + Migration-Driven Strategy
+├── Regnology Deal/            (2 files — unchanged)
+└── Overview.md                 (updated with full directory map)
+
+Scheduled Reports/
+└── Moody's Intelligence/       ← NEW (ready for daily/weekly briefs)
+
+Archive/
+└── Moody's Intelligence/       ← NEW (for archived briefs)
+```
+
+### What changed:
+- **Data Moat Strategy** slimmed from 22 → 11 files (pure strategy only)
+- **Competitive Intelligence** is now its own domain with 12 competitor profiles + 5 analyst profiles — ready for the daily pipeline to populate
+- **Corp Dev** and **Partnerships** separated out for clean access
+- **Scheduled Reports/Moody's Intelligence/** ready to receive daily and weekly briefs
+- Every competitor profile has sections the daily brief will auto-update: Recent News, Analyst Coverage
+
+When Replit Agent ships the automation, it has a clean landing zone. The Moody's agent will read from `Scheduled Reports/Moody's Intelligence/` + the full `Competitive Intelligence/` folder for context.
