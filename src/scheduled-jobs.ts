@@ -32,14 +32,16 @@ const DEFAULT_JOBS: ScheduledJob[] = [
     id: "kb-organizer",
     name: "Knowledge Base Cleanup",
     agentId: "knowledge-organizer",
-    prompt: `Scan the vault for maintenance issues and fix them:
-1. Find and remove empty folders
-2. Look for orphaned or misplaced files and move them to appropriate locations
-3. Check for duplicate or near-duplicate notes and consolidate them
-4. Ensure naming conventions are consistent (kebab-case or Title Case as appropriate)
-5. Create a brief summary of what you changed
+    prompt: `Audit the vault and produce a report — do NOT modify, move, or delete any files. Read-only scan only.
 
-Be conservative — only make changes you're confident about. Save a summary to "Scheduled Reports/KB Cleanup.md".`,
+Check for these issues and list each finding with a suggested action:
+1. Empty folders — list them and suggest removal
+2. Orphaned or misplaced files — list them with suggested new locations
+3. Duplicate or near-duplicate notes — list pairs with a suggestion to consolidate
+4. Inconsistent naming — list files that don't follow conventions (kebab-case or Title Case) with suggested renames
+5. Large files or folders that could be reorganised
+
+Save the report to "Scheduled Reports/KB Audit Report.md" (overwrite previous). Format as a clear checklist so I can review and action items manually.`,
     schedule: { type: "daily", hour: 2, minute: 0 },
     enabled: false,
   },
@@ -103,6 +105,12 @@ export async function init(): Promise<void> {
         jobs: mergedJobs,
         lastJobRun: raw.lastJobRun || {},
       };
+      const kbJob = config.jobs.find(j => j.id === "kb-organizer");
+      if (kbJob && kbJob.prompt.includes("Find and remove empty folders")) {
+        const preset = DEFAULT_JOBS.find(j => j.id === "kb-organizer")!;
+        kbJob.prompt = preset.prompt;
+        await saveConfig();
+      }
     } else {
       await saveConfig();
     }
