@@ -2677,18 +2677,23 @@ process.on("unhandledRejection", (reason) => console.error("Unhandled rejection:
 
 let server = createServer(app);
 
-function gracefulShutdown(signal: string) {
+async function gracefulShutdown(signal: string) {
   console.error(`Got ${signal} — closing server...`);
   if (obSyncProcess) {
     try { obSyncProcess.kill(); } catch {}
     obSyncProcess = null;
   }
   scheduledJobs.stopJobSystem();
-  for (const [id] of sessions.entries()) {
-    saveAndCleanSession(id);
+  const ids = [...sessions.keys()];
+  if (ids.length > 0) {
+    console.error(`[shutdown] Saving ${ids.length} active session(s)...`);
+    const results = await Promise.allSettled(ids.map(id => saveAndCleanSession(id)));
+    const saved = results.filter(r => r.status === "fulfilled").length;
+    const failed = results.filter(r => r.status === "rejected").length;
+    console.error(`[shutdown] Sessions saved: ${saved}, failed: ${failed}`);
   }
   server.close(() => { process.exit(0); });
-  setTimeout(() => { process.exit(1); }, 3000);
+  setTimeout(() => { process.exit(1); }, 5000);
 }
 
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));

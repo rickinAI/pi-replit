@@ -6709,7 +6709,7 @@ app.use((err, _req, res, _next) => {
 process.on("uncaughtException", (err) => console.error("Uncaught exception:", err));
 process.on("unhandledRejection", (reason) => console.error("Unhandled rejection:", reason));
 var server = createServer(app);
-function gracefulShutdown(signal) {
+async function gracefulShutdown(signal) {
   console.error(`Got ${signal} \u2014 closing server...`);
   if (obSyncProcess) {
     try {
@@ -6719,15 +6719,20 @@ function gracefulShutdown(signal) {
     obSyncProcess = null;
   }
   stopJobSystem();
-  for (const [id] of sessions.entries()) {
-    saveAndCleanSession(id);
+  const ids = [...sessions.keys()];
+  if (ids.length > 0) {
+    console.error(`[shutdown] Saving ${ids.length} active session(s)...`);
+    const results = await Promise.allSettled(ids.map((id) => saveAndCleanSession(id)));
+    const saved = results.filter((r) => r.status === "fulfilled").length;
+    const failed = results.filter((r) => r.status === "rejected").length;
+    console.error(`[shutdown] Sessions saved: ${saved}, failed: ${failed}`);
   }
   server.close(() => {
     process.exit(0);
   });
   setTimeout(() => {
     process.exit(1);
-  }, 3e3);
+  }, 5e3);
 }
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
