@@ -1068,19 +1068,21 @@ async function searchEmails(query) {
 async function getUnreadCount() {
   try {
     const client = await getGmailClient();
-    const res = await client.users.labels.get({
+    const res = await client.users.messages.list({
       userId: "me",
-      id: "CATEGORY_PRIMARY"
+      q: "is:unread category:primary newer_than:1d",
+      maxResults: 1
     });
-    return res.data.messagesUnread || 0;
+    return res.data.resultSizeEstimate || 0;
   } catch {
     try {
       const client = await getGmailClient();
-      const res = await client.users.labels.get({
+      const res = await client.users.messages.list({
         userId: "me",
-        id: "INBOX"
+        q: "is:unread newer_than:1d",
+        maxResults: 1
       });
-      return res.data.messagesUnread || 0;
+      return res.data.resultSizeEstimate || 0;
     } catch (err) {
       console.error("Gmail getUnreadCount error:", err instanceof Error ? err.message : err);
       return 0;
