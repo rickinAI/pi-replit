@@ -365,6 +365,8 @@ async function showLanding() {
 
   if (thisInvocation !== landingInvocationId) return;
 
+  convos.sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt));
+
   if (glanceData) {
     const items = [];
     if (glanceData.weather) {
@@ -407,10 +409,39 @@ async function showLanding() {
   });
   landing.appendChild(newBtn);
 
+  function getDateGroup(ts) {
+    const now = new Date();
+    const d = new Date(ts);
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfYesterday = new Date(startOfToday); startOfYesterday.setDate(startOfYesterday.getDate() - 1);
+    const startOfWeek = new Date(startOfToday); startOfWeek.setDate(startOfWeek.getDate() - startOfToday.getDay());
+    if (d >= startOfToday) return "Today";
+    if (d >= startOfYesterday) return "Yesterday";
+    if (d >= startOfWeek) return "This Week";
+    return "Earlier";
+  }
+
+  function renderGroupedCards(list, container) {
+    container.innerHTML = "";
+    let currentGroup = null;
+    for (const convo of list) {
+      const group = getDateGroup(convo.updatedAt || convo.createdAt);
+      if (group !== currentGroup) {
+        currentGroup = group;
+        const header = document.createElement("div");
+        header.className = "landing-group-header";
+        header.textContent = group;
+        container.appendChild(header);
+      }
+      container.appendChild(createLandingCard(convo));
+    }
+  }
+
+  let lastCardEl = null;
   if (convos.length > 0) {
     const last = convos[0];
-    const lastCard = document.createElement("div");
-    lastCard.className = "landing-last";
+    lastCardEl = document.createElement("div");
+    lastCardEl.className = "landing-last";
     let previewHtml = "";
     try {
       const detailRes = await fetch(`/api/conversations/${last.id}`);
@@ -426,44 +457,44 @@ async function showLanding() {
         }
       }
     } catch (err) { console.warn("Preview fetch failed:", err); }
-    lastCard.innerHTML = `
+    lastCardEl.innerHTML = `
       <div class="landing-last-label">Last conversation</div>
       <div class="landing-last-title">${escapeHtml(last.title)}</div>
       <div class="landing-last-meta">${relativeTime(last.updatedAt || last.createdAt)} · ${last.messageCount} msgs</div>
       ${previewHtml ? `<div class="landing-last-preview">${previewHtml}</div>` : ""}
       <button class="landing-resume-btn">[RESUME]</button>
     `;
-    lastCard.querySelector(".landing-resume-btn").addEventListener("click", (e) => {
+    lastCardEl.querySelector(".landing-resume-btn").addEventListener("click", (e) => {
       e.stopPropagation();
       hideLandingAndRun(() => resumeConversation(last.id));
     });
-    landing.appendChild(lastCard);
+    landing.appendChild(lastCardEl);
   }
 
   if (convos.length > 1) {
-    const label = document.createElement("div");
-    label.className = "landing-section-label";
-    label.textContent = "Recent";
-    landing.appendChild(label);
+    const searchWrap = document.createElement("div");
+    searchWrap.className = "landing-search-wrap";
+    searchWrap.innerHTML = `<input type="text" class="landing-search" placeholder="Search conversations..." /><button class="landing-search-clear hidden">×</button>`;
+    landing.appendChild(searchWrap);
+    const searchInput = searchWrap.querySelector(".landing-search");
+    const searchClear = searchWrap.querySelector(".landing-search-clear");
 
     const recentContainer = document.createElement("div");
     recentContainer.className = "landing-recent";
-    const initialShow = Math.min(convos.length, 5);
-    for (let i = 1; i < initialShow; i++) {
-      recentContainer.appendChild(createLandingCard(convos[i]));
-    }
+    const restConvos = convos.slice(1);
+    const initialShow = Math.min(restConvos.length, 4);
+    renderGroupedCards(restConvos.slice(0, initialShow), recentContainer);
     landing.appendChild(recentContainer);
 
-    if (convos.length > 5) {
-      const viewAllBtn = document.createElement("button");
+    let viewAllBtn = null;
+    let expanded = false;
+    if (restConvos.length > 4) {
+      viewAllBtn = document.createElement("button");
       viewAllBtn.className = "landing-view-all";
       viewAllBtn.textContent = "VIEW ALL";
-      let expanded = false;
       viewAllBtn.addEventListener("click", async () => {
         if (expanded) {
-          while (recentContainer.children.length > initialShow - 1) {
-            recentContainer.lastChild.remove();
-          }
+          renderGroupedCards(restConvos.slice(0, initialShow), recentContainer);
           viewAllBtn.textContent = "VIEW ALL";
           expanded = false;
           return;
@@ -472,10 +503,7 @@ async function showLanding() {
         try {
           const allRes = await fetch("/api/conversations");
           const allConvos = allRes.ok ? await allRes.json() : convos;
-          while (recentContainer.children.length > 0) recentContainer.lastChild.remove();
-          for (let i = 1; i < allConvos.length; i++) {
-            recentContainer.appendChild(createLandingCard(allConvos[i]));
-          }
+          renderGroupedCards(allConvos.slice(1), recentContainer);
           viewAllBtn.textContent = "SHOW LESS";
           expanded = true;
         } catch (err) {
@@ -485,6 +513,29 @@ async function showLanding() {
       });
       landing.appendChild(viewAllBtn);
     }
+
+    searchInput.addEventListener("input", () => {
+      const q = searchInput.value.trim().toLowerCase();
+      searchClear.classList.toggle("hidden", !q);
+      if (!q) {
+        if (lastCardEl) lastCardEl.style.display = "";
+        renderGroupedCards(expanded ? restConvos : restConvos.slice(0, initialShow), recentContainer);
+        if (viewAllBtn) viewAllBtn.style.display = "";
+        return;
+      }
+      if (lastCardEl) lastCardEl.style.display = "none";
+      if (viewAllBtn) viewAllBtn.style.display = "none";
+      const filtered = convos.filter(c => c.title.toLowerCase().includes(q));
+      renderGroupedCards(filtered, recentContainer);
+      if (filtered.length === 0) {
+        recentContainer.innerHTML = `<div class="landing-empty">No matches found.</div>`;
+      }
+    });
+    searchClear.addEventListener("click", () => {
+      searchInput.value = "";
+      searchInput.dispatchEvent(new Event("input"));
+      searchInput.focus();
+    });
   }
 
   if (convos.length === 0) {
@@ -493,6 +544,78 @@ async function showLanding() {
     empty.textContent = "No previous missions.";
     landing.appendChild(empty);
   }
+
+  let pullStartY = 0;
+  let pullDelta = 0;
+  let pullIndicator = null;
+  landing.addEventListener("touchstart", (e) => {
+    if (landing.scrollTop === 0) {
+      pullStartY = e.touches[0].clientY;
+      pullDelta = 0;
+    } else {
+      pullStartY = 0;
+    }
+  }, { passive: true });
+  landing.addEventListener("touchmove", (e) => {
+    if (!pullStartY) return;
+    pullDelta = e.touches[0].clientY - pullStartY;
+    if (pullDelta > 0 && landing.scrollTop === 0) {
+      if (!pullIndicator) {
+        pullIndicator = document.createElement("div");
+        pullIndicator.className = "pull-indicator";
+        landing.prepend(pullIndicator);
+      }
+      const clamped = Math.min(pullDelta, 100);
+      pullIndicator.style.height = clamped + "px";
+      pullIndicator.style.opacity = Math.min(clamped / 60, 1);
+      pullIndicator.textContent = pullDelta > 60 ? "RELEASE TO REFRESH" : "PULL TO REFRESH";
+    }
+  }, { passive: true });
+  landing.addEventListener("touchend", async () => {
+    if (pullDelta > 60) {
+      if (pullIndicator) {
+        pullIndicator.textContent = "REFRESHING...";
+        pullIndicator.style.height = "40px";
+      }
+      try {
+        const [newConvRes, newGlanceRes] = await Promise.all([
+          fetch("/api/conversations").then(r => r.ok ? r.json() : []).catch(() => []),
+          fetch("/api/glance").then(r => r.ok ? r.json() : null).catch(() => null),
+        ]);
+        const glanceEl = landing.querySelector(".landing-glance");
+        if (glanceEl && newGlanceRes) {
+          const items = [];
+          if (newGlanceRes.weather) items.push(`${newGlanceRes.weather.icon || "🌡️"} ${newGlanceRes.weather.tempC}°C ${newGlanceRes.weather.condition || ""}`);
+          if (newGlanceRes.emails) items.push(`📧 ${newGlanceRes.emails.unread} unread`);
+          if (newGlanceRes.tasks) items.push(`✅ ${newGlanceRes.tasks.active} task${newGlanceRes.tasks.active !== 1 ? "s" : ""}`);
+          if (newGlanceRes.nextEvent) {
+            const ev = newGlanceRes.nextEvent;
+            items.push(`📅 ${ev.title}${ev.time ? " · " + ev.time : ""}`);
+          }
+          glanceEl.innerHTML = items.map(i => `<span class="landing-glance-item">${escapeHtml(i)}</span>`).join("");
+        }
+        newConvRes.sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt));
+        if (newConvRes.length > 0 && lastCardEl) {
+          const last = newConvRes[0];
+          const titleEl = lastCardEl.querySelector(".landing-last-title");
+          const metaEl = lastCardEl.querySelector(".landing-last-meta");
+          if (titleEl) titleEl.textContent = last.title;
+          if (metaEl) metaEl.textContent = `${relativeTime(last.updatedAt || last.createdAt)} · ${last.messageCount} msgs`;
+        }
+        const recentContainer = landing.querySelector(".landing-recent");
+        if (recentContainer && newConvRes.length > 1) {
+          const rest = newConvRes.slice(1);
+          renderGroupedCards(rest.slice(0, 4), recentContainer);
+        }
+      } catch (err) { console.warn("Pull refresh failed:", err); }
+    }
+    if (pullIndicator) {
+      pullIndicator.remove();
+      pullIndicator = null;
+    }
+    pullStartY = 0;
+    pullDelta = 0;
+  }, { passive: true });
 }
 
 function createLandingCard(convo) {
@@ -596,12 +719,22 @@ async function catchUpSession(sid) {
     const domBubbles = messages.querySelectorAll(".msg.user, .msg.agent");
     const domCount = domBubbles.length;
 
-    if (serverMessages.length > domCount || (!status.agentRunning && isAgentRunning)) {
+    if (serverMessages.length > domCount) {
+      removeEmptyState();
+      removeSuggestionChips();
+      agentBubble = null;
+      agentText = "";
+      for (let i = domCount; i < serverMessages.length; i++) {
+        const msg = serverMessages[i];
+        if (msg.role === "user") appendBubble("user", msg.text, msg.timestamp);
+        else if (msg.role === "agent") appendBubble("agent", msg.text, msg.timestamp);
+      }
+      hasMessages = true;
+    } else if (serverMessages.length < domCount || (!status.agentRunning && isAgentRunning)) {
       clearMessages();
       removeSuggestionChips();
       agentBubble = null;
       agentText = "";
-
       if (serverMessages.length > 0) {
         removeEmptyState();
         for (const msg of serverMessages) {

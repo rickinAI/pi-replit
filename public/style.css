@@ -1332,6 +1332,75 @@ body.light-theme #mic-btn.recording {
   background: rgba(0, 255, 0, 0.25);
 }
 
+.landing-search-wrap {
+  position: relative;
+}
+
+.landing-search {
+  width: 100%;
+  padding: 8px 32px 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--green);
+  font-size: 12px;
+  font-family: var(--font);
+  outline: none;
+  box-sizing: border-box;
+}
+
+.landing-search::placeholder {
+  color: var(--green-muted);
+}
+
+.landing-search:focus {
+  border-color: var(--green-dim);
+}
+
+.landing-search-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--green-muted);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 6px;
+  font-family: var(--font);
+  line-height: 1;
+}
+
+.landing-search-clear.hidden {
+  display: none;
+}
+
+.landing-group-header {
+  font-size: 10px;
+  color: var(--green-muted);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-top: 8px;
+  margin-bottom: 2px;
+}
+
+.landing-group-header:first-child {
+  margin-top: 0;
+}
+
+.pull-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: var(--green-dim);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  overflow: hidden;
+  transition: height 0.2s ease, opacity 0.2s ease;
+}
+
 .landing-section-label {
   font-size: 10px;
   color: var(--green-muted);
@@ -2035,6 +2104,24 @@ body.light-theme .landing-last {
 body.light-theme .landing-new-btn {
   background: rgba(90, 138, 122, 0.1);
   text-shadow: none;
+}
+
+body.light-theme .landing-search {
+  background: #fff;
+  color: #2d2a26;
+  border-color: var(--border);
+}
+
+body.light-theme .landing-search::placeholder {
+  color: #aaa;
+}
+
+body.light-theme .landing-group-header {
+  color: #8a8580;
+}
+
+body.light-theme .pull-indicator {
+  color: var(--green);
 }
 
 body.light-theme .landing-card {

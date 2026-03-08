@@ -31,7 +31,11 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **.pi/agent/models.json** — Custom model registry entries (`claude-sonnet-4-6`, `claude-haiku-4-5-20251001`) so the Pi SDK's ModelRegistry can resolve them. These must match exact Anthropic API model IDs (no `-latest` aliases — Anthropic doesn't support them)
 - **public/** — Static frontend (terminal/hacker aesthetic, branded as "RICKIN")
   - Landing screen: "Mission Control" full-screen overlay on fresh load (no active session). Shows date, glance strip (weather/email/tasks/calendar from `/api/glance`), last conversation card with preview + RESUME button, NEW MISSION button, recent conversation cards with delete, VIEW ALL to expand full history inline
-  - 4 header buttons: Home (house icon, returns to landing), New (+, also returns to landing), Brief, Settings
+  - Conversation search: search input on landing screen filters conversations by title in real-time
+  - Date-grouped conversations: Recent list grouped into Today/Yesterday/This Week/Earlier headers
+  - Pull-to-refresh: touch pull-down on landing screen refreshes glance strip and conversation list
+  - Smoother reconnection: catchUpSession appends only new messages instead of full DOM rebuild (preserves scroll position)
+  - 4 header buttons: Home (house icon, returns to landing), New (+, starts fresh session directly), Brief, Settings
   - Resume conversation from landing cards (creates new session with old messages + context)
   - Scroll-to-bottom floating button (appears when scrolled up)
   - Retry button on errors (resends last message without retyping)
