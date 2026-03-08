@@ -259,11 +259,19 @@ homeBtn.addEventListener("click", () => {
   showLanding();
 });
 
-newSessionBtn.addEventListener("click", () => {
+newSessionBtn.addEventListener("click", async () => {
   if (landingVisible) return;
   stopSyncPolling();
   if (eventSource) { eventSource.close(); eventSource = null; }
-  showLanding();
+  if (sessionId) {
+    await fetch(`/api/session/${sessionId}`, { method: "DELETE" }).catch(() => {});
+    localStorage.removeItem("activeSession");
+    sessionId = null;
+  }
+  cleanupCurrentSession();
+  clearMessages();
+  showEmptyState();
+  await startSession();
 });
 
 modalConfirm.addEventListener("click", () => {
