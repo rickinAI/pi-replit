@@ -22,6 +22,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **src/weather.ts** — Weather via Open-Meteo (free, no API key)
 - **src/websearch.ts** — Web search via DuckDuckGo HTML (free, no API key)
 - **src/tasks.ts** — Task manager with PostgreSQL storage (tasks table)
+- **src/scheduled-jobs.ts** — Scheduled agent jobs system. Runs agents autonomously on configurable schedules. 3 default presets (KB Organizer 2AM, Daily News Brief 6:30AM, Market Summary 7:30AM), all disabled by default. Config stored in `app_config` key='scheduled_jobs'. 60s check loop with run-key dedup. Custom jobs can be added from Settings. API: GET/PUT/DELETE `/api/scheduled-jobs`, PUT `/api/scheduled-jobs/:id`, POST `/api/scheduled-jobs/:id/trigger`
 - **src/news.ts** — News headlines via Google News RSS feeds
 - **src/conversations.ts** — Conversation persistence module (save/load/list/delete via PostgreSQL, AI summaries via Haiku, last-conversation context for session start). Uses Replit's built-in PostgreSQL database (DATABASE_URL) so conversations persist across deployments
 - **src/memory-extractor.ts** — Post-conversation fact extraction (profile updates, action items) via Claude Haiku
@@ -56,7 +57,7 @@ All runtime state persists in Replit's built-in PostgreSQL (shared between dev a
 |-------|--------|---------|
 | `conversations` | `src/conversations.ts` | Chat history, messages, titles |
 | `tasks` | `src/tasks.ts` | To-do items with priority, due dates, tags |
-| `app_config` | `src/alerts.ts` | Brief schedules, watchlist, last prices, theme (key='alerts') |
+| `app_config` | `src/alerts.ts`, `src/scheduled-jobs.ts` | Brief schedules, watchlist, last prices, theme (key='alerts'); Scheduled agent job configs (key='scheduled_jobs') |
 | `oauth_tokens` | `src/gmail.ts` + `src/calendar.ts` | Google OAuth access/refresh tokens (service='google') |
 
 Connection pooling: Single shared `pg.Pool` in `src/db.ts` (max 10 connections), imported by all modules via `getPool()`.

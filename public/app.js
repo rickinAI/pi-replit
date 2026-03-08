@@ -1817,6 +1817,12 @@ function createSettingsPanel() {
       <div class="settings-row"><label>Task Deadline Alerts</label><input type="checkbox" class="settings-toggle" data-alert="taskDeadline"></div>
       <div class="settings-row"><label>Important Email Alerts</label><input type="checkbox" class="settings-toggle" data-alert="importantEmail"></div>
     </div>
+    <div class="settings-section scheduled-jobs-section">
+      <h3>// SCHEDULED AGENTS</h3>
+      <div id="scheduled-jobs-list"></div>
+      <button class="settings-btn" id="add-custom-job-btn">+ CUSTOM JOB</button>
+      <div id="custom-job-form-wrap"></div>
+    </div>
     <div class="settings-section settings-exit-section">
       <a href="/api/logout" class="settings-exit-btn" title="Log out">
         <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -1860,6 +1866,8 @@ function createSettingsPanel() {
   panel.querySelector("#watchlist-input").addEventListener("keydown", e => {
     if (e.key === "Enter") addWatchlistItem();
   });
+
+  setupCustomJobForm();
 
   return panel;
 }
@@ -1910,6 +1918,212 @@ async function loadSettingsConfig() {
     const themeToggle = panel.querySelector("#theme-toggle");
     if (themeToggle) themeToggle.checked = (localStorage.getItem("theme") || cfg.theme) === "light";
   } catch (err) { console.warn("Load settings failed:", err); }
+
+  loadScheduledJobs();
+}
+
+let scheduledJobsData = [];
+
+async function loadScheduledJobs() {
+  try {
+    const res = await fetch("/api/scheduled-jobs");
+    if (!res.ok) return;
+    scheduledJobsData = await res.json();
+    renderScheduledJobs();
+  } catch (err) { console.warn("Load scheduled jobs failed:", err); }
+}
+
+function renderScheduledJobs() {
+  const container = settingsPanel?.querySelector("#scheduled-jobs-list");
+  if (!container) return;
+  container.innerHTML = "";
+
+  scheduledJobsData.forEach(job => {
+    const card = document.createElement("div");
+    card.className = "job-card";
+    card.dataset.id = job.id;
+
+    const h = job.schedule.hour;
+    const m = job.schedule.minute;
+    const ampm = h < 12 ? "AM" : "PM";
+    const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+    const timeStr = `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+
+    let statusHtml = "";
+    if (job.lastRun) {
+      const ago = formatTimeAgo(job.lastRun);
+      const dot = job.lastStatus === "error" ? "pri-high" : "pri-low";
+      statusHtml = `<span class="job-status-badge"><span class="job-status-dot ${dot}"></span> ${ago}</span>`;
+    } else {
+      statusHtml = `<span class="job-status-badge"><span class="job-status-dot pri-med"></span> never run</span>`;
+    }
+
+    card.innerHTML = `
+      <div class="job-card-header">
+        <div class="job-card-info">
+          <span class="job-card-name">${escapeHtml(job.name)}</span>
+          <span class="job-card-agent">${escapeHtml(job.agentId)}</span>
+        </div>
+        <input type="checkbox" class="job-card-toggle" ${job.enabled ? "checked" : ""}>
+      </div>
+      <div class="job-card-body">
+        <div class="job-card-schedule">
+          <span class="job-card-schedule-label">${job.schedule.type === "daily" ? "Daily" : "Weekly"} at</span>
+          <select class="job-card-hour-select"></select>
+          <span class="job-card-time-sep">:</span>
+          <select class="job-card-min-select"></select>
+        </div>
+        <div class="job-card-actions">
+          ${statusHtml}
+          <button class="job-run-btn" title="Run now">Run</button>
+        </div>
+      </div>
+    `;
+
+    const hourSel = card.querySelector(".job-card-hour-select");
+    for (let hr = 0; hr < 24; hr++) {
+      const opt = document.createElement("option");
+      opt.value = hr;
+      const ap = hr < 12 ? "AM" : "PM";
+      const hr12 = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
+      opt.textContent = `${hr12} ${ap}`;
+      if (hr === h) opt.selected = true;
+      hourSel.appendChild(opt);
+    }
+
+    const minSel = card.querySelector(".job-card-min-select");
+    for (let mn = 0; mn < 60; mn += 5) {
+      const opt = document.createElement("option");
+      opt.value = mn;
+      opt.textContent = String(mn).padStart(2, "0");
+      if (mn === m) opt.selected = true;
+      minSel.appendChild(opt);
+    }
+
+    card.querySelector(".job-card-toggle").addEventListener("change", (e) => {
+      job.enabled = e.target.checked;
+      saveJobUpdate(job.id, { enabled: job.enabled });
+    });
+
+    hourSel.addEventListener("change", () => {
+      job.schedule.hour = parseInt(hourSel.value);
+      saveJobUpdate(job.id, { schedule: job.schedule });
+    });
+
+    minSel.addEventListener("change", () => {
+      job.schedule.minute = parseInt(minSel.value);
+      saveJobUpdate(job.id, { schedule: job.schedule });
+    });
+
+    card.querySelector(".job-run-btn").addEventListener("click", async () => {
+      const btn = card.querySelector(".job-run-btn");
+      btn.textContent = "Running...";
+      btn.disabled = true;
+      try {
+        await fetch(`/api/scheduled-jobs/${job.id}/trigger`, { method: "POST" });
+        btn.textContent = "Started";
+        setTimeout(() => { btn.textContent = "Run"; btn.disabled = false; }, 3000);
+      } catch {
+        btn.textContent = "Failed";
+        setTimeout(() => { btn.textContent = "Run"; btn.disabled = false; }, 2000);
+      }
+    });
+
+    container.appendChild(card);
+  });
+}
+
+function formatTimeAgo(iso) {
+  const diff = Date.now() - new Date(iso).getTime();
+  if (diff < 60000) return "just now";
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+  return `${Math.floor(diff / 86400000)}d ago`;
+}
+
+async function saveJobUpdate(jobId, updates) {
+  try {
+    await fetch(`/api/scheduled-jobs/${jobId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updates),
+    });
+  } catch (err) { console.warn("Save job update failed:", err); }
+}
+
+function setupCustomJobForm() {
+  const btn = settingsPanel?.querySelector("#add-custom-job-btn");
+  const wrap = settingsPanel?.querySelector("#custom-job-form-wrap");
+  if (!btn || !wrap) return;
+
+  btn.addEventListener("click", () => {
+    if (wrap.querySelector(".job-add-custom-form")) {
+      wrap.innerHTML = "";
+      return;
+    }
+    wrap.innerHTML = `
+      <div class="job-add-custom-form">
+        <div class="job-form-row"><label>Name</label><input type="text" class="job-form-input" id="custom-job-name" placeholder="My custom job"></div>
+        <div class="job-form-row"><label>Agent</label><select class="job-form-select" id="custom-job-agent"></select></div>
+        <div class="job-form-row"><label>Time</label><select class="job-form-select" id="custom-job-hour"></select><span class="job-card-time-sep">:</span><select class="job-form-select" id="custom-job-min"></select></div>
+        <div class="job-form-row"><label>Prompt</label><textarea class="job-form-textarea" id="custom-job-prompt" rows="4" placeholder="What should the agent do?"></textarea></div>
+        <div class="job-form-row job-form-actions">
+          <button class="job-form-submit">Add Job</button>
+          <button class="job-form-cancel">Cancel</button>
+        </div>
+      </div>
+    `;
+
+    const agentSel = wrap.querySelector("#custom-job-agent");
+    fetch("/api/agents").then(r => r.json()).then(agents => {
+      agents.forEach(a => {
+        const opt = document.createElement("option");
+        opt.value = a.id;
+        opt.textContent = a.name || a.id;
+        agentSel.appendChild(opt);
+      });
+    }).catch(() => {});
+
+    const hourSel2 = wrap.querySelector("#custom-job-hour");
+    for (let h = 0; h < 24; h++) {
+      const opt = document.createElement("option");
+      opt.value = h;
+      const ap = h < 12 ? "AM" : "PM";
+      const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+      opt.textContent = `${h12} ${ap}`;
+      if (h === 8) opt.selected = true;
+      hourSel2.appendChild(opt);
+    }
+    const minSel2 = wrap.querySelector("#custom-job-min");
+    for (let mn = 0; mn < 60; mn += 5) {
+      const opt = document.createElement("option");
+      opt.value = mn;
+      opt.textContent = String(mn).padStart(2, "0");
+      if (mn === 0) opt.selected = true;
+      minSel2.appendChild(opt);
+    }
+
+    wrap.querySelector(".job-form-cancel").addEventListener("click", () => { wrap.innerHTML = ""; });
+    wrap.querySelector(".job-form-submit").addEventListener("click", async () => {
+      const name = wrap.querySelector("#custom-job-name").value.trim();
+      const agentId = wrap.querySelector("#custom-job-agent").value;
+      const prompt = wrap.querySelector("#custom-job-prompt").value.trim();
+      const hour = parseInt(wrap.querySelector("#custom-job-hour").value);
+      const minute = parseInt(wrap.querySelector("#custom-job-min").value);
+      if (!name || !prompt) return;
+      try {
+        const res = await fetch("/api/scheduled-jobs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, agentId, prompt, schedule: { type: "daily", hour, minute }, enabled: false }),
+        });
+        if (res.ok) {
+          wrap.innerHTML = "";
+          loadScheduledJobs();
+        }
+      } catch (err) { console.warn("Add custom job failed:", err); }
+    });
+  });
 }
 
 function renderWatchlist(items) {

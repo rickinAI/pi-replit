@@ -3582,12 +3582,289 @@ async function triggerBrief(type) {
   return event;
 }
 
+// src/scheduled-jobs.ts
+var DEFAULT_JOBS = [
+  {
+    id: "kb-organizer",
+    name: "Knowledge Base Cleanup",
+    agentId: "knowledge-organizer",
+    prompt: `Scan the vault for maintenance issues and fix them:
+1. Find and remove empty folders
+2. Look for orphaned or misplaced files and move them to appropriate locations
+3. Check for duplicate or near-duplicate notes and consolidate them
+4. Ensure naming conventions are consistent (kebab-case or Title Case as appropriate)
+5. Create a brief summary of what you changed
+
+Be conservative \u2014 only make changes you're confident about. Save a summary to "Scheduled Reports/KB Cleanup.md".`,
+    schedule: { type: "daily", hour: 2, minute: 0 },
+    enabled: false
+  },
+  {
+    id: "daily-news",
+    name: "Daily News Brief",
+    agentId: "deep-researcher",
+    prompt: `Research and compile today's top news across these categories:
+1. Technology & AI developments
+2. Financial markets & economy
+3. World events
+
+For each story, provide a 2-3 sentence summary with context on why it matters.
+Save the compiled brief to "Scheduled Reports/Daily News.md" (overwrite previous).`,
+    schedule: { type: "daily", hour: 6, minute: 30 },
+    enabled: false
+  },
+  {
+    id: "market-summary",
+    name: "Market Summary",
+    agentId: "analyst",
+    prompt: `Analyze the current market conditions:
+1. Check the watchlist stocks and crypto prices
+2. Note any significant moves (>2%) with brief analysis
+3. Summarize overall market sentiment
+4. Flag any notable earnings or economic events today
+
+Save the report to "Scheduled Reports/Market Summary.md" (overwrite previous).`,
+    schedule: { type: "daily", hour: 7, minute: 30 },
+    enabled: false
+  }
+];
+var config2 = {
+  jobs: [...DEFAULT_JOBS],
+  lastJobRun: {},
+  timezone: "America/New_York"
+};
+var checkInterval = null;
+var jobRunning = false;
+var runAgentFn = null;
+var broadcastFn2 = null;
+var kbCreateFn = null;
+async function init7() {
+  try {
+    const result = await getPool().query(`SELECT value FROM app_config WHERE key = 'scheduled_jobs'`);
+    if (result.rows.length > 0) {
+      const raw = result.rows[0].value;
+      const existingIds = new Set((raw.jobs || []).map((j) => j.id));
+      const mergedJobs = [...raw.jobs || []];
+      for (const preset of DEFAULT_JOBS) {
+        if (!existingIds.has(preset.id)) {
+          mergedJobs.push(preset);
+        }
+      }
+      config2 = {
+        ...config2,
+        ...raw,
+        jobs: mergedJobs,
+        lastJobRun: raw.lastJobRun || {}
+      };
+    } else {
+      await saveConfig2();
+    }
+    const alertsResult = await getPool().query(`SELECT value FROM app_config WHERE key = 'alerts'`);
+    if (alertsResult.rows.length > 0) {
+      config2.timezone = alertsResult.rows[0].value.timezone || "America/New_York";
+    }
+  } catch (err) {
+    console.error("[scheduled-jobs] Init error:", err);
+  }
+  console.log(`[scheduled-jobs] initialized (${config2.jobs.length} jobs, ${config2.jobs.filter((j) => j.enabled).length} enabled)`);
+}
+async function saveConfig2() {
+  try {
+    await getPool().query(
+      `INSERT INTO app_config (key, value, updated_at)
+       VALUES ('scheduled_jobs', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(config2), Date.now()]
+    );
+  } catch (err) {
+    console.error("[scheduled-jobs] Save config error:", err);
+  }
+}
+function getJobs() {
+  return config2.jobs;
+}
+function updateConfig2(partial) {
+  if (partial.jobs) {
+    config2.jobs = partial.jobs;
+  }
+  if (partial.timezone) {
+    config2.timezone = partial.timezone;
+  }
+  saveConfig2();
+  return config2;
+}
+function updateJob(jobId, updates) {
+  const job = config2.jobs.find((j) => j.id === jobId);
+  if (!job) return null;
+  if (updates.enabled !== void 0) job.enabled = updates.enabled;
+  if (updates.name) job.name = updates.name;
+  if (updates.prompt) job.prompt = updates.prompt;
+  if (updates.schedule) job.schedule = { ...job.schedule, ...updates.schedule };
+  if (updates.agentId) job.agentId = updates.agentId;
+  saveConfig2();
+  return job;
+}
+function addJob(job) {
+  const id = `job_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const newJob = { id, ...job };
+  config2.jobs.push(newJob);
+  saveConfig2();
+  return newJob;
+}
+function removeJob(jobId) {
+  const idx = config2.jobs.findIndex((j) => j.id === jobId);
+  if (idx === -1) return false;
+  config2.jobs.splice(idx, 1);
+  for (const key of Object.keys(config2.lastJobRun)) {
+    if (key === jobId || key.startsWith(`${jobId}_`)) {
+      delete config2.lastJobRun[key];
+    }
+  }
+  saveConfig2();
+  return true;
+}
+function getNow2() {
+  const nowStr = (/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: config2.timezone });
+  return new Date(nowStr);
+}
+function getTodayKey2() {
+  const now = getNow2();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+async function checkJobs() {
+  if (jobRunning || !runAgentFn) return;
+  const now = getNow2();
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const todayKey = getTodayKey2();
+  const dayOfWeek = now.getDay();
+  for (const job of config2.jobs) {
+    if (!job.enabled) continue;
+    const targetMinutes = job.schedule.hour * 60 + job.schedule.minute;
+    if (nowMinutes < targetMinutes || nowMinutes > targetMinutes + 2) continue;
+    if (job.schedule.type === "weekly" && job.schedule.daysOfWeek) {
+      if (!job.schedule.daysOfWeek.includes(dayOfWeek)) continue;
+    }
+    const runKey = `${job.id}_${todayKey}`;
+    if (config2.lastJobRun[runKey]) continue;
+    config2.lastJobRun[runKey] = true;
+    await saveConfig2();
+    jobRunning = true;
+    console.log(`[scheduled-jobs] Running job: ${job.name} (${job.id})`);
+    try {
+      const result = await runAgentFn(job.agentId, job.prompt);
+      job.lastRun = (/* @__PURE__ */ new Date()).toISOString();
+      job.lastResult = result.slice(0, 500);
+      job.lastStatus = "success";
+      await saveConfig2();
+      const dateStr = todayKey;
+      const safeName = job.name.replace(/[^a-zA-Z0-9 ]/g, "").replace(/\s+/g, "-");
+      if (kbCreateFn) {
+        try {
+          await kbCreateFn(`Scheduled Reports/${dateStr}-${safeName}.md`, `# ${job.name}
+*Generated: ${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: config2.timezone })}*
+
+${result}`);
+        } catch (e) {
+          console.error(`[scheduled-jobs] Failed to save to vault:`, e);
+        }
+      }
+      if (broadcastFn2) {
+        broadcastFn2({
+          type: "job_complete",
+          jobId: job.id,
+          jobName: job.name,
+          summary: result.slice(0, 200),
+          timestamp: Date.now()
+        });
+      }
+      console.log(`[scheduled-jobs] Job completed: ${job.name}`);
+    } catch (err) {
+      job.lastRun = (/* @__PURE__ */ new Date()).toISOString();
+      job.lastResult = String(err);
+      job.lastStatus = "error";
+      await saveConfig2();
+      console.error(`[scheduled-jobs] Job failed: ${job.name}`, err);
+    } finally {
+      jobRunning = false;
+    }
+  }
+  const keys = Object.keys(config2.lastJobRun);
+  if (keys.length > 100) {
+    const sorted = keys.sort();
+    for (let i = 0; i < keys.length - 50; i++) {
+      delete config2.lastJobRun[sorted[i]];
+    }
+    saveConfig2();
+  }
+}
+function startJobSystem(runAgent, broadcast, kbCreate2) {
+  runAgentFn = runAgent;
+  broadcastFn2 = broadcast;
+  kbCreateFn = kbCreate2 || null;
+  checkInterval = setInterval(() => {
+    checkJobs().catch((err) => console.error("[scheduled-jobs] Check error:", err));
+  }, 6e4);
+  const enabledJobs = config2.jobs.filter((j) => j.enabled);
+  const jobList = enabledJobs.length > 0 ? enabledJobs.map((j) => `${j.name}/${j.schedule.hour}:${String(j.schedule.minute).padStart(2, "0")}`).join(", ") : "none enabled";
+  console.log(`[scheduled-jobs] System started \u2014 ${jobList} (${config2.timezone})`);
+}
+function stopJobSystem() {
+  if (checkInterval) clearInterval(checkInterval);
+  runAgentFn = null;
+  broadcastFn2 = null;
+  console.log("[scheduled-jobs] System stopped");
+}
+async function triggerJob(jobId) {
+  const job = config2.jobs.find((j) => j.id === jobId);
+  if (!job) throw new Error(`Job not found: ${jobId}`);
+  if (!runAgentFn) throw new Error("Job system not started");
+  if (jobRunning) throw new Error("Another job is currently running");
+  jobRunning = true;
+  console.log(`[scheduled-jobs] Manual trigger: ${job.name}`);
+  try {
+    const result = await runAgentFn(job.agentId, job.prompt);
+    job.lastRun = (/* @__PURE__ */ new Date()).toISOString();
+    job.lastResult = result.slice(0, 500);
+    job.lastStatus = "success";
+    await saveConfig2();
+    const todayKey = getTodayKey2();
+    const safeName = job.name.replace(/[^a-zA-Z0-9 ]/g, "").replace(/\s+/g, "-");
+    if (kbCreateFn) {
+      try {
+        await kbCreateFn(`Scheduled Reports/${todayKey}-${safeName}.md`, `# ${job.name}
+*Generated: ${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: config2.timezone })}*
+
+${result}`);
+      } catch {
+      }
+    }
+    if (broadcastFn2) {
+      broadcastFn2({
+        type: "job_complete",
+        jobId: job.id,
+        jobName: job.name,
+        summary: result.slice(0, 200),
+        timestamp: Date.now()
+      });
+    }
+    return result;
+  } catch (err) {
+    job.lastRun = (/* @__PURE__ */ new Date()).toISOString();
+    job.lastResult = String(err);
+    job.lastStatus = "error";
+    await saveConfig2();
+    throw err;
+  } finally {
+    jobRunning = false;
+  }
+}
+
 // src/agents/loader.ts
 import fs2 from "fs";
 import path3 from "path";
 var agents = [];
 var configPath = "";
-function init7(dataDir) {
+function init8(dataDir) {
   configPath = path3.join(dataDir, "agents.json");
   loadAgents();
   let reloadTimer = null;
@@ -3838,7 +4115,7 @@ var AGENT_DIR = path4.join(PROJECT_ROOT, ".pi/agent");
 var VAULT_DIR = path4.join(PROJECT_ROOT, "data", "vault");
 fs3.mkdirSync(AGENT_DIR, { recursive: true });
 init(VAULT_DIR);
-init7(path4.join(PROJECT_ROOT, "data"));
+init8(path4.join(PROJECT_ROOT, "data"));
 var useLocalVault = isConfigured2();
 setInterval(() => {
   const localAvailable = isConfigured2();
@@ -6035,6 +6312,100 @@ app.get("/api/tasks/completed", async (_req, res) => {
     res.status(500).json({ error: String(err) });
   }
 });
+app.get("/api/scheduled-jobs", (_req, res) => {
+  res.json(getJobs());
+});
+app.put("/api/scheduled-jobs", (req, res) => {
+  try {
+    const body = req.body;
+    if (body.jobs) {
+      updateConfig2({ jobs: body.jobs });
+    }
+    res.json({ ok: true, jobs: getJobs() });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+app.put("/api/scheduled-jobs/:id", (req, res) => {
+  try {
+    const body = req.body;
+    if (body.schedule) {
+      const { hour, minute } = body.schedule;
+      if (hour !== void 0 && (hour < 0 || hour > 23)) {
+        res.status(400).json({ error: "hour must be 0-23" });
+        return;
+      }
+      if (minute !== void 0 && (minute < 0 || minute > 59)) {
+        res.status(400).json({ error: "minute must be 0-59" });
+        return;
+      }
+    }
+    if (body.name && body.name.length > 100) {
+      res.status(400).json({ error: "name too long" });
+      return;
+    }
+    if (body.prompt && body.prompt.length > 5e3) {
+      res.status(400).json({ error: "prompt too long" });
+      return;
+    }
+    const result = updateJob(req.params["id"], body);
+    if (!result) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
+    res.json({ ok: true, job: result });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+app.post("/api/scheduled-jobs", (req, res) => {
+  try {
+    const { name, agentId, prompt, schedule, enabled } = req.body;
+    if (!name || !agentId || !prompt) {
+      res.status(400).json({ error: "name, agentId, and prompt required" });
+      return;
+    }
+    if (name.length > 100) {
+      res.status(400).json({ error: "name too long" });
+      return;
+    }
+    if (prompt.length > 5e3) {
+      res.status(400).json({ error: "prompt too long" });
+      return;
+    }
+    const sched = schedule || { type: "daily", hour: 8, minute: 0 };
+    if (sched.hour < 0 || sched.hour > 23 || sched.minute < 0 || sched.minute > 59) {
+      res.status(400).json({ error: "invalid schedule time" });
+      return;
+    }
+    const job = addJob({ name, agentId, prompt, schedule: sched, enabled: enabled || false });
+    res.json({ ok: true, job });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+app.delete("/api/scheduled-jobs/:id", (req, res) => {
+  try {
+    const removed = removeJob(req.params["id"]);
+    if (!removed) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+app.post("/api/scheduled-jobs/:id/trigger", async (req, res) => {
+  try {
+    res.json({ ok: true, status: "started" });
+    triggerJob(req.params["id"]).catch((err) => {
+      console.error(`[scheduled-jobs] Manual trigger failed:`, err);
+    });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
 app.patch("/api/tasks/:id/restore", async (req, res) => {
   try {
     const result = await restoreTask(req.params["id"]);
@@ -6339,6 +6710,7 @@ function gracefulShutdown(signal) {
     }
     obSyncProcess = null;
   }
+  stopJobSystem();
   for (const [id] of sessions.entries()) {
     saveAndCleanSession(id);
   }
@@ -6390,6 +6762,7 @@ async function startServer(maxRetries = 5) {
   await init4();
   await init5();
   await init6();
+  await init7();
   console.log("[boot] PostgreSQL ready (shared pool, 4 tables)");
   checkConnectionStatus().then((status) => {
     if (status.connected) console.log(`[boot] Google connected: ${status.email} (Gmail, Calendar, Drive, Sheets)`);
@@ -6439,6 +6812,29 @@ async function startServer(maxRetries = 5) {
               console.error(`[alerts] Vault save failed for ${briefPath}:`, err);
             }
           });
+          startJobSystem(
+            async (agentId, task) => {
+              const agentTools = [
+                ...buildKnowledgeBaseTools(),
+                ...cachedStaticTools
+              ];
+              const result = await runSubAgent({
+                agentId,
+                task,
+                allTools: agentTools,
+                apiKey: ANTHROPIC_KEY
+              });
+              return result.response;
+            },
+            broadcastToAll,
+            async (path5, content) => {
+              try {
+                await kbCreate(path5, content);
+              } catch (err) {
+                console.error(`[scheduled-jobs] Vault save failed for ${path5}:`, err);
+              }
+            }
+          );
           resolve();
         });
       });

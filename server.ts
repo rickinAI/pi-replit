@@ -37,6 +37,7 @@ import * as maps from "./src/maps.js";
 import * as gws from "./src/gws.js";
 import * as youtube from "./src/youtube.js";
 import * as alerts from "./src/alerts.js";
+import * as scheduledJobs from "./src/scheduled-jobs.js";
 import * as agentLoader from "./src/agents/loader.js";
 import { runSubAgent } from "./src/agents/orchestrator.js";
 import { extractAndFileInsights } from "./src/memory-extractor.js";
@@ -2285,6 +2286,78 @@ app.get("/api/tasks/completed", async (_req: Request, res: Response) => {
   }
 });
 
+app.get("/api/scheduled-jobs", (_req: Request, res: Response) => {
+  res.json(scheduledJobs.getJobs());
+});
+
+app.put("/api/scheduled-jobs", (req: Request, res: Response) => {
+  try {
+    const body = req.body as any;
+    if (body.jobs) {
+      scheduledJobs.updateConfig({ jobs: body.jobs });
+    }
+    res.json({ ok: true, jobs: scheduledJobs.getJobs() });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.put("/api/scheduled-jobs/:id", (req: Request, res: Response) => {
+  try {
+    const body = req.body as any;
+    if (body.schedule) {
+      const { hour, minute } = body.schedule;
+      if (hour !== undefined && (hour < 0 || hour > 23)) { res.status(400).json({ error: "hour must be 0-23" }); return; }
+      if (minute !== undefined && (minute < 0 || minute > 59)) { res.status(400).json({ error: "minute must be 0-59" }); return; }
+    }
+    if (body.name && body.name.length > 100) { res.status(400).json({ error: "name too long" }); return; }
+    if (body.prompt && body.prompt.length > 5000) { res.status(400).json({ error: "prompt too long" }); return; }
+    const result = scheduledJobs.updateJob(req.params["id"] as string, body);
+    if (!result) { res.status(404).json({ error: "Job not found" }); return; }
+    res.json({ ok: true, job: result });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.post("/api/scheduled-jobs", (req: Request, res: Response) => {
+  try {
+    const { name, agentId, prompt, schedule, enabled } = req.body as any;
+    if (!name || !agentId || !prompt) { res.status(400).json({ error: "name, agentId, and prompt required" }); return; }
+    if (name.length > 100) { res.status(400).json({ error: "name too long" }); return; }
+    if (prompt.length > 5000) { res.status(400).json({ error: "prompt too long" }); return; }
+    const sched = schedule || { type: "daily", hour: 8, minute: 0 };
+    if (sched.hour < 0 || sched.hour > 23 || sched.minute < 0 || sched.minute > 59) {
+      res.status(400).json({ error: "invalid schedule time" }); return;
+    }
+    const job = scheduledJobs.addJob({ name, agentId, prompt, schedule: sched, enabled: enabled || false });
+    res.json({ ok: true, job });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.delete("/api/scheduled-jobs/:id", (req: Request, res: Response) => {
+  try {
+    const removed = scheduledJobs.removeJob(req.params["id"] as string);
+    if (!removed) { res.status(404).json({ error: "Job not found" }); return; }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.post("/api/scheduled-jobs/:id/trigger", async (req: Request, res: Response) => {
+  try {
+    res.json({ ok: true, status: "started" });
+    scheduledJobs.triggerJob(req.params["id"] as string).catch(err => {
+      console.error(`[scheduled-jobs] Manual trigger failed:`, err);
+    });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 app.patch("/api/tasks/:id/restore", async (req: Request, res: Response) => {
   try {
     const result = await tasks.restoreTask(req.params["id"] as string);
@@ -2610,6 +2683,7 @@ function gracefulShutdown(signal: string) {
     try { obSyncProcess.kill(); } catch {}
     obSyncProcess = null;
   }
+  scheduledJobs.stopJobSystem();
   for (const [id] of sessions.entries()) {
     saveAndCleanSession(id);
   }
@@ -2660,6 +2734,7 @@ async function startServer(maxRetries = 5) {
   await gmail.init();
   await tasks.init();
   await alerts.init();
+  await scheduledJobs.init();
   console.log("[boot] PostgreSQL ready (shared pool, 4 tables)");
 
   gmail.checkConnectionStatus().then(status => {
@@ -2708,6 +2783,27 @@ async function startServer(maxRetries = 5) {
               console.error(`[alerts] Vault save failed for ${briefPath}:`, err);
             }
           });
+          scheduledJobs.startJobSystem(
+            async (agentId: string, task: string) => {
+              const agentTools = [
+                ...buildKnowledgeBaseTools(),
+                ...cachedStaticTools,
+              ];
+              const result = await runSubAgent({
+                agentId,
+                task,
+                allTools: agentTools as any,
+                apiKey: ANTHROPIC_KEY,
+              });
+              return result.response;
+            },
+            broadcastToAll,
+            async (path, content) => {
+              try { await kbCreate(path, content); } catch (err) {
+                console.error(`[scheduled-jobs] Vault save failed for ${path}:`, err);
+              }
+            },
+          );
           resolve();
         });
       });
