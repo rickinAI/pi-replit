@@ -2830,6 +2830,8 @@ async function startServer(maxRetries = 5) {
                 console.error(`[scheduled-jobs] Vault save failed for ${path}:`, err);
               }
             },
+            async (path) => kbList(path),
+            async (from, to) => kbMove(from, to),
           );
           resolve();
         });

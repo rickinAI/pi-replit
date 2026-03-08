@@ -26,6 +26,14 @@ interface ScheduledJobsConfig {
 type RunAgentFn = (agentId: string, task: string) => Promise<string>;
 type BroadcastFn = (event: any) => void;
 type KbCreateFn = (path: string, content: string) => Promise<any>;
+type KbListFn = (path: string) => Promise<string>;
+type KbMoveFn = (from: string, to: string) => Promise<string>;
+
+function getMoodysJobSavePath(jobId: string, dateStr: string, safeName: string): string {
+  if (jobId === "moodys-daily-intel") return `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief.md`;
+  if (jobId === "moodys-weekly-digest") return `Scheduled Reports/Moody's Intelligence/Weekly/${dateStr}-Digest.md`;
+  return `Scheduled Reports/${dateStr}-${safeName}.md`;
+}
 
 const DEFAULT_JOBS: ScheduledJob[] = [
   {
@@ -116,7 +124,7 @@ Search site:celent.com for mentions of Moody's, Credit Lens, lending tech, risk 
 Search site:chartis-research.com for RiskTech100, quadrant reports, credit risk, market risk, model risk, RegTech rankings.
 Search for reports from Forrester, Gartner, and IDC on banking technology, risk analytics, or enterprise AI in financial services.
 
-OUTPUT FORMAT — Save using notes_create to "Scheduled Reports/{today's date YYYY-MM-DD}-Moodys-Intelligence-Brief.md":
+OUTPUT FORMAT — Save using notes_create to "Scheduled Reports/Moody's Intelligence/Daily/{today's date YYYY-MM-DD}-Brief.md":
 
 # Moody's Intelligence Brief — {today's date}
 
@@ -155,7 +163,14 @@ OUTPUT FORMAT — Save using notes_create to "Scheduled Reports/{today's date YY
 ## ⚡ Key Takeaways
 - {3-5 bullet executive summary of what matters most for Moody's Banking Solutions positioning}
 
-If a search returns no new results for a category, note "No new developments" rather than omitting the section.`,
+If a search returns no new results for a category, note "No new developments" rather than omitting the section.
+
+AFTER saving the brief, update competitor and analyst profiles with today's findings:
+- For each competitor with new findings, use notes_append on "Projects/Moody's/Competitive Intelligence/Competitor Profiles/{Name}.md" to add a date-stamped entry:
+  ### {today's date YYYY-MM-DD}
+  - {bullet findings from today}
+- For each analyst firm with new findings, use notes_append on "Projects/Moody's/Competitive Intelligence/Industry Analysts/{Name}.md" with the same date-stamped format.
+- Only append to profiles that had actual findings today — skip those with "No new developments".`,
     schedule: { type: "daily", hour: 6, minute: 0 },
     enabled: true,
   },
@@ -165,11 +180,11 @@ If a search returns no new results for a category, note "No new developments" ra
     agentId: "moodys",
     prompt: `Generate the weekly Moody's strategic digest by reading and synthesising all daily intelligence briefs from this past week.
 
-STEP 1: List files in "Scheduled Reports/" folder using notes_list.
-STEP 2: Read every file matching "*-Moodys-Intelligence-Brief.md" from the last 7 days.
+STEP 1: List files in "Scheduled Reports/Moody's Intelligence/Daily/" folder using notes_list.
+STEP 2: Read every file matching "*-Brief.md" from the last 7 days.
 STEP 3: Synthesise all daily briefs into the weekly digest format below.
 
-Save using notes_create to "Scheduled Reports/{today's date YYYY-MM-DD}-Moodys-Weekly-Digest.md":
+Save using notes_create to "Scheduled Reports/Moody's Intelligence/Weekly/{today's date YYYY-MM-DD}-Digest.md":
 
 # Moody's Weekly Strategic Digest — Week of {date}
 
@@ -216,6 +231,51 @@ let jobRunning = false;
 let runAgentFn: RunAgentFn | null = null;
 let broadcastFn: BroadcastFn | null = null;
 let kbCreateFn: KbCreateFn | null = null;
+let kbListFn: KbListFn | null = null;
+let kbMoveFn: KbMoveFn | null = null;
+
+async function archiveOldBriefs(): Promise<void> {
+  if (!kbListFn || !kbMoveFn) return;
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 30);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+
+  const folders = [
+    { src: "Scheduled Reports/Moody's Intelligence/Daily", dest: "Archive/Moody's Intelligence/Daily" },
+    { src: "Scheduled Reports/Moody's Intelligence/Weekly", dest: "Archive/Moody's Intelligence/Weekly" },
+  ];
+
+  let archived = 0;
+  for (const { src, dest } of folders) {
+    try {
+      const listing = await kbListFn(src);
+      let files: string[] = [];
+      try {
+        const parsed = JSON.parse(listing);
+        files = (parsed.files || []).filter((f: string) => f.endsWith(".md"));
+      } catch {
+        continue;
+      }
+      for (const filePath of files) {
+        const basename = filePath.split("/").pop() || "";
+        const dateMatch = basename.match(/^(\d{4}-\d{2}-\d{2})/);
+        if (dateMatch && dateMatch[1] < cutoffStr) {
+          const destPath = `${dest}/${basename}`;
+          try {
+            await kbMoveFn(filePath, destPath);
+            archived++;
+          } catch (e) {
+            console.error(`[scheduled-jobs] Archive move failed: ${filePath}`, e);
+          }
+        }
+      }
+    } catch {
+    }
+  }
+  if (archived > 0) {
+    console.log(`[scheduled-jobs] Archived ${archived} old brief(s)`);
+  }
+}
 
 export async function init(): Promise<void> {
   try {
@@ -368,7 +428,8 @@ async function checkJobs(): Promise<void> {
       const safeName = job.name.replace(/[^a-zA-Z0-9 ]/g, "").replace(/\s+/g, "-");
       if (kbCreateFn) {
         try {
-          await kbCreateFn(`Scheduled Reports/${dateStr}-${safeName}.md`, `# ${job.name}\n*Generated: ${new Date().toLocaleString("en-US", { timeZone: config.timezone })}*\n\n${result}`);
+          const savePath = getMoodysJobSavePath(job.id, dateStr, safeName);
+          await kbCreateFn(savePath, `# ${job.name}\n*Generated: ${new Date().toLocaleString("en-US", { timeZone: config.timezone })}*\n\n${result}`);
         } catch (e) {
           console.error(`[scheduled-jobs] Failed to save to vault:`, e);
         }
@@ -385,6 +446,10 @@ async function checkJobs(): Promise<void> {
       }
 
       console.log(`[scheduled-jobs] Job completed: ${job.name}`);
+
+      if (job.id.startsWith("moodys") && kbListFn && kbMoveFn) {
+        await archiveOldBriefs();
+      }
     } catch (err) {
       job.lastRun = new Date().toISOString();
       job.lastResult = String(err);
@@ -410,10 +475,14 @@ export function startJobSystem(
   runAgent: RunAgentFn,
   broadcast: BroadcastFn,
   kbCreate?: KbCreateFn,
+  kbList?: KbListFn,
+  kbMove?: KbMoveFn,
 ): void {
   runAgentFn = runAgent;
   broadcastFn = broadcast;
   kbCreateFn = kbCreate || null;
+  kbListFn = kbList || null;
+  kbMoveFn = kbMove || null;
 
   checkInterval = setInterval(() => {
     checkJobs().catch(err => console.error("[scheduled-jobs] Check error:", err));
@@ -453,8 +522,13 @@ export async function triggerJob(jobId: string): Promise<string> {
     const safeName = job.name.replace(/[^a-zA-Z0-9 ]/g, "").replace(/\s+/g, "-");
     if (kbCreateFn) {
       try {
-        await kbCreateFn(`Scheduled Reports/${todayKey}-${safeName}.md`, `# ${job.name}\n*Generated: ${new Date().toLocaleString("en-US", { timeZone: config.timezone })}*\n\n${result}`);
+        const savePath = getMoodysJobSavePath(job.id, todayKey, safeName);
+        await kbCreateFn(savePath, `# ${job.name}\n*Generated: ${new Date().toLocaleString("en-US", { timeZone: config.timezone })}*\n\n${result}`);
       } catch {}
+    }
+
+    if (job.id.startsWith("moodys") && kbListFn && kbMoveFn) {
+      await archiveOldBriefs();
     }
 
     if (broadcastFn) {
