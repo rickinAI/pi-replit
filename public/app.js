@@ -374,7 +374,7 @@ async function showLanding() {
       items.push(`${w.icon || "🌡️"} ${w.tempC}°C ${w.condition || ""}`);
     }
     if (glanceData.emails) {
-      items.push(`📧 ${glanceData.emails.unread} unread`);
+      items.push(`📧 ${glanceData.emails.unread} new emails`);
     }
     if (glanceData.tasks) {
       items.push(`✅ ${glanceData.tasks.active} task${glanceData.tasks.active !== 1 ? "s" : ""}`);
@@ -586,7 +586,7 @@ async function showLanding() {
         if (glanceEl && newGlanceRes) {
           const items = [];
           if (newGlanceRes.weather) items.push(`${newGlanceRes.weather.icon || "🌡️"} ${newGlanceRes.weather.tempC}°C ${newGlanceRes.weather.condition || ""}`);
-          if (newGlanceRes.emails) items.push(`📧 ${newGlanceRes.emails.unread} unread`);
+          if (newGlanceRes.emails) items.push(`📧 ${newGlanceRes.emails.unread} new emails`);
           if (newGlanceRes.tasks) items.push(`✅ ${newGlanceRes.tasks.active} task${newGlanceRes.tasks.active !== 1 ? "s" : ""}`);
           if (newGlanceRes.nextEvent) {
             const ev = newGlanceRes.nextEvent;
@@ -2156,7 +2156,7 @@ async function fetchGlance() {
     const e = escapeHtml;
     const parts = [];
     if (d.weather) parts.push(`${e(d.weather.icon)} ${e(String(d.weather.tempC))}°C`);
-    if (d.emails && d.emails.unread > 0) parts.push(`${d.emails.unread} new today`);
+    if (d.emails && d.emails.unread > 0) parts.push(`${d.emails.unread} new emails`);
     if (d.tasks && d.tasks.active > 0) parts.push(`${d.tasks.active} task${d.tasks.active !== 1 ? "s" : ""}`);
     let nextEventHtml = "";
     if (d.nextEvent) {
@@ -2174,7 +2174,7 @@ async function fetchGlance() {
     const detailRows = [];
     if (d.time) detailRows.push(row("time", e(d.time)));
     if (d.weather) detailRows.push(row("weather", `${e(d.weather.icon)} ${e(String(d.weather.tempC))}°C — ${e(d.weather.condition)}`));
-    if (d.emails) detailRows.push(row("email", d.emails.unread === 0 ? "Inbox clear" : `${d.emails.unread} unread today`));
+    if (d.emails) detailRows.push(row("email", d.emails.unread === 0 ? "Inbox clear" : `${d.emails.unread} new emails`));
     if (d.tasks) detailRows.push(row("tasks", d.tasks.active === 0 ? "All clear" : `${d.tasks.active} open`));
     if (d.upcomingEvents && d.upcomingEvents.length > 0) {
       const evList = d.upcomingEvents.map(ev => {
