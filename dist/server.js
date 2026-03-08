@@ -5462,7 +5462,7 @@ ${snippetText}`;
     }
   ];
 }
-function buildAgentTools(allToolsFn) {
+function buildAgentTools(allToolsFn, sessionId) {
   return [
     {
       name: "delegate",
@@ -5475,12 +5475,15 @@ function buildAgentTools(allToolsFn) {
       }),
       async execute(_toolCallId, params) {
         try {
+          const sessionEntry = sessions.get(sessionId);
+          const modelOverride = sessionEntry?.modelMode === "max" ? MAX_MODEL_ID : void 0;
           const result = await runSubAgent({
             agentId: params.agent,
             task: params.task,
             context: params.context,
             allTools: allToolsFn(),
-            apiKey: ANTHROPIC_KEY
+            apiKey: ANTHROPIC_KEY,
+            model: modelOverride
           });
           return {
             content: [{ type: "text", text: result.response }],
@@ -5518,6 +5521,7 @@ ${list2}` }],
 var sessions = /* @__PURE__ */ new Map();
 var FAST_MODEL_ID = "claude-haiku-4-5-20251001";
 var FULL_MODEL_ID = "claude-sonnet-4-6";
+var MAX_MODEL_ID = "claude-opus-4-6";
 var FAST_PATTERNS = [
   /^(hi|hello|hey|yo|sup|good\s*(morning|afternoon|evening)|thanks|thank you|ok|okay|got it|cool|nice|great)\b/i,
   /^what('s| is) (the )?(time|date|day)\b/i,
@@ -5525,6 +5529,18 @@ var FAST_PATTERNS = [
   /^(add|create|complete|delete|remove)\s+(a\s+)?(task|todo|note)\b/i,
   /^(how'?s|what'?s)\s+(the\s+)?(weather|market|stock)\b/i,
   /^(remind|timer|alarm|set)\b/i
+];
+var MAX_PATTERNS = [
+  /\b(project|strategy|architecture|roadmap|proposal|initiative)\b/i,
+  /\b(sprint|milestone|deliverable|stakeholder|requirements?)\b/i,
+  /\b(analysis|analyze|evaluate|assess|audit|review|compare)\b/i,
+  /\b(forecast|budget|revenue|investment|valuation|financial)\b/i,
+  /\b(presentation|deck|report|memo|brief|whitepaper)\b/i,
+  /\b(moody'?s|validmind|data\s*moat|competitive|acquisition)\b/i,
+  /\b(design|implement|build|develop|engineer|refactor)\b/i,
+  /\b(plan\s+(out|for|the)|create\s+a\s+plan|help\s+me\s+(plan|think|figure))\b/i,
+  /\b(research|deep\s*dive|investigate|explore\s+(the|how|why))\b/i,
+  /\b(retirement|estate|wealth|portfolio\s+(review|strategy|allocation))\b/i
 ];
 function classifyIntent(message) {
   const trimmed = message.trim();
@@ -5534,6 +5550,9 @@ function classifyIntent(message) {
     }
   }
   if (trimmed.length < 20 && !trimmed.includes("?")) return "fast";
+  for (const pattern of MAX_PATTERNS) {
+    if (pattern.test(trimmed)) return "max";
+  }
   return "full";
 }
 var syncedConversations = /* @__PURE__ */ new Set();
@@ -5901,7 +5920,7 @@ app.post("/api/session", async (req, res) => {
     ];
     const allTools = [
       ...coreTools,
-      ...buildAgentTools(() => coreTools)
+      ...buildAgentTools(() => coreTools, sessionId)
     ];
     console.log(`[session] ${allTools.length} tools registered`);
     const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false } });
@@ -6092,13 +6111,15 @@ app.post("/api/session/:id/prompt", async (req, res) => {
   }
   let chosenModelId = FULL_MODEL_ID;
   const hasImages = images && images.length > 0;
-  if (hasImages) {
+  if (entry.modelMode === "max") {
+    chosenModelId = MAX_MODEL_ID;
+  } else if (hasImages) {
     chosenModelId = FULL_MODEL_ID;
   } else if (entry.modelMode === "fast") {
     chosenModelId = FAST_MODEL_ID;
   } else if (entry.modelMode === "auto") {
     const intent = classifyIntent(text);
-    chosenModelId = intent === "fast" ? FAST_MODEL_ID : FULL_MODEL_ID;
+    chosenModelId = intent === "fast" ? FAST_MODEL_ID : intent === "max" ? MAX_MODEL_ID : FULL_MODEL_ID;
   }
   if (chosenModelId !== entry.activeModelName) {
     try {
@@ -6205,8 +6226,8 @@ app.put("/api/session/:id/model-mode", (req, res) => {
     return;
   }
   const { mode } = req.body;
-  if (!mode || !["auto", "fast", "full"].includes(mode)) {
-    res.status(400).json({ error: "mode must be auto, fast, or full" });
+  if (!mode || !["auto", "fast", "full", "max"].includes(mode)) {
+    res.status(400).json({ error: "mode must be auto, fast, full, or max" });
     return;
   }
   entry.modelMode = mode;

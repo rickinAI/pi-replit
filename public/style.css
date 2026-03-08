@@ -143,12 +143,21 @@ body {
   color: var(--amber);
 }
 
+.model-badge[data-mode="max"] .model-mode {
+  background: #2a1a3a;
+  color: #c6f;
+}
+
 .model-badge.model-fast {
   border-color: #3a5a3a;
 }
 
 .model-badge.model-full {
   border-color: #5a4a2a;
+}
+
+.model-badge.model-max {
+  border-color: #5a3a6a;
 }
 
 .model-name {
@@ -2387,6 +2396,11 @@ body.light-theme .model-badge[data-mode="fast"] .model-mode {
 body.light-theme .model-badge[data-mode="full"] .model-mode {
   background: rgba(154, 109, 78, 0.12);
   color: var(--amber);
+}
+
+body.light-theme .model-badge[data-mode="max"] .model-mode {
+  background: rgba(140, 80, 200, 0.12);
+  color: #8a3ec8;
 }
 
 body.light-theme .icon-btn:hover,

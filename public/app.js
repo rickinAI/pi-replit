@@ -2187,19 +2187,23 @@ async function saveSettings() {
 alertsSettingsBtn.addEventListener("click", toggleSettings);
 
 const FAST_MODEL_ID = "claude-haiku-4-5-20251001";
+const MAX_MODEL_ID = "claude-opus-4-6";
 const MODEL_DISPLAY = {
   [FAST_MODEL_ID]: "haiku-4.5",
   [FULL_MODEL_ID]: "sonnet-4.6",
+  [MAX_MODEL_ID]: "opus-4.6",
 };
 const MODE_TO_MODEL = {
   fast: FAST_MODEL_ID,
   full: FULL_MODEL_ID,
+  max: MAX_MODEL_ID,
 };
 
 function updateModelBadge(modelId) {
   modelNameEl.textContent = MODEL_DISPLAY[modelId] || modelId;
   modelBadge.classList.toggle("model-fast", modelId === FAST_MODEL_ID);
   modelBadge.classList.toggle("model-full", modelId === FULL_MODEL_ID);
+  modelBadge.classList.toggle("model-max", modelId === MAX_MODEL_ID);
 }
 
 function updateModeDisplay(mode) {
@@ -2208,14 +2212,14 @@ function updateModeDisplay(mode) {
   modelBadge.dataset.mode = mode;
   if (mode === "auto") {
     modelNameEl.textContent = "auto";
-    modelBadge.classList.remove("model-fast", "model-full");
+    modelBadge.classList.remove("model-fast", "model-full", "model-max");
   } else {
     updateModelBadge(MODE_TO_MODEL[mode]);
   }
 }
 
 modelBadge.addEventListener("click", async () => {
-  const modes = ["auto", "fast", "full"];
+  const modes = ["auto", "fast", "full", "max"];
   const next = modes[(modes.indexOf(currentModelMode) + 1) % modes.length];
   updateModeDisplay(next);
   if (!sessionId) return;
