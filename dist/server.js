@@ -3934,6 +3934,23 @@ function getAgent(id) {
 // src/agents/orchestrator.ts
 import Anthropic3 from "@anthropic-ai/sdk";
 var MAX_TOOL_ITERATIONS = 15;
+var NATIVE_WEB_SEARCH = {
+  type: "web_search_20260209",
+  name: "web_search",
+  max_uses: 10,
+  user_location: {
+    type: "approximate",
+    city: "Upper Saddle River",
+    region: "New Jersey",
+    country: "US",
+    timezone: "America/New_York"
+  }
+};
+var NATIVE_WEB_FETCH = {
+  type: "web_fetch_20260209",
+  name: "web_fetch",
+  max_uses: 5
+};
 function convertToolsToAnthropicFormat(tools) {
   return tools.map((t) => ({
     name: t.name,
@@ -3964,9 +3981,10 @@ async function runSubAgent(opts) {
   if (!agent.enabled) throw new Error(`Agent "${opts.agentId}" is currently disabled`);
   const startTime = Date.now();
   console.log(`[agent:${agent.id}] started \u2014 "${opts.task.slice(0, 80)}"`);
-  const filteredTools = opts.allTools.filter((t) => agent.tools.includes(t.name));
+  const filteredTools = opts.allTools.filter((t) => agent.tools.includes(t.name) && t.name !== "web_search" && t.name !== "web_fetch");
   const anthropicTools = convertToolsToAnthropicFormat(filteredTools);
   const toolsUsed = [];
+  const allTools = [...anthropicTools, NATIVE_WEB_SEARCH, NATIVE_WEB_FETCH];
   const client = new Anthropic3({ apiKey: opts.apiKey });
   const modelId = agent.model === "default" ? opts.model || "claude-opus-4-6" : agent.model;
   let userContent = opts.task;
@@ -3989,27 +4007,33 @@ ${opts.task}`;
     }
     const apiResponse = await client.messages.create({
       model: modelId,
-      max_tokens: 4096,
+      max_tokens: 16384,
       system: agent.systemPrompt,
-      tools: anthropicTools.length > 0 ? anthropicTools : void 0,
+      tools: allTools,
       messages
     });
     totalInput += apiResponse.usage?.input_tokens || 0;
     totalOutput += apiResponse.usage?.output_tokens || 0;
     const textBlocks = apiResponse.content.filter((b) => b.type === "text");
-    const toolBlocks = apiResponse.content.filter((b) => b.type === "tool_use");
+    const customToolBlocks = apiResponse.content.filter((b) => b.type === "tool_use");
+    const serverToolBlocks = apiResponse.content.filter((b) => b.type === "server_tool_use");
     if (textBlocks.length > 0) {
       finalResponse = textBlocks.map((b) => b.text).join("\n");
     }
-    if (apiResponse.stop_reason === "end_turn" || toolBlocks.length === 0) {
+    for (const stb of serverToolBlocks) {
+      const name = stb.name || "web_search";
+      if (!toolsUsed.includes(name)) toolsUsed.push(name);
+      console.log(`[agent:${agent.id}] server tool: ${name}`);
+    }
+    if (apiResponse.stop_reason === "end_turn" || customToolBlocks.length === 0) {
       break;
     }
     messages.push({ role: "assistant", content: apiResponse.content });
-    const toolResults = [];
-    for (const toolCall of toolBlocks) {
+    const userContent2 = [];
+    for (const toolCall of customToolBlocks) {
       const impl = filteredTools.find((t) => t.name === toolCall.name);
       if (!impl) {
-        toolResults.push({
+        userContent2.push({
           type: "tool_result",
           tool_use_id: toolCall.id,
           content: `Tool "${toolCall.name}" not available`,
@@ -4022,13 +4046,13 @@ ${opts.task}`;
       try {
         const result = await impl.execute(toolCall.id, toolCall.input);
         const text = result.content.map((c) => c.text || JSON.stringify(c)).filter(Boolean).join("\n");
-        toolResults.push({
+        userContent2.push({
           type: "tool_result",
           tool_use_id: toolCall.id,
           content: text || "(empty result)"
         });
       } catch (err) {
-        toolResults.push({
+        userContent2.push({
           type: "tool_result",
           tool_use_id: toolCall.id,
           content: `Error: ${err.message}`,
@@ -4036,7 +4060,27 @@ ${opts.task}`;
         });
       }
     }
-    messages.push({ role: "user", content: toolResults });
+    if (userContent2.length > 0) {
+      messages.push({ role: "user", content: userContent2 });
+    }
+  }
+  if (!finalResponse && messages.length > 1) {
+    try {
+      console.log(`[agent:${agent.id}] no final response \u2014 requesting summary`);
+      messages.push({ role: "user", content: "Please provide your final summary and findings based on the work you've done so far." });
+      const summaryResponse = await client.messages.create({
+        model: modelId,
+        max_tokens: 4096,
+        system: agent.systemPrompt,
+        messages
+      });
+      totalInput += summaryResponse.usage?.input_tokens || 0;
+      totalOutput += summaryResponse.usage?.output_tokens || 0;
+      const summaryText = summaryResponse.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
+      if (summaryText) finalResponse = summaryText;
+    } catch (err) {
+      console.error(`[agent:${agent.id}] summary request failed:`, err.message);
+    }
   }
   const durationMs = Date.now() - startTime;
   console.log(`[agent:${agent.id}] completed in ${(durationMs / 1e3).toFixed(1)}s (${toolsUsed.length} tools used, ${totalInput + totalOutput} tokens)`);

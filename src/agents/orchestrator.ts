@@ -20,6 +20,25 @@ export interface SubAgentResult {
 
 const MAX_TOOL_ITERATIONS = 15;
 
+const NATIVE_WEB_SEARCH = {
+  type: "web_search_20260209",
+  name: "web_search",
+  max_uses: 10,
+  user_location: {
+    type: "approximate" as const,
+    city: "Upper Saddle River",
+    region: "New Jersey",
+    country: "US",
+    timezone: "America/New_York",
+  },
+};
+
+const NATIVE_WEB_FETCH = {
+  type: "web_fetch_20260209",
+  name: "web_fetch",
+  max_uses: 5,
+};
+
 function convertToolsToAnthropicFormat(tools: ToolImpl[]): Anthropic.Tool[] {
   return tools.map(t => ({
     name: t.name,
@@ -62,9 +81,11 @@ export async function runSubAgent(opts: {
   const startTime = Date.now();
   console.log(`[agent:${agent.id}] started — "${opts.task.slice(0, 80)}"`);
 
-  const filteredTools = opts.allTools.filter(t => agent.tools.includes(t.name));
+  const filteredTools = opts.allTools.filter(t => agent.tools.includes(t.name) && t.name !== "web_search" && t.name !== "web_fetch");
   const anthropicTools = convertToolsToAnthropicFormat(filteredTools);
   const toolsUsed: string[] = [];
+
+  const allTools: any[] = [...anthropicTools, NATIVE_WEB_SEARCH, NATIVE_WEB_FETCH];
 
   const client = new Anthropic({ apiKey: opts.apiKey });
   const modelId = agent.model === "default" ? (opts.model || "claude-opus-4-6") : agent.model;
@@ -90,33 +111,41 @@ export async function runSubAgent(opts: {
 
     const apiResponse = await client.messages.create({
       model: modelId,
-      max_tokens: 4096,
+      max_tokens: 16384,
       system: agent.systemPrompt,
-      tools: anthropicTools.length > 0 ? anthropicTools : undefined,
+      tools: allTools,
       messages,
     });
 
     totalInput += apiResponse.usage?.input_tokens || 0;
     totalOutput += apiResponse.usage?.output_tokens || 0;
 
-    const textBlocks = apiResponse.content.filter(b => b.type === "text");
-    const toolBlocks = apiResponse.content.filter(b => b.type === "tool_use") as Anthropic.ToolUseBlock[];
+    const textBlocks = apiResponse.content.filter((b: any) => b.type === "text");
+    const customToolBlocks = apiResponse.content.filter((b: any) => b.type === "tool_use") as Anthropic.ToolUseBlock[];
+    const serverToolBlocks = apiResponse.content.filter((b: any) => b.type === "server_tool_use");
 
     if (textBlocks.length > 0) {
-      finalResponse = textBlocks.map(b => (b as Anthropic.TextBlock).text).join("\n");
+      finalResponse = textBlocks.map((b: any) => (b as Anthropic.TextBlock).text).join("\n");
     }
 
-    if (apiResponse.stop_reason === "end_turn" || toolBlocks.length === 0) {
+    for (const stb of serverToolBlocks) {
+      const name = (stb as any).name || "web_search";
+      if (!toolsUsed.includes(name)) toolsUsed.push(name);
+      console.log(`[agent:${agent.id}] server tool: ${name}`);
+    }
+
+    if (apiResponse.stop_reason === "end_turn" || customToolBlocks.length === 0) {
       break;
     }
 
-    messages.push({ role: "assistant", content: apiResponse.content });
+    messages.push({ role: "assistant", content: apiResponse.content as any });
 
-    const toolResults: Anthropic.ToolResultBlockParam[] = [];
-    for (const toolCall of toolBlocks) {
+    const userContent: any[] = [];
+
+    for (const toolCall of customToolBlocks) {
       const impl = filteredTools.find(t => t.name === toolCall.name);
       if (!impl) {
-        toolResults.push({
+        userContent.push({
           type: "tool_result",
           tool_use_id: toolCall.id,
           content: `Tool "${toolCall.name}" not available`,
@@ -134,13 +163,13 @@ export async function runSubAgent(opts: {
           .map(c => c.text || JSON.stringify(c))
           .filter(Boolean)
           .join("\n");
-        toolResults.push({
+        userContent.push({
           type: "tool_result",
           tool_use_id: toolCall.id,
           content: text || "(empty result)",
         });
       } catch (err: any) {
-        toolResults.push({
+        userContent.push({
           type: "tool_result",
           tool_use_id: toolCall.id,
           content: `Error: ${err.message}`,
@@ -149,7 +178,31 @@ export async function runSubAgent(opts: {
       }
     }
 
-    messages.push({ role: "user", content: toolResults });
+    if (userContent.length > 0) {
+      messages.push({ role: "user", content: userContent });
+    }
+  }
+
+  if (!finalResponse && messages.length > 1) {
+    try {
+      console.log(`[agent:${agent.id}] no final response — requesting summary`);
+      messages.push({ role: "user", content: "Please provide your final summary and findings based on the work you've done so far." });
+      const summaryResponse = await client.messages.create({
+        model: modelId,
+        max_tokens: 4096,
+        system: agent.systemPrompt,
+        messages,
+      });
+      totalInput += summaryResponse.usage?.input_tokens || 0;
+      totalOutput += summaryResponse.usage?.output_tokens || 0;
+      const summaryText = summaryResponse.content
+        .filter((b: any) => b.type === "text")
+        .map((b: any) => (b as Anthropic.TextBlock).text)
+        .join("\n");
+      if (summaryText) finalResponse = summaryText;
+    } catch (err: any) {
+      console.error(`[agent:${agent.id}] summary request failed:`, err.message);
+    }
   }
 
   const durationMs = Date.now() - startTime;
