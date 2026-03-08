@@ -1,0 +1,132 @@
+> Build a daily automated intelligence pipeline for the Moody's specialist agent.
+>
+> What it does:
+> Every day at 6:00 AM ET, run a scheduled job that collects intelligence across 5 categories and saves a structured brief to the vault. Additionally, every Sunday at 7:00 AM ET, generate a weekly strategic digest.
+>
+> 5 Intelligence Feeds:
+>
+> 1. Moody's Corporate News — Search site:moodys.com + news_search("Moody's") for any new press releases, product announcements, leadership changes, earnings, or strategic moves. Focus on anything related to Banking Solutions, Lending, KYC, Risk Analytics, or data products.
+>
+> 2. Banking Segment Specifics — Search for news about Moody's banking products: Credit Lens, Moody's Analytics banking, OnlineALM, Orbis, BvD. Include any customer wins, partnerships, or product launches in the banking vertical.
+>
+> 3. Competitor Intelligence — Search for latest news from ALL of these competitors and partners:
+>
+>    Credit Rating & Data Peers:
+>    - Bloomberg — Bloomberg Data, Enterprise Data, AI initiatives
+>    - S&P Global — Market Intelligence, Capital IQ, data strategy
+>    - Fitch — Fitch Ratings, Fitch Solutions, banking analytics, data products
+>    - Nasdaq — Nasdaq Financial Technology, AxiomSL, Calypso, risk/regulatory tech
+>
+>    Banking Tech / Lending Platforms:
+>    - nCino — Bank operating system, lending automation, AI in banking workflows
+>    - QRM — Credit risk, ALM, FTP, balance sheet management (direct Credit Lens competitor)
+>    - Empyrean (Emperion) — Lending technology, credit decisioning, banking analytics
+>
+>    Data & AI Infrastructure:
+>    - Quantexa — Entity resolution, knowledge graph, agentic AI, banking deals
+>    - Databricks — Financial services, lakehouse for banking, Delta Sharing
+>
+>    Regulatory & Compliance Partners:
+>    - Regnology — Regulatory reporting tech
+>    - FinregE — Regulatory intelligence automation
+>    - ValidMind — Model risk management, AI governance
+>
+> 4. Enterprise AI Trends — Search for:
+>    - Agentic AI in banking and financial services
+>    - Enterprise LLM deployments in regulated industries
+>    - AI governance and regulation updates (EU AI Act, US banking regulators)
+>    - MCP (Model Context Protocol) enterprise adoption
+>    - CDM / data standards in financial services
+>
+> 5. Industry Analyst Coverage — Scrape/search these analyst and research sites for relevant reports, rankings, and commentary:
+>    - Celent (celent.com) — Banking technology research, vendor rankings, IT spending reports. Search for any mentions of Moody's, Credit Lens, lending tech, risk analytics, ALM, banking AI, and any competitor named above.
+>    - Chartis Research (chartis-research.com) — Risk technology rankings (RiskTech100, quadrants), credit risk, market risk, model risk, RegTech. Search for any vendor rankings, quadrant reports, or category analyses that mention Moody's or competitors.
+>    - Also search for reports from Forrester, Gartner, and IDC covering banking technology, risk analytics, or enterprise AI in financial services.
+>
+> Daily Output format:
+> Save to Scheduled Reports/YYYY-MM-DD-Moodys-Intelligence-Brief.md:
+>
+> 
+> # Moody's Intelligence Brief — {date}
+>
+> ## 🏢 Moody's Corporate
+> - {bullet summaries with source URLs}
+>
+> ## 🏦 Banking Segment
+> - {bullet summaries with source URLs}
+>
+> ## 🔍 Competitor Watch
+> ### Credit Rating & Data Peers
+> #### Bloomberg
+> #### S&P Global
+> #### Fitch
+> #### Nasdaq
+> ### Banking Tech & Lending
+> #### nCino
+> #### QRM
+> #### Empyrean
+> ### Data & AI Infrastructure
+> #### Quantexa
+> #### Databricks
+> ### Regulatory & Compliance
+> #### Regnology / FinregE / ValidMind
+> - {bullet summaries with source URLs}
+>
+> ## 🤖 Enterprise AI Trends
+> - {bullet summaries with source URLs}
+>
+> ## 📊 Industry Analyst Coverage
+> ### Celent
+> ### Chartis Research
+> ### Other Analysts (Forrester / Gartner / IDC)
+> - {bullet summaries with source URLs}
+>
+> ## ⚡ Key Takeaways
+> - {3-5 bullet executive summary of what matters most for Moody's Banking Solutions positioning}
+>
+
+>
+> Weekly Strategic Digest (Sundays at 7:00 AM ET):
+> Save to Scheduled Reports/YYYY-MM-DD-Moodys-Weekly-Digest.md:
+>
+> Read all 7 daily briefs from the past week and synthesize into:
+>
+> 
+> # Moody's Weekly Strategic Digest — Week of {date}
+>
+> ## 📈 Week in Review
+> - {3-5 sentence executive summary of the most important developments}
+>
+> ## 🏢 Moody's Moves This Week
+> - {consolidated list of Moody's news, deduplicated}
+>
+> ## 🔍 Competitor Patterns
+> - {trends across competitors — who's gaining, who's shipping, strategic shifts}
+> - {any new partnerships, acquisitions, or product launches}
+>
+> ## 🤖 AI & Tech Trajectory
+> - {emerging patterns in enterprise AI, agentic AI, banking tech}
+> - {regulatory developments that impact Moody's strategy}
+>
+> ## 📊 Analyst Signals
+> - {any new rankings, quadrant reports, or vendor assessments}
+> - {shifts in analyst sentiment toward Moody's or competitors}
+>
+> ## ⚠️ Strategic Implications for Moody's Banking
+> - {what these developments mean for Rickin's data moat strategy}
+> - {opportunities to exploit or threats to watch}
+> - {specific actions or talking points for the coming week}
+>
+> ## 🎯 Recommended Focus This Week
+> - {top 3 things to pay attention to or act on}
+>
+
+>
+> Implementation details:
+> - Use the existing web_search and news_search tools — no new APIs needed
+> - For Celent and Chartis, use web_search with site:celent.com and site:chartis-research.com queries
+> - Register both as scheduled reports in the alerts/briefs system alongside existing Daily News and Market Summary jobs
+> - The Moody's agent (moodys) should automatically read the latest daily brief AND the latest weekly digest when invoked for any Moody's-related task — add both to the agent's context loading sequence
+> - Keep the last 7 days of daily briefs and last 4 weekly digests; archive older ones to Archive/Moody's Intelligence/
+> - If a search returns no new results for a category, note "No new developments" rather than omitting the section
+> - Tag each item with a relevance indicator: 🔴 High (directly impacts Moody's Banking), 🟡 Medium (industry trend worth watching), 🟢 Low (background context)
