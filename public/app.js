@@ -1792,23 +1792,6 @@ function createSettingsPanel() {
       <div class="settings-row"><label>Light Mode</label><input type="checkbox" class="settings-toggle" id="theme-toggle"></div>
     </div>
     <div class="settings-section">
-      <h3>// SCHEDULED BRIEFS</h3>
-      <div class="settings-row"><label>Morning Brief</label><input type="checkbox" class="settings-toggle" data-brief="morning"></div>
-      <div class="settings-row"><label>Time</label><select class="settings-select" data-brief-time="morning"></select></div>
-      <div class="settings-row"><label>Afternoon Brief</label><input type="checkbox" class="settings-toggle" data-brief="afternoon"></div>
-      <div class="settings-row"><label>Time</label><select class="settings-select" data-brief-time="afternoon"></select></div>
-      <div class="settings-row"><label>Evening Brief</label><input type="checkbox" class="settings-toggle" data-brief="evening"></div>
-      <div class="settings-row"><label>Time</label><select class="settings-select" data-brief-time="evening"></select></div>
-    </div>
-    <div class="settings-section">
-      <h3>// WATCHLIST</h3>
-      <div class="watchlist-items" id="watchlist-items"></div>
-      <div class="watchlist-add-row">
-        <input type="text" class="watchlist-add-input" id="watchlist-input" placeholder="TICKER (e.g. AAPL, BTC)">
-        <button class="settings-btn" id="watchlist-add-btn">ADD</button>
-      </div>
-    </div>
-    <div class="settings-section">
       <h3>// ALERT SETTINGS</h3>
       <div class="settings-row"><label>Calendar Reminders</label><input type="checkbox" class="settings-toggle" data-alert="calendarReminder"></div>
       <div class="settings-row"><label>Minutes Before</label><input type="number" class="settings-input" data-alert-val="minutesBefore" min="5" max="120" value="30"></div>
@@ -1823,6 +1806,14 @@ function createSettingsPanel() {
       <button class="settings-btn" id="add-custom-job-btn">+ CUSTOM JOB</button>
       <div id="custom-job-form-wrap"></div>
     </div>
+    <div class="settings-section">
+      <h3>// WATCHLIST</h3>
+      <div class="watchlist-items" id="watchlist-items"></div>
+      <div class="watchlist-add-row">
+        <input type="text" class="watchlist-add-input" id="watchlist-input" placeholder="TICKER (e.g. AAPL, BTC)">
+        <button class="settings-btn" id="watchlist-add-btn">ADD</button>
+      </div>
+    </div>
     <div class="settings-section settings-exit-section">
       <a href="/api/logout" class="settings-exit-btn" title="Log out">
         <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -1834,18 +1825,6 @@ function createSettingsPanel() {
   `;
   document.body.appendChild(panel);
   settingsPanel = panel;
-
-  const timeSelects = panel.querySelectorAll("[data-brief-time]");
-  timeSelects.forEach(sel => {
-    for (let h = 0; h < 24; h++) {
-      const opt = document.createElement("option");
-      opt.value = h;
-      const ampm = h < 12 ? "AM" : "PM";
-      const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-      opt.textContent = `${h12}:00 ${ampm}`;
-      sel.appendChild(opt);
-    }
-  });
 
   panel.querySelector(".settings-close").addEventListener("click", toggleSettings);
 
@@ -1890,13 +1869,6 @@ async function loadSettingsConfig() {
     const cfg = await res.json();
     const panel = settingsPanel;
     if (!panel) return;
-
-    for (const type of ["morning", "afternoon", "evening"]) {
-      const toggle = panel.querySelector(`[data-brief="${type}"]`);
-      const timeSel = panel.querySelector(`[data-brief-time="${type}"]`);
-      if (toggle && cfg.briefs?.[type]) toggle.checked = cfg.briefs[type].enabled;
-      if (timeSel && cfg.briefs?.[type]) timeSel.value = cfg.briefs[type].hour;
-    }
 
     for (const key of ["calendarReminder", "stockMove", "taskDeadline", "importantEmail"]) {
       const toggle = panel.querySelector(`[data-alert="${key}"]`);
@@ -2188,17 +2160,7 @@ async function saveSettings() {
   if (!settingsPanel) return;
   const panel = settingsPanel;
 
-  const config = { briefs: {}, alerts: {}, watchlist: getCurrentWatchlist(), theme: localStorage.getItem("theme") || "dark" };
-
-  for (const type of ["morning", "afternoon", "evening"]) {
-    const toggle = panel.querySelector(`[data-brief="${type}"]`);
-    const timeSel = panel.querySelector(`[data-brief-time="${type}"]`);
-    config.briefs[type] = {
-      enabled: toggle?.checked || false,
-      hour: parseInt(timeSel?.value || "8"),
-      minute: 0,
-    };
-  }
+  const config = { alerts: {}, watchlist: getCurrentWatchlist(), theme: localStorage.getItem("theme") || "dark" };
 
   for (const key of ["calendarReminder", "stockMove", "taskDeadline", "importantEmail"]) {
     const toggle = panel.querySelector(`[data-alert="${key}"]`);
