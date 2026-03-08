@@ -501,6 +501,7 @@ async function showLanding() {
           const countEl = taskSection.querySelector(".landing-tasks-count");
           if (countEl) countEl.textContent = taskList.querySelectorAll(".landing-task-item").length;
         }
+        addForm.classList.add("hidden");
       }
     } catch (err) { console.warn("Add task failed:", err); }
   };

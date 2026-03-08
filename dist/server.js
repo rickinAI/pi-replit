@@ -5985,6 +5985,7 @@ app.post("/api/tasks", async (req, res) => {
       return;
     }
     await addTask(title.trim(), { priority, dueDate });
+    glanceCache = null;
     const active = await getActiveTasks();
     const created = active.find((t) => t.title === title.trim());
     res.json({ ok: true, task: created || { title: title.trim(), priority: priority || "medium", dueDate } });
@@ -5995,6 +5996,7 @@ app.post("/api/tasks", async (req, res) => {
 app.patch("/api/tasks/:id/complete", async (req, res) => {
   try {
     const result = await completeTask(req.params["id"]);
+    glanceCache = null;
     res.json({ ok: true, result });
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -6003,6 +6005,7 @@ app.patch("/api/tasks/:id/complete", async (req, res) => {
 app.delete("/api/tasks/:id", async (req, res) => {
   try {
     const result = await deleteTask(req.params["id"]);
+    glanceCache = null;
     res.json({ ok: true, result });
   } catch (err) {
     res.status(500).json({ error: String(err) });

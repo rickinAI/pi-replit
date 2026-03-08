@@ -2247,6 +2247,7 @@ app.post("/api/tasks", async (req: Request, res: Response) => {
     const { title, priority, dueDate } = req.body as { title?: string; priority?: string; dueDate?: string };
     if (!title || !title.trim()) { res.status(400).json({ error: "title required" }); return; }
     await tasks.addTask(title.trim(), { priority: priority as any, dueDate });
+    glanceCache = null;
     const active = await tasks.getActiveTasks();
     const created = active.find(t => t.title === title.trim());
     res.json({ ok: true, task: created || { title: title.trim(), priority: priority || "medium", dueDate } });
@@ -2258,6 +2259,7 @@ app.post("/api/tasks", async (req: Request, res: Response) => {
 app.patch("/api/tasks/:id/complete", async (req: Request, res: Response) => {
   try {
     const result = await tasks.completeTask(req.params["id"] as string);
+    glanceCache = null;
     res.json({ ok: true, result });
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -2267,6 +2269,7 @@ app.patch("/api/tasks/:id/complete", async (req: Request, res: Response) => {
 app.delete("/api/tasks/:id", async (req: Request, res: Response) => {
   try {
     const result = await tasks.deleteTask(req.params["id"] as string);
+    glanceCache = null;
     res.json({ ok: true, result });
   } catch (err) {
     res.status(500).json({ error: String(err) });
