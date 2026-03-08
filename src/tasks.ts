@@ -47,9 +47,9 @@ async function loadTasks(): Promise<Task[]> {
   return result.rows.map(rowToTask);
 }
 
-export async function getActiveTasks(): Promise<{ title: string; priority: string; dueDate?: string }[]> {
+export async function getActiveTasks(): Promise<{ id: string; title: string; priority: string; dueDate?: string }[]> {
   const all = await loadTasks();
-  return all.filter(t => !t.completed).map(t => ({ title: t.title, priority: t.priority, dueDate: t.dueDate }));
+  return all.filter(t => !t.completed).map(t => ({ id: t.id, title: t.title, priority: t.priority, dueDate: t.dueDate }));
 }
 
 async function saveTask(task: Task): Promise<void> {

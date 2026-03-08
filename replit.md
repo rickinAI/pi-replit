@@ -30,7 +30,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **.pi/agent/system-prompt.md** — Synced copy of SYSTEM.md for reference
 - **.pi/agent/models.json** — Custom model registry entries (`claude-sonnet-4-6`, `claude-haiku-4-5-20251001`) so the Pi SDK's ModelRegistry can resolve them. These must match exact Anthropic API model IDs (no `-latest` aliases — Anthropic doesn't support them)
 - **public/** — Static frontend (terminal/hacker aesthetic, branded as "RICKIN")
-  - Landing screen: "Mission Control" full-screen overlay on fresh load (no active session). Shows date, glance strip (weather/email/tasks/calendar from `/api/glance`), last conversation card with preview + RESUME button, NEW MISSION button, recent conversation cards with delete, VIEW ALL to expand full history inline
+  - Landing screen: "Mission Control" full-screen overlay on fresh load (no active session). Shows date, glance strip (weather/email/tasks/calendar from `/api/glance`), interactive task section (checklist with checkboxes, priority dots, "Go" quick-launch, inline add-task form), last conversation card with preview + RESUME button, NEW MISSION button, recent conversation cards with delete, VIEW ALL to expand full history inline
   - Conversation search: search input on landing screen filters conversations by title in real-time
   - Date-grouped conversations: Recent list grouped into Today/Yesterday/This Week/Earlier headers
   - Pull-to-refresh: touch pull-down on landing screen refreshes glance strip and conversation list
@@ -132,6 +132,10 @@ Client-side session resume and background agent support:
 | `/api/alerts/config` | GET | Get alert/brief configuration |
 | `/api/alerts/config` | PUT | Update alert/brief configuration |
 | `/api/alerts/trigger/:type` | POST | Manually trigger a brief (morning/afternoon/evening) |
+| `/api/tasks` | GET | List active tasks (id, title, priority, dueDate) |
+| `/api/tasks` | POST | Create a new task (body: title, priority?, dueDate?) — returns created task object |
+| `/api/tasks/:id/complete` | PATCH | Mark task as completed |
+| `/api/tasks/:id` | DELETE | Delete a task |
 | `/api/glance` | GET | Day-at-a-glance summary (weather, emails, tasks, calendar) — 5min server cache |
 | `/health` | GET | Health check |
 | `/api/session/:id/interview-response` | POST | Submit interview form responses |

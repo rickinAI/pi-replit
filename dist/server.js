@@ -1497,7 +1497,7 @@ async function loadTasks() {
 }
 async function getActiveTasks() {
   const all = await loadTasks();
-  return all.filter((t) => !t.completed).map((t) => ({ title: t.title, priority: t.priority, dueDate: t.dueDate }));
+  return all.filter((t) => !t.completed).map((t) => ({ id: t.id, title: t.title, priority: t.priority, dueDate: t.dueDate }));
 }
 async function saveTask(task) {
   await getPool().query(
@@ -5968,6 +5968,45 @@ app.get("/api/conversations/:id", async (req, res) => {
 app.delete("/api/conversations/:id", async (req, res) => {
   await remove(req.params["id"]);
   res.json({ ok: true });
+});
+app.get("/api/tasks", async (_req, res) => {
+  try {
+    const active = await getActiveTasks();
+    res.json(active);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+app.post("/api/tasks", async (req, res) => {
+  try {
+    const { title, priority, dueDate } = req.body;
+    if (!title || !title.trim()) {
+      res.status(400).json({ error: "title required" });
+      return;
+    }
+    await addTask(title.trim(), { priority, dueDate });
+    const active = await getActiveTasks();
+    const created = active.find((t) => t.title === title.trim());
+    res.json({ ok: true, task: created || { title: title.trim(), priority: priority || "medium", dueDate } });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+app.patch("/api/tasks/:id/complete", async (req, res) => {
+  try {
+    const result = await completeTask(req.params["id"]);
+    res.json({ ok: true, result });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+app.delete("/api/tasks/:id", async (req, res) => {
+  try {
+    const result = await deleteTask(req.params["id"]);
+    res.json({ ok: true, result });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
 });
 app.post("/api/config/tunnel-url", (req, res) => {
   const auth = req.headers.authorization;

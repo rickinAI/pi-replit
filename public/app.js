@@ -391,6 +391,126 @@ async function showLanding() {
     }
   }
 
+  const taskSection = document.createElement("div");
+  taskSection.className = "landing-tasks";
+  const taskItems = (glanceData && glanceData.tasks && glanceData.tasks.items) ? glanceData.tasks.items : [];
+  taskSection.innerHTML = `<div class="landing-tasks-header">
+    <span class="landing-tasks-label">Tasks</span>
+    <span class="landing-tasks-count">${taskItems.length}</span>
+  </div>`;
+  const taskList = document.createElement("div");
+  taskList.className = "landing-task-list";
+
+  function renderTaskItem(t) {
+    const item = document.createElement("div");
+    item.className = "landing-task-item";
+    item.dataset.id = t.id;
+    const priClass = t.priority === "high" ? "pri-high" : t.priority === "low" ? "pri-low" : "pri-med";
+    item.innerHTML = `
+      <button class="task-check" title="Complete"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg></button>
+      <span class="task-pri-dot ${priClass}"></span>
+      <span class="task-title">${escapeHtml(t.title)}</span>
+      ${t.dueDate ? `<span class="task-due">${escapeHtml(t.dueDate)}</span>` : ""}
+      <button class="task-go" title="Work on this">Go</button>
+    `;
+    item.querySelector(".task-check").addEventListener("click", async (e) => {
+      e.stopPropagation();
+      item.classList.add("task-completing");
+      try {
+        const res = await fetch(`/api/tasks/${t.id}/complete`, { method: "PATCH" });
+        if (!res.ok) throw new Error("failed");
+        setTimeout(() => {
+          item.remove();
+          const countEl = taskSection.querySelector(".landing-tasks-count");
+          const remaining = taskList.querySelectorAll(".landing-task-item").length;
+          if (countEl) countEl.textContent = remaining;
+          if (remaining === 0) {
+            taskList.innerHTML = `<div class="landing-tasks-empty">All clear</div>`;
+          }
+        }, 500);
+      } catch {
+        item.classList.remove("task-completing");
+      }
+    });
+    item.querySelector(".task-go").addEventListener("click", (e) => {
+      e.stopPropagation();
+      hideLandingAndRun(async () => {
+        if (sessionId) {
+          await fetch(`/api/session/${sessionId}`, { method: "DELETE" }).catch(() => {});
+          localStorage.removeItem("activeSession");
+          sessionId = null;
+        }
+        cleanupCurrentSession();
+        clearMessages();
+        showEmptyState();
+        await startSession();
+        input.value = `Help me with this task: ${t.title}`;
+        sendMessage();
+      });
+    });
+    return item;
+  }
+
+  if (taskItems.length === 0) {
+    taskList.innerHTML = `<div class="landing-tasks-empty">All clear</div>`;
+  } else {
+    taskItems.forEach(t => taskList.appendChild(renderTaskItem(t)));
+  }
+  taskSection.appendChild(taskList);
+
+  const addTaskWrap = document.createElement("div");
+  addTaskWrap.className = "task-add-wrap";
+  addTaskWrap.innerHTML = `<button class="task-add-toggle">+ Add task</button>`;
+  const addForm = document.createElement("div");
+  addForm.className = "task-add-form hidden";
+  addForm.innerHTML = `
+    <input type="text" class="task-add-input" placeholder="Task title..." />
+    <select class="task-add-priority">
+      <option value="medium">Med</option>
+      <option value="high">High</option>
+      <option value="low">Low</option>
+    </select>
+    <button class="task-add-submit">Add</button>
+  `;
+  addTaskWrap.appendChild(addForm);
+  addTaskWrap.querySelector(".task-add-toggle").addEventListener("click", () => {
+    addForm.classList.toggle("hidden");
+    if (!addForm.classList.contains("hidden")) {
+      addForm.querySelector(".task-add-input").focus();
+    }
+  });
+  const submitTask = async () => {
+    const titleInput = addForm.querySelector(".task-add-input");
+    const priSelect = addForm.querySelector(".task-add-priority");
+    const title = titleInput.value.trim();
+    if (!title) return;
+    titleInput.value = "";
+    try {
+      const res = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title, priority: priSelect.value }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const newTask = data.task;
+        if (newTask) {
+          const emptyMsg = taskList.querySelector(".landing-tasks-empty");
+          if (emptyMsg) emptyMsg.remove();
+          taskList.appendChild(renderTaskItem(newTask));
+          const countEl = taskSection.querySelector(".landing-tasks-count");
+          if (countEl) countEl.textContent = taskList.querySelectorAll(".landing-task-item").length;
+        }
+      }
+    } catch (err) { console.warn("Add task failed:", err); }
+  };
+  addForm.querySelector(".task-add-submit").addEventListener("click", submitTask);
+  addForm.querySelector(".task-add-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") submitTask();
+  });
+  taskSection.appendChild(addTaskWrap);
+  landing.appendChild(taskSection);
+
   const newBtn = document.createElement("button");
   newBtn.className = "landing-new-btn";
   newBtn.textContent = "[NEW MISSION]";
