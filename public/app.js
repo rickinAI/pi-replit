@@ -1972,11 +1972,6 @@ function renderScheduledJobs() {
       minSel.appendChild(opt);
     }
 
-    card.querySelector(".job-card-toggle").addEventListener("change", (e) => {
-      job.enabled = e.target.checked;
-      saveJobUpdate(job.id, { enabled: job.enabled });
-    });
-
     hourSel.addEventListener("change", () => {
       job.schedule.hour = parseInt(hourSel.value);
       saveJobUpdate(job.id, { schedule: job.schedule });
@@ -1987,18 +1982,24 @@ function renderScheduledJobs() {
       saveJobUpdate(job.id, { schedule: job.schedule });
     });
 
-    card.querySelector(".job-run-btn").addEventListener("click", async () => {
-      const btn = card.querySelector(".job-run-btn");
-      btn.textContent = "Active";
-      btn.disabled = true;
+    const runBtn = card.querySelector(".job-run-btn");
+    runBtn.addEventListener("click", async () => {
+      runBtn.textContent = "Active";
+      runBtn.disabled = true;
       try {
-        await fetch(`/api/scheduled-jobs/${job.id}/trigger`, { method: "POST" });
-        setTimeout(() => { btn.textContent = "Done"; }, 6000);
-        setTimeout(() => { btn.textContent = "Run"; btn.disabled = false; }, 9000);
+        const res = await fetch(`/api/scheduled-jobs/${job.id}/trigger`, { method: "POST" });
+        if (!res.ok) throw new Error("trigger failed");
       } catch {
-        btn.textContent = "Failed";
-        setTimeout(() => { btn.textContent = "Run"; btn.disabled = false; }, 3000);
+        runBtn.textContent = "Failed";
+        setTimeout(() => { runBtn.textContent = "Run"; runBtn.disabled = false; }, 3000);
       }
+    });
+
+    card.querySelector(".job-card-toggle").addEventListener("change", (e) => {
+      job.enabled = e.target.checked;
+      saveJobUpdate(job.id, { enabled: job.enabled });
+      runBtn.textContent = "Run";
+      runBtn.disabled = false;
     });
 
     container.appendChild(card);
