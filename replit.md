@@ -6,7 +6,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 
 - **server.ts** — Express server wrapping the pi coding agent SDK
   - Creates agent sessions with Anthropic API
-  - Registers custom tools (82 total): knowledge base, email, calendar, weather, web search, tasks, news, Google Drive, Google Sheets (13 tools), Google Docs (12 tools), Google Slides (12 tools), YouTube
+  - Registers custom tools (85 total): knowledge base, email, calendar, weather, web search, tasks, news, Google Drive, Google Sheets (13 tools), Google Docs (12 tools), Google Slides (12 tools), YouTube, Zillow (3 tools), Redfin (3 tools)
   - Multi-agent system with 9 specialist agents defined in `data/agents.json` (hot-reloaded on file change)
   - Streams agent events via SSE (Server-Sent Events)
   - Tracks conversation messages and persists them to PostgreSQL
@@ -42,9 +42,10 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Auto-archive: reports older than 30 days move to corresponding `Archive/` subfolders
   - Moody's agent auto-reads latest briefs before any task (5-step mandatory pre-read including Competitive Intelligence folder). Timeout: 300s
 - **Real Estate Property Scout** — Daily property scan using the real-estate agent:
-  - Daily Property Scan at 7:30 AM ET — searches 6 areas (Upper Saddle River NJ, Montclair NJ, Princeton NJ, Long Island NY, Hudson Valley NY, Stamford-Westport CT) via Zillow API
+  - Daily Property Scan at 7:30 AM ET — searches 6 areas (Upper Saddle River NJ, Montclair NJ, Princeton NJ, Long Island NY, Hudson Valley NY, Stamford-Westport CT) via Zillow AND Redfin APIs
   - Criteria: $1.5M–$2M, 5+ bed / 3+ bath, modern, garage, good schools, walkable. Commute to Brookfield Place (Battery Park City)
-  - 3 RapidAPI tools: `property_search` (Zillow listing search with filters), `property_details` (full property data + schools), `neighborhood_search` (market stats)
+  - 6 RapidAPI tools: Zillow (`property_search`, `property_details`, `neighborhood_search`) + Redfin (`redfin_search`, `redfin_details`, `redfin_autocomplete`)
+  - Dual-platform search: cross-references Zillow and Redfin results, flags platform exclusives (🔵 Redfin-only, 🟡 Zillow-only)
   - Saves to `Scheduled Reports/Real Estate/YYYY-MM-DD-Property-Scan.md`, appends to `Real Estate/Areas/`, saves ⭐ gems to `Real Estate/Favorites/`
   - Auto-archive >30 days to `Archive/Real Estate/`. Agent pre-reads Search Criteria + area files. Timeout: 300s
 - **public/** — Static frontend (terminal/hacker aesthetic, branded as "RICKIN")

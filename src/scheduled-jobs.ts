@@ -227,29 +227,41 @@ Be thorough in reading all available daily briefs. If fewer than 7 daily briefs 
 
 For each of the 6 target areas, search for hidden gem properties matching: $1.5M–$2M, 5+ bedrooms, 3+ bathrooms, Houses.
 
-SEARCH EACH AREA — Use property_search with these locations (one call per area):
+STEP 1 — ZILLOW SEARCH: Use property_search with these locations (one call per area):
 1. "Upper Saddle River, NJ" (also try "Ridgewood, NJ", "Ho-Ho-Kus, NJ")
 2. "Montclair, NJ" (also try "Glen Ridge, NJ")
 3. "Princeton, NJ" (also try "West Windsor, NJ")
 4. "Garden City, NY" (also try "Manhasset, NY", "Great Neck, NY", "Cold Spring Harbor, NY")
 5. "Tarrytown, NY" (also try "Scarsdale, NY", "Chappaqua, NY", "Bronxville, NY")
 6. "Westport, CT" (also try "Darien, CT", "Stamford, CT")
-
 For each search: set minPrice=1500000, maxPrice=2000000, minBeds=5, minBaths=3, sort="Newest".
 
-For the top 3-5 most interesting properties per area, use property_details (with zpid) to get:
-- School ratings and nearby schools
-- Full features (garage, pool, fireplace, basement)
-- Price history and tax data
-- Property description
+STEP 2 — REDFIN SEARCH: Use redfin_search with these pre-verified URLs (one call per area):
+1. https://www.redfin.com/city/19045/NJ/Upper-Saddle-River/filter/min-price=1.5M,max-price=2M,min-beds=5,min-baths=3
+2. https://www.redfin.com/city/35939/NJ/Montclair/filter/min-price=1.5M,max-price=2M,min-beds=5,min-baths=3
+3. https://www.redfin.com/city/15686/NJ/Princeton/filter/min-price=1.5M,max-price=2M,min-beds=5,min-baths=3
+4. https://www.redfin.com/city/7197/NY/Garden-City/filter/min-price=1.5M,max-price=2M,min-beds=5,min-baths=3
+5. https://www.redfin.com/city/18651/NY/Tarrytown/filter/min-price=1.5M,max-price=2M,min-beds=5,min-baths=3
+6. https://www.redfin.com/city/26700/CT/Westport/filter/min-price=1.5M,max-price=2M,min-beds=5,min-baths=3
+Only use redfin_autocomplete as a fallback if a URL returns no results.
 
-For each property include: address, price, beds/baths, sqft, lot size, year built, key features, school district + rating, estimated commute to Brookfield Place (route + transfers + time from Search Criteria), days on market, Zillow listing URL, and WHY it's interesting (1-2 sentences on character/charm/value).
+STEP 3 — CROSS-REFERENCE: Compare Zillow and Redfin results by address. Flag:
+- 🔵 Redfin-only exclusives (not on Zillow)
+- 🟡 Zillow-only exclusives (not on Redfin)
+- Note any price discrepancies between platforms
+
+STEP 4 — DEEP DIVE: For the top 3-5 most interesting properties per area:
+- Use property_details (Zillow zpid) for school ratings, features, price history, tax data
+- Use redfin_details (Redfin URL path) for photos, room details, market data
+
+For each property include: address, price, beds/baths, sqft, lot size, year built, key features, school district + rating, estimated commute to Brookfield Place (route + transfers + time from Search Criteria), days on market, listing URL(s) from both platforms, source (Zillow/Redfin/Both), and WHY it's interesting (1-2 sentences on character/charm/value).
 
 Focus on:
 - New listings (< 7 days on market)
 - Price reductions
 - Back-on-market properties
 - Hidden gems: unique architecture, mature landscaping, walkable location, overlooked value
+- Platform exclusives (listed on one but not the other)
 
 Flag ⭐ standout properties (great schools + walkable + good commute + character) and save each to "Real Estate/Favorites/{Address slug}.md" with full details using notes_create.
 
@@ -258,28 +270,29 @@ OUTPUT — Save using notes_create to "Scheduled Reports/Real Estate/{today's da
 # Daily Property Scan — {today's date}
 
 ## ⚡ Executive Summary
-- Total new listings found across all areas
+- Total new listings found across all areas (Zillow + Redfin combined)
+- Platform coverage: X on both, Y Zillow-only, Z Redfin-only
 - Top gems of the day (⭐ properties)
 - Price trends or market observations
 - Commute comparison across areas
 
 ## 🏡 Upper Saddle River / Bergen County, NJ
-{property listings with full details}
+{property listings with full details, source noted}
 
 ## 🏡 Montclair, NJ
-{property listings with full details}
+{property listings with full details, source noted}
 
 ## 🏡 Princeton, NJ
-{property listings with full details}
+{property listings with full details, source noted}
 
 ## 🏡 Long Island, NY
-{property listings with full details}
+{property listings with full details, source noted}
 
 ## 🏡 Hudson Valley / Upstate NY
-{property listings with full details}
+{property listings with full details, source noted}
 
 ## 🏡 Stamford–Westport, CT
-{property listings with full details}
+{property listings with full details, source noted}
 
 ## 🎯 Top Gems Today
 {ranked list of ⭐ properties with one-line reasons}

@@ -3780,29 +3780,41 @@ Be thorough in reading all available daily briefs. If fewer than 7 daily briefs 
 
 For each of the 6 target areas, search for hidden gem properties matching: $1.5M\u2013$2M, 5+ bedrooms, 3+ bathrooms, Houses.
 
-SEARCH EACH AREA \u2014 Use property_search with these locations (one call per area):
+STEP 1 \u2014 ZILLOW SEARCH: Use property_search with these locations (one call per area):
 1. "Upper Saddle River, NJ" (also try "Ridgewood, NJ", "Ho-Ho-Kus, NJ")
 2. "Montclair, NJ" (also try "Glen Ridge, NJ")
 3. "Princeton, NJ" (also try "West Windsor, NJ")
 4. "Garden City, NY" (also try "Manhasset, NY", "Great Neck, NY", "Cold Spring Harbor, NY")
 5. "Tarrytown, NY" (also try "Scarsdale, NY", "Chappaqua, NY", "Bronxville, NY")
 6. "Westport, CT" (also try "Darien, CT", "Stamford, CT")
-
 For each search: set minPrice=1500000, maxPrice=2000000, minBeds=5, minBaths=3, sort="Newest".
 
-For the top 3-5 most interesting properties per area, use property_details (with zpid) to get:
-- School ratings and nearby schools
-- Full features (garage, pool, fireplace, basement)
-- Price history and tax data
-- Property description
+STEP 2 \u2014 REDFIN SEARCH: Use redfin_search with these pre-verified URLs (one call per area):
+1. https://www.redfin.com/city/19045/NJ/Upper-Saddle-River/filter/min-price=1.5M,max-price=2M,min-beds=5,min-baths=3
+2. https://www.redfin.com/city/35939/NJ/Montclair/filter/min-price=1.5M,max-price=2M,min-beds=5,min-baths=3
+3. https://www.redfin.com/city/15686/NJ/Princeton/filter/min-price=1.5M,max-price=2M,min-beds=5,min-baths=3
+4. https://www.redfin.com/city/7197/NY/Garden-City/filter/min-price=1.5M,max-price=2M,min-beds=5,min-baths=3
+5. https://www.redfin.com/city/18651/NY/Tarrytown/filter/min-price=1.5M,max-price=2M,min-beds=5,min-baths=3
+6. https://www.redfin.com/city/26700/CT/Westport/filter/min-price=1.5M,max-price=2M,min-beds=5,min-baths=3
+Only use redfin_autocomplete as a fallback if a URL returns no results.
 
-For each property include: address, price, beds/baths, sqft, lot size, year built, key features, school district + rating, estimated commute to Brookfield Place (route + transfers + time from Search Criteria), days on market, Zillow listing URL, and WHY it's interesting (1-2 sentences on character/charm/value).
+STEP 3 \u2014 CROSS-REFERENCE: Compare Zillow and Redfin results by address. Flag:
+- \u{1F535} Redfin-only exclusives (not on Zillow)
+- \u{1F7E1} Zillow-only exclusives (not on Redfin)
+- Note any price discrepancies between platforms
+
+STEP 4 \u2014 DEEP DIVE: For the top 3-5 most interesting properties per area:
+- Use property_details (Zillow zpid) for school ratings, features, price history, tax data
+- Use redfin_details (Redfin URL path) for photos, room details, market data
+
+For each property include: address, price, beds/baths, sqft, lot size, year built, key features, school district + rating, estimated commute to Brookfield Place (route + transfers + time from Search Criteria), days on market, listing URL(s) from both platforms, source (Zillow/Redfin/Both), and WHY it's interesting (1-2 sentences on character/charm/value).
 
 Focus on:
 - New listings (< 7 days on market)
 - Price reductions
 - Back-on-market properties
 - Hidden gems: unique architecture, mature landscaping, walkable location, overlooked value
+- Platform exclusives (listed on one but not the other)
 
 Flag \u2B50 standout properties (great schools + walkable + good commute + character) and save each to "Real Estate/Favorites/{Address slug}.md" with full details using notes_create.
 
@@ -3811,28 +3823,29 @@ OUTPUT \u2014 Save using notes_create to "Scheduled Reports/Real Estate/{today's
 # Daily Property Scan \u2014 {today's date}
 
 ## \u26A1 Executive Summary
-- Total new listings found across all areas
+- Total new listings found across all areas (Zillow + Redfin combined)
+- Platform coverage: X on both, Y Zillow-only, Z Redfin-only
 - Top gems of the day (\u2B50 properties)
 - Price trends or market observations
 - Commute comparison across areas
 
 ## \u{1F3E1} Upper Saddle River / Bergen County, NJ
-{property listings with full details}
+{property listings with full details, source noted}
 
 ## \u{1F3E1} Montclair, NJ
-{property listings with full details}
+{property listings with full details, source noted}
 
 ## \u{1F3E1} Princeton, NJ
-{property listings with full details}
+{property listings with full details, source noted}
 
 ## \u{1F3E1} Long Island, NY
-{property listings with full details}
+{property listings with full details, source noted}
 
 ## \u{1F3E1} Hudson Valley / Upstate NY
-{property listings with full details}
+{property listings with full details, source noted}
 
 ## \u{1F3E1} Stamford\u2013Westport, CT
-{property listings with full details}
+{property listings with full details, source noted}
 
 ## \u{1F3AF} Top Gems Today
 {ranked list of \u2B50 properties with one-line reasons}
@@ -5121,6 +5134,129 @@ function buildRealEstateTools() {
           return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text", text: `Neighborhood search failed: ${err.message}` }], details: {} };
+        }
+      }
+    },
+    {
+      name: "redfin_search",
+      label: "Redfin Property Search",
+      description: "Search Redfin for property listings using a Redfin search URL with filters. Use properties/auto-complete first to get the correct region URL, then build a full search URL. Returns listings with address, price, beds, baths, sqft, listing remarks, key facts, and days on market.",
+      parameters: Type.Object({
+        url: Type.String({ description: "Full Redfin search URL with filters, e.g. 'https://www.redfin.com/city/35939/NJ/Montclair/filter/min-price=1.5M,max-price=2M,min-beds=5,min-baths=3'. Build from auto-complete results: /city/{id}/{state}/{city}/filter/min-price=X,max-price=X,min-beds=X,min-baths=X" })
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const resp = await fetch(`https://redfin-com-data.p.rapidapi.com/property/search-url?url=${encodeURIComponent(params.url)}`, {
+            headers: { "X-RapidAPI-Key": RAPIDAPI_KEY, "X-RapidAPI-Host": "redfin-com-data.p.rapidapi.com" }
+          });
+          if (!resp.ok) return { content: [{ type: "text", text: `Redfin API error: ${resp.status} ${resp.statusText}` }], details: {} };
+          const data = await resp.json();
+          const homes = data?.data?.nearbyHomes?.homes || data?.data?.homes || [];
+          if (homes.length === 0) return { content: [{ type: "text", text: `No Redfin listings found for this search. Try broadening filters or checking the URL.` }], details: {} };
+          const summary = homes.slice(0, 20).map((h) => ({
+            address: `${h.streetLine?.value || ""}, ${h.city || ""}, ${h.state || ""} ${h.zip || ""}`.trim(),
+            price: h.price?.value ? `$${h.price.value.toLocaleString()}` : "N/A",
+            beds: h.beds,
+            baths: h.baths,
+            sqft: h.sqFt?.value || null,
+            lotSize: h.lotSize?.value ? `${h.lotSize.value.toLocaleString()} sqft` : null,
+            daysOnMarket: h.dom?.value ?? null,
+            listingId: h.listingId,
+            redfinUrl: h.url ? `https://www.redfin.com${h.url}` : null,
+            mlsId: h.mlsId?.value || null,
+            mlsStatus: h.mlsStatus,
+            propertyType: h.propertyType,
+            listingRemarks: h.listingRemarks ? h.listingRemarks.substring(0, 300) : null,
+            keyFacts: h.keyFacts?.map((f) => f.description) || [],
+            listingTags: h.listingTags || [],
+            broker: h.listingBroker?.name || null,
+            lat: h.latLong?.value?.latitude,
+            lng: h.latLong?.value?.longitude
+          }));
+          return { content: [{ type: "text", text: JSON.stringify({ source: "Redfin", totalResults: homes.length, resultsReturned: summary.length, properties: summary }, null, 2) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: `Redfin search failed: ${err.message}` }], details: {} };
+        }
+      }
+    },
+    {
+      name: "redfin_details",
+      label: "Redfin Property Details",
+      description: "Get detailed Redfin property information including photos, room descriptions, features, and market data. Use the property URL from redfin_search results (e.g. '/NJ/Glen-Ridge/210-Baldwin-St-07028/home/36166097').",
+      parameters: Type.Object({
+        url: Type.String({ description: "Redfin property URL path from search results (e.g. '/NJ/Glen-Ridge/210-Baldwin-St-07028/home/36166097')" })
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const resp = await fetch(`https://redfin-com-data.p.rapidapi.com/property/detail?url=${encodeURIComponent(params.url)}`, {
+            headers: { "X-RapidAPI-Key": RAPIDAPI_KEY, "X-RapidAPI-Host": "redfin-com-data.p.rapidapi.com" }
+          });
+          if (!resp.ok) return { content: [{ type: "text", text: `Redfin API error: ${resp.status} ${resp.statusText}` }], details: {} };
+          const data = await resp.json();
+          if (!data?.data) return { content: [{ type: "text", text: `No details found for this property URL. Ensure the URL is a property path like '/NJ/City/123-Main-St-07028/home/12345678'.` }], details: {} };
+          const d = data.data;
+          const numericKey = Object.keys(d).find((k) => /^\d+$/.test(k));
+          const photoSection = numericKey ? d[numericKey] : null;
+          const tagsByPhoto = photoSection && typeof photoSection === "object" && photoSection.tagsByPhotoId ? photoSection.tagsByPhotoId : {};
+          const photoSummary = Object.values(tagsByPhoto).slice(0, 10).map((p) => ({
+            caption: p.shortCaption || p.longCaption || "",
+            tags: p.tags || [],
+            url: p.photoUrl || ""
+          }));
+          const affordability = d.affordability || {};
+          const result = {
+            source: "Redfin",
+            propertyUrl: params.url,
+            listingId: photoSection?.listingId || null,
+            photoCount: photoSection?.includedFilterTags?.All || Object.keys(tagsByPhoto).length || 0,
+            photos: photoSummary.length > 0 ? photoSummary : "No photos available"
+          };
+          if (affordability.bedroomAggregates) {
+            result.marketData = {
+              activeListingTrend: affordability.activeListingYearlyTrend != null ? `${affordability.activeListingYearlyTrend.toFixed(1)}%` : null,
+              bedroomBreakdown: (affordability.bedroomAggregates || []).filter((b) => b.aggregate?.listPriceMedian).map((b) => ({
+                beds: b.aggregationType,
+                medianPrice: `$${b.aggregate.listPriceMedian.toLocaleString()}`,
+                activeListings: b.aggregate.activeListingsCount
+              }))
+            };
+          }
+          const knownKeys = Object.keys(d).filter((k) => k !== numericKey && k !== "affordability");
+          if (knownKeys.length > 0) {
+            result.additionalSections = knownKeys;
+          }
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: `Redfin details failed: ${err.message}` }], details: {} };
+        }
+      }
+    },
+    {
+      name: "redfin_autocomplete",
+      label: "Redfin Location Lookup",
+      description: "Look up a location on Redfin to get the correct region ID and URL path for use with redfin_search. Returns matching cities, neighborhoods, and schools.",
+      parameters: Type.Object({
+        query: Type.String({ description: "Location to look up (e.g. 'Montclair, NJ', 'Upper Saddle River', 'Princeton NJ')" })
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const resp = await fetch(`https://redfin-com-data.p.rapidapi.com/properties/auto-complete?query=${encodeURIComponent(params.query)}`, {
+            headers: { "X-RapidAPI-Key": RAPIDAPI_KEY, "X-RapidAPI-Host": "redfin-com-data.p.rapidapi.com" }
+          });
+          if (!resp.ok) return { content: [{ type: "text", text: `Redfin API error: ${resp.status} ${resp.statusText}` }], details: {} };
+          const data = await resp.json();
+          const rows = data?.data?.flatMap((section) => section.rows || []) || [];
+          if (rows.length === 0) return { content: [{ type: "text", text: `No Redfin locations found for "${params.query}". Try a different spelling.` }], details: {} };
+          const results = rows.slice(0, 10).map((r) => ({
+            name: r.name,
+            subName: r.subName,
+            url: r.url,
+            id: r.id,
+            type: r.type
+          }));
+          return { content: [{ type: "text", text: JSON.stringify({ source: "Redfin", note: "Use the 'url' field to build redfin_search URLs: https://www.redfin.com{url}/filter/min-price=X,max-price=X,min-beds=X,min-baths=X", locations: results }, null, 2) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: `Redfin autocomplete failed: ${err.message}` }], details: {} };
         }
       }
     }

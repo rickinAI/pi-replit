@@ -765,6 +765,129 @@ function buildRealEstateTools(): ToolDefinition[] {
         }
       },
     },
+    {
+      name: "redfin_search",
+      label: "Redfin Property Search",
+      description: "Search Redfin for property listings using a Redfin search URL with filters. Use properties/auto-complete first to get the correct region URL, then build a full search URL. Returns listings with address, price, beds, baths, sqft, listing remarks, key facts, and days on market.",
+      parameters: Type.Object({
+        url: Type.String({ description: "Full Redfin search URL with filters, e.g. 'https://www.redfin.com/city/35939/NJ/Montclair/filter/min-price=1.5M,max-price=2M,min-beds=5,min-baths=3'. Build from auto-complete results: /city/{id}/{state}/{city}/filter/min-price=X,max-price=X,min-beds=X,min-baths=X" }),
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const resp = await fetch(`https://redfin-com-data.p.rapidapi.com/property/search-url?url=${encodeURIComponent(params.url)}`, {
+            headers: { "X-RapidAPI-Key": RAPIDAPI_KEY, "X-RapidAPI-Host": "redfin-com-data.p.rapidapi.com" },
+          });
+          if (!resp.ok) return { content: [{ type: "text" as const, text: `Redfin API error: ${resp.status} ${resp.statusText}` }], details: {} };
+          const data = await resp.json();
+          const homes = data?.data?.nearbyHomes?.homes || data?.data?.homes || [];
+          if (homes.length === 0) return { content: [{ type: "text" as const, text: `No Redfin listings found for this search. Try broadening filters or checking the URL.` }], details: {} };
+          const summary = homes.slice(0, 20).map((h: any) => ({
+            address: `${h.streetLine?.value || ""}, ${h.city || ""}, ${h.state || ""} ${h.zip || ""}`.trim(),
+            price: h.price?.value ? `$${h.price.value.toLocaleString()}` : "N/A",
+            beds: h.beds,
+            baths: h.baths,
+            sqft: h.sqFt?.value || null,
+            lotSize: h.lotSize?.value ? `${h.lotSize.value.toLocaleString()} sqft` : null,
+            daysOnMarket: h.dom?.value ?? null,
+            listingId: h.listingId,
+            redfinUrl: h.url ? `https://www.redfin.com${h.url}` : null,
+            mlsId: h.mlsId?.value || null,
+            mlsStatus: h.mlsStatus,
+            propertyType: h.propertyType,
+            listingRemarks: h.listingRemarks ? h.listingRemarks.substring(0, 300) : null,
+            keyFacts: h.keyFacts?.map((f: any) => f.description) || [],
+            listingTags: h.listingTags || [],
+            broker: h.listingBroker?.name || null,
+            lat: h.latLong?.value?.latitude,
+            lng: h.latLong?.value?.longitude,
+          }));
+          return { content: [{ type: "text" as const, text: JSON.stringify({ source: "Redfin", totalResults: homes.length, resultsReturned: summary.length, properties: summary }, null, 2) }], details: {} };
+        } catch (err: any) {
+          return { content: [{ type: "text" as const, text: `Redfin search failed: ${err.message}` }], details: {} };
+        }
+      },
+    },
+    {
+      name: "redfin_details",
+      label: "Redfin Property Details",
+      description: "Get detailed Redfin property information including photos, room descriptions, features, and market data. Use the property URL from redfin_search results (e.g. '/NJ/Glen-Ridge/210-Baldwin-St-07028/home/36166097').",
+      parameters: Type.Object({
+        url: Type.String({ description: "Redfin property URL path from search results (e.g. '/NJ/Glen-Ridge/210-Baldwin-St-07028/home/36166097')" }),
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const resp = await fetch(`https://redfin-com-data.p.rapidapi.com/property/detail?url=${encodeURIComponent(params.url)}`, {
+            headers: { "X-RapidAPI-Key": RAPIDAPI_KEY, "X-RapidAPI-Host": "redfin-com-data.p.rapidapi.com" },
+          });
+          if (!resp.ok) return { content: [{ type: "text" as const, text: `Redfin API error: ${resp.status} ${resp.statusText}` }], details: {} };
+          const data = await resp.json();
+          if (!data?.data) return { content: [{ type: "text" as const, text: `No details found for this property URL. Ensure the URL is a property path like '/NJ/City/123-Main-St-07028/home/12345678'.` }], details: {} };
+          const d = data.data;
+          const numericKey = Object.keys(d).find(k => /^\d+$/.test(k));
+          const photoSection = numericKey ? d[numericKey] : null;
+          const tagsByPhoto = (photoSection && typeof photoSection === "object" && photoSection.tagsByPhotoId) ? photoSection.tagsByPhotoId : {};
+          const photoSummary = Object.values(tagsByPhoto).slice(0, 10).map((p: any) => ({
+            caption: p.shortCaption || p.longCaption || "",
+            tags: p.tags || [],
+            url: p.photoUrl || "",
+          }));
+          const affordability = d.affordability || {};
+          const result: any = {
+            source: "Redfin",
+            propertyUrl: params.url,
+            listingId: photoSection?.listingId || null,
+            photoCount: photoSection?.includedFilterTags?.All || Object.keys(tagsByPhoto).length || 0,
+            photos: photoSummary.length > 0 ? photoSummary : "No photos available",
+          };
+          if (affordability.bedroomAggregates) {
+            result.marketData = {
+              activeListingTrend: affordability.activeListingYearlyTrend != null ? `${affordability.activeListingYearlyTrend.toFixed(1)}%` : null,
+              bedroomBreakdown: (affordability.bedroomAggregates || []).filter((b: any) => b.aggregate?.listPriceMedian).map((b: any) => ({
+                beds: b.aggregationType,
+                medianPrice: `$${b.aggregate.listPriceMedian.toLocaleString()}`,
+                activeListings: b.aggregate.activeListingsCount,
+              })),
+            };
+          }
+          const knownKeys = Object.keys(d).filter(k => k !== numericKey && k !== "affordability");
+          if (knownKeys.length > 0) {
+            result.additionalSections = knownKeys;
+          }
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }], details: {} };
+        } catch (err: any) {
+          return { content: [{ type: "text" as const, text: `Redfin details failed: ${err.message}` }], details: {} };
+        }
+      },
+    },
+    {
+      name: "redfin_autocomplete",
+      label: "Redfin Location Lookup",
+      description: "Look up a location on Redfin to get the correct region ID and URL path for use with redfin_search. Returns matching cities, neighborhoods, and schools.",
+      parameters: Type.Object({
+        query: Type.String({ description: "Location to look up (e.g. 'Montclair, NJ', 'Upper Saddle River', 'Princeton NJ')" }),
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const resp = await fetch(`https://redfin-com-data.p.rapidapi.com/properties/auto-complete?query=${encodeURIComponent(params.query)}`, {
+            headers: { "X-RapidAPI-Key": RAPIDAPI_KEY, "X-RapidAPI-Host": "redfin-com-data.p.rapidapi.com" },
+          });
+          if (!resp.ok) return { content: [{ type: "text" as const, text: `Redfin API error: ${resp.status} ${resp.statusText}` }], details: {} };
+          const data = await resp.json();
+          const rows = data?.data?.flatMap((section: any) => section.rows || []) || [];
+          if (rows.length === 0) return { content: [{ type: "text" as const, text: `No Redfin locations found for "${params.query}". Try a different spelling.` }], details: {} };
+          const results = rows.slice(0, 10).map((r: any) => ({
+            name: r.name,
+            subName: r.subName,
+            url: r.url,
+            id: r.id,
+            type: r.type,
+          }));
+          return { content: [{ type: "text" as const, text: JSON.stringify({ source: "Redfin", note: "Use the 'url' field to build redfin_search URLs: https://www.redfin.com{url}/filter/min-price=X,max-price=X,min-beds=X,min-baths=X", locations: results }, null, 2) }], details: {} };
+        } catch (err: any) {
+          return { content: [{ type: "text" as const, text: `Redfin autocomplete failed: ${err.message}` }], details: {} };
+        }
+      },
+    },
   ];
 }
 
