@@ -1243,7 +1243,7 @@ body.light-theme #mic-btn.recording {
   border-radius: 6px;
   background: rgba(0, 255, 0, 0.02);
   transition: opacity 0.6s ease-in-out;
-  min-height: 36px;
+  min-height: 48px;
   text-align: center;
 }
 
