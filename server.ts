@@ -2903,6 +2903,7 @@ app.get("/api/glance", async (_req: Request, res: Response) => {
     const partialCount = jobItems.filter((j: any) => j.status === "partial").length;
     const failedCount = jobItems.filter((j: any) => j.status === "error").length;
     result.jobs = { total: enabledJobs.length, ok: okCount, partial: partialCount, failed: failedCount, items: jobItems };
+    result.nextJob = scheduledJobs.getNextJob();
 
     glanceCache = { data: result, ts: Date.now() };
     res.json(result);

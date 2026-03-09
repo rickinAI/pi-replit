@@ -4130,6 +4130,48 @@ async function saveConfig2() {
 function getJobs() {
   return config2.jobs;
 }
+function getNextJob() {
+  const tz = config2.timezone || "America/New_York";
+  const now = /* @__PURE__ */ new Date();
+  const nowLocal = new Date(now.toLocaleString("en-US", { timeZone: tz }));
+  const nowH = nowLocal.getHours();
+  const nowM = nowLocal.getMinutes();
+  const nowDay = nowLocal.getDay();
+  const enabled = config2.jobs.filter((j) => j.enabled);
+  if (enabled.length === 0) return null;
+  let bestJob = null;
+  let bestMinutesAway = Infinity;
+  for (const job of enabled) {
+    const jH = job.schedule.hour;
+    const jM = job.schedule.minute;
+    if (job.schedule.type === "weekly" && job.schedule.daysOfWeek) {
+      for (const dow of job.schedule.daysOfWeek) {
+        let dayDiff = dow - nowDay;
+        if (dayDiff < 0) dayDiff += 7;
+        let mins = dayDiff * 1440 + (jH * 60 + jM) - (nowH * 60 + nowM);
+        if (mins <= 0) mins += 7 * 1440;
+        if (mins < bestMinutesAway) {
+          bestMinutesAway = mins;
+          bestJob = job;
+        }
+      }
+    } else {
+      let mins = jH * 60 + jM - (nowH * 60 + nowM);
+      if (mins <= 0) mins += 1440;
+      if (mins < bestMinutesAway) {
+        bestMinutesAway = mins;
+        bestJob = job;
+      }
+    }
+  }
+  if (!bestJob) return null;
+  const h = bestJob.schedule.hour;
+  const m = bestJob.schedule.minute;
+  const ampm = h < 12 ? "AM" : "PM";
+  const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  const timeStr = `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+  return { name: bestJob.name, id: bestJob.id, time: timeStr };
+}
 function updateConfig2(partial) {
   if (partial.jobs) {
     config2.jobs = partial.jobs;
@@ -7547,6 +7589,7 @@ app.get("/api/glance", async (_req, res) => {
     const partialCount = jobItems.filter((j) => j.status === "partial").length;
     const failedCount = jobItems.filter((j) => j.status === "error").length;
     result.jobs = { total: enabledJobs.length, ok: okCount, partial: partialCount, failed: failedCount, items: jobItems };
+    result.nextJob = getNextJob();
     glanceCache = { data: result, ts: Date.now() };
     res.json(result);
   } catch (err) {

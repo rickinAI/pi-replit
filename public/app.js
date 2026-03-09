@@ -20,6 +20,10 @@ let timeoutRetryCount = 0;
 let thinkingStartTime = null;
 let thinkingTimerInterval = null;
 let lastEventTime = 0;
+let ambientTickerTimer = null;
+let ambientTickerItems = [];
+let ambientTickerIndex = 0;
+let ambientTickerData = null;
 
 const messages      = document.getElementById("messages");
 const scrollAnchor  = document.getElementById("scroll-anchor");
@@ -295,6 +299,7 @@ confirmModal.addEventListener("click", (e) => {
 
 function cleanupCurrentSession() {
   stopSyncPolling();
+  stopAmbientTicker();
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   if (eventSource) { eventSource.close(); eventSource = null; }
   agentBubble = null;
@@ -393,7 +398,6 @@ async function showLanding() {
     if (glanceData.jobs) {
       if (glanceData.jobs.failed > 0) items.push(`🔴 ${glanceData.jobs.failed} job${glanceData.jobs.failed !== 1 ? "s" : ""} failed`);
       else if (glanceData.jobs.partial > 0) items.push(`🟡 ${glanceData.jobs.partial} partial`);
-      else if (glanceData.jobs.ok > 0) items.push(`🟢 Jobs OK`);
     }
     if (items.length > 0) {
       const strip = document.createElement("div");
@@ -1092,6 +1096,7 @@ function handleAgentEvent(event) {
   switch (event.type) {
     case "agent_start":
       isAgentRunning = true;
+      stopAmbientTicker();
       agentBubble = null;
       agentText = "";
       textOffsetAfterCatchUp = 0;
@@ -1937,6 +1942,22 @@ function renderScheduledJobs() {
   if (!container) return;
   container.innerHTML = "";
 
+  if (scheduledJobsData.length > 0) {
+    const ok = scheduledJobsData.filter(j => j.lastStatus === "success").length;
+    const failed = scheduledJobsData.filter(j => j.lastStatus === "error").length;
+    const partial = scheduledJobsData.filter(j => j.lastStatus === "partial").length;
+    const notRun = scheduledJobsData.filter(j => !j.lastStatus).length;
+    const parts = [`${scheduledJobsData.length} JOBS`];
+    if (ok > 0) parts.push(`${ok} ✅`);
+    if (failed > 0) parts.push(`${failed} 🔴`);
+    if (partial > 0) parts.push(`${partial} 🟡`);
+    if (notRun > 0) parts.push(`${notRun} ⚪`);
+    const summary = document.createElement("div");
+    summary.className = "job-health-summary";
+    summary.textContent = parts.join(" · ");
+    container.appendChild(summary);
+  }
+
   scheduledJobsData.forEach(job => {
     const card = document.createElement("div");
     card.className = "job-card";
@@ -2431,7 +2452,53 @@ function hideStatus() {
     showStatus("[SYNCING TO CLOUD...]");
     return;
   }
+  if (!isAgentRunning && sessionId) {
+    startAmbientTicker();
+    return;
+  }
   statusBar.classList.add("hidden");
+}
+
+function buildAmbientItems(d) {
+  const items = [];
+  if (d.nextJob) items.push(`⏰ NEXT JOB: ${d.nextJob.name.toUpperCase()} · ${d.nextJob.time}`);
+  if (d.nextEvent) {
+    const t = (d.nextEvent.time || "").replace(/^.*?,\s*/, "").replace(/:00\s*/g, " ");
+    items.push(`📅 NEXT: ${d.nextEvent.title.toUpperCase()}${t ? " · " + t : ""}`);
+  }
+  if (d.tasks && d.tasks.active > 0) items.push(`✅ ${d.tasks.active} TASK${d.tasks.active !== 1 ? "S" : ""} OPEN`);
+  if (d.emails && d.emails.unread > 0) items.push(`📧 ${d.emails.unread} UNREAD`);
+  if (d.jobs && d.jobs.failed > 0) items.push(`🔴 ${d.jobs.failed} JOB${d.jobs.failed !== 1 ? "S" : ""} FAILED`);
+  else if (d.jobs && d.jobs.partial > 0) items.push(`🟡 ${d.jobs.partial} PARTIAL`);
+  return items;
+}
+
+function startAmbientTicker() {
+  stopAmbientTicker();
+  if (isAgentRunning) return;
+
+  if (ambientTickerData) {
+    ambientTickerItems = buildAmbientItems(ambientTickerData);
+  }
+
+  if (ambientTickerItems.length === 0) {
+    statusBar.classList.add("hidden");
+    return;
+  }
+
+  ambientTickerIndex = 0;
+  showStatus(ambientTickerItems[0]);
+  if (ambientTickerItems.length > 1) {
+    ambientTickerTimer = setInterval(() => {
+      if (isAgentRunning) { stopAmbientTicker(); return; }
+      ambientTickerIndex = (ambientTickerIndex + 1) % ambientTickerItems.length;
+      showStatus(ambientTickerItems[ambientTickerIndex]);
+    }, 5000);
+  }
+}
+
+function stopAmbientTicker() {
+  if (ambientTickerTimer) { clearInterval(ambientTickerTimer); ambientTickerTimer = null; }
 }
 
 function showErrorWithRetry(errorText) {
@@ -2611,7 +2678,6 @@ async function fetchGlance() {
     if (d.jobs) {
       if (d.jobs.failed > 0) parts.push(`🔴 ${d.jobs.failed} failed`);
       else if (d.jobs.partial > 0) parts.push(`🟡 ${d.jobs.partial} partial`);
-      else if (d.jobs.ok > 0) parts.push(`🟢 Jobs OK`);
     }
     if (parts.length === 0 && d.time) parts.push(e(d.time));
     if (parts.length === 0) parts.push("—");
@@ -2654,6 +2720,18 @@ async function fetchGlance() {
     expanded.innerHTML = detailRows.join("");
 
     bar.style.display = "";
+
+    ambientTickerData = d;
+    if (!isAgentRunning && sessionId) {
+      const newItems = buildAmbientItems(d);
+      ambientTickerItems = newItems;
+      if (newItems.length === 0) {
+        stopAmbientTicker();
+        statusBar.classList.add("hidden");
+      } else {
+        startAmbientTicker();
+      }
+    }
   } catch {
     collapsed.innerHTML = `<span id="glance-clock" class="glance-clock">${getETTimeString()}</span><span class="glance-sep">·</span><span style="opacity:0.3">—</span>`;
   }

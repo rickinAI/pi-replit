@@ -2846,6 +2846,17 @@ body.light-theme .suggestion-chip:hover {
   margin-bottom: 12px;
 }
 
+.job-health-summary {
+  font-family: var(--font);
+  font-size: 11px;
+  color: var(--green-muted);
+  letter-spacing: 0.5px;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: center;
+}
+
 .job-card {
   background: var(--surface);
   border: 1px solid var(--border);

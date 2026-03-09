@@ -339,8 +339,9 @@ Proactive background scheduler that pushes briefings and alerts via SSE to all c
   - Briefs render as full-width styled messages with `// MORNING BRIEF — 8:00 AM` header
   - Alerts show dismissible banner (auto-dismiss 30s) + persistent chat line
   - Browser notifications + audio beep when tab is hidden
-  - Settings panel (gear icon in header) with sections: Appearance (theme toggle), Alert Settings (calendar reminders, stock moves, task deadlines, important emails), Scheduled Agents (job cards with enable/disable toggles, hour/minute pickers, Run button, custom job form), Watchlist (stock/crypto tickers), Logout
+  - Settings panel (gear icon in header) with sections: Appearance (theme toggle), Alert Settings (calendar reminders, stock moves, task deadlines, important emails), Scheduled Agents (job cards with enable/disable toggles, hour/minute pickers, Run button, custom job form, health summary banner), Watchlist (stock/crypto tickers), Logout
   - Settings auto-save with 500ms debounce
+  - Ambient ticker in status bar: when agent is idle, cycles through glance data (next scheduled job, next calendar event, open tasks, unread emails, failed jobs) every 5s. Stops when agent starts, resumes on agent_end. Managed by `startAmbientTicker()`/`stopAmbientTicker()`, data sourced from `ambientTickerData` (refreshed on each glance fetch). Cleaned up on session teardown
 
 ## Image / Screenshot Support
 
