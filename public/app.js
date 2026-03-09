@@ -2487,8 +2487,8 @@ function startLandingTicker(cycles) {
     setTimeout(() => {
       el.innerHTML = ambientTickerItems[ambientTickerIndex];
       el.classList.remove("ticker-fade");
-    }, 300);
-  }, 5000);
+    }, 600);
+  }, 8000);
 }
 
 function stopLandingTicker() {
