@@ -205,9 +205,59 @@ export async function listEventsStructured(options?: { maxResults?: number; time
   }
 }
 
-export async function createEvent(summary: string, options: { startTime: string; endTime?: string; description?: string; location?: string; allDay?: boolean }): Promise<string> {
+export async function listCalendars(): Promise<Array<{ id: string; name: string; accessRole: string }>> {
+  try {
+    const cal = await getCalendarClient();
+    const calList = await cal.calendarList.list({ minAccessRole: "reader" });
+    const items = calList.data.items || [];
+    return items
+      .filter((c: any) => c.id)
+      .map((c: any) => ({
+        id: c.id,
+        name: c.summaryOverride || c.summary || c.id,
+        accessRole: c.accessRole || "reader",
+      }));
+  } catch (err) {
+    console.error("[calendar] listCalendars error:", err instanceof Error ? err.message : String(err));
+    return [];
+  }
+}
+
+function fuzzyMatchCalendar(calendars: Array<{ id: string; name: string }>, query: string): string {
+  const q = query.toLowerCase().trim();
+  const exact = calendars.find(c => c.name.toLowerCase() === q);
+  if (exact) return exact.id;
+  const starts = calendars.find(c => c.name.toLowerCase().startsWith(q));
+  if (starts) return starts.id;
+  const contains = calendars.find(c => c.name.toLowerCase().includes(q));
+  if (contains) return contains.id;
+  return "primary";
+}
+
+export async function createEvent(summary: string, options: { startTime: string; endTime?: string; description?: string; location?: string; allDay?: boolean; calendarName?: string }): Promise<string> {
   try {
     const calendar = await getCalendarClient();
+
+    let targetCalendarId = "primary";
+    let targetCalendarName = "primary";
+    if (options.calendarName && options.calendarName.trim()) {
+      const cals = await listCalendars();
+      if (cals.length === 0) {
+        return `Unable to create event: could not retrieve calendar list to match "${options.calendarName}". Try again or omit calendarName to use the primary calendar.`;
+      }
+      const writableCals = cals.filter(c => c.accessRole === "owner" || c.accessRole === "writer");
+      const matchedId = fuzzyMatchCalendar(writableCals, options.calendarName);
+      if (matchedId === "primary") {
+        const readOnlyMatch = fuzzyMatchCalendar(cals, options.calendarName);
+        if (readOnlyMatch !== "primary") {
+          const roName = cals.find(c => c.id === readOnlyMatch)?.name || readOnlyMatch;
+          return `Cannot create event on "${roName}" — it is read-only. Available writable calendars: ${writableCals.map(c => c.name).join(", ")}`;
+        }
+      }
+      targetCalendarId = matchedId;
+      const matched = writableCals.find(c => c.id === targetCalendarId);
+      targetCalendarName = matched ? matched.name : targetCalendarId;
+    }
 
     let start: any;
     let end: any;
@@ -237,7 +287,7 @@ export async function createEvent(summary: string, options: { startTime: string;
     if (options.location) event.location = options.location;
 
     const res = await calendar.events.insert({
-      calendarId: "primary",
+      calendarId: targetCalendarId,
       requestBody: event,
     });
 
@@ -246,7 +296,8 @@ export async function createEvent(summary: string, options: { startTime: string;
       ? new Date(created.start.dateTime).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
       : created.start?.date || "";
 
-    return `Created event: "${summary}" on ${startStr}`;
+    const calLabel = targetCalendarId !== "primary" ? ` on calendar "${targetCalendarName}"` : "";
+    return `Created event: "${summary}" on ${startStr}${calLabel}`;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("Calendar createEvent error:", msg);

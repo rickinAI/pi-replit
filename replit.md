@@ -6,7 +6,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 
 - **server.ts** — Express server wrapping the pi coding agent SDK
   - Creates agent sessions with Anthropic API
-  - Registers custom tools (86 total): knowledge base, email, calendar, weather, web search, tasks, news, Google Drive, Google Sheets (13 tools), Google Docs (12 tools), Google Slides (12 tools), YouTube, Zillow (3 tools), Redfin (3 tools), X/Twitter (4 tools)
+  - Registers custom tools (87 total): knowledge base, email, calendar (3: list events, create event with calendar targeting, list available calendars), weather, web search, tasks, news, Google Drive, Google Sheets (13 tools), Google Docs (12 tools), Google Slides (12 tools), YouTube, Zillow (3 tools), Redfin (3 tools), X/Twitter (4 tools)
   - Multi-agent system with 9 specialist agents defined in `data/agents.json` (hot-reloaded on file change)
   - Dual-source research default: all research-oriented agents search both web AND X (Twitter) for maximum coverage. X tools added to deep-researcher, analyst, real-estate, and moodys agents
   - Streams agent events via SSE (Server-Sent Events)
@@ -20,7 +20,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **src/db.ts** — Shared PostgreSQL connection pool (single `pg.Pool`, max 10 connections). Creates all 4 tables on init (`conversations`, `tasks`, `app_config`, `oauth_tokens`). All other modules import `getPool()` from here
 - **src/obsidian.ts** — Client for the knowledge base REST API (10s timeout, 2 retries on transient failures, health ping)
 - **src/gmail.ts** — Gmail integration via custom Google OAuth (list/read/search emails). Tokens stored in PostgreSQL (oauth_tokens table). OAuth scopes: gmail.readonly, calendar, drive, spreadsheets, documents, presentations, youtube.readonly. Also exports `getAccessToken()` for gws CLI and YouTube API
-- **src/calendar.ts** — Google Calendar integration (shares OAuth tokens with Gmail via PostgreSQL). Queries all selected calendars (not just primary). `listEventsStructured()` returns events with calendar source names for family calendar awareness (Rickin, Pooja, Reya)
+- **src/calendar.ts** — Google Calendar integration (shares OAuth tokens with Gmail via PostgreSQL). Queries all selected calendars (not just primary). `listEventsStructured()` returns events with calendar source names for family calendar awareness (Rickin, Pooja, Reya). `listCalendars()` exposes available calendars. `createEvent()` accepts optional `calendarName` for fuzzy-matching target calendar (e.g. "Reya" matches "Reya's Schedule")
 - **src/weather.ts** — Weather via Open-Meteo (free, no API key)
 - **src/websearch.ts** — Web search via DuckDuckGo HTML (free, no API key)
 - **src/tasks.ts** — Task manager with PostgreSQL storage (tasks table)

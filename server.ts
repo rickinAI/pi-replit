@@ -415,7 +415,7 @@ function buildCalendarTools(): ToolDefinition[] {
     {
       name: "calendar_create",
       label: "Create Event",
-      description: "Create a new calendar event.",
+      description: "Create a new calendar event. Can target a specific calendar by name (e.g. 'Reya' to match \"Reya's Schedule\"). Use calendar_list_available to see available calendars.",
       parameters: Type.Object({
         summary: Type.String({ description: "Event title" }),
         startTime: Type.String({ description: "Start time in ISO 8601 format (e.g. '2025-03-15T14:00:00')" }),
@@ -423,11 +423,24 @@ function buildCalendarTools(): ToolDefinition[] {
         description: Type.Optional(Type.String({ description: "Event description" })),
         location: Type.Optional(Type.String({ description: "Event location" })),
         allDay: Type.Optional(Type.Boolean({ description: "Whether this is an all-day event" })),
+        calendarName: Type.Optional(Type.String({ description: "Target calendar name to fuzzy-match (e.g. 'Reya', 'Pooja'). Defaults to primary calendar if omitted." })),
       }),
       async execute(_toolCallId, params) {
         const { summary, ...options } = params;
         const result = await calendar.createEvent(summary, options);
         return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "calendar_list_available",
+      label: "List Calendars",
+      description: "List all available Google calendars with their names and access levels. Use this to find the correct calendar name for calendar_create.",
+      parameters: Type.Object({}),
+      async execute() {
+        const cals = await calendar.listCalendars();
+        if (cals.length === 0) return { content: [{ type: "text" as const, text: "No calendars found or not connected." }], details: {} };
+        const lines = cals.map((c, i) => `${i + 1}. ${c.name} (${c.accessRole})${c.id === "primary" ? " [PRIMARY]" : ""}`);
+        return { content: [{ type: "text" as const, text: `Available calendars (${cals.length}):\n\n${lines.join("\n")}` }], details: {} };
       },
     },
   ];

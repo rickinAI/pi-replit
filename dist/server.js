@@ -1307,9 +1307,54 @@ async function listEventsStructured(options) {
     return [];
   }
 }
+async function listCalendars() {
+  try {
+    const cal = await getCalendarClient();
+    const calList = await cal.calendarList.list({ minAccessRole: "reader" });
+    const items = calList.data.items || [];
+    return items.filter((c) => c.id).map((c) => ({
+      id: c.id,
+      name: c.summaryOverride || c.summary || c.id,
+      accessRole: c.accessRole || "reader"
+    }));
+  } catch (err) {
+    console.error("[calendar] listCalendars error:", err instanceof Error ? err.message : String(err));
+    return [];
+  }
+}
+function fuzzyMatchCalendar(calendars, query) {
+  const q = query.toLowerCase().trim();
+  const exact = calendars.find((c) => c.name.toLowerCase() === q);
+  if (exact) return exact.id;
+  const starts = calendars.find((c) => c.name.toLowerCase().startsWith(q));
+  if (starts) return starts.id;
+  const contains = calendars.find((c) => c.name.toLowerCase().includes(q));
+  if (contains) return contains.id;
+  return "primary";
+}
 async function createEvent(summary, options) {
   try {
     const calendar = await getCalendarClient();
+    let targetCalendarId = "primary";
+    let targetCalendarName = "primary";
+    if (options.calendarName && options.calendarName.trim()) {
+      const cals = await listCalendars();
+      if (cals.length === 0) {
+        return `Unable to create event: could not retrieve calendar list to match "${options.calendarName}". Try again or omit calendarName to use the primary calendar.`;
+      }
+      const writableCals = cals.filter((c) => c.accessRole === "owner" || c.accessRole === "writer");
+      const matchedId = fuzzyMatchCalendar(writableCals, options.calendarName);
+      if (matchedId === "primary") {
+        const readOnlyMatch = fuzzyMatchCalendar(cals, options.calendarName);
+        if (readOnlyMatch !== "primary") {
+          const roName = cals.find((c) => c.id === readOnlyMatch)?.name || readOnlyMatch;
+          return `Cannot create event on "${roName}" \u2014 it is read-only. Available writable calendars: ${writableCals.map((c) => c.name).join(", ")}`;
+        }
+      }
+      targetCalendarId = matchedId;
+      const matched = writableCals.find((c) => c.id === targetCalendarId);
+      targetCalendarName = matched ? matched.name : targetCalendarId;
+    }
     let start;
     let end;
     if (options.allDay) {
@@ -1335,12 +1380,13 @@ async function createEvent(summary, options) {
     if (options.description) event.description = options.description;
     if (options.location) event.location = options.location;
     const res = await calendar.events.insert({
-      calendarId: "primary",
+      calendarId: targetCalendarId,
       requestBody: event
     });
     const created = res.data;
     const startStr = created.start?.dateTime ? new Date(created.start.dateTime).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : created.start?.date || "";
-    return `Created event: "${summary}" on ${startStr}`;
+    const calLabel = targetCalendarId !== "primary" ? ` on calendar "${targetCalendarName}"` : "";
+    return `Created event: "${summary}" on ${startStr}${calLabel}`;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("Calendar createEvent error:", msg);
@@ -5170,19 +5216,34 @@ function buildCalendarTools() {
     {
       name: "calendar_create",
       label: "Create Event",
-      description: "Create a new calendar event.",
+      description: `Create a new calendar event. Can target a specific calendar by name (e.g. 'Reya' to match "Reya's Schedule"). Use calendar_list_available to see available calendars.`,
       parameters: Type.Object({
         summary: Type.String({ description: "Event title" }),
         startTime: Type.String({ description: "Start time in ISO 8601 format (e.g. '2025-03-15T14:00:00')" }),
         endTime: Type.Optional(Type.String({ description: "End time in ISO 8601 format (defaults to 1 hour after start)" })),
         description: Type.Optional(Type.String({ description: "Event description" })),
         location: Type.Optional(Type.String({ description: "Event location" })),
-        allDay: Type.Optional(Type.Boolean({ description: "Whether this is an all-day event" }))
+        allDay: Type.Optional(Type.Boolean({ description: "Whether this is an all-day event" })),
+        calendarName: Type.Optional(Type.String({ description: "Target calendar name to fuzzy-match (e.g. 'Reya', 'Pooja'). Defaults to primary calendar if omitted." }))
       }),
       async execute(_toolCallId, params) {
         const { summary, ...options } = params;
         const result = await createEvent(summary, options);
         return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "calendar_list_available",
+      label: "List Calendars",
+      description: "List all available Google calendars with their names and access levels. Use this to find the correct calendar name for calendar_create.",
+      parameters: Type.Object({}),
+      async execute() {
+        const cals = await listCalendars();
+        if (cals.length === 0) return { content: [{ type: "text", text: "No calendars found or not connected." }], details: {} };
+        const lines = cals.map((c, i) => `${i + 1}. ${c.name} (${c.accessRole})${c.id === "primary" ? " [PRIMARY]" : ""}`);
+        return { content: [{ type: "text", text: `Available calendars (${cals.length}):
+
+${lines.join("\n")}` }], details: {} };
       }
     }
   ];
