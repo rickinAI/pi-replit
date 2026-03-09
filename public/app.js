@@ -2456,11 +2456,23 @@ function buildLandingTickerCycles(d) {
     if (w.feelsLikeC !== undefined) line += ` · Feels ${w.feelsLikeC}°C`;
     cycles.push(`<span class="landing-glance-item">${line}</span>`);
     if (w.forecast && w.forecast.length > 0) {
-      for (const f of w.forecast) {
+      const fIcon = (c) => {
+        const cl = c.toLowerCase();
+        if (cl.includes("clear") || cl.includes("sunny")) return "☀️";
+        if (cl.includes("partly")) return "⛅";
+        if (cl.includes("cloud") || cl.includes("overcast")) return "☁️";
+        if (cl.includes("rain") || cl.includes("drizzle") || cl.includes("shower")) return "🌧️";
+        if (cl.includes("snow")) return "❄️";
+        if (cl.includes("thunder")) return "⛈️";
+        if (cl.includes("fog")) return "🌫️";
+        return "🌡️";
+      };
+      const parts = w.forecast.map(f => {
         const dt = new Date(f.date + "T12:00:00");
-        const day = dt.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
-        cycles.push(`<span class="landing-glance-item">📅 ${e(day)}: ${e(f.condition)}, ${f.lowC}°–${f.highC}°C, Rain ${f.rainPct}%</span>`);
-      }
+        const day = dt.toLocaleDateString("en-US", { weekday: "short" });
+        return `${fIcon(f.condition)} ${day} ${f.lowC}°–${f.highC}°C`;
+      });
+      cycles.push(`<span class="landing-glance-item">${parts.join(" · ")}</span>`);
     }
   }
 
