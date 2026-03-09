@@ -14,6 +14,7 @@ export interface AgentConfig {
 
 let agents: AgentConfig[] = [];
 let configPath = "";
+let registeredToolNames: Set<string> | null = null;
 
 export function init(dataDir: string): void {
   configPath = path.join(dataDir, "agents.json");
@@ -32,6 +33,21 @@ export function init(dataDir: string): void {
   } catch {
     console.warn("[agents] Could not watch agents.json — using periodic reload");
     setInterval(loadAgents, 60_000);
+  }
+}
+
+export function setRegisteredTools(toolNames: string[]): void {
+  registeredToolNames = new Set(toolNames);
+  validateAgentTools();
+}
+
+function validateAgentTools(): void {
+  if (!registeredToolNames || agents.length === 0) return;
+  for (const agent of agents) {
+    const unknownTools = agent.tools.filter(t => !registeredToolNames!.has(t));
+    if (unknownTools.length > 0) {
+      console.warn(`[agents] WARNING: agent "${agent.id}" references unknown tools: ${unknownTools.join(", ")}`);
+    }
   }
 }
 
@@ -62,6 +78,7 @@ function loadAgents(): void {
     }
     agents = valid;
     console.log(`[agents] Loaded ${agents.length} agents: ${agents.map(a => a.id).join(", ")}`);
+    if (registeredToolNames) validateAgentTools();
   } catch (err: any) {
     console.error(`[agents] Failed to load agents.json: ${err.message}`);
   }

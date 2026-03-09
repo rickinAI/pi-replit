@@ -1785,14 +1785,18 @@ function buildAgentTools(allToolsFn: () => ToolDefinition[], sessionId: string):
             apiKey: ANTHROPIC_KEY,
             model: modelOverride,
           });
+          const details: any = { agent: result.agentId, toolsUsed: result.toolsUsed, durationMs: result.durationMs };
+          if (result.error) details.error = result.error;
+          if (result.timedOut) details.timedOut = true;
           return {
             content: [{ type: "text" as const, text: result.response }],
-            details: { agent: result.agentId, toolsUsed: result.toolsUsed, durationMs: result.durationMs },
+            details,
           };
         } catch (err: any) {
+          console.error(`[delegate] Unhandled error delegating to agent: ${err.message}`);
           return {
-            content: [{ type: "text" as const, text: `Agent delegation failed: ${err.message}` }],
-            details: { error: true },
+            content: [{ type: "text" as const, text: `Agent delegation failed: ${err.message}. Try running the tools directly instead of delegating.` }],
+            details: { error: err.message, unhandled: true },
           };
         }
       },
@@ -2226,6 +2230,12 @@ const cachedStaticTools: ToolDefinition[] = [
   ...buildRealEstateTools(),
   ...buildConversationTools(),
 ];
+
+{
+  const kbToolNames = buildKnowledgeBaseTools().map(t => t.name);
+  const staticToolNames = cachedStaticTools.map(t => t.name);
+  agentLoader.setRegisteredTools([...kbToolNames, ...staticToolNames]);
+}
 
 app.post("/api/session", async (req: Request, res: Response) => {
   try {

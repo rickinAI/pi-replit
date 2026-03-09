@@ -17,28 +17,10 @@ export interface SubAgentResult {
   durationMs: number;
   tokensUsed: { input: number; output: number };
   timedOut: boolean;
+  error?: string;
 }
 
 const MAX_TOOL_ITERATIONS = 15;
-
-const NATIVE_WEB_SEARCH = {
-  type: "web_search_20260209",
-  name: "web_search",
-  max_uses: 10,
-  user_location: {
-    type: "approximate" as const,
-    city: "Upper Saddle River",
-    region: "New Jersey",
-    country: "US",
-    timezone: "America/New_York",
-  },
-};
-
-const NATIVE_WEB_FETCH = {
-  type: "web_fetch_20260209",
-  name: "web_fetch",
-  max_uses: 5,
-};
 
 function convertToolsToAnthropicFormat(tools: ToolImpl[]): Anthropic.Tool[] {
   return tools.map(t => ({
@@ -66,6 +48,20 @@ function removeTypeBoxKeys(obj: any): void {
   }
 }
 
+function parseApiError(err: any): { status: number; type: string; message: string } {
+  const status = err?.status || err?.statusCode || 0;
+  let type = "unknown_error";
+  let message = err?.message || String(err);
+  try {
+    const body = err?.error || err?.body;
+    if (body?.error) {
+      type = body.error.type || type;
+      message = body.error.message || message;
+    }
+  } catch {}
+  return { status, type, message };
+}
+
 export async function runSubAgent(opts: {
   agentId: string;
   task: string;
@@ -82,11 +78,9 @@ export async function runSubAgent(opts: {
   const startTime = Date.now();
   console.log(`[agent:${agent.id}] started — "${opts.task.slice(0, 80)}"`);
 
-  const filteredTools = opts.allTools.filter(t => agent.tools.includes(t.name) && t.name !== "web_search" && t.name !== "web_fetch");
+  const filteredTools = opts.allTools.filter(t => agent.tools.includes(t.name));
   const anthropicTools = convertToolsToAnthropicFormat(filteredTools);
   const toolsUsed: string[] = [];
-
-  const allTools: any[] = [...anthropicTools, NATIVE_WEB_SEARCH, NATIVE_WEB_FETCH];
 
   const client = new Anthropic({ apiKey: opts.apiKey });
   const modelId = agent.model === "default" ? (opts.model || "claude-opus-4-6") : agent.model;
@@ -103,9 +97,21 @@ export async function runSubAgent(opts: {
   let finalResponse = "";
   let softTimeoutSent = false;
   let hardTimedOut = false;
+  let containerId: string | undefined;
 
   const timeoutMs = agent.timeout * 1000;
   const softTimeoutMs = timeoutMs * 0.8;
+
+  const buildResult = (extra?: { error?: string }): SubAgentResult => ({
+    agentId: agent.id,
+    agentName: agent.name,
+    response: finalResponse || "(No response generated)",
+    toolsUsed,
+    durationMs: Date.now() - startTime,
+    tokensUsed: { input: totalInput, output: totalOutput },
+    timedOut: hardTimedOut,
+    ...(extra || {}),
+  });
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
     const elapsed = Date.now() - startTime;
@@ -125,43 +131,106 @@ export async function runSubAgent(opts: {
       });
     }
 
-    const apiResponse = await client.messages.create({
-      model: modelId,
-      max_tokens: 16384,
-      system: agent.systemPrompt,
-      tools: allTools,
-      messages,
-    });
+    let apiResponse: Anthropic.Message;
+    try {
+      const requestParams: any = {
+        model: modelId,
+        max_tokens: 16384,
+        system: agent.systemPrompt,
+        tools: anthropicTools,
+        messages,
+      };
+      if (containerId) {
+        requestParams.container_id = containerId;
+      }
+      apiResponse = await client.messages.create(requestParams);
+    } catch (err: any) {
+      const parsed = parseApiError(err);
+      console.error(`[agent:${agent.id}] API error (${parsed.status}): ${parsed.type} — ${parsed.message}`);
 
-    totalInput += apiResponse.usage?.input_tokens || 0;
-    totalOutput += apiResponse.usage?.output_tokens || 0;
+      if (parsed.status === 400) {
+        if (containerId && parsed.message.includes("container")) {
+          console.warn(`[agent:${agent.id}] stale container_id — clearing and retrying`);
+          containerId = undefined;
+          try {
+            apiResponse = await client.messages.create({
+              model: modelId,
+              max_tokens: 16384,
+              system: agent.systemPrompt,
+              tools: anthropicTools,
+              messages,
+            });
+          } catch (retryErr: any) {
+            const retryParsed = parseApiError(retryErr);
+            console.error(`[agent:${agent.id}] retry without container_id also failed: ${retryParsed.message}`);
+            finalResponse = finalResponse
+              ? `${finalResponse}\n\n[Agent hit API error: ${retryParsed.message}]`
+              : `Agent "${agent.id}" encountered an API error: ${retryParsed.message}`;
+            return buildResult({ error: retryParsed.message });
+          }
+        } else {
+          finalResponse = finalResponse
+            ? `${finalResponse}\n\n[Agent hit API error: ${parsed.message}]`
+            : `Agent "${agent.id}" encountered an API error on iteration ${iteration + 1}: ${parsed.message}`;
+          return buildResult({ error: parsed.message });
+        }
+      }
 
-    const textBlocks = apiResponse.content.filter((b: any) => b.type === "text");
-    const customToolBlocks = apiResponse.content.filter((b: any) => b.type === "tool_use") as Anthropic.ToolUseBlock[];
-    const serverToolBlocks = apiResponse.content.filter((b: any) => b.type === "server_tool_use");
+      if (parsed.status === 429 || parsed.status === 529) {
+        console.log(`[agent:${agent.id}] rate limited — waiting 5s before retry`);
+        await new Promise(r => setTimeout(r, 5000));
+        try {
+          const retryParams: any = {
+            model: modelId,
+            max_tokens: 16384,
+            system: agent.systemPrompt,
+            tools: anthropicTools,
+            messages,
+          };
+          if (containerId) retryParams.container_id = containerId;
+          apiResponse = await client.messages.create(retryParams);
+        } catch (retryErr: any) {
+          const retryParsed = parseApiError(retryErr);
+          console.error(`[agent:${agent.id}] retry also failed (${retryParsed.status}): ${retryParsed.message}`);
+          finalResponse = finalResponse
+            ? `${finalResponse}\n\n[Agent hit API error after retry: ${retryParsed.message}]`
+            : `Agent "${agent.id}" failed after retry: ${retryParsed.message}`;
+          return buildResult({ error: retryParsed.message });
+        }
+      } else {
+        finalResponse = finalResponse
+          ? `${finalResponse}\n\n[Agent hit API error: ${parsed.message}]`
+          : `Agent "${agent.id}" encountered an API error: ${parsed.message}`;
+        return buildResult({ error: parsed.message });
+      }
+    }
+
+    if ((apiResponse as any).container_id) {
+      containerId = (apiResponse as any).container_id;
+    }
+
+    totalInput += apiResponse!.usage?.input_tokens || 0;
+    totalOutput += apiResponse!.usage?.output_tokens || 0;
+
+    const textBlocks = apiResponse!.content.filter((b: any) => b.type === "text");
+    const toolBlocks = apiResponse!.content.filter((b: any) => b.type === "tool_use") as Anthropic.ToolUseBlock[];
 
     if (textBlocks.length > 0) {
       finalResponse = textBlocks.map((b: any) => (b as Anthropic.TextBlock).text).join("\n");
     }
 
-    for (const stb of serverToolBlocks) {
-      const name = (stb as any).name || "web_search";
-      if (!toolsUsed.includes(name)) toolsUsed.push(name);
-      console.log(`[agent:${agent.id}] server tool: ${name}`);
-    }
-
-    if (apiResponse.stop_reason === "end_turn" || customToolBlocks.length === 0) {
+    if (apiResponse!.stop_reason === "end_turn" || toolBlocks.length === 0) {
       break;
     }
 
-    messages.push({ role: "assistant", content: apiResponse.content as any });
+    messages.push({ role: "assistant", content: apiResponse!.content as any });
 
-    const userContent: any[] = [];
+    const toolResults: any[] = [];
 
-    for (const toolCall of customToolBlocks) {
+    for (const toolCall of toolBlocks) {
       const impl = filteredTools.find(t => t.name === toolCall.name);
       if (!impl) {
-        userContent.push({
+        toolResults.push({
           type: "tool_result",
           tool_use_id: toolCall.id,
           content: `Tool "${toolCall.name}" not available`,
@@ -179,13 +248,13 @@ export async function runSubAgent(opts: {
           .map(c => c.text || JSON.stringify(c))
           .filter(Boolean)
           .join("\n");
-        userContent.push({
+        toolResults.push({
           type: "tool_result",
           tool_use_id: toolCall.id,
           content: text || "(empty result)",
         });
       } catch (err: any) {
-        userContent.push({
+        toolResults.push({
           type: "tool_result",
           tool_use_id: toolCall.id,
           content: `Error: ${err.message}`,
@@ -194,8 +263,8 @@ export async function runSubAgent(opts: {
       }
     }
 
-    if (userContent.length > 0) {
-      messages.push({ role: "user", content: userContent });
+    if (toolResults.length > 0) {
+      messages.push({ role: "user", content: toolResults });
     }
   }
 
@@ -203,12 +272,14 @@ export async function runSubAgent(opts: {
     try {
       console.log(`[agent:${agent.id}] no final response — requesting summary`);
       messages.push({ role: "user", content: "Please provide your final summary and findings based on the work you've done so far." });
-      const summaryResponse = await client.messages.create({
+      const summaryParams: any = {
         model: modelId,
         max_tokens: 4096,
         system: agent.systemPrompt,
         messages,
-      });
+      };
+      if (containerId) summaryParams.container_id = containerId;
+      const summaryResponse = await client.messages.create(summaryParams);
       totalInput += summaryResponse.usage?.input_tokens || 0;
       totalOutput += summaryResponse.usage?.output_tokens || 0;
       const summaryText = summaryResponse.content
@@ -224,13 +295,5 @@ export async function runSubAgent(opts: {
   const durationMs = Date.now() - startTime;
   console.log(`[agent:${agent.id}] completed in ${(durationMs / 1000).toFixed(1)}s (${toolsUsed.length} tools used, ${totalInput + totalOutput} tokens)`);
 
-  return {
-    agentId: agent.id,
-    agentName: agent.name,
-    response: finalResponse || "(No response generated)",
-    toolsUsed,
-    durationMs,
-    tokensUsed: { input: totalInput, output: totalOutput },
-    timedOut: hardTimedOut,
-  };
+  return buildResult();
 }

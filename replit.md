@@ -35,8 +35,9 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Three-tier model system with 4 modes: Auto (routes fast/full/max by intent), Fast (Haiku), Full (Sonnet), Max (Opus)
   - Auto mode uses MAX_PATTERNS to detect work/project keywords and route to Opus
   - All sub-agents default to Opus (`data/agents.json` model field + orchestrator fallback)
-  - All sub-agents get Anthropic native `web_search_20260209` and `web_fetch_20260209` server tools automatically (no DuckDuckGo scraping)
-  - Orchestrator: soft timeout at 80% of budget (nudges agent to save partial results), hard timeout at 100%, fallback summary if no response. `SubAgentResult.timedOut` flag propagated to job system
+  - All sub-agents use the custom `web_search` tool (DuckDuckGo-based) — Anthropic native server tools removed to avoid container_id API issues
+  - Orchestrator: container_id tracking (future-proofing), graceful API error handling (400/429/529 with retry), soft timeout at 80% of budget (nudges agent to save partial results), hard timeout at 100%, fallback summary if no response. `SubAgentResult.timedOut` and `.error` flags propagated to job system
+  - Agent loader validates tool names against registered tools at startup — logs warnings for unknown tools
 - **Moody's Intelligence Pipeline** — Three scheduled jobs using the moodys agent:
   - Pass 1: Daily Intelligence Brief at 6:00 AM ET — 5 categories: Corporate News, Banking Segment, Competitor Watch (12 competitors), Enterprise AI Trends, Analyst Coverage (Celent, Chartis, Forrester, Gartner, IDC). Dual-source: searches both web AND X for each category. Includes 🐦 X/Twitter Signals section. Saves to `Scheduled Reports/Moody's Intelligence/Daily/YYYY-MM-DD-Brief.md`. Research only — does NOT update profiles.
   - Pass 2: Profile Updates at 6:15 AM ET — reads today's brief, appends date-stamped findings to competitor/analyst profiles in `Projects/Moody's/Competitive Intelligence/`
