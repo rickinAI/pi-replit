@@ -2454,23 +2454,22 @@ function buildLandingTickerCycles(d) {
   if (d.weather) c1.push(`${d.weather.icon || "🌡️"} ${e(d.weather.tempC + "°C " + (d.weather.condition || ""))}`);
   if (d.emails) c1.push(`📧 ${d.emails.unread} new email${d.emails.unread !== 1 ? "s" : ""}`);
   if (d.tasks) c1.push(`✅ ${d.tasks.active} task${d.tasks.active !== 1 ? "s" : ""}`);
-  if (c1.length > 0) cycles.push(c1.map(i => `<span class="landing-glance-item">${i}</span>`).join(""));
+  if (c1.length > 0) cycles.push(`<span class="landing-glance-item">${c1.join(" · ")}</span>`);
 
-  const c2 = [];
   if (d.upcomingEvents && d.upcomingEvents.length > 0) {
     for (const ev of d.upcomingEvents.slice(0, 3)) {
       const t = (ev.time || "").replace(/^.*?,\s*/, "").replace(/:00\s*/g, " ");
       const cal = ev.calendar && ev.calendar !== "Rickin" ? `${e(ev.calendar)}: ` : "";
-      c2.push(`📅 ${cal}${e(ev.title)}${t ? " · " + e(t) : ""}`);
+      cycles.push(`<span class="landing-glance-item">📅 ${cal}${e(ev.title)}${t ? " · " + e(t) : ""}</span>`);
     }
   }
-  if (d.nextJob) c2.push(`⏰ Next: ${e(d.nextJob.name)} · ${e(d.nextJob.time)}`);
-  if (c2.length > 0) cycles.push(c2.map(i => `<span class="landing-glance-item">${i}</span>`).join(""));
+
+  if (d.nextJob) cycles.push(`<span class="landing-glance-item">⏰ Next: ${e(d.nextJob.name)} · ${e(d.nextJob.time)}</span>`);
 
   const c3 = [];
   if (d.jobs && d.jobs.failed > 0) c3.push(`🔴 ${d.jobs.failed} job${d.jobs.failed !== 1 ? "s" : ""} failed`);
   if (d.jobs && d.jobs.partial > 0) c3.push(`🟡 ${d.jobs.partial} partial`);
-  if (c3.length > 0) cycles.push(c3.map(i => `<span class="landing-glance-item">${i}</span>`).join(""));
+  if (c3.length > 0) cycles.push(`<span class="landing-glance-item">${c3.join(" · ")}</span>`);
 
   return cycles;
 }

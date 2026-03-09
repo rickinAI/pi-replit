@@ -1231,9 +1231,9 @@ body.light-theme #mic-btn.recording {
 
 .landing-glance {
   display: flex;
-  justify-content: center;
-  gap: 12px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
   font-size: 11px;
   color: var(--green-dim);
   padding: 8px 12px;
@@ -1242,6 +1242,7 @@ body.light-theme #mic-btn.recording {
   background: rgba(0, 255, 0, 0.02);
   transition: opacity 0.3s ease;
   min-height: 20px;
+  text-align: center;
 }
 
 .landing-glance.ticker-fade {
@@ -1249,7 +1250,7 @@ body.light-theme #mic-btn.recording {
 }
 
 .landing-glance-item {
-  white-space: nowrap;
+  line-height: 1.4;
 }
 
 .landing-last {
