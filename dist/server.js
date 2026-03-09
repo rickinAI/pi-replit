@@ -1068,11 +1068,12 @@ async function searchEmails(query) {
 async function getUnreadCount() {
   try {
     const client = await getGmailClient();
-    const res = await client.users.labels.get({
+    const res = await client.users.messages.list({
       userId: "me",
-      id: "INBOX"
+      q: "is:unread category:primary",
+      maxResults: 1
     });
-    return res.data.messagesUnread || 0;
+    return res.data.resultSizeEstimate || 0;
   } catch (err) {
     console.error("Gmail getUnreadCount error:", err instanceof Error ? err.message : err);
     return 0;
@@ -7652,9 +7653,9 @@ app.get("/api/glance", async (_req, res) => {
           const tzStr = now.toLocaleString("en-US", { timeZone: tz });
           const tzOffsetMs = new Date(tzStr).getTime() - new Date(utcStr).getTime();
           const nowShifted = new Date(now.getTime() + tzOffsetMs);
-          const eodInTz = new Date(Date.UTC(nowShifted.getUTCFullYear(), nowShifted.getUTCMonth(), nowShifted.getUTCDate(), 23, 59, 59, 999));
-          const endOfDayUTC = new Date(eodInTz.getTime() - tzOffsetMs);
-          const events = await listEventsStructured({ maxResults: 5, timeMax: endOfDayUTC.toISOString() });
+          const eodTomorrowInTz = new Date(Date.UTC(nowShifted.getUTCFullYear(), nowShifted.getUTCMonth(), nowShifted.getUTCDate() + 1, 23, 59, 59, 999));
+          const endOfTomorrowUTC = new Date(eodTomorrowInTz.getTime() - tzOffsetMs);
+          const events = await listEventsStructured({ maxResults: 5, timeMax: endOfTomorrowUTC.toISOString() });
           if (events.length > 0) {
             result.nextEvent = events[0];
             result.upcomingEvents = events.slice(0, 5);

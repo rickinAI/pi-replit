@@ -2881,9 +2881,9 @@ app.get("/api/glance", async (_req: Request, res: Response) => {
           const tzStr = now.toLocaleString("en-US", { timeZone: tz });
           const tzOffsetMs = new Date(tzStr).getTime() - new Date(utcStr).getTime();
           const nowShifted = new Date(now.getTime() + tzOffsetMs);
-          const eodInTz = new Date(Date.UTC(nowShifted.getUTCFullYear(), nowShifted.getUTCMonth(), nowShifted.getUTCDate(), 23, 59, 59, 999));
-          const endOfDayUTC = new Date(eodInTz.getTime() - tzOffsetMs);
-          const events = await calendar.listEventsStructured({ maxResults: 5, timeMax: endOfDayUTC.toISOString() });
+          const eodTomorrowInTz = new Date(Date.UTC(nowShifted.getUTCFullYear(), nowShifted.getUTCMonth(), nowShifted.getUTCDate() + 1, 23, 59, 59, 999));
+          const endOfTomorrowUTC = new Date(eodTomorrowInTz.getTime() - tzOffsetMs);
+          const events = await calendar.listEventsStructured({ maxResults: 5, timeMax: endOfTomorrowUTC.toISOString() });
           if (events.length > 0) {
             result.nextEvent = events[0];
             result.upcomingEvents = events.slice(0, 5);

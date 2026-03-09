@@ -278,11 +278,12 @@ export async function searchEmails(query: string): Promise<string> {
 export async function getUnreadCount(): Promise<number> {
   try {
     const client = await getGmailClient();
-    const res = await client.users.labels.get({
+    const res = await client.users.messages.list({
       userId: "me",
-      id: "INBOX",
+      q: "is:unread category:primary",
+      maxResults: 1,
     });
-    return (res.data as any).messagesUnread || 0;
+    return (res.data as any).resultSizeEstimate || 0;
   } catch (err) {
     console.error("Gmail getUnreadCount error:", err instanceof Error ? err.message : err);
     return 0;
