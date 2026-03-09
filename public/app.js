@@ -2450,11 +2450,19 @@ function buildLandingTickerCycles(d) {
   const e = escapeHtml;
   const cycles = [];
 
-  const c1 = [];
-  if (d.weather) c1.push(`${d.weather.icon || "🌡️"} ${e(d.weather.tempC + "°C " + (d.weather.condition || ""))}`);
-  if (d.emails) c1.push(`📧 ${d.emails.unread} new email${d.emails.unread !== 1 ? "s" : ""}`);
-  if (d.tasks) c1.push(`✅ ${d.tasks.active} task${d.tasks.active !== 1 ? "s" : ""}`);
-  if (c1.length > 0) cycles.push(`<span class="landing-glance-item">${c1.join(" · ")}</span>`);
+  if (d.weather) {
+    const w = d.weather;
+    let line = `${w.icon || "🌡️"} ${w.tempC}°C ${e(w.condition || "")}`;
+    if (w.feelsLikeC !== undefined) line += ` · Feels ${w.feelsLikeC}°C`;
+    cycles.push(`<span class="landing-glance-item">${line}</span>`);
+    if (w.forecast && w.forecast.length > 0) {
+      for (const f of w.forecast) {
+        const dt = new Date(f.date + "T12:00:00");
+        const day = dt.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+        cycles.push(`<span class="landing-glance-item">📅 ${e(day)}: ${e(f.condition)}, ${f.lowC}°–${f.highC}°C, Rain ${f.rainPct}%</span>`);
+      }
+    }
+  }
 
   if (d.upcomingEvents && d.upcomingEvents.length > 0) {
     for (const ev of d.upcomingEvents.slice(0, 5)) {

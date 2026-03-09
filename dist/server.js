@@ -7625,6 +7625,7 @@ app.get("/api/glance", async (_req, res) => {
         const raw = await getWeather(loc);
         const tempMatch = raw.match(/Temperature:\s*([\d.-]+)°C\s*\((\d+)°F\)/);
         const condMatch = raw.match(/Condition:\s*(.+)/);
+        const feelsMatch = raw.match(/Feels like:\s*([\d.-]+)°C/);
         if (tempMatch && condMatch) {
           const condition = condMatch[1].trim();
           const etHour = new Date((/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York" })).getHours();
@@ -7638,7 +7639,17 @@ app.get("/api/glance", async (_req, res) => {
           else if (cl.includes("snow")) icon = "\u2744\uFE0F";
           else if (cl.includes("thunder")) icon = "\u26C8\uFE0F";
           else if (cl.includes("fog")) icon = "\u{1F32B}\uFE0F";
-          result.weather = { tempC: Math.round(parseFloat(tempMatch[1])), condition, icon };
+          const w = { tempC: Math.round(parseFloat(tempMatch[1])), condition, icon };
+          if (feelsMatch) w.feelsLikeC = Math.round(parseFloat(feelsMatch[1]));
+          const forecastLines = raw.match(/\d{4}-\d{2}-\d{2}:\s*.+/g);
+          if (forecastLines) {
+            w.forecast = forecastLines.map((line) => {
+              const m = line.match(/(\d{4}-\d{2}-\d{2}):\s*(.+?),\s*([\d-]+)-([\d-]+)°C.*?Rain:\s*(\d+)%/);
+              if (!m) return null;
+              return { date: m[1], condition: m[2].trim(), lowC: parseInt(m[3]), highC: parseInt(m[4]), rainPct: parseInt(m[5]) };
+            }).filter(Boolean);
+          }
+          result.weather = w;
         }
       } catch {
       }
