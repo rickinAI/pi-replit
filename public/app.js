@@ -2468,7 +2468,14 @@ function buildLandingTickerCycles(d) {
     }
   }
 
-  if (d.nextJob) cycles.push(`<span class="landing-glance-item">⏰ Next: ${e(d.nextJob.name)} · ${e(d.nextJob.time)}</span>`);
+  if (d.headlines && d.headlines.length > 0) {
+    for (const h of d.headlines.slice(0, 3)) {
+      const src = h.source ? ` (${e(h.source)})` : "";
+      cycles.push(`<span class="landing-glance-item">📰 ${e(h.title)}${src}</span>`);
+    }
+  }
+
+  if (d.nextJob) cycles.push(`<span class="landing-glance-item">🤖 Next: ${e(d.nextJob.name)} · ${e(d.nextJob.time)}</span>`);
 
   const c3 = [];
   if (d.jobs && d.jobs.failed > 0) c3.push(`🔴 ${d.jobs.failed} job${d.jobs.failed !== 1 ? "s" : ""} failed`);

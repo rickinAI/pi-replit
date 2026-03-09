@@ -1779,6 +1779,19 @@ ${lines.join("\n\n")}`;
     return `Unable to fetch news: ${msg}`;
   }
 }
+async function getTopHeadlines(count = 3) {
+  try {
+    const res = await fetch(RSS_FEEDS["top"], {
+      headers: { "User-Agent": "pi-assistant/1.0" }
+    });
+    if (!res.ok) return [];
+    const xml = await res.text();
+    const items = parseRssItems(xml);
+    return items.slice(0, count).map((item) => ({ title: item.title, source: item.source }));
+  } catch {
+    return [];
+  }
+}
 async function searchNews(query) {
   try {
     const feedUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`;
@@ -7664,6 +7677,13 @@ app.get("/api/glance", async (_req, res) => {
         }
       })());
     }
+    promises.push((async () => {
+      try {
+        const headlines = await getTopHeadlines(3);
+        if (headlines.length > 0) result.headlines = headlines;
+      } catch {
+      }
+    })());
     await Promise.all(promises);
     const allJobs = getJobs();
     const enabledJobs = allJobs.filter((j) => j.enabled);

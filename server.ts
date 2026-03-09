@@ -2892,6 +2892,13 @@ app.get("/api/glance", async (_req: Request, res: Response) => {
       })());
     }
 
+    promises.push((async () => {
+      try {
+        const headlines = await news.getTopHeadlines(3);
+        if (headlines.length > 0) (result as any).headlines = headlines;
+      } catch {}
+    })());
+
     await Promise.all(promises);
 
     const allJobs = scheduledJobs.getJobs();
