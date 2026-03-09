@@ -16,6 +16,7 @@ export interface SubAgentResult {
   toolsUsed: string[];
   durationMs: number;
   tokensUsed: { input: number; output: number };
+  timedOut: boolean;
 }
 
 const MAX_TOOL_ITERATIONS = 15;
@@ -100,13 +101,28 @@ export async function runSubAgent(opts: {
   let totalInput = 0;
   let totalOutput = 0;
   let finalResponse = "";
+  let softTimeoutSent = false;
+  let hardTimedOut = false;
 
   const timeoutMs = agent.timeout * 1000;
+  const softTimeoutMs = timeoutMs * 0.8;
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
-    if (Date.now() - startTime > timeoutMs) {
+    const elapsed = Date.now() - startTime;
+
+    if (elapsed > timeoutMs) {
       console.warn(`[agent:${agent.id}] timeout after ${agent.timeout}s`);
+      hardTimedOut = true;
       break;
+    }
+
+    if (!softTimeoutSent && elapsed > softTimeoutMs) {
+      softTimeoutSent = true;
+      console.log(`[agent:${agent.id}] soft timeout at 80% — nudging to save`);
+      messages.push({
+        role: "user",
+        content: "⚠️ TIME WARNING: You are running low on time. Immediately save whatever findings you have so far using notes_create. Prefix the filename with '⚠️ PARTIAL — ' to indicate incomplete results. Then provide your final summary.",
+      });
     }
 
     const apiResponse = await client.messages.create({
@@ -183,7 +199,7 @@ export async function runSubAgent(opts: {
     }
   }
 
-  if (!finalResponse && messages.length > 1) {
+  if (!finalResponse && messages.length > 1 && !hardTimedOut) {
     try {
       console.log(`[agent:${agent.id}] no final response — requesting summary`);
       messages.push({ role: "user", content: "Please provide your final summary and findings based on the work you've done so far." });
@@ -215,5 +231,6 @@ export async function runSubAgent(opts: {
     toolsUsed,
     durationMs,
     tokensUsed: { input: totalInput, output: totalOutput },
+    timedOut: hardTimedOut,
   };
 }

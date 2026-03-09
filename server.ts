@@ -2819,6 +2819,20 @@ app.get("/api/glance", async (_req: Request, res: Response) => {
     }
 
     await Promise.all(promises);
+
+    const allJobs = scheduledJobs.getJobs();
+    const enabledJobs = allJobs.filter((j: any) => j.enabled);
+    const jobItems = enabledJobs.map((j: any) => ({
+      name: j.name,
+      id: j.id,
+      status: j.lastStatus || null,
+      lastRun: j.lastRun || null,
+    }));
+    const okCount = jobItems.filter((j: any) => j.status === "success").length;
+    const partialCount = jobItems.filter((j: any) => j.status === "partial").length;
+    const failedCount = jobItems.filter((j: any) => j.status === "error").length;
+    result.jobs = { total: enabledJobs.length, ok: okCount, partial: partialCount, failed: failedCount, items: jobItems };
+
     glanceCache = { data: result, ts: Date.now() };
     res.json(result);
   } catch (err) {
@@ -3118,7 +3132,7 @@ async function startServer(maxRetries = 5) {
                 allTools: agentTools as any,
                 apiKey: ANTHROPIC_KEY,
               });
-              return result.response;
+              return { response: result.response, timedOut: result.timedOut };
             },
             broadcastToAll,
             async (path, content) => {

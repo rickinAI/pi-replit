@@ -3681,9 +3681,17 @@ async function triggerBrief(type) {
 // src/scheduled-jobs.ts
 function getJobSavePath(jobId, dateStr, safeName) {
   if (jobId === "moodys-daily-intel") return `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief.md`;
+  if (jobId === "moodys-profile-updates") return `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Profile-Updates.md`;
   if (jobId === "moodys-weekly-digest") return `Scheduled Reports/Moody's Intelligence/Weekly/${dateStr}-Digest.md`;
   if (jobId === "real-estate-daily-scan") return `Scheduled Reports/Real Estate/${dateStr}-Property-Scan.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
+}
+var jobStatusCache = {};
+async function writeJobStatus(jobId, entry) {
+  jobStatusCache[jobId] = entry;
+  if (kbCreateFn) {
+    await kbCreateFn("Scheduled Reports/job-status.json", JSON.stringify(jobStatusCache, null, 2));
+  }
 }
 var DEFAULT_JOBS = [
   {
@@ -3828,13 +3836,34 @@ OUTPUT FORMAT \u2014 Save using notes_create to "Scheduled Reports/Moody's Intel
 
 If a search returns no new results for a category, note "No new developments" rather than omitting the section.
 
-AFTER saving the brief, update competitor and analyst profiles with today's findings:
-- For each competitor with new findings, use notes_append on "Projects/Moody's/Competitive Intelligence/Competitor Profiles/{Name}.md" to add a date-stamped entry:
-  ### {today's date YYYY-MM-DD}
-  - {bullet findings from today}
-- For each analyst firm with new findings, use notes_append on "Projects/Moody's/Competitive Intelligence/Industry Analysts/{Name}.md" with the same date-stamped format.
-- Only append to profiles that had actual findings today \u2014 skip those with "No new developments".`,
+Do NOT update competitor or analyst profiles in this pass \u2014 a separate scheduled job handles that.`,
     schedule: { type: "daily", hour: 6, minute: 0 },
+    enabled: true
+  },
+  {
+    id: "moodys-profile-updates",
+    name: "Moody's Profile Updates",
+    agentId: "moodys",
+    prompt: `Read today's intelligence brief and update competitor/analyst profiles with the findings.
+
+STEP 1: Use notes_list on "Scheduled Reports/Moody's Intelligence/Daily/" to find today's brief (filename format: YYYY-MM-DD-Brief.md). Read it with notes_read.
+
+STEP 2: For each competitor that has actual findings in the brief (not "No new developments"), use notes_append on the corresponding profile file to add a date-stamped entry:
+
+Competitor Profiles \u2014 append to "Projects/Moody's/Competitive Intelligence/Competitor Profiles/{Name}.md":
+- Bloomberg, S&P Global, Fitch, Nasdaq, nCino, QRM, Empyrean, Quantexa, Databricks, Regnology, FinregE, ValidMind
+
+Industry Analyst Profiles \u2014 append to "Projects/Moody's/Competitive Intelligence/Industry Analysts/{Name}.md":
+- Celent, Chartis Research, Forrester, Gartner, IDC
+
+Entry format for each profile:
+### {today's date YYYY-MM-DD}
+- {bullet findings from today's brief}
+
+Only append to profiles that had actual findings \u2014 skip any with "No new developments" or no mention in the brief.
+
+After completing all updates, provide a summary of how many profiles were updated and which ones.`,
+    schedule: { type: "daily", hour: 6, minute: 15 },
     enabled: true
   },
   {
@@ -4053,6 +4082,13 @@ async function init7() {
         kbJob.prompt = preset.prompt;
         await saveConfig2();
       }
+      const intelJob = config2.jobs.find((j) => j.id === "moodys-daily-intel");
+      if (intelJob && intelJob.prompt.includes("AFTER saving the brief, update competitor")) {
+        const preset = DEFAULT_JOBS.find((j) => j.id === "moodys-daily-intel");
+        intelJob.prompt = preset.prompt;
+        console.log("[scheduled-jobs] Migrated moodys-daily-intel: removed profile update step (now handled by moodys-profile-updates)");
+        await saveConfig2();
+      }
     } else {
       await saveConfig2();
     }
@@ -4148,22 +4184,30 @@ async function checkJobs() {
     jobRunning = true;
     console.log(`[scheduled-jobs] Running job: ${job.name} (${job.id})`);
     try {
-      const result = await runAgentFn(job.agentId, job.prompt);
+      const agentResult = await runAgentFn(job.agentId, job.prompt);
+      const result = agentResult.response;
+      const isPartial = agentResult.timedOut || result.includes("\u26A0\uFE0F PARTIAL");
       job.lastRun = (/* @__PURE__ */ new Date()).toISOString();
       job.lastResult = result.slice(0, 500);
-      job.lastStatus = "success";
+      job.lastStatus = isPartial ? "partial" : "success";
       await saveConfig2();
       const dateStr = todayKey;
       const safeName = job.name.replace(/[^a-zA-Z0-9 ]/g, "").replace(/\s+/g, "-");
+      const savePath = getJobSavePath(job.id, dateStr, safeName);
+      let vaultSaved = false;
       if (kbCreateFn) {
         try {
-          const savePath = getJobSavePath(job.id, dateStr, safeName);
           await kbCreateFn(savePath, `# ${job.name}
 *Generated: ${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: config2.timezone })}*
 
 ${result}`);
+          vaultSaved = true;
         } catch (e) {
           console.error(`[scheduled-jobs] Failed to save to vault:`, e);
+        }
+        try {
+          await writeJobStatus(job.id, { lastRun: job.lastRun, status: job.lastStatus, savedTo: vaultSaved ? savePath : null, error: vaultSaved ? null : "vault save failed" });
+        } catch {
         }
       }
       if (broadcastFn2) {
@@ -4175,7 +4219,7 @@ ${result}`);
           timestamp: Date.now()
         });
       }
-      console.log(`[scheduled-jobs] Job completed: ${job.name}`);
+      console.log(`[scheduled-jobs] Job completed${isPartial ? " (partial)" : ""}: ${job.name}`);
       if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate")) && kbListFn && kbMoveFn) {
         await archiveOldReports();
       }
@@ -4184,6 +4228,12 @@ ${result}`);
       job.lastResult = String(err);
       job.lastStatus = "error";
       await saveConfig2();
+      if (kbCreateFn) {
+        try {
+          await writeJobStatus(job.id, { lastRun: job.lastRun, status: "error", savedTo: null, error: String(err).slice(0, 300) });
+        } catch {
+        }
+      }
       console.error(`[scheduled-jobs] Job failed: ${job.name}`, err);
     } finally {
       jobRunning = false;
@@ -4225,20 +4275,28 @@ async function triggerJob(jobId) {
   jobRunning = true;
   console.log(`[scheduled-jobs] Manual trigger: ${job.name}`);
   try {
-    const result = await runAgentFn(job.agentId, job.prompt);
+    const agentResult = await runAgentFn(job.agentId, job.prompt);
+    const result = agentResult.response;
+    const isPartial = agentResult.timedOut || result.includes("\u26A0\uFE0F PARTIAL");
     job.lastRun = (/* @__PURE__ */ new Date()).toISOString();
     job.lastResult = result.slice(0, 500);
-    job.lastStatus = "success";
+    job.lastStatus = isPartial ? "partial" : "success";
     await saveConfig2();
     const todayKey = getTodayKey2();
     const safeName = job.name.replace(/[^a-zA-Z0-9 ]/g, "").replace(/\s+/g, "-");
+    const savePath = getJobSavePath(job.id, todayKey, safeName);
+    let vaultSaved = false;
     if (kbCreateFn) {
       try {
-        const savePath = getJobSavePath(job.id, todayKey, safeName);
         await kbCreateFn(savePath, `# ${job.name}
 *Generated: ${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: config2.timezone })}*
 
 ${result}`);
+        vaultSaved = true;
+      } catch {
+      }
+      try {
+        await writeJobStatus(job.id, { lastRun: job.lastRun, status: job.lastStatus, savedTo: vaultSaved ? savePath : null, error: vaultSaved ? null : "vault save failed" });
       } catch {
       }
     }
@@ -4260,6 +4318,12 @@ ${result}`);
     job.lastResult = String(err);
     job.lastStatus = "error";
     await saveConfig2();
+    if (kbCreateFn) {
+      try {
+        await writeJobStatus(job.id, { lastRun: job.lastRun, status: "error", savedTo: null, error: String(err).slice(0, 300) });
+      } catch {
+      }
+    }
     throw err;
   } finally {
     jobRunning = false;
@@ -4398,11 +4462,24 @@ ${opts.task}`;
   let totalInput = 0;
   let totalOutput = 0;
   let finalResponse = "";
+  let softTimeoutSent = false;
+  let hardTimedOut = false;
   const timeoutMs = agent.timeout * 1e3;
+  const softTimeoutMs = timeoutMs * 0.8;
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
-    if (Date.now() - startTime > timeoutMs) {
+    const elapsed = Date.now() - startTime;
+    if (elapsed > timeoutMs) {
       console.warn(`[agent:${agent.id}] timeout after ${agent.timeout}s`);
+      hardTimedOut = true;
       break;
+    }
+    if (!softTimeoutSent && elapsed > softTimeoutMs) {
+      softTimeoutSent = true;
+      console.log(`[agent:${agent.id}] soft timeout at 80% \u2014 nudging to save`);
+      messages.push({
+        role: "user",
+        content: "\u26A0\uFE0F TIME WARNING: You are running low on time. Immediately save whatever findings you have so far using notes_create. Prefix the filename with '\u26A0\uFE0F PARTIAL \u2014 ' to indicate incomplete results. Then provide your final summary."
+      });
     }
     const apiResponse = await client.messages.create({
       model: modelId,
@@ -4463,7 +4540,7 @@ ${opts.task}`;
       messages.push({ role: "user", content: userContent2 });
     }
   }
-  if (!finalResponse && messages.length > 1) {
+  if (!finalResponse && messages.length > 1 && !hardTimedOut) {
     try {
       console.log(`[agent:${agent.id}] no final response \u2014 requesting summary`);
       messages.push({ role: "user", content: "Please provide your final summary and findings based on the work you've done so far." });
@@ -4489,7 +4566,8 @@ ${opts.task}`;
     response: finalResponse || "(No response generated)",
     toolsUsed,
     durationMs,
-    tokensUsed: { input: totalInput, output: totalOutput }
+    tokensUsed: { input: totalInput, output: totalOutput },
+    timedOut: hardTimedOut
   };
 }
 
@@ -7305,6 +7383,18 @@ app.get("/api/glance", async (_req, res) => {
       })());
     }
     await Promise.all(promises);
+    const allJobs = getJobs();
+    const enabledJobs = allJobs.filter((j) => j.enabled);
+    const jobItems = enabledJobs.map((j) => ({
+      name: j.name,
+      id: j.id,
+      status: j.lastStatus || null,
+      lastRun: j.lastRun || null
+    }));
+    const okCount = jobItems.filter((j) => j.status === "success").length;
+    const partialCount = jobItems.filter((j) => j.status === "partial").length;
+    const failedCount = jobItems.filter((j) => j.status === "error").length;
+    result.jobs = { total: enabledJobs.length, ok: okCount, partial: partialCount, failed: failedCount, items: jobItems };
     glanceCache = { data: result, ts: Date.now() };
     res.json(result);
   } catch (err) {
@@ -7595,7 +7685,7 @@ async function startServer(maxRetries = 5) {
                 allTools: agentTools,
                 apiKey: ANTHROPIC_KEY
               });
-              return result.response;
+              return { response: result.response, timedOut: result.timedOut };
             },
             broadcastToAll,
             async (path5, content) => {

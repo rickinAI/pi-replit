@@ -383,6 +383,11 @@ async function showLanding() {
       const ev = glanceData.nextEvent;
       items.push(`📅 ${ev.title}${ev.time ? " · " + ev.time : ""}`);
     }
+    if (glanceData.jobs) {
+      if (glanceData.jobs.failed > 0) items.push(`🔴 ${glanceData.jobs.failed} job${glanceData.jobs.failed !== 1 ? "s" : ""} failed`);
+      else if (glanceData.jobs.partial > 0) items.push(`🟡 ${glanceData.jobs.partial} partial`);
+      else if (glanceData.jobs.ok > 0) items.push(`🟢 Jobs OK`);
+    }
     if (items.length > 0) {
       const strip = document.createElement("div");
       strip.className = "landing-glance";
@@ -2548,6 +2553,16 @@ function updateGlanceClock() {
   if (el) el.textContent = getETTimeString();
 }
 
+function timeAgo(isoStr) {
+  const diff = Date.now() - new Date(isoStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
 async function fetchGlance() {
   const bar = document.getElementById("glance-bar");
   const collapsed = document.getElementById("glance-collapsed");
@@ -2570,6 +2585,11 @@ async function fetchGlance() {
       const t = d.nextEvent.time || "";
       const short = t.replace(/^.*?,\s*/, "").replace(/:00\s*/g, " ");
       nextEventHtml = `<div class="glance-next-row">Next: ${e(d.nextEvent.title)}${short ? " " + e(short) : ""}</div>`;
+    }
+    if (d.jobs) {
+      if (d.jobs.failed > 0) parts.push(`🔴 ${d.jobs.failed} failed`);
+      else if (d.jobs.partial > 0) parts.push(`🟡 ${d.jobs.partial} partial`);
+      else if (d.jobs.ok > 0) parts.push(`🟢 Jobs OK`);
     }
     if (parts.length === 0 && d.time) parts.push(e(d.time));
     if (parts.length === 0) parts.push("—");
@@ -2600,6 +2620,14 @@ async function fetchGlance() {
       detailRows.push(row("calendar", evList));
     } else if (d.nextEvent) {
       detailRows.push(row("next", `${e(d.nextEvent.title)} — ${e(d.nextEvent.time || "")}`));
+    }
+    if (d.jobs && d.jobs.items && d.jobs.items.length > 0) {
+      const jobList = d.jobs.items.map(j => {
+        const icon = j.status === "error" ? "🔴" : j.status === "partial" ? "🟡" : j.status === "success" ? "🟢" : "⚪";
+        const ago = j.lastRun ? timeAgo(j.lastRun) : "not run";
+        return `${icon} ${e(j.name)} (${ago})`;
+      }).join("; ");
+      detailRows.push(row("jobs", jobList));
     }
     expanded.innerHTML = detailRows.join("");
 

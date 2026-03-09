@@ -14,7 +14,7 @@ export interface ScheduledJob {
   enabled: boolean;
   lastRun?: string;
   lastResult?: string;
-  lastStatus?: "success" | "error";
+  lastStatus?: "success" | "partial" | "error";
 }
 
 interface ScheduledJobsConfig {
@@ -23,7 +23,7 @@ interface ScheduledJobsConfig {
   timezone: string;
 }
 
-type RunAgentFn = (agentId: string, task: string) => Promise<string>;
+type RunAgentFn = (agentId: string, task: string) => Promise<{ response: string; timedOut: boolean }>;
 type BroadcastFn = (event: any) => void;
 type KbCreateFn = (path: string, content: string) => Promise<any>;
 type KbListFn = (path: string) => Promise<string>;
@@ -31,9 +31,19 @@ type KbMoveFn = (from: string, to: string) => Promise<string>;
 
 function getJobSavePath(jobId: string, dateStr: string, safeName: string): string {
   if (jobId === "moodys-daily-intel") return `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief.md`;
+  if (jobId === "moodys-profile-updates") return `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Profile-Updates.md`;
   if (jobId === "moodys-weekly-digest") return `Scheduled Reports/Moody's Intelligence/Weekly/${dateStr}-Digest.md`;
   if (jobId === "real-estate-daily-scan") return `Scheduled Reports/Real Estate/${dateStr}-Property-Scan.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
+}
+
+let jobStatusCache: Record<string, any> = {};
+
+async function writeJobStatus(jobId: string, entry: { lastRun: string; status: string; savedTo: string | null; error: string | null }): Promise<void> {
+  jobStatusCache[jobId] = entry;
+  if (kbCreateFn) {
+    await kbCreateFn("Scheduled Reports/job-status.json", JSON.stringify(jobStatusCache, null, 2));
+  }
 }
 
 const DEFAULT_JOBS: ScheduledJob[] = [
@@ -179,13 +189,34 @@ OUTPUT FORMAT — Save using notes_create to "Scheduled Reports/Moody's Intellig
 
 If a search returns no new results for a category, note "No new developments" rather than omitting the section.
 
-AFTER saving the brief, update competitor and analyst profiles with today's findings:
-- For each competitor with new findings, use notes_append on "Projects/Moody's/Competitive Intelligence/Competitor Profiles/{Name}.md" to add a date-stamped entry:
-  ### {today's date YYYY-MM-DD}
-  - {bullet findings from today}
-- For each analyst firm with new findings, use notes_append on "Projects/Moody's/Competitive Intelligence/Industry Analysts/{Name}.md" with the same date-stamped format.
-- Only append to profiles that had actual findings today — skip those with "No new developments".`,
+Do NOT update competitor or analyst profiles in this pass — a separate scheduled job handles that.`,
     schedule: { type: "daily", hour: 6, minute: 0 },
+    enabled: true,
+  },
+  {
+    id: "moodys-profile-updates",
+    name: "Moody's Profile Updates",
+    agentId: "moodys",
+    prompt: `Read today's intelligence brief and update competitor/analyst profiles with the findings.
+
+STEP 1: Use notes_list on "Scheduled Reports/Moody's Intelligence/Daily/" to find today's brief (filename format: YYYY-MM-DD-Brief.md). Read it with notes_read.
+
+STEP 2: For each competitor that has actual findings in the brief (not "No new developments"), use notes_append on the corresponding profile file to add a date-stamped entry:
+
+Competitor Profiles — append to "Projects/Moody's/Competitive Intelligence/Competitor Profiles/{Name}.md":
+- Bloomberg, S&P Global, Fitch, Nasdaq, nCino, QRM, Empyrean, Quantexa, Databricks, Regnology, FinregE, ValidMind
+
+Industry Analyst Profiles — append to "Projects/Moody's/Competitive Intelligence/Industry Analysts/{Name}.md":
+- Celent, Chartis Research, Forrester, Gartner, IDC
+
+Entry format for each profile:
+### {today's date YYYY-MM-DD}
+- {bullet findings from today's brief}
+
+Only append to profiles that had actual findings — skip any with "No new developments" or no mention in the brief.
+
+After completing all updates, provide a summary of how many profiles were updated and which ones.`,
+    schedule: { type: "daily", hour: 6, minute: 15 },
     enabled: true,
   },
   {
@@ -410,6 +441,13 @@ export async function init(): Promise<void> {
         kbJob.prompt = preset.prompt;
         await saveConfig();
       }
+      const intelJob = config.jobs.find(j => j.id === "moodys-daily-intel");
+      if (intelJob && intelJob.prompt.includes("AFTER saving the brief, update competitor")) {
+        const preset = DEFAULT_JOBS.find(j => j.id === "moodys-daily-intel")!;
+        intelJob.prompt = preset.prompt;
+        console.log("[scheduled-jobs] Migrated moodys-daily-intel: removed profile update step (now handled by moodys-profile-updates)");
+        await saveConfig();
+      }
     } else {
       await saveConfig();
     }
@@ -527,21 +565,28 @@ async function checkJobs(): Promise<void> {
     console.log(`[scheduled-jobs] Running job: ${job.name} (${job.id})`);
 
     try {
-      const result = await runAgentFn(job.agentId, job.prompt);
+      const agentResult = await runAgentFn(job.agentId, job.prompt);
+      const result = agentResult.response;
+      const isPartial = agentResult.timedOut || result.includes("⚠️ PARTIAL");
       job.lastRun = new Date().toISOString();
       job.lastResult = result.slice(0, 500);
-      job.lastStatus = "success";
+      job.lastStatus = isPartial ? "partial" : "success";
       await saveConfig();
 
       const dateStr = todayKey;
       const safeName = job.name.replace(/[^a-zA-Z0-9 ]/g, "").replace(/\s+/g, "-");
+      const savePath = getJobSavePath(job.id, dateStr, safeName);
+      let vaultSaved = false;
       if (kbCreateFn) {
         try {
-          const savePath = getJobSavePath(job.id, dateStr, safeName);
           await kbCreateFn(savePath, `# ${job.name}\n*Generated: ${new Date().toLocaleString("en-US", { timeZone: config.timezone })}*\n\n${result}`);
+          vaultSaved = true;
         } catch (e) {
           console.error(`[scheduled-jobs] Failed to save to vault:`, e);
         }
+        try {
+          await writeJobStatus(job.id, { lastRun: job.lastRun, status: job.lastStatus!, savedTo: vaultSaved ? savePath : null, error: vaultSaved ? null : "vault save failed" });
+        } catch {}
       }
 
       if (broadcastFn) {
@@ -554,7 +599,7 @@ async function checkJobs(): Promise<void> {
         });
       }
 
-      console.log(`[scheduled-jobs] Job completed: ${job.name}`);
+      console.log(`[scheduled-jobs] Job completed${isPartial ? " (partial)" : ""}: ${job.name}`);
 
       if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate")) && kbListFn && kbMoveFn) {
         await archiveOldReports();
@@ -564,6 +609,9 @@ async function checkJobs(): Promise<void> {
       job.lastResult = String(err);
       job.lastStatus = "error";
       await saveConfig();
+      if (kbCreateFn) {
+        try { await writeJobStatus(job.id, { lastRun: job.lastRun, status: "error", savedTo: null, error: String(err).slice(0, 300) }); } catch {}
+      }
       console.error(`[scheduled-jobs] Job failed: ${job.name}`, err);
     } finally {
       jobRunning = false;
@@ -621,19 +669,24 @@ export async function triggerJob(jobId: string): Promise<string> {
   console.log(`[scheduled-jobs] Manual trigger: ${job.name}`);
 
   try {
-    const result = await runAgentFn(job.agentId, job.prompt);
+    const agentResult = await runAgentFn(job.agentId, job.prompt);
+    const result = agentResult.response;
+    const isPartial = agentResult.timedOut || result.includes("⚠️ PARTIAL");
     job.lastRun = new Date().toISOString();
     job.lastResult = result.slice(0, 500);
-    job.lastStatus = "success";
+    job.lastStatus = isPartial ? "partial" : "success";
     await saveConfig();
 
     const todayKey = getTodayKey();
     const safeName = job.name.replace(/[^a-zA-Z0-9 ]/g, "").replace(/\s+/g, "-");
+    const savePath = getJobSavePath(job.id, todayKey, safeName);
+    let vaultSaved = false;
     if (kbCreateFn) {
       try {
-        const savePath = getJobSavePath(job.id, todayKey, safeName);
         await kbCreateFn(savePath, `# ${job.name}\n*Generated: ${new Date().toLocaleString("en-US", { timeZone: config.timezone })}*\n\n${result}`);
+        vaultSaved = true;
       } catch {}
+      try { await writeJobStatus(job.id, { lastRun: job.lastRun, status: job.lastStatus!, savedTo: vaultSaved ? savePath : null, error: vaultSaved ? null : "vault save failed" }); } catch {}
     }
 
     if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate")) && kbListFn && kbMoveFn) {
@@ -656,6 +709,9 @@ export async function triggerJob(jobId: string): Promise<string> {
     job.lastResult = String(err);
     job.lastStatus = "error";
     await saveConfig();
+    if (kbCreateFn) {
+      try { await writeJobStatus(job.id, { lastRun: job.lastRun, status: "error", savedTo: null, error: String(err).slice(0, 300) }); } catch {}
+    }
     throw err;
   } finally {
     jobRunning = false;

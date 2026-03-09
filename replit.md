@@ -24,7 +24,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **src/weather.ts** — Weather via Open-Meteo (free, no API key)
 - **src/websearch.ts** — Web search via DuckDuckGo HTML (free, no API key)
 - **src/tasks.ts** — Task manager with PostgreSQL storage (tasks table)
-- **src/scheduled-jobs.ts** — Scheduled agent jobs system. Runs agents autonomously on configurable schedules. 3 default presets (KB Audit 2AM — audit/report-only mode, Daily News Brief 6:30AM, Market Summary 7:30AM), all disabled by default. Config stored in `app_config` key='scheduled_jobs'. 60s check loop with run-key dedup. Custom jobs can be added from Settings. API: GET/PUT/DELETE `/api/scheduled-jobs`, PUT `/api/scheduled-jobs/:id`, POST `/api/scheduled-jobs/:id/trigger`
+- **src/scheduled-jobs.ts** — Scheduled agent jobs system. Runs agents autonomously on configurable schedules. 7 jobs (5 enabled): KB Audit 2AM (disabled), Daily News 6:30AM (disabled), Market Summary 7:30AM (disabled), Moody's Intel Brief 6:00AM, Moody's Profile Updates 6:15AM, Moody's Weekly Digest Sun 7:00AM, Real Estate Scan 7:30AM. Config stored in `app_config` key='scheduled_jobs'. 60s check loop with run-key dedup. Status tracking: `success`, `partial` (timedOut or "PARTIAL" in response), `error`. Writes `Scheduled Reports/job-status.json` to vault after each job. API: GET/PUT/DELETE `/api/scheduled-jobs`, PUT `/api/scheduled-jobs/:id`, POST `/api/scheduled-jobs/:id/trigger`
 - **src/news.ts** — News headlines via Google News RSS feeds
 - **src/conversations.ts** — Conversation persistence module (save/load/list/delete via PostgreSQL, AI summaries via Haiku, last-conversation context for session start). Uses Replit's built-in PostgreSQL database (DATABASE_URL) so conversations persist across deployments
 - **src/memory-extractor.ts** — Post-conversation fact extraction (profile updates, action items) via Claude Haiku
@@ -36,12 +36,13 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Auto mode uses MAX_PATTERNS to detect work/project keywords and route to Opus
   - All sub-agents default to Opus (`data/agents.json` model field + orchestrator fallback)
   - All sub-agents get Anthropic native `web_search_20260209` and `web_fetch_20260209` server tools automatically (no DuckDuckGo scraping)
-  - Orchestrator fallback summary: if agent loop ends with no response, makes one final API call for summary
-- **Moody's Intelligence Pipeline** — Two scheduled jobs using the moodys agent:
-  - Daily Intelligence Brief at 6:00 AM ET — 5 categories: Corporate News, Banking Segment, Competitor Watch (12 competitors), Enterprise AI Trends, Analyst Coverage (Celent, Chartis, Forrester, Gartner, IDC). Dual-source: searches both web AND X for each category. Includes 🐦 X/Twitter Signals section. Saves to `Scheduled Reports/Moody's Intelligence/Daily/YYYY-MM-DD-Brief.md`. Also appends date-stamped findings to competitor/analyst profiles in `Projects/Moody's/Competitive Intelligence/`
+  - Orchestrator: soft timeout at 80% of budget (nudges agent to save partial results), hard timeout at 100%, fallback summary if no response. `SubAgentResult.timedOut` flag propagated to job system
+- **Moody's Intelligence Pipeline** — Three scheduled jobs using the moodys agent:
+  - Pass 1: Daily Intelligence Brief at 6:00 AM ET — 5 categories: Corporate News, Banking Segment, Competitor Watch (12 competitors), Enterprise AI Trends, Analyst Coverage (Celent, Chartis, Forrester, Gartner, IDC). Dual-source: searches both web AND X for each category. Includes 🐦 X/Twitter Signals section. Saves to `Scheduled Reports/Moody's Intelligence/Daily/YYYY-MM-DD-Brief.md`. Research only — does NOT update profiles.
+  - Pass 2: Profile Updates at 6:15 AM ET — reads today's brief, appends date-stamped findings to competitor/analyst profiles in `Projects/Moody's/Competitive Intelligence/`
   - Weekly Strategic Digest on Sundays at 7:00 AM ET — reads from `Daily/`, synthesises into strategic analysis. Saves to `Scheduled Reports/Moody's Intelligence/Weekly/YYYY-MM-DD-Digest.md`
   - Auto-archive: reports older than 30 days move to corresponding `Archive/` subfolders
-  - Moody's agent auto-reads latest briefs before any task (5-step mandatory pre-read including Competitive Intelligence folder). Timeout: 300s
+  - Moody's agent pre-read optimized: uses notes_list for folder awareness, only reads file content when directly needed for the current task. Timeout: 600s
 - **Real Estate Property Scout** — Daily property scan using the real-estate agent:
   - Daily Property Scan at 7:30 AM ET — searches 6 areas (Upper Saddle River NJ, Montclair NJ, Princeton NJ, Long Island NY, Hudson Valley NY, Stamford-Westport CT) via Zillow AND Redfin APIs
   - Criteria: $1.5M–$2M, 5+ bed / 3+ bath, modern, garage, good schools, walkable. Commute to Brookfield Place (Battery Park City)
@@ -49,7 +50,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Dual-platform search: cross-references Zillow and Redfin results, flags platform exclusives (🔵 Redfin-only, 🟡 Zillow-only)
   - 5-step daily scan: Zillow → Redfin → cross-reference → deep dive → X/social signals per area
   - Saves to `Scheduled Reports/Real Estate/YYYY-MM-DD-Property-Scan.md`, appends to `Real Estate/Areas/`, saves ⭐ gems to `Real Estate/Favorites/`
-  - Auto-archive >30 days to `Archive/Real Estate/`. Agent pre-reads Search Criteria + area files. Timeout: 300s
+  - Auto-archive >30 days to `Archive/Real Estate/`. Agent pre-reads Search Criteria + area files. Timeout: 600s
 - **public/** — Static frontend (terminal/hacker aesthetic, branded as "RICKIN")
   - Landing screen: "Mission Control" full-screen overlay on fresh load (no active session). Shows date, glance strip (weather/email/tasks/calendar from `/api/glance`), interactive task section (checklist with checkboxes, priority dots, "Go" quick-launch, inline add-task form), last conversation card with preview + RESUME button, NEW MISSION button, recent conversation cards with delete, VIEW ALL to expand full history inline
   - Conversation search: search input on landing screen filters conversations by title in real-time
@@ -110,7 +111,7 @@ Connection pooling: Single shared `pg.Pool` in `src/db.ts` (max 10 connections),
 - Login page: ASCII art header, simulated boot sequence, blinking cursor
 - Chat: terminal-style prompts, amber agent text
 - Mobile-friendly: visualViewport keyboard handling, 16px input fonts, 44px touch targets, smart auto-scroll
-- **Glance bar**: Slim strip pinned below header showing day-at-a-glance (weather, unread emails, task count, next calendar event). Tap to expand 3-line detail card (auto-collapses after 8s). Fetches from `/api/glance` every 5 min. Both dark/light mode styled. Graceful degradation when data sources unavailable.
+- **Glance bar**: Slim strip pinned below header showing day-at-a-glance (weather, unread emails, task count, next calendar event, job health). Tap to expand detail card with per-job status rows (auto-collapses after 8s). Fetches from `/api/glance` every 5 min. `/api/glance` includes `jobs` field with enabled job count, ok/partial/failed counts, and per-job items. Both dark/light mode styled. Graceful degradation when data sources unavailable.
 - **Suggestion chips**: After each AI response, 2-3 contextual follow-up prompts appear as tappable pill buttons below the message. AI generates them via `[suggestions: "...", "..."]` tag (stripped from display). Tapping a chip sends it as the next prompt. Chips cleared on new message or new AI response.
 - **Dynamic profile learning**: AI maintains a structured profile in the vault (`About Me/My Profile.md`) with sections for preferences, routines, active projects, goals, key people, interests, decision patterns, and frequent requests. Also updates `About Me/About Me.md` and `About Me/My Style Guide.md` directly when learning relevant info. All three loaded at session start.
 - **PWA standalone mode**: `manifest.json` with icons, `display: standalone`, iOS safe area insets for notch/Dynamic Island/home indicator, `@media (display-mode: standalone)` CSS block, `viewport-fit=cover`
