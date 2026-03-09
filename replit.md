@@ -8,6 +8,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Creates agent sessions with Anthropic API
   - Registers custom tools (86 total): knowledge base, email, calendar, weather, web search, tasks, news, Google Drive, Google Sheets (13 tools), Google Docs (12 tools), Google Slides (12 tools), YouTube, Zillow (3 tools), Redfin (3 tools), X/Twitter (4 tools)
   - Multi-agent system with 9 specialist agents defined in `data/agents.json` (hot-reloaded on file change)
+  - Dual-source research default: all research-oriented agents search both web AND X (Twitter) for maximum coverage. X tools added to deep-researcher, analyst, real-estate, and moodys agents
   - Streams agent events via SSE (Server-Sent Events)
   - Tracks conversation messages and persists them to PostgreSQL
   - Auto-saves conversations every 5 minutes; saves on session close/expiry/shutdown
@@ -37,15 +38,16 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - All sub-agents get Anthropic native `web_search_20260209` and `web_fetch_20260209` server tools automatically (no DuckDuckGo scraping)
   - Orchestrator fallback summary: if agent loop ends with no response, makes one final API call for summary
 - **Moody's Intelligence Pipeline** — Two scheduled jobs using the moodys agent:
-  - Daily Intelligence Brief at 6:00 AM ET — 5 categories: Corporate News, Banking Segment, Competitor Watch (12 competitors), Enterprise AI Trends, Analyst Coverage (Celent, Chartis, Forrester, Gartner, IDC). Saves to `Scheduled Reports/Moody's Intelligence/Daily/YYYY-MM-DD-Brief.md`. Also appends date-stamped findings to competitor/analyst profiles in `Projects/Moody's/Competitive Intelligence/`
+  - Daily Intelligence Brief at 6:00 AM ET — 5 categories: Corporate News, Banking Segment, Competitor Watch (12 competitors), Enterprise AI Trends, Analyst Coverage (Celent, Chartis, Forrester, Gartner, IDC). Dual-source: searches both web AND X for each category. Includes 🐦 X/Twitter Signals section. Saves to `Scheduled Reports/Moody's Intelligence/Daily/YYYY-MM-DD-Brief.md`. Also appends date-stamped findings to competitor/analyst profiles in `Projects/Moody's/Competitive Intelligence/`
   - Weekly Strategic Digest on Sundays at 7:00 AM ET — reads from `Daily/`, synthesises into strategic analysis. Saves to `Scheduled Reports/Moody's Intelligence/Weekly/YYYY-MM-DD-Digest.md`
   - Auto-archive: reports older than 30 days move to corresponding `Archive/` subfolders
   - Moody's agent auto-reads latest briefs before any task (5-step mandatory pre-read including Competitive Intelligence folder). Timeout: 300s
 - **Real Estate Property Scout** — Daily property scan using the real-estate agent:
   - Daily Property Scan at 7:30 AM ET — searches 6 areas (Upper Saddle River NJ, Montclair NJ, Princeton NJ, Long Island NY, Hudson Valley NY, Stamford-Westport CT) via Zillow AND Redfin APIs
   - Criteria: $1.5M–$2M, 5+ bed / 3+ bath, modern, garage, good schools, walkable. Commute to Brookfield Place (Battery Park City)
-  - 6 RapidAPI tools: Zillow (`property_search`, `property_details`, `neighborhood_search`) + Redfin (`redfin_search`, `redfin_details`, `redfin_autocomplete`)
+  - 6 RapidAPI tools: Zillow (`property_search`, `property_details`, `neighborhood_search`) + Redfin (`redfin_search`, `redfin_details`, `redfin_autocomplete`) + `x_search` for local market intel
   - Dual-platform search: cross-references Zillow and Redfin results, flags platform exclusives (🔵 Redfin-only, 🟡 Zillow-only)
+  - 5-step daily scan: Zillow → Redfin → cross-reference → deep dive → X/social signals per area
   - Saves to `Scheduled Reports/Real Estate/YYYY-MM-DD-Property-Scan.md`, appends to `Real Estate/Areas/`, saves ⭐ gems to `Real Estate/Favorites/`
   - Auto-archive >30 days to `Archive/Real Estate/`. Agent pre-reads Search Criteria + area files. Timeout: 300s
 - **public/** — Static frontend (terminal/hacker aesthetic, branded as "RICKIN")

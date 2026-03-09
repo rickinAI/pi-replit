@@ -74,9 +74,10 @@ Save the compiled brief to "Scheduled Reports/Daily News.md" (overwrite previous
     agentId: "analyst",
     prompt: `Analyze the current market conditions:
 1. Check the watchlist stocks and crypto prices
-2. Note any significant moves (>2%) with brief analysis
-3. Summarize overall market sentiment
-4. Flag any notable earnings or economic events today
+2. Search X for ticker sentiment and market chatter — x_search("$GOLD OR $BTC OR $MSTR OR stock market") for real-time trader sentiment
+3. Note any significant moves (>2%) with brief analysis
+4. Summarize overall market sentiment (include X/social sentiment alongside data)
+5. Flag any notable earnings or economic events today
 
 Save the report to "Scheduled Reports/Market Summary.md" (overwrite previous).`,
     schedule: { type: "daily", hour: 7, minute: 30 },
@@ -90,40 +91,47 @@ Save the report to "Scheduled Reports/Market Summary.md" (overwrite previous).`,
 
 CATEGORY 1 — Moody's Corporate News:
 Search site:moodys.com and news for "Moody's" for any press releases, product announcements, leadership changes, earnings, or strategic moves. Focus on Banking Solutions, Lending, KYC, Risk Analytics, and data products.
+Also search X: x_search("from:MoodysAnalytics OR from:MoodysInvSvc OR from:Moodys") and x_search("Moody's Banking OR Credit Lens OR Moody's Analytics") for real-time announcements.
 
 CATEGORY 2 — Banking Segment Specifics:
 Search for news about Moody's banking products: Credit Lens, Moody's Analytics banking, OnlineALM, Orbis, BvD. Include customer wins, partnerships, or product launches in the banking vertical.
 
 CATEGORY 3 — Competitor Intelligence:
-Search for latest news from ALL of these competitors:
+Search for latest news from ALL of these competitors using BOTH web_search AND x_search:
 
 Credit Rating & Data Peers:
 - Bloomberg — Bloomberg Data, Enterprise Data, AI initiatives
 - S&P Global — Market Intelligence, Capital IQ, data strategy
 - Fitch — Fitch Ratings, Fitch Solutions, banking analytics, data products
 - Nasdaq — Nasdaq Financial Technology, AxiomSL, Calypso, risk/regulatory tech
+X search: x_search("Bloomberg data AI OR S&P Global Capital IQ OR Fitch Solutions OR Nasdaq AxiomSL")
 
 Banking Tech / Lending Platforms:
 - nCino — Bank operating system, lending automation, AI in banking
 - QRM — Credit risk, ALM, FTP, balance sheet management (direct Credit Lens competitor)
 - Empyrean (Emperion) — Lending technology, credit decisioning, banking analytics
+X search: x_search("nCino OR QRM credit risk OR Empyrean lending")
 
 Data & AI Infrastructure:
 - Quantexa — Entity resolution, knowledge graph, agentic AI, banking deals
 - Databricks — Financial services, lakehouse for banking, Delta Sharing
+X search: x_search("Quantexa banking OR Databricks financial services")
 
 Regulatory & Compliance Partners:
 - Regnology — Regulatory reporting tech
 - FinregE — Regulatory intelligence automation
 - ValidMind — Model risk management, AI governance
+X search: x_search("Regnology OR FinregE OR ValidMind AI governance")
 
 CATEGORY 4 — Enterprise AI Trends:
 Search for: agentic AI in banking/financial services, enterprise LLM deployments in regulated industries, AI governance and regulation (EU AI Act, US banking regulators), MCP (Model Context Protocol) enterprise adoption, CDM/data standards in financial services.
+Also search X: x_search("agentic AI banking OR enterprise LLM financial services OR AI governance banking") for cutting-edge discussions and announcements.
 
 CATEGORY 5 — Industry Analyst Coverage:
 Search site:celent.com for mentions of Moody's, Credit Lens, lending tech, risk analytics, ALM, banking AI, and competitors.
 Search site:chartis-research.com for RiskTech100, quadrant reports, credit risk, market risk, model risk, RegTech rankings.
 Search for reports from Forrester, Gartner, and IDC on banking technology, risk analytics, or enterprise AI in financial services.
+Also search X: x_search("from:CelentResearch OR from:Chartis_Research OR Celent banking OR RiskTech100") for analyst commentary and early report previews.
 
 OUTPUT FORMAT — Save using notes_create to "Scheduled Reports/Moody's Intelligence/Daily/{today's date YYYY-MM-DD}-Brief.md":
 
@@ -160,6 +168,11 @@ OUTPUT FORMAT — Save using notes_create to "Scheduled Reports/Moody's Intellig
 ### Chartis Research
 ### Other Analysts (Forrester / Gartner / IDC)
 - {bullet summaries with source URLs and relevance tags}
+
+## 🐦 X/Twitter Signals
+- {notable tweets from competitors, analysts, or industry leaders that don't fit the categories above}
+- {early signals, hot takes, or viral threads relevant to Moody's positioning}
+- {include tweet author, handle, and URL for each}
 
 ## ⚡ Key Takeaways
 - {3-5 bullet executive summary of what matters most for Moody's Banking Solutions positioning}
@@ -254,6 +267,15 @@ STEP 4 — DEEP DIVE: For the top 3-5 most interesting properties per area:
 - Use property_details (Zillow zpid) for school ratings, features, price history, tax data
 - Use redfin_details (Redfin URL path) for photos, room details, market data
 
+STEP 5 — X/SOCIAL SIGNALS: Search X for hyper-local real estate intel in each target area:
+- x_search("Upper Saddle River NJ home OR house OR listing OR real estate")
+- x_search("Montclair NJ real estate OR new listing OR open house")
+- x_search("Princeton NJ home OR listing OR real estate market")
+- x_search("Garden City NY real estate OR new listing")
+- x_search("Tarrytown NY OR Scarsdale NY real estate OR home")
+- x_search("Westport CT real estate OR new listing OR open house")
+Look for: pocket listings, agent buzz about upcoming listings, local market sentiment, neighborhood chatter, price trend discussions. Note any relevant finds in the Executive Summary under "Social Signals".
+
 For each property include: address, price, beds/baths, sqft, lot size, year built, key features, school district + rating, estimated commute to Brookfield Place (route + transfers + time from Search Criteria), days on market, listing URL(s) from both platforms, source (Zillow/Redfin/Both), and WHY it's interesting (1-2 sentences on character/charm/value).
 
 Focus on:
@@ -275,6 +297,7 @@ OUTPUT — Save using notes_create to "Scheduled Reports/Real Estate/{today's da
 - Top gems of the day (⭐ properties)
 - Price trends or market observations
 - Commute comparison across areas
+- 🐦 Social Signals: {any notable X chatter about target areas — pocket listings, agent buzz, market sentiment}
 
 ## 🏡 Upper Saddle River / Bergen County, NJ
 {property listings with full details, source noted}
