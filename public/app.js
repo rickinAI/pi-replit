@@ -925,7 +925,9 @@ function openEventStream(id) {
     }
     reconnectAttempts++;
     const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 30000);
-    showStatus("[RECONNECTING...]");
+    if (isAgentRunning) {
+      showStatus("[RECONNECTING...]");
+    }
     reconnectTimer = setTimeout(() => {
       if (sessionId === id) openEventStream(id);
     }, delay);

@@ -2546,11 +2546,28 @@ body.light-theme .msg-time {
 }
 
 body.light-theme .copy-btn {
-  color: #a8a098;
+  color: #7a7068;
+  background: rgba(0,0,0,0.05);
+  border-color: #c5bfb8;
 }
 
 body.light-theme .copy-btn:hover {
-  color: var(--green);
+  color: #5a8a7a;
+  background: rgba(0,0,0,0.08);
+  border-color: #5a8a7a;
+}
+
+body.light-theme .md-table-copy {
+  background: rgba(0,0,0,0.05);
+  color: #7a7068;
+  border-color: #c5bfb8;
+}
+
+body.light-theme .md-table-copy:hover,
+body.light-theme .md-table-copy:active {
+  background: rgba(0,0,0,0.08);
+  color: #5a8a7a;
+  border-color: #5a8a7a;
 }
 
 .glance-bar {
