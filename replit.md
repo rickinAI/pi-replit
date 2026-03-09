@@ -446,6 +446,13 @@ Automatic model routing to optimize cost and speed:
 - `GMAIL_REDIRECT_URI` (env) — OAuth redirect URI for Gmail (overrides auto-detected Replit domain). Must match what's registered in Google Cloud Console.
 - `PORT` — Server port (default: 3000)
 
+## Knowledge Base Sync Reminder
+
+After making significant changes (new tools, agent config updates, bug fixes, feature additions), update the relevant folders in the knowledge base vault:
+- **`Agents/`** — Agent definitions, capabilities, tool lists
+- **`Replit Agent/`** — Fix requests, changelogs, architecture notes
+- **`Replit Agent/Fix Requests/`** — Mark completed fix requests as Done
+
 ## Deployment
 
 - Target: VM (always running) — needed for in-memory sessions and SSE
