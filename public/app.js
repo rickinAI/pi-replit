@@ -2490,8 +2490,8 @@ function buildLandingTickerCycles(d) {
 
   if (d.headlines && d.headlines.length > 0) {
     for (const h of d.headlines.slice(0, 3)) {
-      const src = h.source ? ` (${e(h.source)})` : "";
-      cycles.push(`<span class="landing-glance-item">📰 ${e(h.title)}${src}</span>`);
+      const t = h.title.length > 80 ? h.title.slice(0, 77) + "..." : h.title;
+      cycles.push(`<span class="landing-glance-item">📰 ${e(t)}</span>`);
     }
   }
 
