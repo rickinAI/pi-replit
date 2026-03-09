@@ -2459,8 +2459,12 @@ function buildLandingTickerCycles(d) {
   if (d.upcomingEvents && d.upcomingEvents.length > 0) {
     for (const ev of d.upcomingEvents.slice(0, 5)) {
       const t = (ev.time || "").replace(/^.*?,\s*/, "").replace(/:00\s*/g, " ");
-      const cal = ev.calendar && ev.calendar !== "Rickin" ? `${e(ev.calendar)}: ` : "";
-      cycles.push(`<span class="landing-glance-item">📅 ${cal}${e(ev.title)}${t ? " · " + e(t) : ""}</span>`);
+      const c = (ev.calendar || "").toLowerCase();
+      let who = ev.calendar || "";
+      if (c.includes("rickin")) who = "Rickin";
+      else if (c.includes("pooja") || c.includes("bhatt")) who = "Pooja";
+      else if (c.includes("reya")) who = "Reya";
+      cycles.push(`<span class="landing-glance-item">📅 ${e(who)}: ${e(ev.title)}${t ? " · " + e(t) : ""}</span>`);
     }
   }
 
