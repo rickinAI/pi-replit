@@ -1,17 +1,7 @@
-const FXTWITTER_BASE = "https://api.fxtwitter.com";
-const SYNDICATION_BASE = "https://syndication.twitter.com/srv/timeline-profile/screen-name";
-const TIMEOUT_MS = 10_000;
-
-interface TweetData {
-  text: string;
-  author: string;
-  handle: string;
-  date: string;
-  likes: number;
-  retweets: number;
-  replies: number;
-  url: string;
-}
+const API_BASE = "https://twitter241.p.rapidapi.com";
+const API_HOST = "twitter241.p.rapidapi.com";
+const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY || "";
+const TIMEOUT_MS = 15_000;
 
 function cleanUsername(input: string): string {
   return input.replace(/^@/, "").replace(/^https?:\/\/(x\.com|twitter\.com)\//, "").replace(/\/.*$/, "").trim();
@@ -24,16 +14,21 @@ function extractTweetId(input: string): string | null {
   return null;
 }
 
-async function fetchWithTimeout(url: string, headers: Record<string, string> = {}): Promise<Response> {
+async function apiFetch(endpoint: string, params: Record<string, string>): Promise<any> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
+    const url = `${API_BASE}${endpoint}?${new URLSearchParams(params)}`;
     const res = await fetch(url, {
-      headers: { "User-Agent": "pi-assistant/1.0", ...headers },
+      headers: {
+        "X-RapidAPI-Key": RAPIDAPI_KEY,
+        "X-RapidAPI-Host": API_HOST,
+      },
       signal: controller.signal,
     });
     clearTimeout(timeout);
-    return res;
+    if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
+    return await res.json();
   } catch (err: any) {
     clearTimeout(timeout);
     if (err.name === "AbortError") throw new Error("X request timed out");
@@ -41,25 +36,94 @@ async function fetchWithTimeout(url: string, headers: Record<string, string> = {
   }
 }
 
+function extractTweetFromResult(result: any): any {
+  if (!result) return null;
+  if (result.__typename === "TweetWithVisibilityResults") return result.tweet || null;
+  if (result.__typename === "Tweet" || result.legacy) return result;
+  return null;
+}
+
+function extractTweetsFromEntries(entries: any[]): any[] {
+  const results: any[] = [];
+  for (const entry of entries) {
+    const content = entry?.content || {};
+    const directResult = content?.itemContent?.tweet_results?.result;
+    if (directResult) {
+      const tweet = extractTweetFromResult(directResult);
+      if (tweet) results.push(tweet);
+    }
+    const items = content?.items || [];
+    for (const sub of items) {
+      const subResult = sub?.item?.itemContent?.tweet_results?.result;
+      if (subResult) {
+        const tweet = extractTweetFromResult(subResult);
+        if (tweet) results.push(tweet);
+      }
+    }
+  }
+  return results;
+}
+
+function formatTweetData(tweet: any): { text: string; author: string; handle: string; likes: number; retweets: number; replies: number; views: string | null; date: string; id: string; media: string[]; quoteText: string | null; quoteAuthor: string | null } | null {
+  if (!tweet) return null;
+  const legacy = tweet.legacy || {};
+  const userResult = tweet.core?.user_results?.result || {};
+  const userCore = userResult.core || {};
+  const fullText = legacy.full_text || "";
+  if (!fullText && !legacy.id_str) return null;
+
+  const mediaEntities = legacy.extended_entities?.media || legacy.entities?.media || [];
+
+  let quoteText = null;
+  let quoteAuthor = null;
+  const qt = tweet.quoted_status_result?.result;
+  if (qt) {
+    const qtTweet = extractTweetFromResult(qt);
+    if (qtTweet?.legacy?.full_text) {
+      quoteText = qtTweet.legacy.full_text;
+      quoteAuthor = qtTweet.core?.user_results?.result?.core?.screen_name || "unknown";
+    }
+  }
+
+  return {
+    text: fullText,
+    author: userCore.name || "",
+    handle: userCore.screen_name || "",
+    likes: legacy.favorite_count || 0,
+    retweets: legacy.retweet_count || 0,
+    replies: legacy.reply_count || 0,
+    views: tweet.views?.count || null,
+    date: legacy.created_at || "",
+    id: legacy.id_str || tweet.rest_id || "",
+    media: mediaEntities.map((m: any) => m.type || "photo"),
+    quoteText,
+    quoteAuthor,
+  };
+}
+
 export async function getUserProfile(username: string): Promise<string> {
   try {
+    if (!RAPIDAPI_KEY) return "X/Twitter API not configured (missing API key).";
     const handle = cleanUsername(username);
-    const res = await fetchWithTimeout(`${FXTWITTER_BASE}/${handle}`);
-    if (!res.ok) return `Could not find X user @${handle} (${res.status})`;
+    const data = await apiFetch("/user", { username: handle });
 
-    const data = await res.json();
-    const u = data.user;
-    if (!u) return `Could not find X user @${handle}`;
+    const user = data?.result?.data?.user?.result;
+    if (!user) return `Could not find X user @${handle}`;
+
+    const core = user.core || {};
+    const legacy = user.legacy || {};
+    const location = user.location || {};
 
     const parts = [
-      `@${u.screen_name} (${u.name})`,
-      u.description ? `Bio: ${u.description}` : null,
-      u.location ? `Location: ${u.location}` : null,
-      `Followers: ${(u.followers || 0).toLocaleString()} | Following: ${(u.following || 0).toLocaleString()}`,
-      `Tweets: ${(u.tweets || 0).toLocaleString()}`,
-      u.website ? `Website: ${u.website.url || u.website}` : null,
-      u.joined ? `Joined: ${u.joined}` : null,
-      `Profile: ${u.url}`,
+      `@${core.screen_name || handle} (${core.name || ""})`,
+      legacy.description ? `Bio: ${legacy.description}` : null,
+      location.location ? `Location: ${location.location}` : null,
+      `Followers: ${(legacy.followers_count || 0).toLocaleString()} | Following: ${(legacy.friends_count || 0).toLocaleString()}`,
+      `Tweets: ${(legacy.statuses_count || 0).toLocaleString()} | Likes: ${(legacy.favourites_count || 0).toLocaleString()}`,
+      user.is_blue_verified ? "✓ Verified" : null,
+      core.created_at ? `Joined: ${new Date(core.created_at).toLocaleDateString("en-US", { month: "long", year: "numeric" })}` : null,
+      legacy.entities?.url?.urls?.[0]?.expanded_url ? `Website: ${legacy.entities.url.urls[0].expanded_url}` : null,
+      `Profile: https://x.com/${core.screen_name || handle}`,
     ];
 
     return parts.filter(Boolean).join("\n");
@@ -71,110 +135,137 @@ export async function getUserProfile(username: string): Promise<string> {
 
 export async function getTweet(tweetInput: string): Promise<string> {
   try {
+    if (!RAPIDAPI_KEY) return "X/Twitter API not configured (missing API key).";
     const tweetId = extractTweetId(tweetInput);
     if (!tweetId) return "Please provide a valid tweet URL or tweet ID.";
 
-    const urlMatch = tweetInput.match(/(?:x\.com|twitter\.com)\/(\w+)\/status\//);
-    const handle = urlMatch ? urlMatch[1] : "i";
+    const data = await apiFetch("/tweet", { pid: tweetId });
 
-    const res = await fetchWithTimeout(`${FXTWITTER_BASE}/${handle}/status/${tweetId}`);
-    if (!res.ok) return `Could not find that tweet (${res.status})`;
+    const instructions = data?.data?.threaded_conversation_with_injections_v2?.instructions || [];
+    for (const inst of instructions) {
+      for (const entry of inst.entries || []) {
+        const rawResult = entry?.content?.itemContent?.tweet_results?.result;
+        const tweet = extractTweetFromResult(rawResult);
+        const formatted = formatTweetData(tweet);
+        if (formatted && (formatted.id === tweetId || entry.entryId?.includes(tweetId))) {
+          const parts = [
+            `@${formatted.handle} (${formatted.author})`,
+            formatted.text,
+            "",
+            `${formatted.likes.toLocaleString()} likes | ${formatted.retweets.toLocaleString()} retweets | ${formatted.replies.toLocaleString()} replies${formatted.views ? ` | ${Number(formatted.views).toLocaleString()} views` : ""}`,
+            formatted.date ? `Posted: ${new Date(formatted.date).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}` : null,
+            `Link: https://x.com/${formatted.handle}/status/${formatted.id}`,
+          ];
 
-    const data = await res.json();
-    const t = data.tweet;
-    if (!t) return "Tweet not found or may have been deleted.";
+          if (formatted.media.length > 0) {
+            parts.push(`Media: ${formatted.media.length} attachment(s) (${formatted.media.join(", ")})`);
+          }
 
-    const parts = [
-      `@${t.author?.screen_name || "unknown"} (${t.author?.name || ""})`,
-      t.text,
-      "",
-      `${(t.likes || 0).toLocaleString()} likes | ${(t.retweets || 0).toLocaleString()} retweets | ${(t.replies || 0).toLocaleString()} replies`,
-      t.created_at ? `Posted: ${t.created_at}` : null,
-      `Link: ${t.url || tweetInput}`,
-    ];
+          if (formatted.quoteText) {
+            parts.push("", `Quoting @${formatted.quoteAuthor}:`, formatted.quoteText);
+          }
 
-    if (t.media?.all?.length) {
-      parts.push(`Media: ${t.media.all.length} attachment(s)`);
+          return parts.filter(p => p !== null).join("\n");
+        }
+      }
     }
 
-    if (t.quote) {
-      parts.push("", `Quoting @${t.quote.author?.screen_name || "unknown"}:`, t.quote.text);
-    }
-
-    return parts.filter(p => p !== null).join("\n");
+    return "Tweet not found or may have been deleted.";
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return `Error fetching tweet: ${msg}`;
   }
 }
 
+async function resolveUserId(username: string): Promise<string | null> {
+  const data = await apiFetch("/user", { username });
+  return data?.result?.data?.user?.result?.rest_id || null;
+}
+
 export async function getUserTimeline(username: string, count = 10): Promise<string> {
   try {
+    if (!RAPIDAPI_KEY) return "X/Twitter API not configured (missing API key).";
     const handle = cleanUsername(username);
     const maxTweets = Math.min(count, 20);
 
-    const res = await fetchWithTimeout(`${SYNDICATION_BASE}/${handle}`);
-    if (!res.ok) return `Could not fetch timeline for @${handle} (${res.status})`;
+    const userId = await resolveUserId(handle);
+    if (!userId) return `Could not find X user @${handle}`;
 
-    const html = await res.text();
+    const data = await apiFetch("/user-tweets", { user: userId, count: String(maxTweets) });
 
-    const tweets: TweetData[] = [];
-    const tweetRegex = /"full_text":"((?:[^"\\]|\\.)*)"/g;
-    const nameRegex = /"name":"((?:[^"\\]|\\.)*)"/g;
-    const screenNameRegex = /"screen_name":"((?:[^"\\]|\\.)*)"/g;
-    const dateRegex = /"created_at":"((?:[^"\\]|\\.)*)"/g;
-    const likeRegex = /"favorite_count":(\d+)/g;
-    const rtRegex = /"retweet_count":(\d+)/g;
-    const replyRegex = /"reply_count":(\d+)/g;
-    const idRegex = /"id_str":"(\d+)"/g;
-
-    const texts: string[] = [];
-    const names: string[] = [];
-    const screenNames: string[] = [];
-    const dates: string[] = [];
-    const likes: number[] = [];
-    const rts: number[] = [];
-    const replies: number[] = [];
-    const ids: string[] = [];
-
-    let m;
-    while ((m = tweetRegex.exec(html)) !== null) texts.push(m[1].replace(/\\n/g, "\n").replace(/\\"/g, '"'));
-    while ((m = nameRegex.exec(html)) !== null) names.push(m[1]);
-    while ((m = screenNameRegex.exec(html)) !== null) screenNames.push(m[1]);
-    while ((m = dateRegex.exec(html)) !== null) dates.push(m[1]);
-    while ((m = likeRegex.exec(html)) !== null) likes.push(parseInt(m[1]));
-    while ((m = rtRegex.exec(html)) !== null) rts.push(parseInt(m[1]));
-    while ((m = replyRegex.exec(html)) !== null) replies.push(parseInt(m[1]));
-    while ((m = idRegex.exec(html)) !== null) ids.push(m[1]);
-
+    const instructions = data?.result?.timeline?.instructions || [];
+    const tweets: ReturnType<typeof formatTweetData>[] = [];
     const seen = new Set<string>();
-    for (let i = 0; i < texts.length && tweets.length < maxTweets; i++) {
-      const text = texts[i];
-      if (seen.has(text) || text.startsWith("RT @")) continue;
-      seen.add(text);
 
-      tweets.push({
-        text,
-        author: names[i] || handle,
-        handle: screenNames[i] || handle,
-        date: dates[i] ? new Date(dates[i]).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "",
-        likes: likes[i] || 0,
-        retweets: rts[i] || 0,
-        replies: replies[i] || 0,
-        url: ids[i] ? `https://x.com/${screenNames[i] || handle}/status/${ids[i]}` : "",
-      });
+    for (const inst of instructions) {
+      const allTweets = extractTweetsFromEntries(inst.entries || []);
+      for (const tweet of allTweets) {
+        const formatted = formatTweetData(tweet);
+        if (formatted && !seen.has(formatted.id) && !formatted.text.startsWith("RT @")) {
+          seen.add(formatted.id);
+          tweets.push(formatted);
+          if (tweets.length >= maxTweets) break;
+        }
+      }
+      if (tweets.length >= maxTweets) break;
     }
 
     if (tweets.length === 0) return `No recent tweets found for @${handle}. The account may be private or have no recent activity.`;
 
     const lines = tweets.map((t, i) => {
-      const stats = `${t.likes.toLocaleString()} likes | ${t.retweets.toLocaleString()} RTs`;
-      return `${i + 1}. @${t.handle} — ${t.date}\n   ${t.text.slice(0, 280)}${t.text.length > 280 ? "..." : ""}\n   ${stats}${t.url ? ` | ${t.url}` : ""}`;
+      if (!t) return "";
+      const dateStr = t.date ? new Date(t.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "";
+      const stats = `${t.likes.toLocaleString()} likes | ${t.retweets.toLocaleString()} RTs${t.views ? ` | ${Number(t.views).toLocaleString()} views` : ""}`;
+      return `${i + 1}. @${t.handle} — ${dateStr}\n   ${t.text.slice(0, 280)}${t.text.length > 280 ? "..." : ""}\n   ${stats} | https://x.com/${t.handle}/status/${t.id}`;
     });
 
     return `Recent tweets from @${handle}:\n\n${lines.join("\n\n")}`;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return `Error fetching timeline: ${msg}`;
+  }
+}
+
+export async function searchTweets(query: string, count = 10, type: "Latest" | "Top" = "Latest"): Promise<string> {
+  try {
+    if (!RAPIDAPI_KEY) return "X/Twitter API not configured (missing API key).";
+    const maxResults = Math.min(count, 20);
+
+    const data = await apiFetch("/search", { query, count: String(maxResults), type });
+
+    const instructions = data?.result?.timeline?.instructions || [];
+    const tweets: ReturnType<typeof formatTweetData>[] = [];
+    const seen = new Set<string>();
+
+    for (const inst of instructions) {
+      const allTweets = extractTweetsFromEntries(inst.entries || []);
+      for (const tweet of allTweets) {
+        const formatted = formatTweetData(tweet);
+        if (formatted && !seen.has(formatted.id)) {
+          seen.add(formatted.id);
+          tweets.push(formatted);
+          if (tweets.length >= maxResults) break;
+        }
+      }
+      if (tweets.length >= maxResults) break;
+    }
+
+    if (tweets.length === 0) return `No tweets found matching "${query}".`;
+
+    const lines = tweets.map((t, i) => {
+      if (!t) return "";
+      const dateStr = t.date ? new Date(t.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "";
+      const stats = `${t.likes.toLocaleString()} likes | ${t.retweets.toLocaleString()} RTs${t.views ? ` | ${Number(t.views).toLocaleString()} views` : ""}`;
+      let line = `${i + 1}. @${t.handle} — ${dateStr}\n   ${t.text.slice(0, 280)}${t.text.length > 280 ? "..." : ""}\n   ${stats} | https://x.com/${t.handle}/status/${t.id}`;
+      if (t.quoteText) {
+        line += `\n   ↳ Quoting @${t.quoteAuthor}: ${t.quoteText.slice(0, 150)}${(t.quoteText.length || 0) > 150 ? "..." : ""}`;
+      }
+      return line;
+    });
+
+    return `X search results for "${query}" (${type}):\n\n${lines.join("\n\n")}`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `Error searching X: ${msg}`;
   }
 }

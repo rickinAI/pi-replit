@@ -569,13 +569,28 @@ function buildTwitterTools(): ToolDefinition[] {
     {
       name: "x_user_timeline",
       label: "X Timeline",
-      description: "Read recent tweets/posts from an X (Twitter) user's timeline. Returns their latest public posts.",
+      description: "Read recent tweets/posts from an X (Twitter) user's timeline. Returns their latest public posts with engagement stats and view counts.",
       parameters: Type.Object({
         username: Type.String({ description: "X username (e.g. 'elonmusk') or profile URL" }),
         count: Type.Optional(Type.Number({ description: "Number of tweets to fetch (default 10, max 20)" })),
       }),
       async execute(_toolCallId, params) {
         const result = await twitter.getUserTimeline(params.username, params.count ?? 10);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "x_search",
+      label: "X Search",
+      description: "Search X (Twitter) for tweets matching a query. Returns matching posts with engagement stats and view counts. Useful for finding mentions, discussions, news, and sentiment on any topic.",
+      parameters: Type.Object({
+        query: Type.String({ description: "Search query — supports keywords, phrases, @mentions, #hashtags, from:user, to:user, etc." }),
+        count: Type.Optional(Type.Number({ description: "Number of results to return (default 10, max 20)" })),
+        type: Type.Optional(Type.String({ description: "Search type: 'Latest' (most recent) or 'Top' (most popular). Default: 'Latest'" })),
+      }),
+      async execute(_toolCallId, params) {
+        const searchType = (params.type === "Top" ? "Top" : "Latest") as "Latest" | "Top";
+        const result = await twitter.searchTweets(params.query, params.count ?? 10, searchType);
         return { content: [{ type: "text" as const, text: result }], details: {} };
       },
     },

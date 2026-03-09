@@ -6,7 +6,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 
 - **server.ts** — Express server wrapping the pi coding agent SDK
   - Creates agent sessions with Anthropic API
-  - Registers custom tools (85 total): knowledge base, email, calendar, weather, web search, tasks, news, Google Drive, Google Sheets (13 tools), Google Docs (12 tools), Google Slides (12 tools), YouTube, Zillow (3 tools), Redfin (3 tools)
+  - Registers custom tools (86 total): knowledge base, email, calendar, weather, web search, tasks, news, Google Drive, Google Sheets (13 tools), Google Docs (12 tools), Google Slides (12 tools), YouTube, Zillow (3 tools), Redfin (3 tools), X/Twitter (4 tools)
   - Multi-agent system with 9 specialist agents defined in `data/agents.json` (hot-reloaded on file change)
   - Streams agent events via SSE (Server-Sent Events)
   - Tracks conversation messages and persists them to PostgreSQL
@@ -294,10 +294,11 @@ Auth via custom OAuth flow using `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`. To
 
 ## X (Twitter) Reader
 
-3 custom tools using public APIs (free, no API key):
-- `x_user_profile` — User profile info via fxtwitter API
-- `x_read_tweet` — Read specific tweet by URL or ID via fxtwitter API
-- `x_user_timeline` — User's recent tweets via Twitter syndication API
+4 tools using Twitter241 API via RapidAPI (same `RAPIDAPI_KEY`):
+- `x_user_profile` — User profile info (bio, followers, verified status, join date)
+- `x_read_tweet` — Read specific tweet by URL or ID (full text, engagement, views, media, quotes)
+- `x_user_timeline` — User's recent tweets with view counts and engagement stats
+- `x_search` — Search tweets by query (keywords, @mentions, #hashtags, from:user). Supports "Latest" and "Top" modes
 
 ## Stock & Crypto Tracker
 
@@ -401,7 +402,7 @@ Config-driven specialist agents that RICKIN can delegate complex tasks to. Each 
 
 ## src/ Modules
 - **src/db.ts** — Shared PostgreSQL pool and table initialization
-- **src/twitter.ts** — X/Twitter reader (fxtwitter for profiles/tweets, syndication API for timelines)
+- **src/twitter.ts** — X/Twitter reader via Twitter241 RapidAPI (profiles, tweets, timelines, search)
 - **src/stocks.ts** — Stock quotes (Yahoo Finance) and crypto prices (CoinGecko)
 - **src/maps.ts** — Directions (Nominatim + OSRM) and place search (Nominatim)
 - **src/youtube.ts** — YouTube Data API v3 integration (search, video details, channel info, trending)
