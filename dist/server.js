@@ -3916,7 +3916,7 @@ Be thorough in reading all available daily briefs. If fewer than 7 daily briefs 
     agentId: "real-estate",
     prompt: `You are running the daily property scan. First read "Real Estate/Search Criteria.md" for full criteria and target areas.
 
-For each of the 6 target areas, search for hidden gem properties matching: $1.5M\u2013$2M, 5+ bedrooms, 3+ bathrooms, Houses.
+For each of the 6 target areas, search for hidden gem properties matching: $1.3M\u2013$1.8M, 4+ bedrooms, 3+ bathrooms, Houses.
 
 STEP 1 \u2014 ZILLOW SEARCH: Use property_search with these locations (one call per area):
 1. "Upper Saddle River, NJ" (also try "Ridgewood, NJ", "Ho-Ho-Kus, NJ")
@@ -3925,15 +3925,15 @@ STEP 1 \u2014 ZILLOW SEARCH: Use property_search with these locations (one call 
 4. "Garden City, NY" (also try "Manhasset, NY", "Great Neck, NY", "Cold Spring Harbor, NY")
 5. "Tarrytown, NY" (also try "Scarsdale, NY", "Chappaqua, NY", "Bronxville, NY")
 6. "Westport, CT" (also try "Darien, CT", "Stamford, CT")
-For each search: set minPrice=1500000, maxPrice=2000000, minBeds=5, minBaths=3, sort="Newest".
+For each search: set minPrice=1300000, maxPrice=1800000, minBeds=4, minBaths=3, sort="Newest".
 
 STEP 2 \u2014 REDFIN SEARCH: Use redfin_search with these pre-verified URLs (one call per area):
-1. https://www.redfin.com/city/19045/NJ/Upper-Saddle-River/filter/min-price=1.5M,max-price=2M,min-beds=5,min-baths=3
-2. https://www.redfin.com/city/35939/NJ/Montclair/filter/min-price=1.5M,max-price=2M,min-beds=5,min-baths=3
-3. https://www.redfin.com/city/15686/NJ/Princeton/filter/min-price=1.5M,max-price=2M,min-beds=5,min-baths=3
-4. https://www.redfin.com/city/7197/NY/Garden-City/filter/min-price=1.5M,max-price=2M,min-beds=5,min-baths=3
-5. https://www.redfin.com/city/18651/NY/Tarrytown/filter/min-price=1.5M,max-price=2M,min-beds=5,min-baths=3
-6. https://www.redfin.com/city/26700/CT/Westport/filter/min-price=1.5M,max-price=2M,min-beds=5,min-baths=3
+1. https://www.redfin.com/city/19045/NJ/Upper-Saddle-River/filter/min-price=1.3M,max-price=1.8M,min-beds=4,min-baths=3
+2. https://www.redfin.com/city/35939/NJ/Montclair/filter/min-price=1.3M,max-price=1.8M,min-beds=4,min-baths=3
+3. https://www.redfin.com/city/15686/NJ/Princeton/filter/min-price=1.3M,max-price=1.8M,min-beds=4,min-baths=3
+4. https://www.redfin.com/city/7197/NY/Garden-City/filter/min-price=1.3M,max-price=1.8M,min-beds=4,min-baths=3
+5. https://www.redfin.com/city/18651/NY/Tarrytown/filter/min-price=1.3M,max-price=1.8M,min-beds=4,min-baths=3
+6. https://www.redfin.com/city/26700/CT/Westport/filter/min-price=1.3M,max-price=1.8M,min-beds=4,min-baths=3
 Only use redfin_autocomplete as a fallback if a URL returns no results.
 
 STEP 3 \u2014 CROSS-REFERENCE: Compare Zillow and Redfin results by address. Flag:
@@ -3942,7 +3942,7 @@ STEP 3 \u2014 CROSS-REFERENCE: Compare Zillow and Redfin results by address. Fla
 - Note any price discrepancies between platforms
 
 STEP 4 \u2014 DEEP DIVE: For the top 3-5 most interesting properties per area:
-- Use property_details (Zillow zpid) for school ratings, features, price history, tax data
+- Use property_details (Zillow zpid + location) for zestimate, open house info, listing details
 - Use redfin_details (Redfin URL path) for photos, room details, market data
 
 STEP 5 \u2014 X/SOCIAL SIGNALS: Search X for hyper-local real estate intel in each target area:
@@ -3954,7 +3954,9 @@ STEP 5 \u2014 X/SOCIAL SIGNALS: Search X for hyper-local real estate intel in ea
 - x_search("Westport CT real estate OR new listing OR open house")
 Look for: pocket listings, agent buzz about upcoming listings, local market sentiment, neighborhood chatter, price trend discussions. Note any relevant finds in the Executive Summary under "Social Signals".
 
-For each property include: address, price, beds/baths, sqft, lot size, year built, key features, school district + rating, estimated commute to Brookfield Place (route + transfers + time from Search Criteria), days on market, listing URL(s) from both platforms, source (Zillow/Redfin/Both), and WHY it's interesting (1-2 sentences on character/charm/value).
+STEP 6 \u2014 COMMUTE RESEARCH: For any area where the area note's commute section still has placeholder text ("To be populated") or only rough estimates, use web_search to look up current peak-hour transit schedules (NJ Transit, LIRR, Metro-North) and update the area note with actual commute times to Brookfield Place. Include route, transfers, and total door-to-door time.
+
+For each property include: address, price, beds/baths, sqft, lot size, year built, key features, school district + rating, estimated commute to Brookfield Place (route + transfers + time from area note), days on market, listing URL(s) from both platforms, source (Zillow/Redfin/Both), and WHY it's interesting (1-2 sentences on character/charm/value).
 
 Focus on:
 - New listings (< 7 days on market)
@@ -3998,7 +4000,12 @@ OUTPUT \u2014 Save using notes_create to "Scheduled Reports/Real Estate/{today's
 ## \u{1F3AF} Top Gems Today
 {ranked list of \u2B50 properties with one-line reasons}
 
-After saving the scan, append any notable new listings to the corresponding area file in "Real Estate/Areas/" using notes_append with a date-stamped header (### YYYY-MM-DD).
+STEP 7 \u2014 MARKET OVERVIEW: After saving the scan report, overwrite "Real Estate/Market Overview.md" using notes_create with:
+- Market Snapshot: today's date, total listings found, notable market trends
+- Area Comparison table: | Area | Listings | Price Range | Avg $/sqft | New (<7d) |
+- Commute Comparison: transit route + estimated time per area (from area notes)
+
+After the Market Overview, append any notable new listings to the corresponding area file in "Real Estate/Areas/" using notes_append with a date-stamped header (### YYYY-MM-DD).
 
 If no properties are found in an area, note "No new listings matching criteria" rather than omitting the section.`,
     schedule: { type: "daily", hour: 7, minute: 30 },
@@ -4087,6 +4094,13 @@ async function init7() {
         const preset = DEFAULT_JOBS.find((j) => j.id === "moodys-daily-intel");
         intelJob.prompt = preset.prompt;
         console.log("[scheduled-jobs] Migrated moodys-daily-intel: removed profile update step (now handled by moodys-profile-updates)");
+        await saveConfig2();
+      }
+      const scanJob = config2.jobs.find((j) => j.id === "real-estate-daily-scan");
+      if (scanJob && (scanJob.prompt.includes("minPrice=1500000") || scanJob.prompt.includes("$1.5M\u2013$2M") || scanJob.prompt.includes("minBeds=5"))) {
+        const preset = DEFAULT_JOBS.find((j) => j.id === "real-estate-daily-scan");
+        scanJob.prompt = preset.prompt;
+        console.log("[scheduled-jobs] Migrated real-estate-daily-scan: updated budget to $1.3M\u2013$1.8M, 4+ bed, added commute/market-overview steps");
         await saveConfig2();
       }
     } else {

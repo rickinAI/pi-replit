@@ -45,10 +45,10 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Moody's agent pre-read optimized: uses notes_list for folder awareness, only reads file content when directly needed for the current task. Timeout: 600s
 - **Real Estate Property Scout** — Daily property scan using the real-estate agent:
   - Daily Property Scan at 7:30 AM ET — searches 6 areas (Upper Saddle River NJ, Montclair NJ, Princeton NJ, Long Island NY, Hudson Valley NY, Stamford-Westport CT) via Zillow AND Redfin APIs
-  - Criteria: $1.5M–$2M, 5+ bed / 3+ bath, modern, garage, good schools, walkable. Commute to Brookfield Place (Battery Park City)
+  - Criteria: $1.3M–$1.8M, 4+ bed / 3+ bath, modern, garage, good schools, walkable. Commute to Brookfield Place (Battery Park City)
   - 6 RapidAPI tools: Zillow via `private-zillow.p.rapidapi.com` (`property_search`, `property_details`, `neighborhood_search`) + Redfin (`redfin_search`, `redfin_details`, `redfin_autocomplete`) + `x_search` for local market intel
   - Dual-platform search: cross-references Zillow and Redfin results, flags platform exclusives (🔵 Redfin-only, 🟡 Zillow-only)
-  - 5-step daily scan: Zillow → Redfin → cross-reference → deep dive → X/social signals per area
+  - 7-step daily scan: Zillow → Redfin → cross-reference → deep dive → X/social signals → commute research → Market Overview update
   - Saves to `Scheduled Reports/Real Estate/YYYY-MM-DD-Property-Scan.md`, appends to `Real Estate/Areas/`, saves ⭐ gems to `Real Estate/Favorites/`
   - Auto-archive >30 days to `Archive/Real Estate/`. Agent pre-reads Search Criteria + area files. Timeout: 600s
 - **public/** — Static frontend (terminal/hacker aesthetic, branded as "RICKIN")
