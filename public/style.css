@@ -486,9 +486,8 @@ body {
 }
 
 .copy-btn {
-  position: absolute;
-  top: 6px;
-  right: 0;
+  display: none;
+  margin-left: auto;
   background: none;
   border: 1px solid var(--border);
   border-radius: 2px;
@@ -497,16 +496,16 @@ body {
   font-size: 9px;
   padding: 2px 6px;
   cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s, color 0.15s;
+  transition: color 0.15s;
   letter-spacing: 0.5px;
+  margin-bottom: 2px;
 }
 
 .msg:hover .copy-btn {
-  opacity: 1;
+  display: block;
 }
 
-.bubble:has(.md-table-wrap) ~ .copy-btn {
+.msg:has(.bubble .md-table-wrap) > .copy-btn {
   display: none;
 }
 
@@ -525,7 +524,7 @@ body {
 }
 
 @media (max-width: 600px) {
-  .copy-btn { opacity: 0.5; }
+  .copy-btn { display: block; opacity: 0.5; }
 }
 
 .tool-pill {

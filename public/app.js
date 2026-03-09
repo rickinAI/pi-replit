@@ -1174,7 +1174,9 @@ function handleAgentEvent(event) {
               setTimeout(() => { copyBtn.textContent = "COPY"; }, 1500);
             });
           });
-          agentBubble.appendChild(copyBtn);
+          const bblEl = agentBubble.querySelector(".bubble");
+          if (bblEl) agentBubble.insertBefore(copyBtn, bblEl);
+          else agentBubble.appendChild(copyBtn);
         }
         renderSuggestionChipsFromText(rawForChips);
       }
@@ -2318,8 +2320,6 @@ function appendBubble(role, text, timestamp) {
     bubble.textContent = text;
   }
 
-  msg.appendChild(bubble);
-
   if (role === "agent" && text) {
     const copyBtn = document.createElement("button");
     copyBtn.className = "copy-btn";
@@ -2334,6 +2334,8 @@ function appendBubble(role, text, timestamp) {
     });
     msg.appendChild(copyBtn);
   }
+
+  msg.appendChild(bubble);
 
   const time = document.createElement("span");
   time.className = "msg-time";
