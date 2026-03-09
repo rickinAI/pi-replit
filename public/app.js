@@ -1282,6 +1282,12 @@ function renderInterviewForm(event) {
             ${isRec ? '<span class="interview-rec">REC</span>' : ''}
           </label>`;
         }
+        html += `<label class="interview-option interview-other-option">
+          <input type="radio" name="iv_${escapeHtml(q.id)}" value="__other__">
+          <span class="interview-radio"></span>
+          <span class="interview-opt-label">Other</span>
+          <input type="text" class="interview-other-input" placeholder="Specify..." disabled>
+        </label>`;
       } else if (q.type === "multi" && q.options) {
         const recs = q.recommended ? (Array.isArray(q.recommended) ? q.recommended : [q.recommended]) : [];
         for (const opt of q.options) {
@@ -1293,6 +1299,12 @@ function renderInterviewForm(event) {
             ${isRec ? '<span class="interview-rec">REC</span>' : ''}
           </label>`;
         }
+        html += `<label class="interview-option interview-other-option">
+          <input type="checkbox" name="iv_${escapeHtml(q.id)}" value="__other__">
+          <span class="interview-check"></span>
+          <span class="interview-opt-label">Other</span>
+          <input type="text" class="interview-other-input" placeholder="Specify..." disabled>
+        </label>`;
       } else if (q.type === "text") {
         html += `<textarea class="interview-text" name="iv_${escapeHtml(q.id)}" rows="3" placeholder="Type your response..."></textarea>`;
       }
@@ -1308,6 +1320,33 @@ function renderInterviewForm(event) {
   agentBubble = null;
   agentText = "";
   throttledScroll();
+
+  card.querySelectorAll(".interview-other-option").forEach(otherLabel => {
+    const toggle = otherLabel.querySelector('input[type="radio"], input[type="checkbox"]');
+    const textInput = otherLabel.querySelector(".interview-other-input");
+    if (!toggle || !textInput) return;
+    const name = toggle.name;
+    const isRadio = toggle.type === "radio";
+
+    textInput.addEventListener("click", (e) => e.stopPropagation());
+    textInput.addEventListener("focus", () => { toggle.checked = true; });
+
+    const updateOther = () => {
+      textInput.disabled = !toggle.checked;
+      if (toggle.checked) textInput.focus();
+    };
+
+    if (isRadio) {
+      const parent = otherLabel.closest(".interview-q");
+      if (parent) {
+        parent.querySelectorAll(`input[name="${CSS.escape(name)}"]`).forEach(r => {
+          r.addEventListener("change", updateOther);
+        });
+      }
+    } else {
+      toggle.addEventListener("change", updateOther);
+    }
+  });
 
   const submitBtn2 = card.querySelector(".interview-submit");
   submitBtn2.addEventListener("click", async () => {
@@ -1325,10 +1364,23 @@ function renderInterviewForm(event) {
 
       if (q.type === "single") {
         const checked = qEl.querySelector(`input[name="iv_${qid}"]:checked`);
-        if (checked) responses.push({ id: q.id, value: checked.value });
+        if (checked) {
+          let val = checked.value;
+          if (val === "__other__") {
+            const otherInput = qEl.querySelector(".interview-other-input");
+            val = otherInput && otherInput.value.trim() ? "Other: " + otherInput.value.trim() : "Other";
+          }
+          responses.push({ id: q.id, value: val });
+        }
       } else if (q.type === "multi") {
         const checked = qEl.querySelectorAll(`input[name="iv_${qid}"]:checked`);
-        const vals = Array.from(checked).map(c => c.value);
+        const vals = Array.from(checked).map(c => {
+          if (c.value === "__other__") {
+            const otherInput = qEl.querySelector(".interview-other-input");
+            return otherInput && otherInput.value.trim() ? "Other: " + otherInput.value.trim() : "Other";
+          }
+          return c.value;
+        });
         if (vals.length > 0) responses.push({ id: q.id, value: vals });
       } else if (q.type === "text") {
         const textarea = qEl.querySelector("textarea");

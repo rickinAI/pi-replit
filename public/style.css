@@ -799,6 +799,38 @@ input[type="checkbox"]:checked ~ .interview-check::after {
   font-weight: 600;
 }
 
+.interview-other-option {
+  flex-wrap: wrap;
+}
+
+.interview-other-input {
+  width: 100%;
+  margin-top: 6px;
+  padding: 6px 10px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--green);
+  font-family: var(--font);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.2s, opacity 0.2s;
+}
+
+.interview-other-input:disabled {
+  opacity: 0.3;
+}
+
+.interview-other-input:focus {
+  border-color: var(--green-dim);
+  box-shadow: 0 0 6px rgba(0, 255, 0, 0.1);
+  opacity: 1;
+}
+
+.interview-other-input::placeholder {
+  color: var(--green-muted);
+}
+
 .interview-text {
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid var(--border);
@@ -2522,6 +2554,10 @@ body.light-theme .interview-card {
 }
 
 body.light-theme .interview-text {
+  background: var(--bg);
+}
+
+body.light-theme .interview-other-input {
   background: var(--bg);
 }
 
