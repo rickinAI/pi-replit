@@ -2457,7 +2457,7 @@ function buildLandingTickerCycles(d) {
   if (c1.length > 0) cycles.push(`<span class="landing-glance-item">${c1.join(" · ")}</span>`);
 
   if (d.upcomingEvents && d.upcomingEvents.length > 0) {
-    for (const ev of d.upcomingEvents.slice(0, 3)) {
+    for (const ev of d.upcomingEvents.slice(0, 5)) {
       const t = (ev.time || "").replace(/^.*?,\s*/, "").replace(/:00\s*/g, " ");
       const cal = ev.calendar && ev.calendar !== "Rickin" ? `${e(ev.calendar)}: ` : "";
       cycles.push(`<span class="landing-glance-item">📅 ${cal}${e(ev.title)}${t ? " · " + e(t) : ""}</span>`);
