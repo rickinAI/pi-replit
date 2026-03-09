@@ -28,7 +28,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **src/news.ts** — News headlines via Google News RSS feeds
 - **src/conversations.ts** — Conversation persistence module (save/load/list/delete via PostgreSQL, AI summaries via Haiku, last-conversation context for session start). Uses Replit's built-in PostgreSQL database (DATABASE_URL) so conversations persist across deployments
 - **src/memory-extractor.ts** — Post-conversation fact extraction (profile updates, action items) via Claude Haiku
-- **.pi/SYSTEM.md** — Agent personality, greeting template, vault structure map, and auto-categorization rules (auto-loaded by SDK from `.pi/SYSTEM.md`)
+- **.pi/SYSTEM.md** — Agent personality, greeting template, vault structure map, auto-categorization rules, dual-source research default (web + X), and auto-catalog shared links behavior (auto-loaded by SDK from `.pi/SYSTEM.md`)
 - **Vault index injection** — At session creation, a full vault tree (all folders/files) is generated via `buildVaultTree()` / `formatVaultIndex()` and injected into the agent's first prompt via `startupContext`. This gives the agent immediate awareness of all vault contents without needing to call notes_list first
 - **.pi/agent/system-prompt.md** — Synced copy of SYSTEM.md for reference
 - **.pi/agent/models.json** — Custom model registry entries (`claude-sonnet-4-6`, `claude-haiku-4-5-20251001`, `claude-opus-4-6`) so the Pi SDK's ModelRegistry can resolve them. These must match exact Anthropic API model IDs (no `-latest` aliases — Anthropic doesn't support them)
