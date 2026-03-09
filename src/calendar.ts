@@ -149,6 +149,62 @@ export async function listEvents(options?: { maxResults?: number; timeMin?: stri
   }
 }
 
+export async function listEventsStructured(options?: { maxResults?: number; timeMin?: string; timeMax?: string }): Promise<Array<{ title: string; time: string; calendar: string }>> {
+  try {
+    const cal = await getCalendarClient();
+    const now = new Date();
+    const timeMin = options?.timeMin || now.toISOString();
+    const maxResults = options?.maxResults || 10;
+
+    let calendars: Array<{ id: string; name: string }> = [{ id: "primary", name: "Rickin" }];
+    try {
+      const calList = await cal.calendarList.list({ minAccessRole: "reader" });
+      const items = calList.data.items || [];
+      if (items.length > 0) {
+        calendars = items
+          .filter((c: any) => c.selected !== false && c.id)
+          .map((c: any) => ({ id: c.id, name: c.summaryOverride || c.summary || c.id }));
+        if (calendars.length === 0) calendars = [{ id: "primary", name: "Rickin" }];
+      }
+    } catch {}
+
+    const allEvents: Array<{ event: any; calName: string }> = [];
+    for (const c of calendars) {
+      try {
+        const params: any = { calendarId: c.id, timeMin, maxResults, singleEvents: true, orderBy: "startTime" };
+        if (options?.timeMax) params.timeMax = options.timeMax;
+        const res = await cal.events.list(params);
+        for (const ev of (res.data.items || [])) {
+          allEvents.push({ event: ev, calName: c.name });
+        }
+      } catch {}
+    }
+
+    allEvents.sort((a, b) => {
+      const aT = a.event.start?.dateTime || a.event.start?.date || "";
+      const bT = b.event.start?.dateTime || b.event.start?.date || "";
+      return aT.localeCompare(bT);
+    });
+
+    return allEvents.slice(0, maxResults).map(({ event, calName }) => {
+      const start = event.start?.dateTime
+        ? new Date(event.start.dateTime).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+        : event.start?.date || "TBD";
+      const end = event.end?.dateTime
+        ? new Date(event.end.dateTime).toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" })
+        : "";
+      return {
+        title: event.summary || "(No title)",
+        time: `${start}${end ? " - " + end : ""}`,
+        calendar: calName,
+      };
+    });
+  } catch (err) {
+    console.error("[calendar] listEventsStructured error:", err instanceof Error ? err.message : String(err));
+    return [];
+  }
+}
+
 export async function createEvent(summary: string, options: { startTime: string; endTime?: string; description?: string; location?: string; allDay?: boolean }): Promise<string> {
   try {
     const calendar = await getCalendarClient();

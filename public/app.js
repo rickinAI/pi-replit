@@ -23,7 +23,6 @@ let lastEventTime = 0;
 let ambientTickerTimer = null;
 let ambientTickerItems = [];
 let ambientTickerIndex = 0;
-let ambientTickerData = null;
 
 const messages      = document.getElementById("messages");
 const scrollAnchor  = document.getElementById("scroll-anchor");
@@ -299,7 +298,7 @@ confirmModal.addEventListener("click", (e) => {
 
 function cleanupCurrentSession() {
   stopSyncPolling();
-  stopAmbientTicker();
+  stopLandingTicker();
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   if (eventSource) { eventSource.close(); eventSource = null; }
   agentBubble = null;
@@ -326,6 +325,7 @@ function relativeTime(dateStr) {
 }
 
 async function showLanding() {
+  stopLandingTicker();
   landingVisible = true;
   input.disabled = true;
   sendBtn.disabled = true;
@@ -380,30 +380,14 @@ async function showLanding() {
   convos.sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt));
 
   if (glanceData) {
-    const items = [];
-    if (glanceData.weather) {
-      const w = glanceData.weather;
-      items.push(`${w.icon || "🌡️"} ${w.tempC}°C ${w.condition || ""}`);
-    }
-    if (glanceData.emails) {
-      items.push(`📧 ${glanceData.emails.unread} new emails`);
-    }
-    if (glanceData.tasks) {
-      items.push(`✅ ${glanceData.tasks.active} task${glanceData.tasks.active !== 1 ? "s" : ""}`);
-    }
-    if (glanceData.nextEvent) {
-      const ev = glanceData.nextEvent;
-      items.push(`📅 ${ev.title}${ev.time ? " · " + ev.time : ""}`);
-    }
-    if (glanceData.jobs) {
-      if (glanceData.jobs.failed > 0) items.push(`🔴 ${glanceData.jobs.failed} job${glanceData.jobs.failed !== 1 ? "s" : ""} failed`);
-      else if (glanceData.jobs.partial > 0) items.push(`🟡 ${glanceData.jobs.partial} partial`);
-    }
-    if (items.length > 0) {
-      const strip = document.createElement("div");
-      strip.className = "landing-glance";
-      strip.innerHTML = items.map(i => `<span class="landing-glance-item">${escapeHtml(i)}</span>`).join("");
-      landing.appendChild(strip);
+    const cycles = buildLandingTickerCycles(glanceData);
+    if (cycles.length > 0) {
+      const ticker = document.createElement("div");
+      ticker.className = "landing-glance";
+      ticker.id = "landing-ticker";
+      ticker.innerHTML = cycles[0];
+      landing.appendChild(ticker);
+      startLandingTicker(cycles);
     }
   }
 
@@ -823,17 +807,25 @@ async function showLanding() {
           fetch("/api/conversations").then(r => r.ok ? r.json() : []).catch(() => []),
           fetch("/api/glance").then(r => r.ok ? r.json() : null).catch(() => null),
         ]);
-        const glanceEl = landing.querySelector(".landing-glance");
-        if (glanceEl && newGlanceRes) {
-          const items = [];
-          if (newGlanceRes.weather) items.push(`${newGlanceRes.weather.icon || "🌡️"} ${newGlanceRes.weather.tempC}°C ${newGlanceRes.weather.condition || ""}`);
-          if (newGlanceRes.emails) items.push(`📧 ${newGlanceRes.emails.unread} new emails`);
-          if (newGlanceRes.tasks) items.push(`✅ ${newGlanceRes.tasks.active} task${newGlanceRes.tasks.active !== 1 ? "s" : ""}`);
-          if (newGlanceRes.nextEvent) {
-            const ev = newGlanceRes.nextEvent;
-            items.push(`📅 ${ev.title}${ev.time ? " · " + ev.time : ""}`);
+        if (newGlanceRes) {
+          const cycles = buildLandingTickerCycles(newGlanceRes);
+          const tickerEl = landing.querySelector("#landing-ticker");
+          if (cycles.length > 0) {
+            if (tickerEl) {
+              tickerEl.innerHTML = cycles[0];
+            } else {
+              const ticker = document.createElement("div");
+              ticker.className = "landing-glance";
+              ticker.id = "landing-ticker";
+              ticker.innerHTML = cycles[0];
+              const header = landing.querySelector(".landing-header");
+              if (header) header.after(ticker);
+            }
+            startLandingTicker(cycles);
+          } else if (tickerEl) {
+            stopLandingTicker();
+            tickerEl.remove();
           }
-          glanceEl.innerHTML = items.map(i => `<span class="landing-glance-item">${escapeHtml(i)}</span>`).join("");
         }
         newConvRes.sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt));
         if (newConvRes.length > 0 && lastCardEl) {
@@ -1096,7 +1088,6 @@ function handleAgentEvent(event) {
   switch (event.type) {
     case "agent_start":
       isAgentRunning = true;
-      stopAmbientTicker();
       agentBubble = null;
       agentText = "";
       textOffsetAfterCatchUp = 0;
@@ -2452,52 +2443,56 @@ function hideStatus() {
     showStatus("[SYNCING TO CLOUD...]");
     return;
   }
-  if (!isAgentRunning && sessionId) {
-    startAmbientTicker();
-    return;
-  }
   statusBar.classList.add("hidden");
 }
 
-function buildAmbientItems(d) {
-  const items = [];
-  if (d.nextJob) items.push(`⏰ NEXT JOB: ${d.nextJob.name.toUpperCase()} · ${d.nextJob.time}`);
-  if (d.nextEvent) {
-    const t = (d.nextEvent.time || "").replace(/^.*?,\s*/, "").replace(/:00\s*/g, " ");
-    items.push(`📅 NEXT: ${d.nextEvent.title.toUpperCase()}${t ? " · " + t : ""}`);
+function buildLandingTickerCycles(d) {
+  const e = escapeHtml;
+  const cycles = [];
+
+  const c1 = [];
+  if (d.weather) c1.push(`${d.weather.icon || "🌡️"} ${e(d.weather.tempC + "°C " + (d.weather.condition || ""))}`);
+  if (d.emails) c1.push(`📧 ${d.emails.unread} new email${d.emails.unread !== 1 ? "s" : ""}`);
+  if (d.tasks) c1.push(`✅ ${d.tasks.active} task${d.tasks.active !== 1 ? "s" : ""}`);
+  if (c1.length > 0) cycles.push(c1.map(i => `<span class="landing-glance-item">${i}</span>`).join(""));
+
+  const c2 = [];
+  if (d.upcomingEvents && d.upcomingEvents.length > 0) {
+    for (const ev of d.upcomingEvents.slice(0, 3)) {
+      const t = (ev.time || "").replace(/^.*?,\s*/, "").replace(/:00\s*/g, " ");
+      const cal = ev.calendar && ev.calendar !== "Rickin" ? `${e(ev.calendar)}: ` : "";
+      c2.push(`📅 ${cal}${e(ev.title)}${t ? " · " + e(t) : ""}`);
+    }
   }
-  if (d.tasks && d.tasks.active > 0) items.push(`✅ ${d.tasks.active} TASK${d.tasks.active !== 1 ? "S" : ""} OPEN`);
-  if (d.emails && d.emails.unread > 0) items.push(`📧 ${d.emails.unread} UNREAD`);
-  if (d.jobs && d.jobs.failed > 0) items.push(`🔴 ${d.jobs.failed} JOB${d.jobs.failed !== 1 ? "S" : ""} FAILED`);
-  else if (d.jobs && d.jobs.partial > 0) items.push(`🟡 ${d.jobs.partial} PARTIAL`);
-  return items;
+  if (d.nextJob) c2.push(`⏰ Next: ${e(d.nextJob.name)} · ${e(d.nextJob.time)}`);
+  if (c2.length > 0) cycles.push(c2.map(i => `<span class="landing-glance-item">${i}</span>`).join(""));
+
+  const c3 = [];
+  if (d.jobs && d.jobs.failed > 0) c3.push(`🔴 ${d.jobs.failed} job${d.jobs.failed !== 1 ? "s" : ""} failed`);
+  if (d.jobs && d.jobs.partial > 0) c3.push(`🟡 ${d.jobs.partial} partial`);
+  if (c3.length > 0) cycles.push(c3.map(i => `<span class="landing-glance-item">${i}</span>`).join(""));
+
+  return cycles;
 }
 
-function startAmbientTicker() {
-  stopAmbientTicker();
-  if (isAgentRunning) return;
-
-  if (ambientTickerData) {
-    ambientTickerItems = buildAmbientItems(ambientTickerData);
-  }
-
-  if (ambientTickerItems.length === 0) {
-    statusBar.classList.add("hidden");
-    return;
-  }
-
+function startLandingTicker(cycles) {
+  stopLandingTicker();
+  if (!cycles || cycles.length <= 1) return;
+  ambientTickerItems = cycles;
   ambientTickerIndex = 0;
-  showStatus(ambientTickerItems[0]);
-  if (ambientTickerItems.length > 1) {
-    ambientTickerTimer = setInterval(() => {
-      if (isAgentRunning) { stopAmbientTicker(); return; }
-      ambientTickerIndex = (ambientTickerIndex + 1) % ambientTickerItems.length;
-      showStatus(ambientTickerItems[ambientTickerIndex]);
-    }, 5000);
-  }
+  ambientTickerTimer = setInterval(() => {
+    ambientTickerIndex = (ambientTickerIndex + 1) % ambientTickerItems.length;
+    const el = document.getElementById("landing-ticker");
+    if (!el) { stopLandingTicker(); return; }
+    el.classList.add("ticker-fade");
+    setTimeout(() => {
+      el.innerHTML = ambientTickerItems[ambientTickerIndex];
+      el.classList.remove("ticker-fade");
+    }, 300);
+  }, 5000);
 }
 
-function stopAmbientTicker() {
+function stopLandingTicker() {
   if (ambientTickerTimer) { clearInterval(ambientTickerTimer); ambientTickerTimer = null; }
 }
 
@@ -2721,17 +2716,6 @@ async function fetchGlance() {
 
     bar.style.display = "";
 
-    ambientTickerData = d;
-    if (!isAgentRunning && sessionId) {
-      const newItems = buildAmbientItems(d);
-      ambientTickerItems = newItems;
-      if (newItems.length === 0) {
-        stopAmbientTicker();
-        statusBar.classList.add("hidden");
-      } else {
-        startAmbientTicker();
-      }
-    }
   } catch {
     collapsed.innerHTML = `<span id="glance-clock" class="glance-clock">${getETTimeString()}</span><span class="glance-sep">·</span><span style="opacity:0.3">—</span>`;
   }

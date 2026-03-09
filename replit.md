@@ -20,7 +20,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **src/db.ts** — Shared PostgreSQL connection pool (single `pg.Pool`, max 10 connections). Creates all 4 tables on init (`conversations`, `tasks`, `app_config`, `oauth_tokens`). All other modules import `getPool()` from here
 - **src/obsidian.ts** — Client for the knowledge base REST API (10s timeout, 2 retries on transient failures, health ping)
 - **src/gmail.ts** — Gmail integration via custom Google OAuth (list/read/search emails). Tokens stored in PostgreSQL (oauth_tokens table). OAuth scopes: gmail.readonly, calendar, drive, spreadsheets, documents, presentations, youtube.readonly. Also exports `getAccessToken()` for gws CLI and YouTube API
-- **src/calendar.ts** — Google Calendar integration (shares OAuth tokens with Gmail via PostgreSQL)
+- **src/calendar.ts** — Google Calendar integration (shares OAuth tokens with Gmail via PostgreSQL). Queries all selected calendars (not just primary). `listEventsStructured()` returns events with calendar source names for family calendar awareness (Rickin, Pooja, Reya)
 - **src/weather.ts** — Weather via Open-Meteo (free, no API key)
 - **src/websearch.ts** — Web search via DuckDuckGo HTML (free, no API key)
 - **src/tasks.ts** — Task manager with PostgreSQL storage (tasks table)
@@ -341,7 +341,7 @@ Proactive background scheduler that pushes briefings and alerts via SSE to all c
   - Browser notifications + audio beep when tab is hidden
   - Settings panel (gear icon in header) with sections: Appearance (theme toggle), Alert Settings (calendar reminders, stock moves, task deadlines, important emails), Scheduled Agents (job cards with enable/disable toggles, hour/minute pickers, Run button, custom job form, health summary banner), Watchlist (stock/crypto tickers), Logout
   - Settings auto-save with 500ms debounce
-  - Ambient ticker in status bar: when agent is idle, cycles through glance data (next scheduled job, next calendar event, open tasks, unread emails, failed jobs) every 5s. Stops when agent starts, resumes on agent_end. Managed by `startAmbientTicker()`/`stopAmbientTicker()`, data sourced from `ambientTickerData` (refreshed on each glance fetch). Cleaned up on session teardown
+  - Ambient ticker on Mission Control landing page: replaces static glance strip with cycling ticker that rotates through 2-3 groups of info every 5s with fade transitions. Cycle 1: weather, emails, tasks. Cycle 2: upcoming calendar events (from all family calendars with person labels — Pooja, Reya) + next scheduled job. Cycle 3 (if needed): failed/partial jobs. Managed by `startLandingTicker()`/`stopLandingTicker()`, built by `buildLandingTickerCycles()`. Cleaned up on session teardown
 
 ## Image / Screenshot Support
 

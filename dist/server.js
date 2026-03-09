@@ -1260,6 +1260,53 @@ ${lines.join("\n\n")}`;
     return `Unable to fetch calendar events: ${msg}`;
   }
 }
+async function listEventsStructured(options) {
+  try {
+    const cal = await getCalendarClient();
+    const now = /* @__PURE__ */ new Date();
+    const timeMin = options?.timeMin || now.toISOString();
+    const maxResults = options?.maxResults || 10;
+    let calendars = [{ id: "primary", name: "Rickin" }];
+    try {
+      const calList = await cal.calendarList.list({ minAccessRole: "reader" });
+      const items = calList.data.items || [];
+      if (items.length > 0) {
+        calendars = items.filter((c) => c.selected !== false && c.id).map((c) => ({ id: c.id, name: c.summaryOverride || c.summary || c.id }));
+        if (calendars.length === 0) calendars = [{ id: "primary", name: "Rickin" }];
+      }
+    } catch {
+    }
+    const allEvents = [];
+    for (const c of calendars) {
+      try {
+        const params = { calendarId: c.id, timeMin, maxResults, singleEvents: true, orderBy: "startTime" };
+        if (options?.timeMax) params.timeMax = options.timeMax;
+        const res = await cal.events.list(params);
+        for (const ev of res.data.items || []) {
+          allEvents.push({ event: ev, calName: c.name });
+        }
+      } catch {
+      }
+    }
+    allEvents.sort((a, b) => {
+      const aT = a.event.start?.dateTime || a.event.start?.date || "";
+      const bT = b.event.start?.dateTime || b.event.start?.date || "";
+      return aT.localeCompare(bT);
+    });
+    return allEvents.slice(0, maxResults).map(({ event, calName }) => {
+      const start = event.start?.dateTime ? new Date(event.start.dateTime).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : event.start?.date || "TBD";
+      const end = event.end?.dateTime ? new Date(event.end.dateTime).toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" }) : "";
+      return {
+        title: event.summary || "(No title)",
+        time: `${start}${end ? " - " + end : ""}`,
+        calendar: calName
+      };
+    });
+  } catch (err) {
+    console.error("[calendar] listEventsStructured error:", err instanceof Error ? err.message : String(err));
+    return [];
+  }
+}
 async function createEvent(summary, options) {
   try {
     const calendar = await getCalendarClient();
@@ -7557,20 +7604,10 @@ app.get("/api/glance", async (_req, res) => {
           const nowShifted = new Date(now.getTime() + tzOffsetMs);
           const eodInTz = new Date(Date.UTC(nowShifted.getUTCFullYear(), nowShifted.getUTCMonth(), nowShifted.getUTCDate(), 23, 59, 59, 999));
           const endOfDayUTC = new Date(eodInTz.getTime() - tzOffsetMs);
-          const raw = await listEvents({ maxResults: 3, timeMax: endOfDayUTC.toISOString() });
-          if (!raw.includes("No upcoming events") && !raw.includes("expired") && !raw.includes("not authorized")) {
-            const events = [];
-            const eventBlocks = raw.split(/\d+\.\s+/).slice(1);
-            for (const block of eventBlocks) {
-              const lines = block.trim().split("\n");
-              const title = lines[0]?.trim() || "";
-              const timeLine = lines[1]?.trim() || "";
-              if (title) events.push({ title, time: timeLine });
-            }
-            if (events.length > 0) {
-              result.nextEvent = events[0];
-              result.upcomingEvents = events.slice(0, 3);
-            }
+          const events = await listEventsStructured({ maxResults: 5, timeMax: endOfDayUTC.toISOString() });
+          if (events.length > 0) {
+            result.nextEvent = events[0];
+            result.upcomingEvents = events.slice(0, 5);
           }
         } catch {
         }

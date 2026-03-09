@@ -1240,6 +1240,12 @@ body.light-theme #mic-btn.recording {
   border: 1px solid var(--border);
   border-radius: 6px;
   background: rgba(0, 255, 0, 0.02);
+  transition: opacity 0.3s ease;
+  min-height: 20px;
+}
+
+.landing-glance.ticker-fade {
+  opacity: 0;
 }
 
 .landing-glance-item {

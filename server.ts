@@ -2870,20 +2870,10 @@ app.get("/api/glance", async (_req: Request, res: Response) => {
           const nowShifted = new Date(now.getTime() + tzOffsetMs);
           const eodInTz = new Date(Date.UTC(nowShifted.getUTCFullYear(), nowShifted.getUTCMonth(), nowShifted.getUTCDate(), 23, 59, 59, 999));
           const endOfDayUTC = new Date(eodInTz.getTime() - tzOffsetMs);
-          const raw = await calendar.listEvents({ maxResults: 3, timeMax: endOfDayUTC.toISOString() });
-          if (!raw.includes("No upcoming events") && !raw.includes("expired") && !raw.includes("not authorized")) {
-            const events: Array<{ title: string; time: string }> = [];
-            const eventBlocks = raw.split(/\d+\.\s+/).slice(1);
-            for (const block of eventBlocks) {
-              const lines = block.trim().split("\n");
-              const title = lines[0]?.trim() || "";
-              const timeLine = lines[1]?.trim() || "";
-              if (title) events.push({ title, time: timeLine });
-            }
-            if (events.length > 0) {
-              result.nextEvent = events[0];
-              result.upcomingEvents = events.slice(0, 3);
-            }
+          const events = await calendar.listEventsStructured({ maxResults: 5, timeMax: endOfDayUTC.toISOString() });
+          if (events.length > 0) {
+            result.nextEvent = events[0];
+            result.upcomingEvents = events.slice(0, 5);
           }
         } catch {}
       })());
