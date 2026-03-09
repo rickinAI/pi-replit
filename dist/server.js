@@ -6649,17 +6649,20 @@ ${queueContext}${pending.text}`;
       actualPromise.then(() => {
         console.log(`[prompt] queued background prompt completed after ${((Date.now() - queuedPromptStart) / 1e3).toFixed(1)}s total`);
         entry.isAgentRunning = false;
+        entry.currentToolName = null;
         processingQueue.delete(sessionId);
         processNextPendingMessage(sessionId);
       }).catch(() => {
         console.log(`[prompt] queued background prompt failed after ${((Date.now() - queuedPromptStart) / 1e3).toFixed(1)}s total`);
         entry.isAgentRunning = false;
+        entry.currentToolName = null;
         processingQueue.delete(sessionId);
         processNextPendingMessage(sessionId);
       });
       return;
     }
     entry.isAgentRunning = false;
+    entry.currentToolName = null;
     processingQueue.delete(sessionId);
     processNextPendingMessage(sessionId);
     return;
@@ -6915,6 +6918,7 @@ app.post("/api/session", async (req, res) => {
       createdAt: Date.now(),
       conversation: conv,
       currentAgentText: "",
+      currentToolName: null,
       modelMode: "auto",
       activeModelName: FULL_MODEL_ID,
       isAgentRunning: false,
@@ -6937,8 +6941,14 @@ app.post("/api/session", async (req, res) => {
           entry.currentAgentText += ae.delta;
         }
       }
+      if (event.type === "tool_execution_start") {
+        entry.currentToolName = event.toolName || null;
+      } else if (event.type === "tool_execution_end") {
+        entry.currentToolName = null;
+      }
       if (event.type === "agent_end") {
         entry.isAgentRunning = false;
+        entry.currentToolName = null;
         if (entry.currentAgentText) {
           addMessage(entry.conversation, "agent", entry.currentAgentText);
           entry.currentAgentText = "";
@@ -7008,6 +7018,7 @@ app.get("/api/session/:id/status", (req, res) => {
     alive: true,
     agentRunning: entry.isAgentRunning,
     currentAgentText: entry.currentAgentText,
+    currentToolName: entry.currentToolName,
     messages: entry.conversation.messages,
     pendingCount: entry.pendingMessages.length
   });
@@ -7141,6 +7152,7 @@ ${entry.startupContext}
     await Promise.race([actualPromise, timeoutPromise]);
     console.log(`[prompt] completed in ${((Date.now() - promptStart) / 1e3).toFixed(1)}s`);
     entry.isAgentRunning = false;
+    entry.currentToolName = null;
     processNextPendingMessage(sessionId);
   } catch (err) {
     const elapsed = ((Date.now() - promptStart) / 1e3).toFixed(1);
@@ -7160,14 +7172,17 @@ ${entry.startupContext}
       actualPromise.then(() => {
         console.log(`[prompt] background prompt finally completed after ${((Date.now() - promptStart) / 1e3).toFixed(1)}s total`);
         entry.isAgentRunning = false;
+        entry.currentToolName = null;
         processNextPendingMessage(sessionId);
       }).catch(() => {
         console.log(`[prompt] background prompt failed after ${((Date.now() - promptStart) / 1e3).toFixed(1)}s total`);
         entry.isAgentRunning = false;
+        entry.currentToolName = null;
         processNextPendingMessage(sessionId);
       });
     } else {
       entry.isAgentRunning = false;
+      entry.currentToolName = null;
     }
   }
 });

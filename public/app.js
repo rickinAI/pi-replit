@@ -19,6 +19,7 @@ let lastSentMessage = null;
 let timeoutRetryCount = 0;
 let thinkingStartTime = null;
 let thinkingTimerInterval = null;
+let lastEventTime = 0;
 
 const messages      = document.getElementById("messages");
 const scrollAnchor  = document.getElementById("scroll-anchor");
@@ -128,6 +129,11 @@ const TOOL_LABELS = {
   slides_batch_update: "📽️ UPDATING SLIDES",
 };
 
+function getToolStatusLabel(toolName) {
+  if (!toolName) return "🧠 THINKING...";
+  return TOOL_LABELS[toolName] || `⚙️ ${toolName.toUpperCase().replace(/_/g, " ")}`;
+}
+
 function checkAuth(res) {
   if (res.status === 401) {
     window.location.href = "/login.html";
@@ -209,7 +215,8 @@ if (window.visualViewport) {
               bbl.innerHTML = renderMarkdown(agentText);
               bbl.dataset.rawText = agentText;
             }
-            showStatus("[PROCESSING...]");
+            startThinkingTimer();
+            showStatus(getToolStatusLabel(status.currentToolName));
           }
           openEventStream(sessionId);
           startSyncPolling();
@@ -902,6 +909,7 @@ function openEventStream(id) {
 
   eventSource.addEventListener("open", () => {
     setConnected(true);
+    lastEventTime = Date.now();
     if (reconnectAttempts > 0) {
       catchUpSession(id);
       hideStatus();
@@ -910,6 +918,7 @@ function openEventStream(id) {
   });
 
   eventSource.addEventListener("message", (e) => {
+    lastEventTime = Date.now();
     let event;
     try { event = JSON.parse(e.data); } catch { return; }
     handleAgentEvent(event);
@@ -950,6 +959,11 @@ async function catchUpSession(sid) {
     const serverMessages = status.messages || [];
     const domBubbles = messages.querySelectorAll(".msg.user, .msg.agent");
     const domCount = domBubbles.length;
+
+    if (serverMessages.length === domCount && status.agentRunning === isAgentRunning && !status.currentAgentText && !status.currentToolName && !status.pendingCount) {
+      catchUpInProgress = false;
+      return;
+    }
 
     if (serverMessages.length > domCount) {
       removeEmptyState();
@@ -993,7 +1007,8 @@ async function catchUpSession(sid) {
       }
       isAgentRunning = true;
       if (!thinkingStartTime) startThinkingTimer();
-      showStatus(status.pendingCount > 0 ? `🧠 THINKING... ${status.pendingCount} QUEUED` : "🧠 THINKING...");
+      const toolLabel = getToolStatusLabel(status.currentToolName);
+      showStatus(status.pendingCount > 0 ? `${toolLabel} ${status.pendingCount} QUEUED` : toolLabel);
     } else {
       isAgentRunning = false;
       agentBubble = null;
@@ -1051,7 +1066,10 @@ function attemptReconnect() {
     reconnectAttempts = 0;
     openEventStream(sessionId);
   } else {
-    catchUpSession(sessionId);
+    const timeSinceLastEvent = Date.now() - lastEventTime;
+    if (timeSinceLastEvent > 20000) {
+      catchUpSession(sessionId);
+    }
   }
 }
 

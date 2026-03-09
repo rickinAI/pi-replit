@@ -1841,6 +1841,7 @@ interface SessionEntry {
   createdAt: number;
   conversation: conversations.Conversation;
   currentAgentText: string;
+  currentToolName: string | null;
   modelMode: ModelMode;
   activeModelName: string;
   interviewWaiter?: InterviewWaiter;
@@ -2033,17 +2034,20 @@ async function processNextPendingMessage(sessionId: string) {
       actualPromise.then(() => {
         console.log(`[prompt] queued background prompt completed after ${((Date.now() - queuedPromptStart) / 1000).toFixed(1)}s total`);
         entry.isAgentRunning = false;
+        entry.currentToolName = null;
         processingQueue.delete(sessionId);
         processNextPendingMessage(sessionId);
       }).catch(() => {
         console.log(`[prompt] queued background prompt failed after ${((Date.now() - queuedPromptStart) / 1000).toFixed(1)}s total`);
         entry.isAgentRunning = false;
+        entry.currentToolName = null;
         processingQueue.delete(sessionId);
         processNextPendingMessage(sessionId);
       });
       return;
     }
     entry.isAgentRunning = false;
+    entry.currentToolName = null;
     processingQueue.delete(sessionId);
     processNextPendingMessage(sessionId);
     return;
@@ -2303,6 +2307,7 @@ app.post("/api/session", async (req: Request, res: Response) => {
       createdAt: Date.now(),
       conversation: conv,
       currentAgentText: "",
+      currentToolName: null,
       modelMode: "auto",
       activeModelName: FULL_MODEL_ID,
       isAgentRunning: false,
@@ -2323,8 +2328,15 @@ app.post("/api/session", async (req: Request, res: Response) => {
         }
       }
 
+      if (event.type === "tool_execution_start") {
+        entry.currentToolName = (event as any).toolName || null;
+      } else if (event.type === "tool_execution_end") {
+        entry.currentToolName = null;
+      }
+
       if (event.type === "agent_end") {
         entry.isAgentRunning = false;
+        entry.currentToolName = null;
         if (entry.currentAgentText) {
           conversations.addMessage(entry.conversation, "agent", entry.currentAgentText);
           entry.currentAgentText = "";
@@ -2393,6 +2405,7 @@ app.get("/api/session/:id/status", (req: Request, res: Response) => {
     alive: true,
     agentRunning: entry.isAgentRunning,
     currentAgentText: entry.currentAgentText,
+    currentToolName: entry.currentToolName,
     messages: entry.conversation.messages,
     pendingCount: entry.pendingMessages.length,
   });
@@ -2513,6 +2526,7 @@ app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
     await Promise.race([actualPromise, timeoutPromise]);
     console.log(`[prompt] completed in ${((Date.now() - promptStart) / 1000).toFixed(1)}s`);
     entry.isAgentRunning = false;
+    entry.currentToolName = null;
     processNextPendingMessage(sessionId);
   } catch (err) {
     const elapsed = ((Date.now() - promptStart) / 1000).toFixed(1);
@@ -2527,14 +2541,17 @@ app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
       actualPromise.then(() => {
         console.log(`[prompt] background prompt finally completed after ${((Date.now() - promptStart) / 1000).toFixed(1)}s total`);
         entry.isAgentRunning = false;
+        entry.currentToolName = null;
         processNextPendingMessage(sessionId);
       }).catch(() => {
         console.log(`[prompt] background prompt failed after ${((Date.now() - promptStart) / 1000).toFixed(1)}s total`);
         entry.isAgentRunning = false;
+        entry.currentToolName = null;
         processNextPendingMessage(sessionId);
       });
     } else {
       entry.isAgentRunning = false;
+      entry.currentToolName = null;
     }
   }
 });
