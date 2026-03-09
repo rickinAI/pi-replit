@@ -24,7 +24,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **src/weather.ts** — Weather via Open-Meteo (free, no API key)
 - **src/websearch.ts** — Web search via DuckDuckGo HTML (free, no API key)
 - **src/tasks.ts** — Task manager with PostgreSQL storage (tasks table)
-- **src/scheduled-jobs.ts** — Scheduled agent jobs system. Runs agents autonomously on configurable schedules. 7 jobs (5 enabled): KB Audit 2AM (disabled), Daily News 6:30AM (disabled), Market Summary 7:30AM (disabled), Moody's Intel Brief 6:00AM, Moody's Profile Updates 6:15AM, Moody's Weekly Digest Sun 7:00AM, Real Estate Scan 7:30AM. Config stored in `app_config` key='scheduled_jobs'. 60s check loop with run-key dedup. Status tracking: `success`, `partial` (timedOut or "PARTIAL" in response), `error`. Writes `Scheduled Reports/job-status.json` to vault after each job. API: GET/PUT/DELETE `/api/scheduled-jobs`, PUT `/api/scheduled-jobs/:id`, POST `/api/scheduled-jobs/:id/trigger`
+- **src/scheduled-jobs.ts** — Scheduled agent jobs system. Runs agents autonomously on configurable schedules. 8 jobs (6 enabled): KB Audit 2AM (disabled), Daily News 6:30AM (disabled), Market Summary 7:30AM (disabled), Moody's Intel Brief 6:00AM, Moody's Profile Updates 6:15AM, Moody's Weekly Digest Sun 7:00AM, Real Estate Scan 7:30AM, **Inbox Monitor every 30m** (polls Gmail for @darknode emails). Config stored in `app_config` key='scheduled_jobs'. 60s check loop with run-key dedup (interval jobs use timestamp-based dedup). Schedule types: `daily`, `weekly`, `interval` (with `intervalMinutes`). Status tracking: `success`, `partial` (timedOut or "PARTIAL" in response), `error`. Writes `Scheduled Reports/job-status.json` to vault after each job. API: GET/PUT/DELETE `/api/scheduled-jobs`, PUT `/api/scheduled-jobs/:id`, POST `/api/scheduled-jobs/:id/trigger`
 - **src/news.ts** — News headlines via Google News RSS feeds
 - **src/conversations.ts** — Conversation persistence module (save/load/list/delete via PostgreSQL, AI summaries via Haiku, last-conversation context for session start). Uses Replit's built-in PostgreSQL database (DATABASE_URL) so conversations persist across deployments
 - **src/memory-extractor.ts** — Post-conversation fact extraction (profile updates, action items) via Claude Haiku
@@ -52,6 +52,14 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - 7-step daily scan: Zillow → Redfin → cross-reference → deep dive → X/social signals → commute research → Market Overview update
   - Saves to `Scheduled Reports/Real Estate/YYYY-MM-DD-Property-Scan.md`, appends to `Real Estate/Areas/`, saves ⭐ gems to `Real Estate/Favorites/`
   - Auto-archive >30 days to `Archive/Real Estate/`. Agent pre-reads Search Criteria + area files. Timeout: 600s
+- **@darknode Inbox Monitor** — Automated email-to-task pipeline:
+  - Polls Gmail every 30 minutes for unread emails containing `@darknode` + instruction
+  - Uses `getDarkNodeEmails()` from `src/gmail.ts` to search `is:unread @darknode`, extract instruction text after the `@darknode` tag
+  - Tracks processed email IDs in `app_config` key `darknode_processed_emails` (keeps last 200 IDs) — avoids reprocessing without needing `gmail.modify` scope
+  - For each email, constructs a prompt with the full email content + instruction, runs via `deep-researcher` agent
+  - Common instructions: "add to KB" (save to vault), "summarize", "add to calendar", "action items", "tasks"
+  - Results saved to `Scheduled Reports/Inbox Monitor/` with timestamps
+  - Usage: forward any email to `rickin.patel@gmail.com` and reply/add `@darknode [instruction]` in the body
 - **public/** — Static frontend (terminal/hacker aesthetic, branded as "RICKIN")
   - Landing screen: "Mission Control" full-screen overlay on fresh load (no active session). Shows date, glance strip (weather/email/tasks/calendar from `/api/glance`), interactive task section (checklist with checkboxes, priority dots, "Go" quick-launch, inline add-task form), last conversation card with preview + RESUME button, NEW MISSION button, recent conversation cards with delete, VIEW ALL to expand full history inline
   - Conversation search: search input on landing screen filters conversations by title in real-time

@@ -324,6 +324,124 @@ export async function getAccessToken(): Promise<string | null> {
   }
 }
 
+export interface DarkNodeEmail {
+  messageId: string;
+  subject: string;
+  from: string;
+  date: string;
+  body: string;
+  instruction: string;
+}
+
+const TRUSTED_SENDERS = [
+  "rickin.patel@gmail.com",
+  "rickin@rickin.live",
+];
+
+function isTrustedSender(from: string): boolean {
+  const emailMatch = from.match(/<([^>]+)>/);
+  const email = emailMatch ? emailMatch[1].toLowerCase() : from.toLowerCase().trim();
+  return TRUSTED_SENDERS.some(trusted => email === trusted || email.endsWith(`<${trusted}>`));
+}
+
+export async function getDarkNodeEmails(): Promise<DarkNodeEmail[]> {
+  try {
+    const gmail = await getGmailClient();
+    const listRes = await gmail.users.messages.list({
+      userId: "me",
+      q: "is:unread from:me @darknode",
+      maxResults: 5,
+    });
+    const messageRefs = listRes.data.messages || [];
+    if (messageRefs.length === 0) return [];
+
+    const processedIds = await getProcessedDarkNodeIds();
+
+    const results: DarkNodeEmail[] = [];
+    for (const ref of messageRefs) {
+      if (processedIds.has(ref.id!)) continue;
+
+      const msg = await gmail.users.messages.get({
+        userId: "me",
+        id: ref.id!,
+        format: "full",
+      });
+      const headers = msg.data.payload?.headers || [];
+      const from = decodeHeader(headers, "From");
+
+      if (!isTrustedSender(from)) {
+        console.log(`[gmail] getDarkNodeEmails: skipping untrusted sender: ${from}`);
+        await markDarkNodeProcessed(ref.id!);
+        continue;
+      }
+
+      const subject = decodeHeader(headers, "Subject") || "(no subject)";
+      const date = decodeHeader(headers, "Date");
+      const body = decodeBody(msg.data.payload) || "(no readable content)";
+
+      const instruction = extractDarkNodeInstruction(body);
+      if (!instruction) continue;
+
+      results.push({
+        messageId: ref.id!,
+        subject,
+        from,
+        date,
+        body: body.length > 5000 ? body.slice(0, 5000) + "\n\n[...truncated]" : body,
+        instruction,
+      });
+    }
+
+    return results;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[gmail] getDarkNodeEmails error:", msg);
+    return [];
+  }
+}
+
+function extractDarkNodeInstruction(body: string): string | null {
+  const lines = body.split(/\n/);
+  for (const line of lines) {
+    if (line.trimStart().startsWith(">")) continue;
+    const match = line.match(/@darknode\s*[-–—:]?\s*(.+)/i);
+    if (match) {
+      let instruction = match[1].trim();
+      if (instruction.length === 0) continue;
+      if (instruction.length > 200) instruction = instruction.slice(0, 200);
+      return instruction;
+    }
+  }
+  return null;
+}
+
+async function getProcessedDarkNodeIds(): Promise<Set<string>> {
+  try {
+    const result = await getPool().query(`SELECT value FROM app_config WHERE key = 'darknode_processed_emails'`);
+    if (result.rows.length > 0) {
+      const ids: string[] = result.rows[0].value.ids || [];
+      return new Set(ids);
+    }
+  } catch {}
+  return new Set();
+}
+
+export async function markDarkNodeProcessed(messageId: string): Promise<void> {
+  try {
+    const existing = await getProcessedDarkNodeIds();
+    existing.add(messageId);
+    const ids = [...existing].slice(-200);
+    await getPool().query(
+      `INSERT INTO app_config (key, value, updated_at)
+       VALUES ('darknode_processed_emails', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify({ ids }), Date.now()]
+    );
+  } catch (err) {
+    console.error("[gmail] markDarkNodeProcessed error:", err);
+  }
+}
+
 export async function checkConnectionStatus(): Promise<{ connected: boolean; email?: string; error?: string }> {
   if (!isConfigured()) return { connected: false, error: "GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET not set" };
   if (!isConnected()) return { connected: false, error: "No OAuth tokens — visit /api/gmail/auth to connect" };

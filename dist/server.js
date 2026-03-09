@@ -1108,6 +1108,102 @@ async function getAccessToken() {
     return null;
   }
 }
+var TRUSTED_SENDERS = [
+  "rickin.patel@gmail.com",
+  "rickin@rickin.live"
+];
+function isTrustedSender(from) {
+  const emailMatch = from.match(/<([^>]+)>/);
+  const email = emailMatch ? emailMatch[1].toLowerCase() : from.toLowerCase().trim();
+  return TRUSTED_SENDERS.some((trusted) => email === trusted || email.endsWith(`<${trusted}>`));
+}
+async function getDarkNodeEmails() {
+  try {
+    const gmail = await getGmailClient();
+    const listRes = await gmail.users.messages.list({
+      userId: "me",
+      q: "is:unread from:me @darknode",
+      maxResults: 5
+    });
+    const messageRefs = listRes.data.messages || [];
+    if (messageRefs.length === 0) return [];
+    const processedIds = await getProcessedDarkNodeIds();
+    const results = [];
+    for (const ref of messageRefs) {
+      if (processedIds.has(ref.id)) continue;
+      const msg = await gmail.users.messages.get({
+        userId: "me",
+        id: ref.id,
+        format: "full"
+      });
+      const headers2 = msg.data.payload?.headers || [];
+      const from = decodeHeader(headers2, "From");
+      if (!isTrustedSender(from)) {
+        console.log(`[gmail] getDarkNodeEmails: skipping untrusted sender: ${from}`);
+        await markDarkNodeProcessed(ref.id);
+        continue;
+      }
+      const subject = decodeHeader(headers2, "Subject") || "(no subject)";
+      const date = decodeHeader(headers2, "Date");
+      const body = decodeBody(msg.data.payload) || "(no readable content)";
+      const instruction = extractDarkNodeInstruction(body);
+      if (!instruction) continue;
+      results.push({
+        messageId: ref.id,
+        subject,
+        from,
+        date,
+        body: body.length > 5e3 ? body.slice(0, 5e3) + "\n\n[...truncated]" : body,
+        instruction
+      });
+    }
+    return results;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[gmail] getDarkNodeEmails error:", msg);
+    return [];
+  }
+}
+function extractDarkNodeInstruction(body) {
+  const lines = body.split(/\n/);
+  for (const line of lines) {
+    if (line.trimStart().startsWith(">")) continue;
+    const match = line.match(/@darknode\s*[-–—:]?\s*(.+)/i);
+    if (match) {
+      let instruction = match[1].trim();
+      if (instruction.length === 0) continue;
+      if (instruction.length > 200) instruction = instruction.slice(0, 200);
+      return instruction;
+    }
+  }
+  return null;
+}
+async function getProcessedDarkNodeIds() {
+  try {
+    const result = await getPool().query(`SELECT value FROM app_config WHERE key = 'darknode_processed_emails'`);
+    if (result.rows.length > 0) {
+      const ids = result.rows[0].value.ids || [];
+      return new Set(ids);
+    }
+  } catch {
+  }
+  return /* @__PURE__ */ new Set();
+}
+async function markDarkNodeProcessed(messageId) {
+  try {
+    const existing = await getProcessedDarkNodeIds();
+    existing.add(messageId);
+    const ids = [...existing].slice(-200);
+    await getPool().query(
+      `INSERT INTO app_config (key, value, updated_at)
+       VALUES ('darknode_processed_emails', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify({ ids }), Date.now()]
+    );
+  } catch (err) {
+    console.error("[gmail] markDarkNodeProcessed error:", err);
+  }
+}
 async function checkConnectionStatus() {
   if (!isConfigured3()) return { connected: false, error: "GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET not set" };
   if (!isConnected()) return { connected: false, error: "No OAuth tokens \u2014 visit /api/gmail/auth to connect" };
@@ -3780,6 +3876,7 @@ function getJobSavePath(jobId, dateStr, safeName) {
   if (jobId === "moodys-profile-updates") return `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Profile-Updates.md`;
   if (jobId === "moodys-weekly-digest") return `Scheduled Reports/Moody's Intelligence/Weekly/${dateStr}-Digest.md`;
   if (jobId === "real-estate-daily-scan") return `Scheduled Reports/Real Estate/${dateStr}-Property-Scan.md`;
+  if (jobId === "darknode-inbox-monitor") return `Scheduled Reports/Inbox Monitor/${dateStr}-${safeName}.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 var jobStatusCache = {};
@@ -4106,6 +4203,14 @@ After the Market Overview, append any notable new listings to the corresponding 
 If no properties are found in an area, note "No new listings matching criteria" rather than omitting the section.`,
     schedule: { type: "daily", hour: 7, minute: 30 },
     enabled: true
+  },
+  {
+    id: "darknode-inbox-monitor",
+    name: "Inbox Monitor (@darknode)",
+    agentId: "orchestrator",
+    prompt: "",
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 30 },
+    enabled: true
   }
 ];
 var config2 = {
@@ -4238,6 +4343,18 @@ function getNextJob() {
   let bestJob = null;
   let bestMinutesAway = Infinity;
   for (const job of enabled) {
+    if (job.schedule.type === "interval") {
+      const intervalMs = (job.schedule.intervalMinutes || 30) * 6e4;
+      const lastRunTime = job.lastRun ? new Date(job.lastRun).getTime() : 0;
+      const elapsed = Date.now() - lastRunTime;
+      const remaining = Math.max(0, intervalMs - elapsed);
+      const mins = Math.ceil(remaining / 6e4);
+      if (mins < bestMinutesAway) {
+        bestMinutesAway = mins;
+        bestJob = job;
+      }
+      continue;
+    }
     const jH = job.schedule.hour;
     const jM = job.schedule.minute;
     if (job.schedule.type === "weekly" && job.schedule.daysOfWeek) {
@@ -4261,11 +4378,16 @@ function getNextJob() {
     }
   }
   if (!bestJob) return null;
-  const h = bestJob.schedule.hour;
-  const m = bestJob.schedule.minute;
-  const ampm = h < 12 ? "AM" : "PM";
-  const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-  const timeStr = `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+  let timeStr;
+  if (bestJob.schedule.type === "interval") {
+    timeStr = `every ${bestJob.schedule.intervalMinutes || 30}m`;
+  } else {
+    const h = bestJob.schedule.hour;
+    const m = bestJob.schedule.minute;
+    const ampm = h < 12 ? "AM" : "PM";
+    const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+    timeStr = `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+  }
   return { name: bestJob.name, id: bestJob.id, time: timeStr };
 }
 function updateConfig2(partial) {
@@ -4316,6 +4438,110 @@ function getTodayKey2() {
   const now = getNow2();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
+function shouldJobRun(job, now, nowMinutes, todayKey, dayOfWeek) {
+  if (job.schedule.type === "interval") {
+    const intervalMs = (job.schedule.intervalMinutes || 30) * 6e4;
+    const lastRunTime = job.lastRun ? new Date(job.lastRun).getTime() : 0;
+    return Date.now() - lastRunTime >= intervalMs;
+  }
+  const targetMinutes = job.schedule.hour * 60 + job.schedule.minute;
+  if (nowMinutes < targetMinutes || nowMinutes > targetMinutes + 2) return false;
+  if (job.schedule.type === "weekly" && job.schedule.daysOfWeek) {
+    if (!job.schedule.daysOfWeek.includes(dayOfWeek)) return false;
+  }
+  const runKey = `${job.id}_${todayKey}`;
+  return !config2.lastJobRun[runKey];
+}
+async function runInboxMonitor(job) {
+  console.log(`[scheduled-jobs] Inbox monitor: checking for @darknode emails...`);
+  let emails;
+  try {
+    emails = await getDarkNodeEmails();
+  } catch (err) {
+    console.error("[scheduled-jobs] Inbox monitor: failed to fetch emails:", err);
+    job.lastRun = (/* @__PURE__ */ new Date()).toISOString();
+    job.lastResult = `Error fetching emails: ${err}`;
+    job.lastStatus = "error";
+    await saveConfig2();
+    return;
+  }
+  if (emails.length === 0) {
+    console.log("[scheduled-jobs] Inbox monitor: no new @darknode emails");
+    job.lastRun = (/* @__PURE__ */ new Date()).toISOString();
+    job.lastResult = "No new @darknode emails found";
+    job.lastStatus = "success";
+    await saveConfig2();
+    return;
+  }
+  console.log(`[scheduled-jobs] Inbox monitor: found ${emails.length} @darknode email(s)`);
+  const results = [];
+  for (const email of emails) {
+    const prompt = `You received a forwarded email with a @darknode instruction. Process it accordingly.
+
+**Instruction**: ${email.instruction}
+
+**Email Details**:
+- Subject: ${email.subject}
+- From: ${email.from}
+- Date: ${email.date}
+
+**Email Body**:
+${email.body}
+
+Process the email content according to the instruction "${email.instruction}". Common instructions:
+- "add to KB" / "save" = Save the email content as a well-organized note in the knowledge base
+- "summarize" = Create a concise summary and save it
+- "add to calendar" = Extract event details and create calendar events
+- "action items" / "tasks" = Extract action items and create tasks
+- For any other instruction, use your best judgment to fulfill the request
+
+After processing, briefly confirm what you did.`;
+    try {
+      const agentResult = await runAgentFn(job.agentId === "orchestrator" ? "deep-researcher" : job.agentId, prompt);
+      results.push(`## ${email.subject}
+**Instruction**: ${email.instruction}
+**Result**: ${agentResult.response}`);
+      await markDarkNodeProcessed(email.messageId);
+      console.log(`[scheduled-jobs] Inbox monitor: processed "${email.subject}" (${email.instruction})`);
+    } catch (err) {
+      results.push(`## ${email.subject}
+**Instruction**: ${email.instruction}
+**Error**: ${err}`);
+      console.error(`[scheduled-jobs] Inbox monitor: failed to process "${email.subject}":`, err);
+    }
+  }
+  const fullResult = results.join("\n\n---\n\n");
+  job.lastRun = (/* @__PURE__ */ new Date()).toISOString();
+  job.lastResult = fullResult.slice(0, 500);
+  job.lastStatus = results.some((r) => r.includes("**Error**")) ? "partial" : "success";
+  await saveConfig2();
+  if (kbCreateFn) {
+    const todayKey = getTodayKey2();
+    const timestamp = (/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: config2.timezone }).replace(/[/:]/g, "-").replace(/,\s*/g, "_");
+    const savePath = `Scheduled Reports/Inbox Monitor/${todayKey}-${timestamp}.md`;
+    try {
+      await kbCreateFn(savePath, `# Inbox Monitor Results
+*Processed: ${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: config2.timezone })}*
+*Emails processed: ${emails.length}*
+
+${fullResult}`);
+    } catch {
+    }
+    try {
+      await writeJobStatus(job.id, { lastRun: job.lastRun, status: job.lastStatus, savedTo: savePath, error: null });
+    } catch {
+    }
+  }
+  if (broadcastFn2) {
+    broadcastFn2({
+      type: "job_complete",
+      jobId: job.id,
+      jobName: job.name,
+      summary: `Processed ${emails.length} @darknode email(s): ${emails.map((e) => e.instruction).join(", ")}`,
+      timestamp: Date.now()
+    });
+  }
+}
 async function checkJobs() {
   if (jobRunning || !runAgentFn) return;
   const now = getNow2();
@@ -4324,56 +4550,57 @@ async function checkJobs() {
   const dayOfWeek = now.getDay();
   for (const job of config2.jobs) {
     if (!job.enabled) continue;
-    const targetMinutes = job.schedule.hour * 60 + job.schedule.minute;
-    if (nowMinutes < targetMinutes || nowMinutes > targetMinutes + 2) continue;
-    if (job.schedule.type === "weekly" && job.schedule.daysOfWeek) {
-      if (!job.schedule.daysOfWeek.includes(dayOfWeek)) continue;
+    if (!shouldJobRun(job, now, nowMinutes, todayKey, dayOfWeek)) continue;
+    if (job.schedule.type !== "interval") {
+      const runKey = `${job.id}_${todayKey}`;
+      config2.lastJobRun[runKey] = true;
+      await saveConfig2();
     }
-    const runKey = `${job.id}_${todayKey}`;
-    if (config2.lastJobRun[runKey]) continue;
-    config2.lastJobRun[runKey] = true;
-    await saveConfig2();
     jobRunning = true;
     console.log(`[scheduled-jobs] Running job: ${job.name} (${job.id})`);
     try {
-      const agentResult = await runAgentFn(job.agentId, job.prompt);
-      const result = agentResult.response;
-      const isPartial = agentResult.timedOut || result.includes("\u26A0\uFE0F PARTIAL");
-      job.lastRun = (/* @__PURE__ */ new Date()).toISOString();
-      job.lastResult = result.slice(0, 500);
-      job.lastStatus = isPartial ? "partial" : "success";
-      await saveConfig2();
-      const dateStr = todayKey;
-      const safeName = job.name.replace(/[^a-zA-Z0-9 ]/g, "").replace(/\s+/g, "-");
-      const savePath = getJobSavePath(job.id, dateStr, safeName);
-      let vaultSaved = false;
-      if (kbCreateFn) {
-        try {
-          await kbCreateFn(savePath, `# ${job.name}
+      if (job.id === "darknode-inbox-monitor") {
+        await runInboxMonitor(job);
+      } else {
+        const agentResult = await runAgentFn(job.agentId, job.prompt);
+        const result = agentResult.response;
+        const isPartial = agentResult.timedOut || result.includes("\u26A0\uFE0F PARTIAL");
+        job.lastRun = (/* @__PURE__ */ new Date()).toISOString();
+        job.lastResult = result.slice(0, 500);
+        job.lastStatus = isPartial ? "partial" : "success";
+        await saveConfig2();
+        const dateStr = todayKey;
+        const safeName = job.name.replace(/[^a-zA-Z0-9 ]/g, "").replace(/\s+/g, "-");
+        const savePath = getJobSavePath(job.id, dateStr, safeName);
+        let vaultSaved = false;
+        if (kbCreateFn) {
+          try {
+            await kbCreateFn(savePath, `# ${job.name}
 *Generated: ${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: config2.timezone })}*
 
 ${result}`);
-          vaultSaved = true;
-        } catch (e) {
-          console.error(`[scheduled-jobs] Failed to save to vault:`, e);
+            vaultSaved = true;
+          } catch (e) {
+            console.error(`[scheduled-jobs] Failed to save to vault:`, e);
+          }
+          try {
+            await writeJobStatus(job.id, { lastRun: job.lastRun, status: job.lastStatus, savedTo: vaultSaved ? savePath : null, error: vaultSaved ? null : "vault save failed" });
+          } catch {
+          }
         }
-        try {
-          await writeJobStatus(job.id, { lastRun: job.lastRun, status: job.lastStatus, savedTo: vaultSaved ? savePath : null, error: vaultSaved ? null : "vault save failed" });
-        } catch {
+        if (broadcastFn2) {
+          broadcastFn2({
+            type: "job_complete",
+            jobId: job.id,
+            jobName: job.name,
+            summary: result.slice(0, 200),
+            timestamp: Date.now()
+          });
         }
-      }
-      if (broadcastFn2) {
-        broadcastFn2({
-          type: "job_complete",
-          jobId: job.id,
-          jobName: job.name,
-          summary: result.slice(0, 200),
-          timestamp: Date.now()
-        });
-      }
-      console.log(`[scheduled-jobs] Job completed${isPartial ? " (partial)" : ""}: ${job.name}`);
-      if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate")) && kbListFn && kbMoveFn) {
-        await archiveOldReports();
+        console.log(`[scheduled-jobs] Job completed${isPartial ? " (partial)" : ""}: ${job.name}`);
+        if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate")) && kbListFn && kbMoveFn) {
+          await archiveOldReports();
+        }
       }
     } catch (err) {
       job.lastRun = (/* @__PURE__ */ new Date()).toISOString();
@@ -4410,7 +4637,10 @@ function startJobSystem(runAgent, broadcast, kbCreate2, kbList2, kbMove2) {
     checkJobs().catch((err) => console.error("[scheduled-jobs] Check error:", err));
   }, 6e4);
   const enabledJobs = config2.jobs.filter((j) => j.enabled);
-  const jobList = enabledJobs.length > 0 ? enabledJobs.map((j) => `${j.name}/${j.schedule.hour}:${String(j.schedule.minute).padStart(2, "0")}`).join(", ") : "none enabled";
+  const jobList = enabledJobs.length > 0 ? enabledJobs.map((j) => {
+    if (j.schedule.type === "interval") return `${j.name}/every ${j.schedule.intervalMinutes || 30}m`;
+    return `${j.name}/${j.schedule.hour}:${String(j.schedule.minute).padStart(2, "0")}`;
+  }).join(", ") : "none enabled";
   console.log(`[scheduled-jobs] System started \u2014 ${jobList} (${config2.timezone})`);
 }
 function stopJobSystem() {
@@ -4427,6 +4657,10 @@ async function triggerJob(jobId) {
   jobRunning = true;
   console.log(`[scheduled-jobs] Manual trigger: ${job.name}`);
   try {
+    if (job.id === "darknode-inbox-monitor") {
+      await runInboxMonitor(job);
+      return job.lastResult || "Inbox monitor completed";
+    }
     const agentResult = await runAgentFn(job.agentId, job.prompt);
     const result = agentResult.response;
     const isPartial = agentResult.timedOut || result.includes("\u26A0\uFE0F PARTIAL");

@@ -365,6 +365,17 @@ If something goes sideways mid-execution, STOP and re-plan — don't keep pushin
 - One clear task per agent for focused execution
 - Always confirm delegation with the user via interview form before dispatching an agent
 
+### 2.5. @darknode Email Instructions
+The inbox monitor polls Gmail every 30 minutes for unread emails containing "@darknode" followed by an instruction. When you receive one of these as a task, the email body and instruction are provided in the prompt. Common patterns:
+- **"add to KB"** / **"save"** — Parse the email content and save it as a well-organized note in the appropriate vault folder (e.g., school emails to `Family/Reya/School/`, recipes to `Reference/Recipes/`)
+- **"summarize"** — Create a concise summary note
+- **"add to calendar"** — Extract dates/times and create calendar events
+- **"action items"** / **"tasks"** — Extract action items and create tasks
+- **"agent [instruction]"** — Pass the full email to the specified instruction (e.g., "agent research this topic")
+- Any other text — Use your best judgment based on the instruction
+
+Always confirm what you did in your response. These run autonomously without user interaction — **skip all interview-form confirmations and plan-confirm steps** for inbox monitor tasks. Just execute the instruction directly and report what you did. Be thorough but conservative — save content, don't delete or modify existing data unless explicitly asked.
+
 ### 3. Self-Improvement Loop
 - After ANY correction from Rickin, update `About Me/Lessons Learned.md`
 - Write rules for yourself that prevent repeating the same mistake

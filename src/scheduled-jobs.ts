@@ -1,4 +1,5 @@
 import { getPool } from "./db.js";
+import { getDarkNodeEmails, markDarkNodeProcessed } from "./gmail.js";
 
 export interface ScheduledJob {
   id: string;
@@ -6,10 +7,11 @@ export interface ScheduledJob {
   agentId: string;
   prompt: string;
   schedule: {
-    type: "daily" | "weekly";
+    type: "daily" | "weekly" | "interval";
     hour: number;
     minute: number;
     daysOfWeek?: number[];
+    intervalMinutes?: number;
   };
   enabled: boolean;
   lastRun?: string;
@@ -34,6 +36,7 @@ function getJobSavePath(jobId: string, dateStr: string, safeName: string): strin
   if (jobId === "moodys-profile-updates") return `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Profile-Updates.md`;
   if (jobId === "moodys-weekly-digest") return `Scheduled Reports/Moody's Intelligence/Weekly/${dateStr}-Digest.md`;
   if (jobId === "real-estate-daily-scan") return `Scheduled Reports/Real Estate/${dateStr}-Property-Scan.md`;
+  if (jobId === "darknode-inbox-monitor") return `Scheduled Reports/Inbox Monitor/${dateStr}-${safeName}.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 
@@ -364,6 +367,14 @@ If no properties are found in an area, note "No new listings matching criteria" 
     schedule: { type: "daily", hour: 7, minute: 30 },
     enabled: true,
   },
+  {
+    id: "darknode-inbox-monitor",
+    name: "Inbox Monitor (@darknode)",
+    agentId: "orchestrator",
+    prompt: "",
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 30 },
+    enabled: true,
+  },
 ];
 
 let config: ScheduledJobsConfig = {
@@ -512,6 +523,16 @@ export function getNextJob(): { name: string; id: string; time: string } | null 
   let bestMinutesAway = Infinity;
 
   for (const job of enabled) {
+    if (job.schedule.type === "interval") {
+      const intervalMs = (job.schedule.intervalMinutes || 30) * 60_000;
+      const lastRunTime = job.lastRun ? new Date(job.lastRun).getTime() : 0;
+      const elapsed = Date.now() - lastRunTime;
+      const remaining = Math.max(0, intervalMs - elapsed);
+      const mins = Math.ceil(remaining / 60_000);
+      if (mins < bestMinutesAway) { bestMinutesAway = mins; bestJob = job; }
+      continue;
+    }
+
     const jH = job.schedule.hour;
     const jM = job.schedule.minute;
 
@@ -532,11 +553,16 @@ export function getNextJob(): { name: string; id: string; time: string } | null 
 
   if (!bestJob) return null;
 
-  const h = bestJob.schedule.hour;
-  const m = bestJob.schedule.minute;
-  const ampm = h < 12 ? "AM" : "PM";
-  const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-  const timeStr = `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+  let timeStr: string;
+  if (bestJob.schedule.type === "interval") {
+    timeStr = `every ${bestJob.schedule.intervalMinutes || 30}m`;
+  } else {
+    const h = bestJob.schedule.hour;
+    const m = bestJob.schedule.minute;
+    const ampm = h < 12 ? "AM" : "PM";
+    const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+    timeStr = `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+  }
 
   return { name: bestJob.name, id: bestJob.id, time: timeStr };
 }
@@ -595,6 +621,112 @@ function getTodayKey(): string {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
 
+function shouldJobRun(job: ScheduledJob, now: Date, nowMinutes: number, todayKey: string, dayOfWeek: number): boolean {
+  if (job.schedule.type === "interval") {
+    const intervalMs = (job.schedule.intervalMinutes || 30) * 60_000;
+    const lastRunTime = job.lastRun ? new Date(job.lastRun).getTime() : 0;
+    return (Date.now() - lastRunTime) >= intervalMs;
+  }
+
+  const targetMinutes = job.schedule.hour * 60 + job.schedule.minute;
+  if (nowMinutes < targetMinutes || nowMinutes > targetMinutes + 2) return false;
+
+  if (job.schedule.type === "weekly" && job.schedule.daysOfWeek) {
+    if (!job.schedule.daysOfWeek.includes(dayOfWeek)) return false;
+  }
+
+  const runKey = `${job.id}_${todayKey}`;
+  return !config.lastJobRun[runKey];
+}
+
+async function runInboxMonitor(job: ScheduledJob): Promise<void> {
+  console.log(`[scheduled-jobs] Inbox monitor: checking for @darknode emails...`);
+  let emails;
+  try {
+    emails = await getDarkNodeEmails();
+  } catch (err) {
+    console.error("[scheduled-jobs] Inbox monitor: failed to fetch emails:", err);
+    job.lastRun = new Date().toISOString();
+    job.lastResult = `Error fetching emails: ${err}`;
+    job.lastStatus = "error";
+    await saveConfig();
+    return;
+  }
+
+  if (emails.length === 0) {
+    console.log("[scheduled-jobs] Inbox monitor: no new @darknode emails");
+    job.lastRun = new Date().toISOString();
+    job.lastResult = "No new @darknode emails found";
+    job.lastStatus = "success";
+    await saveConfig();
+    return;
+  }
+
+  console.log(`[scheduled-jobs] Inbox monitor: found ${emails.length} @darknode email(s)`);
+
+  const results: string[] = [];
+  for (const email of emails) {
+    const prompt = `You received a forwarded email with a @darknode instruction. Process it accordingly.
+
+**Instruction**: ${email.instruction}
+
+**Email Details**:
+- Subject: ${email.subject}
+- From: ${email.from}
+- Date: ${email.date}
+
+**Email Body**:
+${email.body}
+
+Process the email content according to the instruction "${email.instruction}". Common instructions:
+- "add to KB" / "save" = Save the email content as a well-organized note in the knowledge base
+- "summarize" = Create a concise summary and save it
+- "add to calendar" = Extract event details and create calendar events
+- "action items" / "tasks" = Extract action items and create tasks
+- For any other instruction, use your best judgment to fulfill the request
+
+After processing, briefly confirm what you did.`;
+
+    try {
+      const agentResult = await runAgentFn!(job.agentId === "orchestrator" ? "deep-researcher" : job.agentId, prompt);
+      results.push(`## ${email.subject}\n**Instruction**: ${email.instruction}\n**Result**: ${agentResult.response}`);
+      await markDarkNodeProcessed(email.messageId);
+      console.log(`[scheduled-jobs] Inbox monitor: processed "${email.subject}" (${email.instruction})`);
+    } catch (err) {
+      results.push(`## ${email.subject}\n**Instruction**: ${email.instruction}\n**Error**: ${err}`);
+      console.error(`[scheduled-jobs] Inbox monitor: failed to process "${email.subject}":`, err);
+    }
+  }
+
+  const fullResult = results.join("\n\n---\n\n");
+  job.lastRun = new Date().toISOString();
+  job.lastResult = fullResult.slice(0, 500);
+  job.lastStatus = results.some(r => r.includes("**Error**")) ? "partial" : "success";
+  await saveConfig();
+
+  if (kbCreateFn) {
+    const todayKey = getTodayKey();
+    const timestamp = new Date().toLocaleString("en-US", { timeZone: config.timezone }).replace(/[/:]/g, "-").replace(/,\s*/g, "_");
+    const savePath = `Scheduled Reports/Inbox Monitor/${todayKey}-${timestamp}.md`;
+    try {
+      await kbCreateFn(savePath, `# Inbox Monitor Results\n*Processed: ${new Date().toLocaleString("en-US", { timeZone: config.timezone })}*\n*Emails processed: ${emails.length}*\n\n${fullResult}`);
+    } catch {}
+    try {
+      await writeJobStatus(job.id, { lastRun: job.lastRun, status: job.lastStatus!, savedTo: savePath, error: null });
+    } catch {}
+  }
+
+  if (broadcastFn) {
+    broadcastFn({
+      type: "job_complete",
+      jobId: job.id,
+      jobName: job.name,
+      summary: `Processed ${emails.length} @darknode email(s): ${emails.map(e => e.instruction).join(", ")}`,
+      timestamp: Date.now(),
+    });
+  }
+}
+
 async function checkJobs(): Promise<void> {
   if (jobRunning || !runAgentFn) return;
 
@@ -605,62 +737,60 @@ async function checkJobs(): Promise<void> {
 
   for (const job of config.jobs) {
     if (!job.enabled) continue;
+    if (!shouldJobRun(job, now, nowMinutes, todayKey, dayOfWeek)) continue;
 
-    const targetMinutes = job.schedule.hour * 60 + job.schedule.minute;
-    if (nowMinutes < targetMinutes || nowMinutes > targetMinutes + 2) continue;
-
-    if (job.schedule.type === "weekly" && job.schedule.daysOfWeek) {
-      if (!job.schedule.daysOfWeek.includes(dayOfWeek)) continue;
+    if (job.schedule.type !== "interval") {
+      const runKey = `${job.id}_${todayKey}`;
+      config.lastJobRun[runKey] = true;
+      await saveConfig();
     }
-
-    const runKey = `${job.id}_${todayKey}`;
-    if (config.lastJobRun[runKey]) continue;
-
-    config.lastJobRun[runKey] = true;
-    await saveConfig();
 
     jobRunning = true;
     console.log(`[scheduled-jobs] Running job: ${job.name} (${job.id})`);
 
     try {
-      const agentResult = await runAgentFn(job.agentId, job.prompt);
-      const result = agentResult.response;
-      const isPartial = agentResult.timedOut || result.includes("⚠️ PARTIAL");
-      job.lastRun = new Date().toISOString();
-      job.lastResult = result.slice(0, 500);
-      job.lastStatus = isPartial ? "partial" : "success";
-      await saveConfig();
+      if (job.id === "darknode-inbox-monitor") {
+        await runInboxMonitor(job);
+      } else {
+        const agentResult = await runAgentFn(job.agentId, job.prompt);
+        const result = agentResult.response;
+        const isPartial = agentResult.timedOut || result.includes("⚠️ PARTIAL");
+        job.lastRun = new Date().toISOString();
+        job.lastResult = result.slice(0, 500);
+        job.lastStatus = isPartial ? "partial" : "success";
+        await saveConfig();
 
-      const dateStr = todayKey;
-      const safeName = job.name.replace(/[^a-zA-Z0-9 ]/g, "").replace(/\s+/g, "-");
-      const savePath = getJobSavePath(job.id, dateStr, safeName);
-      let vaultSaved = false;
-      if (kbCreateFn) {
-        try {
-          await kbCreateFn(savePath, `# ${job.name}\n*Generated: ${new Date().toLocaleString("en-US", { timeZone: config.timezone })}*\n\n${result}`);
-          vaultSaved = true;
-        } catch (e) {
-          console.error(`[scheduled-jobs] Failed to save to vault:`, e);
+        const dateStr = todayKey;
+        const safeName = job.name.replace(/[^a-zA-Z0-9 ]/g, "").replace(/\s+/g, "-");
+        const savePath = getJobSavePath(job.id, dateStr, safeName);
+        let vaultSaved = false;
+        if (kbCreateFn) {
+          try {
+            await kbCreateFn(savePath, `# ${job.name}\n*Generated: ${new Date().toLocaleString("en-US", { timeZone: config.timezone })}*\n\n${result}`);
+            vaultSaved = true;
+          } catch (e) {
+            console.error(`[scheduled-jobs] Failed to save to vault:`, e);
+          }
+          try {
+            await writeJobStatus(job.id, { lastRun: job.lastRun, status: job.lastStatus!, savedTo: vaultSaved ? savePath : null, error: vaultSaved ? null : "vault save failed" });
+          } catch {}
         }
-        try {
-          await writeJobStatus(job.id, { lastRun: job.lastRun, status: job.lastStatus!, savedTo: vaultSaved ? savePath : null, error: vaultSaved ? null : "vault save failed" });
-        } catch {}
-      }
 
-      if (broadcastFn) {
-        broadcastFn({
-          type: "job_complete",
-          jobId: job.id,
-          jobName: job.name,
-          summary: result.slice(0, 200),
-          timestamp: Date.now(),
-        });
-      }
+        if (broadcastFn) {
+          broadcastFn({
+            type: "job_complete",
+            jobId: job.id,
+            jobName: job.name,
+            summary: result.slice(0, 200),
+            timestamp: Date.now(),
+          });
+        }
 
-      console.log(`[scheduled-jobs] Job completed${isPartial ? " (partial)" : ""}: ${job.name}`);
+        console.log(`[scheduled-jobs] Job completed${isPartial ? " (partial)" : ""}: ${job.name}`);
 
-      if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate")) && kbListFn && kbMoveFn) {
-        await archiveOldReports();
+        if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate")) && kbListFn && kbMoveFn) {
+          await archiveOldReports();
+        }
       }
     } catch (err) {
       job.lastRun = new Date().toISOString();
@@ -705,7 +835,10 @@ export function startJobSystem(
 
   const enabledJobs = config.jobs.filter(j => j.enabled);
   const jobList = enabledJobs.length > 0
-    ? enabledJobs.map(j => `${j.name}/${j.schedule.hour}:${String(j.schedule.minute).padStart(2, "0")}`).join(", ")
+    ? enabledJobs.map(j => {
+        if (j.schedule.type === "interval") return `${j.name}/every ${j.schedule.intervalMinutes || 30}m`;
+        return `${j.name}/${j.schedule.hour}:${String(j.schedule.minute).padStart(2, "0")}`;
+      }).join(", ")
     : "none enabled";
   console.log(`[scheduled-jobs] System started — ${jobList} (${config.timezone})`);
 }
@@ -727,6 +860,11 @@ export async function triggerJob(jobId: string): Promise<string> {
   console.log(`[scheduled-jobs] Manual trigger: ${job.name}`);
 
   try {
+    if (job.id === "darknode-inbox-monitor") {
+      await runInboxMonitor(job);
+      return job.lastResult || "Inbox monitor completed";
+    }
+
     const agentResult = await runAgentFn(job.agentId, job.prompt);
     const result = agentResult.response;
     const isPartial = agentResult.timedOut || result.includes("⚠️ PARTIAL");
