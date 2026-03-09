@@ -6,7 +6,7 @@ modules = ["python-3.11", "nodejs-22", "postgresql-16"]
 channel = "stable-25_05"
 
 [deployment]
-run = ["npm", "start"]
+run = ["bash", "-c", "PORT=5000 npm start"]
 deploymentTarget = "vm"
 build = ["npm", "run", "build"]
 publicDir = "dist"
