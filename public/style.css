@@ -1164,7 +1164,7 @@ body.light-theme #mic-btn.recording {
   background: var(--bg);
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: calc(20px + var(--safe-top)) 16px 20px;
+  padding: calc(12px + var(--safe-top)) 16px 20px;
   padding-bottom: calc(20px + var(--safe-bottom));
   display: flex;
   flex-direction: column;
@@ -1179,8 +1179,7 @@ body.light-theme #mic-btn.recording {
 
 .landing-header {
   text-align: center;
-  padding: 8px 0;
-  padding-top: calc(var(--safe-top) + 8px);
+  padding: 4px 0;
   position: relative;
 }
 
@@ -1199,7 +1198,7 @@ body.light-theme #mic-btn.recording {
 
 .landing-header-actions {
   position: absolute;
-  top: 8px;
+  top: 4px;
   right: 0;
   display: flex;
   gap: 6px;
@@ -1234,15 +1233,16 @@ body.light-theme #mic-btn.recording {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  font-size: 12px;
+  justify-content: center;
+  gap: 6px;
+  font-size: 13px;
   color: var(--green-dim);
-  padding: 12px 16px;
+  padding: 16px 20px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: rgba(0, 255, 0, 0.02);
   transition: opacity 0.6s ease-in-out;
-  min-height: 28px;
+  min-height: 36px;
   text-align: center;
 }
 
