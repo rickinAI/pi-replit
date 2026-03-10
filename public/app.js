@@ -906,6 +906,7 @@ function openEventStream(id) {
   eventSource.addEventListener("open", () => {
     setConnected(true);
     lastEventTime = Date.now();
+    startHeartbeatMonitor();
     if (reconnectAttempts > 0) {
       catchUpSession(id);
       hideStatus();
@@ -939,16 +940,36 @@ function openEventStream(id) {
   });
 }
 
-async function catchUpSession(sid) {
+async function catchUpSession(sid, retryCount = 0) {
   if (catchUpInProgress) return;
   catchUpInProgress = true;
   try {
-    const res = await fetch(`/api/session/${sid}/status`);
-    if (!res.ok) { catchUpInProgress = false; return; }
+    let res;
+    try {
+      res = await fetch(`/api/session/${sid}/status`);
+    } catch (fetchErr) {
+      catchUpInProgress = false;
+      if (retryCount < 1) {
+        setTimeout(() => catchUpSession(sid, retryCount + 1), 2000);
+      }
+      return;
+    }
+    if (!res.ok) {
+      catchUpInProgress = false;
+      if (retryCount < 1) {
+        setTimeout(() => catchUpSession(sid, retryCount + 1), 2000);
+      }
+      return;
+    }
     const status = await res.json();
     if (!status.alive) {
       localStorage.removeItem("activeSession");
+      stopHeartbeatMonitor();
+      if (eventSource) { eventSource.close(); eventSource = null; }
+      sessionId = null;
       catchUpInProgress = false;
+      showSystemMsg("Session expired. Returning to home screen.");
+      setTimeout(() => showLanding(), 1500);
       return;
     }
 
@@ -1056,27 +1077,74 @@ async function pollKbStatus() {
 pollKbStatus();
 setInterval(pollKbStatus, 2 * 60 * 1000);
 
+let wasBackgrounded = false;
+let heartbeatMonitor = null;
+
+function startHeartbeatMonitor() {
+  if (heartbeatMonitor) clearInterval(heartbeatMonitor);
+  heartbeatMonitor = setInterval(() => {
+    if (!sessionId || !eventSource) return;
+    if (eventSource.readyState !== EventSource.OPEN) return;
+    const elapsed = Date.now() - lastEventTime;
+    if (elapsed > 45000) {
+      console.log("[sse] heartbeat monitor: no events for 45s, force-reconnecting");
+      forceReconnect();
+    }
+  }, 20000);
+}
+
+function stopHeartbeatMonitor() {
+  if (heartbeatMonitor) { clearInterval(heartbeatMonitor); heartbeatMonitor = null; }
+}
+
+let reconnectInFlight = false;
+
+function forceReconnect() {
+  if (!sessionId || reconnectInFlight) return;
+  reconnectInFlight = true;
+  console.log("[sse] force-reconnecting stream");
+  if (eventSource) { eventSource.close(); eventSource = null; }
+  reconnectAttempts = 1;
+  openEventStream(sessionId);
+  setTimeout(() => { reconnectInFlight = false; }, 3000);
+}
+
 function attemptReconnect() {
   if (!sessionId) return;
+  if (wasBackgrounded) {
+    wasBackgrounded = false;
+    forceReconnect();
+    return;
+  }
   if (!eventSource || eventSource.readyState !== EventSource.OPEN) {
     reconnectAttempts = 0;
     openEventStream(sessionId);
   } else {
     const timeSinceLastEvent = Date.now() - lastEventTime;
     if (timeSinceLastEvent > 20000) {
-      catchUpSession(sessionId);
+      forceReconnect();
     }
   }
 }
 
 let visibilityDebounce = null;
 document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") {
+    wasBackgrounded = true;
+    return;
+  }
   if (document.visibilityState !== "visible" || !sessionId) return;
   if (visibilityDebounce) clearTimeout(visibilityDebounce);
   visibilityDebounce = setTimeout(() => {
     visibilityDebounce = null;
     attemptReconnect();
-  }, 500);
+  }, 300);
+});
+
+window.addEventListener("pageshow", (e) => {
+  if (!sessionId) return;
+  if (e.persisted) wasBackgrounded = true;
+  setTimeout(() => attemptReconnect(), 300);
 });
 
 window.addEventListener("online", () => {
@@ -1084,6 +1152,7 @@ window.addEventListener("online", () => {
 });
 
 function handleAgentEvent(event) {
+  if (event.type === "ping") return;
   if (catchUpInProgress && !["brief", "alert", "agent_end", "agent_start", "message_queued"].includes(event.type)) return;
   switch (event.type) {
     case "agent_start":

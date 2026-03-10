@@ -7387,7 +7387,9 @@ app.get("/api/session/:id/stream", (req, res) => {
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
   const heartbeat = setInterval(() => {
-    res.write(": heartbeat\n\n");
+    res.write(`data: ${JSON.stringify({ type: "ping" })}
+
+`);
   }, 15e3);
   entry.subscribers.add(res);
   req.on("close", () => {
