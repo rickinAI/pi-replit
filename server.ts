@@ -1775,10 +1775,7 @@ function buildConversationTools(): ToolDefinition[] {
 }
 
 function buildWebPublishTools(): ToolDefinition[] {
-  const PUBLISH_SCRIPT = path.join(
-    process.env.HOME || "/home/runner",
-    ".agents/skills/here-now/scripts/publish.sh"
-  );
+  const PUBLISH_SCRIPT = path.join(PROJECT_ROOT, "scripts", "herenow-publish.sh");
 
   return [
     {

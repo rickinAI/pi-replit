@@ -6792,10 +6792,7 @@ ${snippetText}`;
   ];
 }
 function buildWebPublishTools() {
-  const PUBLISH_SCRIPT = path4.join(
-    process.env.HOME || "/home/runner",
-    ".agents/skills/here-now/scripts/publish.sh"
-  );
+  const PUBLISH_SCRIPT = path4.join(PROJECT_ROOT, "scripts", "herenow-publish.sh");
   return [
     {
       name: "web_publish",
