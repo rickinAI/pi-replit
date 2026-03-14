@@ -4,7 +4,7 @@ modules = ["python-3.11", "nodejs-22", "postgresql-16"]
 
 [nix]
 channel = "stable-25_05"
-packages = ["file"]
+packages = ["file", "jq"]
 
 [deployment]
 run = ["npm", "start"]
