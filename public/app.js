@@ -208,7 +208,10 @@ if (window.visualViewport) {
           } else {
             showEmptyState();
           }
-          if (status.agentRunning) {
+          if (status.pendingInterview) {
+            isAgentRunning = !!status.agentRunning;
+            renderInterviewForm(status.pendingInterview);
+          } else if (status.agentRunning) {
             isAgentRunning = true;
             if (status.currentAgentText) {
               removeEmptyState();
@@ -1008,7 +1011,9 @@ async function catchUpSession(sid, retryCount = 0) {
       }
     }
 
-    if (status.agentRunning) {
+    if (status.pendingInterview && !messages.querySelector(".interview-card:not(.interview-submitted)")) {
+      renderInterviewForm(status.pendingInterview);
+    } else if (status.agentRunning) {
       if (status.currentAgentText) {
         if (!agentBubble) {
           removeEmptyState();
@@ -1468,6 +1473,13 @@ function renderInterviewForm(event) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ responses }),
       });
+      if (resp.status === 410) {
+        submitBtn2.textContent = "EXPIRED";
+        card.classList.add("interview-submitted");
+        card.querySelectorAll("input, textarea").forEach(el => el.disabled = true);
+        hideStatus();
+        return;
+      }
       if (!resp.ok) throw new Error("Server error");
       submitBtn2.textContent = "SUBMITTED";
       card.classList.add("interview-submitted");

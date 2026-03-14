@@ -6071,6 +6071,12 @@ function buildInterviewTool(sessionId) {
         if (entry.interviewWaiter) {
           return { content: [{ type: "text", text: "An interview form is already active. Wait for the user to respond before sending another." }], details: {} };
         }
+        entry.pendingInterviewForm = {
+          toolCallId,
+          title: params.title,
+          description: params.description,
+          questions: params.questions
+        };
         const interviewEvent = JSON.stringify({
           type: "interview_form",
           toolCallId,
@@ -6090,6 +6096,7 @@ function buildInterviewTool(sessionId) {
           const timer = setTimeout(() => {
             if (entry.interviewWaiter) {
               entry.interviewWaiter = void 0;
+              entry.pendingInterviewForm = void 0;
               const timeoutEvent = JSON.stringify({ type: "interview_timeout" });
               for (const sub of entry.subscribers) {
                 try {
@@ -7530,7 +7537,8 @@ app.get("/api/session/:id/status", (req, res) => {
     currentAgentText: entry.currentAgentText,
     currentToolName: entry.currentToolName,
     messages: entry.conversation.messages,
-    pendingCount: entry.pendingMessages.length
+    pendingCount: entry.pendingMessages.length,
+    pendingInterview: entry.pendingInterviewForm || null
   });
 });
 app.post("/api/session/:id/prompt", async (req, res) => {
@@ -7734,9 +7742,12 @@ app.post("/api/session/:id/interview-response", (req, res) => {
     clearTimeout(entry.interviewWaiter.timer);
     entry.interviewWaiter.resolve(responses);
     entry.interviewWaiter = void 0;
+    entry.pendingInterviewForm = void 0;
     console.log(`[interview] Received ${responses.length} responses for session ${req.params["id"]}`);
+    res.json({ ok: true });
+  } else {
+    res.status(410).json({ error: "Form expired or already submitted" });
   }
-  res.json({ ok: true });
 });
 app.delete("/api/session/:id", async (req, res) => {
   await saveAndCleanSession(req.params["id"]);
