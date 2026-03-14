@@ -578,10 +578,10 @@ async function getLastConversationContext(maxMessages = 10) {
   });
   const exchanges = relevantMsgs.map((m) => {
     const role = m.role === "user" ? "Rickin" : "You";
-    const text = m.text.length > 300 ? m.text.slice(0, 300) + "..." : m.text;
+    const text = m.text.length > 600 ? m.text.slice(0, 600) + "\u2026" : m.text;
     return `**${role}:** ${text}`;
   }).join("\n\n");
-  return `Your last conversation with Rickin was "${mostRecent.title}" (${date}, last active ${time}):
+  return `Your last conversation with Rickin was "${mostRecent.title}" (${date}, last active ${time}). If Rickin refers to something briefly ("it", "that", "try again"), it likely relates to this conversation:
 
 ${exchanges}`;
 }
@@ -7455,11 +7455,18 @@ app.post("/api/session", async (req, res) => {
     });
     let combinedContext;
     if (resumeConversationId && resumedMessages.length > 0) {
-      const last10 = resumedMessages.slice(-10);
+      const lastN = resumedMessages.slice(-20);
+      const formatted = lastN.map((m) => {
+        const role = m.role === "user" ? "RICKIN" : m.role === "agent" ? "YOU" : "SYSTEM";
+        const text = m.text.length > 800 ? m.text.slice(0, 800) + "\u2026" : m.text;
+        return `${role}: ${text}`;
+      }).join("\n\n");
       const resumeContext = `[RESUMED CONVERSATION: "${conv.title}"]
-The user is resuming a previous conversation. Here are the last ${last10.length} messages for context:
+Rickin is picking up exactly where you left off. This is a continuation \u2014 treat any references like "it", "that", "this" as referring to the topic below. Here are the last ${lastN.length} messages:
 
-` + last10.map((m) => `${m.role.toUpperCase()}: ${m.text}`).join("\n\n");
+${formatted}
+
+IMPORTANT: When Rickin says something brief like "test it", "try again", "do it", etc., it refers to whatever you were last discussing above. Do NOT start a new unrelated topic.`;
       const vaultIndex = await getVaultIndex();
       combinedContext = [resumeContext, vaultIndex].filter(Boolean).join("\n\n---\n\n");
     } else {

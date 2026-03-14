@@ -123,11 +123,11 @@ export async function getLastConversationContext(maxMessages: number = 10): Prom
 
   const exchanges = relevantMsgs.map(m => {
     const role = m.role === "user" ? "Rickin" : "You";
-    const text = m.text.length > 300 ? m.text.slice(0, 300) + "..." : m.text;
+    const text = m.text.length > 600 ? m.text.slice(0, 600) + "…" : m.text;
     return `**${role}:** ${text}`;
   }).join("\n\n");
 
-  return `Your last conversation with Rickin was "${mostRecent.title}" (${date}, last active ${time}):\n\n${exchanges}`;
+  return `Your last conversation with Rickin was "${mostRecent.title}" (${date}, last active ${time}). If Rickin refers to something briefly ("it", "that", "try again"), it likely relates to this conversation:\n\n${exchanges}`;
 }
 
 export function createConversation(sessionId: string): Conversation {

@@ -2480,9 +2480,13 @@ app.post("/api/session", async (req: Request, res: Response) => {
 
     let combinedContext: string | null;
     if (resumeConversationId && resumedMessages.length > 0) {
-      const last10 = resumedMessages.slice(-10);
-      const resumeContext = `[RESUMED CONVERSATION: "${conv.title}"]\nThe user is resuming a previous conversation. Here are the last ${last10.length} messages for context:\n\n` +
-        last10.map(m => `${m.role.toUpperCase()}: ${m.text}`).join("\n\n");
+      const lastN = resumedMessages.slice(-20);
+      const formatted = lastN.map(m => {
+        const role = m.role === "user" ? "RICKIN" : m.role === "agent" ? "YOU" : "SYSTEM";
+        const text = m.text.length > 800 ? m.text.slice(0, 800) + "…" : m.text;
+        return `${role}: ${text}`;
+      }).join("\n\n");
+      const resumeContext = `[RESUMED CONVERSATION: "${conv.title}"]\nRickin is picking up exactly where you left off. This is a continuation — treat any references like "it", "that", "this" as referring to the topic below. Here are the last ${lastN.length} messages:\n\n${formatted}\n\nIMPORTANT: When Rickin says something brief like "test it", "try again", "do it", etc., it refers to whatever you were last discussing above. Do NOT start a new unrelated topic.`;
       const vaultIndex = await getVaultIndex();
       combinedContext = [resumeContext, vaultIndex].filter(Boolean).join("\n\n---\n\n");
     } else {
