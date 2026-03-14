@@ -51,7 +51,21 @@ export async function init(): Promise<pg.Pool> {
     )
   `);
 
-  console.log("[db] PostgreSQL initialized (shared pool, 4 tables)");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS job_history (
+      id SERIAL PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      job_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'success',
+      summary TEXT,
+      saved_to TEXT,
+      duration_ms INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_job_history_created ON job_history(created_at DESC)`);
+
+  console.log("[db] PostgreSQL initialized (shared pool, 5 tables)");
   return pool;
 }
 

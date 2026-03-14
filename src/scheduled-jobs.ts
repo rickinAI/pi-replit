@@ -26,7 +26,7 @@ interface ScheduledJobsConfig {
   timezone: string;
 }
 
-type RunAgentFn = (agentId: string, task: string) => Promise<{ response: string; timedOut: boolean }>;
+type RunAgentFn = (agentId: string, task: string, onProgress?: (info: { toolName: string; iteration: number }) => void) => Promise<{ response: string; timedOut: boolean }>;
 type BroadcastFn = (event: any) => void;
 type KbCreateFn = (path: string, content: string) => Promise<any>;
 type KbListFn = (path: string) => Promise<string>;
@@ -773,6 +773,40 @@ let broadcastFn: BroadcastFn | null = null;
 let kbCreateFn: KbCreateFn | null = null;
 let kbListFn: KbListFn | null = null;
 let kbMoveFn: KbMoveFn | null = null;
+let dbPoolFn: (() => any) | null = null;
+
+async function writeJobHistory(jobId: string, jobName: string, status: string, summary: string | null, savedTo: string | null, durationMs: number | null): Promise<void> {
+  if (!dbPoolFn) return;
+  try {
+    const pool = dbPoolFn();
+    await pool.query(
+      `INSERT INTO job_history (job_id, job_name, status, summary, saved_to, duration_ms) VALUES ($1, $2, $3, $4, $5, $6)`,
+      [jobId, jobName, status, summary?.slice(0, 1000) || null, savedTo, durationMs]
+    );
+    await pool.query(
+      `DELETE FROM job_history WHERE id IN (
+        SELECT id FROM job_history WHERE job_id = $1 ORDER BY created_at DESC OFFSET 50
+      )`, [jobId]
+    );
+  } catch (err) {
+    console.warn(`[scheduled-jobs] Failed to write job history:`, err);
+  }
+}
+
+export async function getJobHistory(limit = 20): Promise<any[]> {
+  if (!dbPoolFn) return [];
+  try {
+    const pool = dbPoolFn();
+    const result = await pool.query(
+      `SELECT job_id, job_name, status, summary, saved_to, duration_ms, created_at FROM job_history ORDER BY created_at DESC LIMIT $1`,
+      [limit]
+    );
+    return result.rows;
+  } catch (err) {
+    console.warn(`[scheduled-jobs] Failed to read job history:`, err);
+    return [];
+  }
+}
 
 async function archiveOldReports(): Promise<void> {
   if (!kbListFn || !kbMoveFn) return;
@@ -1069,6 +1103,7 @@ async function runTimelineAdvance(job: ScheduledJob): Promise<void> {
       job.lastResult = `Week ${currentWeek} row not found`;
       job.lastStatus = "error";
       await saveConfig();
+      await writeJobHistory(job.id, job.name, "error", job.lastResult, null, null);
       return;
     }
 
@@ -1078,6 +1113,7 @@ async function runTimelineAdvance(job: ScheduledJob): Promise<void> {
       job.lastResult = `Already at week ${currentWeek}`;
       job.lastStatus = "success";
       await saveConfig();
+      await writeJobHistory(job.id, job.name, "success", job.lastResult, null, null);
       return;
     }
 
@@ -1096,6 +1132,7 @@ async function runTimelineAdvance(job: ScheduledJob): Promise<void> {
     job.lastResult = `Advanced from week ${currentWeekLabel} to week ${currentWeek}`;
     job.lastStatus = "success";
     await saveConfig();
+    await writeJobHistory(job.id, job.name, "success", job.lastResult, null, null);
 
     if (broadcastFn) {
       broadcastFn({
@@ -1112,6 +1149,7 @@ async function runTimelineAdvance(job: ScheduledJob): Promise<void> {
     job.lastResult = String(err).slice(0, 300);
     job.lastStatus = "error";
     await saveConfig();
+    await writeJobHistory(job.id, job.name, "error", String(err).slice(0, 300), null, null);
   }
 }
 
@@ -1180,17 +1218,20 @@ After processing, briefly confirm what you did.`;
   job.lastStatus = results.some(r => r.includes("**Error**")) ? "partial" : "success";
   await saveConfig();
 
+  let inboxSavePath: string | null = null;
   if (kbCreateFn) {
     const todayKey = getTodayKey();
     const timestamp = new Date().toLocaleString("en-US", { timeZone: config.timezone }).replace(/[/:]/g, "-").replace(/,\s*/g, "_");
-    const savePath = `Scheduled Reports/Inbox Monitor/${todayKey}-${timestamp}.md`;
+    inboxSavePath = `Scheduled Reports/Inbox Monitor/${todayKey}-${timestamp}.md`;
     try {
-      await kbCreateFn(savePath, `# Inbox Monitor Results\n*Processed: ${new Date().toLocaleString("en-US", { timeZone: config.timezone })}*\n*Emails processed: ${emails.length}*\n\n${fullResult}`);
+      await kbCreateFn(inboxSavePath, `# Inbox Monitor Results\n*Processed: ${new Date().toLocaleString("en-US", { timeZone: config.timezone })}*\n*Emails processed: ${emails.length}*\n\n${fullResult}`);
     } catch {}
     try {
-      await writeJobStatus(job.id, { lastRun: job.lastRun, status: job.lastStatus!, savedTo: savePath, error: null });
+      await writeJobStatus(job.id, { lastRun: job.lastRun, status: job.lastStatus!, savedTo: inboxSavePath, error: null });
     } catch {}
   }
+
+  await writeJobHistory(job.id, job.name, job.lastStatus || "success", `Processed ${emails.length} email(s)`, inboxSavePath, null);
 
   if (broadcastFn) {
     broadcastFn({
@@ -1240,7 +1281,13 @@ async function checkJobs(): Promise<void> {
       } else if (job.id === "baby-timeline-advance") {
         await runTimelineAdvance(job);
       } else {
-        const agentResult = await runAgentFn(job.agentId, job.prompt);
+        const jobStartMs = Date.now();
+        const progressCb = (info: { toolName: string; iteration: number }) => {
+          if (broadcastFn) {
+            broadcastFn({ type: "job_progress", jobId: job.id, jobName: job.name, toolName: info.toolName, timestamp: Date.now() });
+          }
+        };
+        const agentResult = await runAgentFn(job.agentId, job.prompt, progressCb);
         const result = agentResult.response;
         const isPartial = agentResult.timedOut || result.includes("⚠️ PARTIAL");
         job.lastRun = new Date().toISOString();
@@ -1289,6 +1336,7 @@ async function checkJobs(): Promise<void> {
         }
 
         console.log(`[scheduled-jobs] Job completed${isPartial ? " (partial)" : ""}: ${job.name}`);
+        await writeJobHistory(job.id, job.name, job.lastStatus || "success", result.slice(0, 500), vaultSaved ? savePath : null, Date.now() - jobStartMs);
 
         if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit" || job.id === "weekly-inbox-deep-clean" || job.id === "baby-dashboard-weekly-update") && kbListFn && kbMoveFn) {
           await archiveOldReports();
@@ -1302,6 +1350,7 @@ async function checkJobs(): Promise<void> {
       if (kbCreateFn) {
         try { await writeJobStatus(job.id, { lastRun: job.lastRun, status: "error", savedTo: null, error: String(err).slice(0, 300) }); } catch {}
       }
+      await writeJobHistory(job.id, job.name, "error", String(err).slice(0, 500), null, null);
       if (broadcastFn) {
         broadcastFn({
           type: "job_complete",
@@ -1336,12 +1385,14 @@ export function startJobSystem(
   kbCreate?: KbCreateFn,
   kbList?: KbListFn,
   kbMove?: KbMoveFn,
+  getDbPool?: () => any,
 ): void {
   runAgentFn = runAgent;
   broadcastFn = broadcast;
   kbCreateFn = kbCreate || null;
   kbListFn = kbList || null;
   kbMoveFn = kbMove || null;
+  dbPoolFn = getDbPool || null;
 
   checkInterval = setInterval(() => {
     checkJobs().catch(err => console.error("[scheduled-jobs] Check error:", err));
@@ -1390,7 +1441,13 @@ export async function triggerJob(jobId: string): Promise<string> {
       return job.lastResult || "Inbox monitor completed";
     }
 
-    const agentResult = await runAgentFn(job.agentId, job.prompt);
+    const triggerStartMs = Date.now();
+    const progressCb = (info: { toolName: string; iteration: number }) => {
+      if (broadcastFn) {
+        broadcastFn({ type: "job_progress", jobId: job.id, jobName: job.name, toolName: info.toolName, timestamp: Date.now() });
+      }
+    };
+    const agentResult = await runAgentFn(job.agentId, job.prompt, progressCb);
     const result = agentResult.response;
     const isPartial = agentResult.timedOut || result.includes("⚠️ PARTIAL");
     job.lastRun = new Date().toISOString();
@@ -1414,6 +1471,8 @@ export async function triggerJob(jobId: string): Promise<string> {
       await archiveOldReports();
     }
 
+    await writeJobHistory(job.id, job.name, job.lastStatus || "success", result.slice(0, 500), vaultSaved ? savePath : null, Date.now() - triggerStartMs);
+
     if (broadcastFn) {
       broadcastFn({
         type: "job_complete",
@@ -1435,6 +1494,7 @@ export async function triggerJob(jobId: string): Promise<string> {
     if (kbCreateFn) {
       try { await writeJobStatus(job.id, { lastRun: job.lastRun, status: "error", savedTo: null, error: String(err).slice(0, 300) }); } catch {}
     }
+    await writeJobHistory(job.id, job.name, "error", String(err).slice(0, 500), null, null);
     if (broadcastFn) {
       broadcastFn({
         type: "job_complete", jobId: job.id, jobName: job.name,

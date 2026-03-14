@@ -488,7 +488,20 @@ async function init2() {
       updated_at BIGINT NOT NULL DEFAULT 0
     )
   `);
-  console.log("[db] PostgreSQL initialized (shared pool, 4 tables)");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS job_history (
+      id SERIAL PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      job_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'success',
+      summary TEXT,
+      saved_to TEXT,
+      duration_ms INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_job_history_created ON job_history(created_at DESC)`);
+  console.log("[db] PostgreSQL initialized (shared pool, 5 tables)");
   return pool;
 }
 function getPool() {
@@ -5256,6 +5269,39 @@ var broadcastFn2 = null;
 var kbCreateFn = null;
 var kbListFn = null;
 var kbMoveFn = null;
+var dbPoolFn = null;
+async function writeJobHistory(jobId, jobName, status, summary, savedTo, durationMs) {
+  if (!dbPoolFn) return;
+  try {
+    const pool2 = dbPoolFn();
+    await pool2.query(
+      `INSERT INTO job_history (job_id, job_name, status, summary, saved_to, duration_ms) VALUES ($1, $2, $3, $4, $5, $6)`,
+      [jobId, jobName, status, summary?.slice(0, 1e3) || null, savedTo, durationMs]
+    );
+    await pool2.query(
+      `DELETE FROM job_history WHERE id IN (
+        SELECT id FROM job_history WHERE job_id = $1 ORDER BY created_at DESC OFFSET 50
+      )`,
+      [jobId]
+    );
+  } catch (err) {
+    console.warn(`[scheduled-jobs] Failed to write job history:`, err);
+  }
+}
+async function getJobHistory(limit = 20) {
+  if (!dbPoolFn) return [];
+  try {
+    const pool2 = dbPoolFn();
+    const result = await pool2.query(
+      `SELECT job_id, job_name, status, summary, saved_to, duration_ms, created_at FROM job_history ORDER BY created_at DESC LIMIT $1`,
+      [limit]
+    );
+    return result.rows;
+  } catch (err) {
+    console.warn(`[scheduled-jobs] Failed to read job history:`, err);
+    return [];
+  }
+}
 async function archiveOldReports() {
   if (!kbListFn || !kbMoveFn) return;
   const cutoff = /* @__PURE__ */ new Date();
@@ -5525,6 +5571,7 @@ async function runTimelineAdvance(job) {
       job.lastResult = `Week ${currentWeek} row not found`;
       job.lastStatus = "error";
       await saveConfig2();
+      await writeJobHistory(job.id, job.name, "error", job.lastResult, null, null);
       return;
     }
     if (currentSheetRow === targetSheetRow) {
@@ -5533,6 +5580,7 @@ async function runTimelineAdvance(job) {
       job.lastResult = `Already at week ${currentWeek}`;
       job.lastStatus = "success";
       await saveConfig2();
+      await writeJobHistory(job.id, job.name, "success", job.lastResult, null, null);
       return;
     }
     if (currentSheetRow >= 0 && currentSheetRow !== targetSheetRow) {
@@ -5548,6 +5596,7 @@ async function runTimelineAdvance(job) {
     job.lastResult = `Advanced from week ${currentWeekLabel} to week ${currentWeek}`;
     job.lastStatus = "success";
     await saveConfig2();
+    await writeJobHistory(job.id, job.name, "success", job.lastResult, null, null);
     if (broadcastFn2) {
       broadcastFn2({
         type: "job_complete",
@@ -5563,6 +5612,7 @@ async function runTimelineAdvance(job) {
     job.lastResult = String(err).slice(0, 300);
     job.lastStatus = "error";
     await saveConfig2();
+    await writeJobHistory(job.id, job.name, "error", String(err).slice(0, 300), null, null);
   }
 }
 async function runInboxMonitor(job) {
@@ -5628,12 +5678,13 @@ After processing, briefly confirm what you did.`;
   job.lastResult = fullResult.slice(0, 500);
   job.lastStatus = results.some((r) => r.includes("**Error**")) ? "partial" : "success";
   await saveConfig2();
+  let inboxSavePath = null;
   if (kbCreateFn) {
     const todayKey = getTodayKey2();
     const timestamp = (/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: config2.timezone }).replace(/[/:]/g, "-").replace(/,\s*/g, "_");
-    const savePath = `Scheduled Reports/Inbox Monitor/${todayKey}-${timestamp}.md`;
+    inboxSavePath = `Scheduled Reports/Inbox Monitor/${todayKey}-${timestamp}.md`;
     try {
-      await kbCreateFn(savePath, `# Inbox Monitor Results
+      await kbCreateFn(inboxSavePath, `# Inbox Monitor Results
 *Processed: ${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: config2.timezone })}*
 *Emails processed: ${emails.length}*
 
@@ -5641,10 +5692,11 @@ ${fullResult}`);
     } catch {
     }
     try {
-      await writeJobStatus(job.id, { lastRun: job.lastRun, status: job.lastStatus, savedTo: savePath, error: null });
+      await writeJobStatus(job.id, { lastRun: job.lastRun, status: job.lastStatus, savedTo: inboxSavePath, error: null });
     } catch {
     }
   }
+  await writeJobHistory(job.id, job.name, job.lastStatus || "success", `Processed ${emails.length} email(s)`, inboxSavePath, null);
   if (broadcastFn2) {
     broadcastFn2({
       type: "job_complete",
@@ -5686,7 +5738,13 @@ async function checkJobs() {
       } else if (job.id === "baby-timeline-advance") {
         await runTimelineAdvance(job);
       } else {
-        const agentResult = await runAgentFn(job.agentId, job.prompt);
+        const jobStartMs = Date.now();
+        const progressCb = (info) => {
+          if (broadcastFn2) {
+            broadcastFn2({ type: "job_progress", jobId: job.id, jobName: job.name, toolName: info.toolName, timestamp: Date.now() });
+          }
+        };
+        const agentResult = await runAgentFn(job.agentId, job.prompt, progressCb);
         const result = agentResult.response;
         const isPartial = agentResult.timedOut || result.includes("\u26A0\uFE0F PARTIAL");
         job.lastRun = (/* @__PURE__ */ new Date()).toISOString();
@@ -5735,6 +5793,7 @@ ${result}`);
           }
         }
         console.log(`[scheduled-jobs] Job completed${isPartial ? " (partial)" : ""}: ${job.name}`);
+        await writeJobHistory(job.id, job.name, job.lastStatus || "success", result.slice(0, 500), vaultSaved ? savePath : null, Date.now() - jobStartMs);
         if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit" || job.id === "weekly-inbox-deep-clean" || job.id === "baby-dashboard-weekly-update") && kbListFn && kbMoveFn) {
           await archiveOldReports();
         }
@@ -5750,6 +5809,7 @@ ${result}`);
         } catch {
         }
       }
+      await writeJobHistory(job.id, job.name, "error", String(err).slice(0, 500), null, null);
       if (broadcastFn2) {
         broadcastFn2({
           type: "job_complete",
@@ -5776,12 +5836,13 @@ ${result}`);
     saveConfig2();
   }
 }
-function startJobSystem(runAgent, broadcast, kbCreate2, kbList2, kbMove2) {
+function startJobSystem(runAgent, broadcast, kbCreate2, kbList2, kbMove2, getDbPool) {
   runAgentFn = runAgent;
   broadcastFn2 = broadcast;
   kbCreateFn = kbCreate2 || null;
   kbListFn = kbList2 || null;
   kbMoveFn = kbMove2 || null;
+  dbPoolFn = getDbPool || null;
   checkInterval = setInterval(() => {
     checkJobs().catch((err) => console.error("[scheduled-jobs] Check error:", err));
   }, 6e4);
@@ -5819,7 +5880,13 @@ async function triggerJob(jobId) {
       await runInboxMonitor(job);
       return job.lastResult || "Inbox monitor completed";
     }
-    const agentResult = await runAgentFn(job.agentId, job.prompt);
+    const triggerStartMs = Date.now();
+    const progressCb = (info) => {
+      if (broadcastFn2) {
+        broadcastFn2({ type: "job_progress", jobId: job.id, jobName: job.name, toolName: info.toolName, timestamp: Date.now() });
+      }
+    };
+    const agentResult = await runAgentFn(job.agentId, job.prompt, progressCb);
     const result = agentResult.response;
     const isPartial = agentResult.timedOut || result.includes("\u26A0\uFE0F PARTIAL");
     job.lastRun = (/* @__PURE__ */ new Date()).toISOString();
@@ -5847,6 +5914,7 @@ ${result}`);
     if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit" || job.id === "weekly-inbox-deep-clean" || job.id === "baby-dashboard-weekly-update") && kbListFn && kbMoveFn) {
       await archiveOldReports();
     }
+    await writeJobHistory(job.id, job.name, job.lastStatus || "success", result.slice(0, 500), vaultSaved ? savePath : null, Date.now() - triggerStartMs);
     if (broadcastFn2) {
       broadcastFn2({
         type: "job_complete",
@@ -5870,6 +5938,7 @@ ${result}`);
       } catch {
       }
     }
+    await writeJobHistory(job.id, job.name, "error", String(err).slice(0, 500), null, null);
     if (broadcastFn2) {
       broadcastFn2({
         type: "job_complete",
@@ -6161,6 +6230,12 @@ ${opts.task}`;
       }
       if (!toolsUsed.includes(toolCall.name)) toolsUsed.push(toolCall.name);
       console.log(`[agent:${agent.id}] calling tool: ${toolCall.name}`);
+      if (opts.onProgress) {
+        try {
+          opts.onProgress({ toolName: toolCall.name, iteration });
+        } catch {
+        }
+      }
       try {
         const result = await impl.execute(toolCall.id, toolCall.input);
         const text = result.content.map((c) => c.text || JSON.stringify(c)).filter(Boolean).join("\n");
@@ -9621,6 +9696,15 @@ app.delete("/api/scheduled-jobs/:id", (req, res) => {
     res.status(500).json({ error: String(err) });
   }
 });
+app.get("/api/scheduled-jobs/history", async (_req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(parseInt(_req.query.limit) || 20, 100));
+    const history = await getJobHistory(limit);
+    res.json(history);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
 app.post("/api/scheduled-jobs/:id/trigger", async (req, res) => {
   try {
     res.json({ ok: true, status: "started" });
@@ -10076,7 +10160,7 @@ async function startServer(maxRetries = 5) {
             }
           });
           startJobSystem(
-            async (agentId, task) => {
+            async (agentId, task, onProgress) => {
               const agentTools = [
                 ...buildKnowledgeBaseTools(),
                 ...cachedStaticTools
@@ -10085,7 +10169,8 @@ async function startServer(maxRetries = 5) {
                 agentId,
                 task,
                 allTools: agentTools,
-                apiKey: ANTHROPIC_KEY
+                apiKey: ANTHROPIC_KEY,
+                onProgress
               });
               return { response: result.response, timedOut: result.timedOut };
             },
@@ -10098,7 +10183,8 @@ async function startServer(maxRetries = 5) {
               }
             },
             async (path5) => kbList(path5),
-            async (from, to) => kbMove(from, to)
+            async (from, to) => kbMove(from, to),
+            () => getPool()
           );
           resolve();
         });

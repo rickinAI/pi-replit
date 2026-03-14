@@ -343,6 +343,12 @@ async function showLanding() {
   landing.innerHTML = `<div class="landing-header">
     <h2>[MISSION CONTROL]</h2>
     <div class="landing-header-actions">
+      <button class="landing-header-btn" id="landing-jobs-btn" title="Agents">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
+        </svg>
+      </button>
       <button class="landing-header-btn" id="landing-settings-btn" title="Settings">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
@@ -363,6 +369,9 @@ async function showLanding() {
   const now = new Date();
   dateEl.textContent = now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
 
+  landing.querySelector("#landing-jobs-btn").addEventListener("click", () => {
+    toggleJobsPanel();
+  });
   landing.querySelector("#landing-settings-btn").addEventListener("click", () => {
     toggleSettings();
   });
@@ -1320,11 +1329,22 @@ function handleAgentEvent(event) {
 
     case "job_start":
       updateAgentDot("running", event.jobName);
+      jobsProgressTool = null;
+      updateJobsBanner("running", event.jobName, null);
+      break;
+
+    case "job_progress":
+      jobsProgressTool = event.toolName;
+      updateAgentDot("running", event.jobName + (event.toolName ? " \u2014 " + event.toolName : ""));
+      updateJobsBanner("running", event.jobName, event.toolName);
       break;
 
     case "job_complete":
       updateAgentDot("idle", null);
       showJobToast(event);
+      jobsProgressTool = null;
+      updateJobsBanner("idle");
+      if (jobsPanel && jobsPanel.classList.contains("open")) loadJobsPanelData();
       break;
   }
 }
@@ -1965,12 +1985,6 @@ function createSettingsPanel() {
       <div class="settings-row"><label>Task Deadline Alerts</label><input type="checkbox" class="settings-toggle" data-alert="taskDeadline"></div>
       <div class="settings-row"><label>Important Email Alerts</label><input type="checkbox" class="settings-toggle" data-alert="importantEmail"></div>
     </div>
-    <div class="settings-section scheduled-jobs-section">
-      <h3>// SCHEDULED AGENTS</h3>
-      <div id="scheduled-jobs-list"></div>
-      <button class="settings-btn" id="add-custom-job-btn">+ CUSTOM JOB</button>
-      <div id="custom-job-form-wrap"></div>
-    </div>
     <div class="settings-section">
       <h3>// WATCHLIST</h3>
       <div class="watchlist-items" id="watchlist-items"></div>
@@ -2010,8 +2024,6 @@ function createSettingsPanel() {
   panel.querySelector("#watchlist-input").addEventListener("keydown", e => {
     if (e.key === "Enter") addWatchlistItem();
   });
-
-  setupCustomJobForm();
 
   return panel;
 }
@@ -2056,136 +2068,11 @@ async function loadSettingsConfig() {
     if (themeToggle) themeToggle.checked = (localStorage.getItem("theme") || cfg.theme) === "light";
   } catch (err) { console.warn("Load settings failed:", err); }
 
-  loadScheduledJobs();
 }
 
 let scheduledJobsData = [];
-
-async function loadScheduledJobs() {
-  try {
-    const res = await fetch("/api/scheduled-jobs");
-    if (!res.ok) return;
-    scheduledJobsData = await res.json();
-    renderScheduledJobs();
-  } catch (err) { console.warn("Load scheduled jobs failed:", err); }
-}
-
-function renderScheduledJobs() {
-  const container = settingsPanel?.querySelector("#scheduled-jobs-list");
-  if (!container) return;
-  container.innerHTML = "";
-
-  if (scheduledJobsData.length > 0) {
-    const ok = scheduledJobsData.filter(j => j.lastStatus === "success").length;
-    const failed = scheduledJobsData.filter(j => j.lastStatus === "error").length;
-    const partial = scheduledJobsData.filter(j => j.lastStatus === "partial").length;
-    const notRun = scheduledJobsData.filter(j => !j.lastStatus).length;
-    const parts = [`${scheduledJobsData.length} JOBS`];
-    if (ok > 0) parts.push(`${ok} ✅`);
-    if (failed > 0) parts.push(`${failed} 🔴`);
-    if (partial > 0) parts.push(`${partial} 🟡`);
-    if (notRun > 0) parts.push(`${notRun} ⚪`);
-    const summary = document.createElement("div");
-    summary.className = "job-health-summary";
-    summary.textContent = parts.join(" · ");
-    container.appendChild(summary);
-  }
-
-  scheduledJobsData.forEach(job => {
-    const card = document.createElement("div");
-    card.className = "job-card";
-    card.dataset.id = job.id;
-
-    const h = job.schedule.hour;
-    const m = job.schedule.minute;
-    const ampm = h < 12 ? "AM" : "PM";
-    const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-    const timeStr = `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
-
-    let statusHtml = "";
-    if (job.lastRun) {
-      const ago = formatTimeAgo(job.lastRun);
-      const dot = job.lastStatus === "error" ? "pri-high" : "pri-low";
-      statusHtml = `<span class="job-status-badge"><span class="job-status-dot ${dot}"></span> ${ago}</span>`;
-    } else {
-      statusHtml = `<span class="job-status-badge"><span class="job-status-dot pri-med"></span> never run</span>`;
-    }
-
-    card.innerHTML = `
-      <div class="job-card-header">
-        <div class="job-card-info">
-          <span class="job-card-name">${escapeHtml(job.name)}</span>
-          <span class="job-card-agent">${escapeHtml(job.agentId)}</span>
-        </div>
-        <input type="checkbox" class="job-card-toggle" ${job.enabled ? "checked" : ""}>
-      </div>
-      <div class="job-card-body">
-        <div class="job-card-schedule">
-          <span class="job-card-schedule-label">${job.schedule.type === "daily" ? "Daily" : "Weekly"} at</span>
-          <select class="job-card-hour-select"></select>
-          <span class="job-card-time-sep">:</span>
-          <select class="job-card-min-select"></select>
-        </div>
-        <div class="job-card-actions">
-          ${statusHtml}
-          <button class="job-run-btn" title="Run now">Run</button>
-        </div>
-      </div>
-    `;
-
-    const hourSel = card.querySelector(".job-card-hour-select");
-    for (let hr = 0; hr < 24; hr++) {
-      const opt = document.createElement("option");
-      opt.value = hr;
-      const ap = hr < 12 ? "AM" : "PM";
-      const hr12 = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
-      opt.textContent = `${hr12} ${ap}`;
-      if (hr === h) opt.selected = true;
-      hourSel.appendChild(opt);
-    }
-
-    const minSel = card.querySelector(".job-card-min-select");
-    for (let mn = 0; mn < 60; mn += 5) {
-      const opt = document.createElement("option");
-      opt.value = mn;
-      opt.textContent = String(mn).padStart(2, "0");
-      if (mn === m) opt.selected = true;
-      minSel.appendChild(opt);
-    }
-
-    hourSel.addEventListener("change", () => {
-      job.schedule.hour = parseInt(hourSel.value);
-      saveJobUpdate(job.id, { schedule: job.schedule });
-    });
-
-    minSel.addEventListener("change", () => {
-      job.schedule.minute = parseInt(minSel.value);
-      saveJobUpdate(job.id, { schedule: job.schedule });
-    });
-
-    const runBtn = card.querySelector(".job-run-btn");
-    runBtn.addEventListener("click", async () => {
-      runBtn.textContent = "Active";
-      runBtn.disabled = true;
-      try {
-        const res = await fetch(`/api/scheduled-jobs/${job.id}/trigger`, { method: "POST" });
-        if (!res.ok) throw new Error("trigger failed");
-      } catch {
-        runBtn.textContent = "Failed";
-        setTimeout(() => { runBtn.textContent = "Run"; runBtn.disabled = false; }, 3000);
-      }
-    });
-
-    card.querySelector(".job-card-toggle").addEventListener("change", (e) => {
-      job.enabled = e.target.checked;
-      saveJobUpdate(job.id, { enabled: job.enabled });
-      runBtn.textContent = "Run";
-      runBtn.disabled = false;
-    });
-
-    container.appendChild(card);
-  });
-}
+let jobsPanel = null;
+let jobsProgressTool = null;
 
 function formatTimeAgo(iso) {
   const diff = Date.now() - new Date(iso).getTime();
@@ -2205,79 +2092,335 @@ async function saveJobUpdate(jobId, updates) {
   } catch (err) { console.warn("Save job update failed:", err); }
 }
 
-function setupCustomJobForm() {
-  const btn = settingsPanel?.querySelector("#add-custom-job-btn");
-  const wrap = settingsPanel?.querySelector("#custom-job-form-wrap");
-  if (!btn || !wrap) return;
+function createJobsPanel() {
+  if (jobsPanel) return jobsPanel;
+  const panel = document.createElement("div");
+  panel.className = "jobs-panel";
+  panel.innerHTML = `
+    <div class="jobs-panel-header">
+      <h3>AGENTS</h3>
+      <button class="jobs-panel-close">\u2715</button>
+    </div>
+    <div class="jobs-live-banner" id="jobs-live-banner">
+      <span class="jobs-live-dot"></span>
+      <span class="jobs-live-text">All agents idle</span>
+    </div>
+    <div class="jobs-panel-tabs">
+      <button class="jobs-tab active" data-tab="history">History</button>
+      <button class="jobs-tab" data-tab="schedule">Schedule</button>
+      <button class="jobs-tab" data-tab="custom">+ Custom</button>
+    </div>
+    <div class="jobs-panel-body">
+      <div class="jobs-tab-content active" id="jobs-tab-history">
+        <div id="jobs-history-list" class="jobs-history-list"></div>
+      </div>
+      <div class="jobs-tab-content" id="jobs-tab-schedule">
+        <div id="jobs-schedule-list" class="jobs-schedule-list"></div>
+      </div>
+      <div class="jobs-tab-content" id="jobs-tab-custom">
+        <div id="jobs-custom-form-wrap" class="jobs-custom-form-wrap"></div>
+      </div>
+    </div>
+    <div class="jobs-report-overlay hidden" id="jobs-report-overlay">
+      <div class="jobs-report-modal">
+        <div class="jobs-report-header">
+          <span id="jobs-report-title"></span>
+          <button class="jobs-report-close">\u2715</button>
+        </div>
+        <div class="jobs-report-body" id="jobs-report-body"></div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(panel);
+  jobsPanel = panel;
 
-  btn.addEventListener("click", () => {
-    if (wrap.querySelector(".job-add-custom-form")) {
-      wrap.innerHTML = "";
-      return;
+  panel.querySelector(".jobs-panel-close").addEventListener("click", toggleJobsPanel);
+  panel.querySelector(".jobs-report-close").addEventListener("click", () => {
+    panel.querySelector("#jobs-report-overlay").classList.add("hidden");
+  });
+
+  panel.querySelectorAll(".jobs-tab").forEach(tab => {
+    tab.addEventListener("click", () => {
+      panel.querySelectorAll(".jobs-tab").forEach(t => t.classList.remove("active"));
+      panel.querySelectorAll(".jobs-tab-content").forEach(t => t.classList.remove("active"));
+      tab.classList.add("active");
+      panel.querySelector(`#jobs-tab-${tab.dataset.tab}`).classList.add("active");
+      if (tab.dataset.tab === "custom") renderCustomJobForm();
+    });
+  });
+
+  return panel;
+}
+
+let jobsPanelPollInterval = null;
+function toggleJobsPanel() {
+  const panel = createJobsPanel();
+  const isOpen = panel.classList.contains("open");
+  if (isOpen) {
+    panel.classList.remove("open");
+    if (jobsPanelPollInterval) { clearInterval(jobsPanelPollInterval); jobsPanelPollInterval = null; }
+  } else {
+    panel.classList.add("open");
+    loadJobsPanelData();
+    jobsPanelPollInterval = setInterval(() => {
+      if (panel.classList.contains("open")) loadJobsPanelData();
+      else { clearInterval(jobsPanelPollInterval); jobsPanelPollInterval = null; }
+    }, 10000);
+  }
+}
+
+async function loadJobsPanelData() {
+  try {
+    const [jobsRes, historyRes, statusRes] = await Promise.all([
+      fetch("/api/scheduled-jobs").then(r => r.ok ? r.json() : []),
+      fetch("/api/scheduled-jobs/history?limit=20").then(r => r.ok ? r.json() : []),
+      fetch("/api/agents/status").then(r => r.ok ? r.json() : null),
+    ]);
+    scheduledJobsData = jobsRes;
+    renderJobsHistory(historyRes);
+    renderJobsSchedule();
+    if (statusRes && statusRes.job && statusRes.job.running) {
+      updateJobsBanner("running", statusRes.job.jobName, jobsProgressTool);
+    } else {
+      updateJobsBanner("idle");
     }
-    wrap.innerHTML = `
-      <div class="job-add-custom-form">
-        <div class="job-form-row"><label>Name</label><input type="text" class="job-form-input" id="custom-job-name" placeholder="My custom job"></div>
-        <div class="job-form-row"><label>Agent</label><select class="job-form-select" id="custom-job-agent"></select></div>
-        <div class="job-form-row"><label>Time</label><select class="job-form-select" id="custom-job-hour"></select><span class="job-card-time-sep">:</span><select class="job-form-select" id="custom-job-min"></select></div>
-        <div class="job-form-row"><label>Prompt</label><textarea class="job-form-textarea" id="custom-job-prompt" rows="4" placeholder="What should the agent do?"></textarea></div>
-        <div class="job-form-row job-form-actions">
-          <button class="job-form-submit">Add Job</button>
-          <button class="job-form-cancel">Cancel</button>
+  } catch (err) { console.warn("Load jobs panel data failed:", err); }
+}
+
+function updateJobsBanner(state, jobName, toolName) {
+  const banner = jobsPanel?.querySelector("#jobs-live-banner");
+  if (!banner) return;
+  const dot = banner.querySelector(".jobs-live-dot");
+  const text = banner.querySelector(".jobs-live-text");
+  if (state === "running") {
+    banner.classList.add("active");
+    dot.classList.add("active");
+    let label = jobName || "Agent working...";
+    if (toolName) label += ` \u2014 ${toolName}`;
+    text.textContent = label;
+  } else {
+    banner.classList.remove("active");
+    dot.classList.remove("active");
+    text.textContent = "All agents idle";
+  }
+}
+
+function renderJobsHistory(history) {
+  const container = jobsPanel?.querySelector("#jobs-history-list");
+  if (!container) return;
+  container.innerHTML = "";
+  if (!history || history.length === 0) {
+    container.innerHTML = '<div class="jobs-empty">No job runs yet</div>';
+    return;
+  }
+  history.forEach(entry => {
+    const item = document.createElement("div");
+    item.className = "jobs-history-item";
+    const dotClass = entry.status === "error" ? "dot-error" : entry.status === "partial" ? "dot-partial" : "dot-success";
+    const ago = formatTimeAgo(entry.created_at);
+    const summary = entry.summary ? (entry.summary.length > 120 ? entry.summary.slice(0, 117) + "..." : entry.summary) : "No summary";
+    item.innerHTML = `
+      <div class="jobs-history-row">
+        <span class="jobs-history-dot ${dotClass}"></span>
+        <div class="jobs-history-info">
+          <span class="jobs-history-name">${escapeHtml(entry.job_name)}</span>
+          <span class="jobs-history-time">${ago}${entry.duration_ms ? ' \u00B7 ' + Math.round(entry.duration_ms / 1000) + 's' : ''}</span>
+        </div>
+      </div>
+      <div class="jobs-history-summary">${escapeHtml(summary)}</div>
+      ${entry.saved_to ? `<button class="jobs-history-report-btn" data-path="${escapeHtml(entry.saved_to)}">View Report</button>` : ''}
+    `;
+    const reportBtn = item.querySelector(".jobs-history-report-btn");
+    if (reportBtn) {
+      reportBtn.addEventListener("click", () => openJobReport(entry.saved_to, entry.job_name));
+    }
+    container.appendChild(item);
+  });
+}
+
+async function openJobReport(path, jobName) {
+  const overlay = jobsPanel?.querySelector("#jobs-report-overlay");
+  const title = jobsPanel?.querySelector("#jobs-report-title");
+  const body = jobsPanel?.querySelector("#jobs-report-body");
+  if (!overlay || !body) return;
+  title.textContent = jobName || "Report";
+  body.innerHTML = '<div class="jobs-report-loading">Loading...</div>';
+  overlay.classList.remove("hidden");
+  try {
+    const res = await fetch(`/api/kb/read?path=${encodeURIComponent(path)}`);
+    if (!res.ok) throw new Error("Failed to load");
+    const data = await res.json();
+    body.innerHTML = `<pre class="jobs-report-content">${escapeHtml(data.content || data.text || JSON.stringify(data, null, 2))}</pre>`;
+  } catch (err) {
+    body.innerHTML = `<div class="jobs-report-loading">Failed to load report</div>`;
+  }
+}
+
+function renderJobsSchedule() {
+  const container = jobsPanel?.querySelector("#jobs-schedule-list");
+  if (!container) return;
+  container.innerHTML = "";
+
+  if (scheduledJobsData.length > 0) {
+    const ok = scheduledJobsData.filter(j => j.lastStatus === "success").length;
+    const failed = scheduledJobsData.filter(j => j.lastStatus === "error").length;
+    const partial = scheduledJobsData.filter(j => j.lastStatus === "partial").length;
+    const notRun = scheduledJobsData.filter(j => !j.lastStatus).length;
+    const parts = [`${scheduledJobsData.length} JOBS`];
+    if (ok > 0) parts.push(`${ok} \u2705`);
+    if (failed > 0) parts.push(`${failed} \uD83D\uDD34`);
+    if (partial > 0) parts.push(`${partial} \uD83D\uDFE1`);
+    if (notRun > 0) parts.push(`${notRun} \u26AA`);
+    const summary = document.createElement("div");
+    summary.className = "job-health-summary";
+    summary.textContent = parts.join(" \u00B7 ");
+    container.appendChild(summary);
+  }
+
+  scheduledJobsData.forEach(job => {
+    const card = document.createElement("div");
+    card.className = "job-card";
+    card.dataset.id = job.id;
+    const h = job.schedule.hour;
+    const m = job.schedule.minute;
+    let statusHtml = "";
+    if (job.lastRun) {
+      const ago = formatTimeAgo(job.lastRun);
+      const dot = job.lastStatus === "error" ? "pri-high" : "pri-low";
+      statusHtml = `<span class="job-status-badge"><span class="job-status-dot ${dot}"></span> ${ago}</span>`;
+    } else {
+      statusHtml = `<span class="job-status-badge"><span class="job-status-dot pri-med"></span> never run</span>`;
+    }
+    card.innerHTML = `
+      <div class="job-card-header">
+        <div class="job-card-info">
+          <span class="job-card-name">${escapeHtml(job.name)}</span>
+          <span class="job-card-agent">${escapeHtml(job.agentId)}</span>
+        </div>
+        <input type="checkbox" class="job-card-toggle" ${job.enabled ? "checked" : ""}>
+      </div>
+      <div class="job-card-body">
+        <div class="job-card-schedule">
+          <span class="job-card-schedule-label">${job.schedule.type === "daily" ? "Daily" : job.schedule.daysOfWeek ? job.schedule.daysOfWeek.map(d => ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d]).join("/") : "Weekly"} at</span>
+          <select class="job-card-hour-select"></select>
+          <span class="job-card-time-sep">:</span>
+          <select class="job-card-min-select"></select>
+        </div>
+        <div class="job-card-actions">
+          ${statusHtml}
+          <button class="job-run-btn" title="Run now">Run</button>
         </div>
       </div>
     `;
-
-    const agentSel = wrap.querySelector("#custom-job-agent");
-    fetch("/api/agents").then(r => r.json()).then(data => {
-      const list = data.agents || data;
-      list.forEach(a => {
-        const opt = document.createElement("option");
-        opt.value = a.id;
-        opt.textContent = a.name || a.id;
-        agentSel.appendChild(opt);
-      });
-    }).catch(() => {});
-
-    const hourSel2 = wrap.querySelector("#custom-job-hour");
-    for (let h = 0; h < 24; h++) {
+    const hourSel = card.querySelector(".job-card-hour-select");
+    for (let hr = 0; hr < 24; hr++) {
       const opt = document.createElement("option");
-      opt.value = h;
-      const ap = h < 12 ? "AM" : "PM";
-      const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-      opt.textContent = `${h12} ${ap}`;
-      if (h === 8) opt.selected = true;
-      hourSel2.appendChild(opt);
+      opt.value = hr;
+      const ap = hr < 12 ? "AM" : "PM";
+      const hr12 = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
+      opt.textContent = `${hr12} ${ap}`;
+      if (hr === h) opt.selected = true;
+      hourSel.appendChild(opt);
     }
-    const minSel2 = wrap.querySelector("#custom-job-min");
+    const minSel = card.querySelector(".job-card-min-select");
     for (let mn = 0; mn < 60; mn += 5) {
       const opt = document.createElement("option");
       opt.value = mn;
       opt.textContent = String(mn).padStart(2, "0");
-      if (mn === 0) opt.selected = true;
-      minSel2.appendChild(opt);
+      if (mn === m) opt.selected = true;
+      minSel.appendChild(opt);
     }
-
-    wrap.querySelector(".job-form-cancel").addEventListener("click", () => { wrap.innerHTML = ""; });
-    wrap.querySelector(".job-form-submit").addEventListener("click", async () => {
-      const name = wrap.querySelector("#custom-job-name").value.trim();
-      const agentId = wrap.querySelector("#custom-job-agent").value;
-      const prompt = wrap.querySelector("#custom-job-prompt").value.trim();
-      const hour = parseInt(wrap.querySelector("#custom-job-hour").value);
-      const minute = parseInt(wrap.querySelector("#custom-job-min").value);
-      if (!name || !agentId || !prompt) return;
-      try {
-        const res = await fetch("/api/scheduled-jobs", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, agentId, prompt, schedule: { type: "daily", hour, minute }, enabled: false }),
-        });
-        if (res.ok) {
-          wrap.innerHTML = "";
-          loadScheduledJobs();
-        }
-      } catch (err) { console.warn("Add custom job failed:", err); }
+    hourSel.addEventListener("change", () => {
+      job.schedule.hour = parseInt(hourSel.value);
+      saveJobUpdate(job.id, { schedule: job.schedule });
     });
+    minSel.addEventListener("change", () => {
+      job.schedule.minute = parseInt(minSel.value);
+      saveJobUpdate(job.id, { schedule: job.schedule });
+    });
+    const runBtn = card.querySelector(".job-run-btn");
+    runBtn.addEventListener("click", async () => {
+      runBtn.textContent = "Active";
+      runBtn.disabled = true;
+      try {
+        const res = await fetch(`/api/scheduled-jobs/${job.id}/trigger`, { method: "POST" });
+        if (!res.ok) throw new Error("trigger failed");
+      } catch {
+        runBtn.textContent = "Failed";
+        setTimeout(() => { runBtn.textContent = "Run"; runBtn.disabled = false; }, 3000);
+      }
+    });
+    card.querySelector(".job-card-toggle").addEventListener("change", (e) => {
+      job.enabled = e.target.checked;
+      saveJobUpdate(job.id, { enabled: job.enabled });
+      runBtn.textContent = "Run";
+      runBtn.disabled = false;
+    });
+    container.appendChild(card);
+  });
+}
+
+function renderCustomJobForm() {
+  const wrap = jobsPanel?.querySelector("#jobs-custom-form-wrap");
+  if (!wrap || wrap.querySelector(".job-add-custom-form")) return;
+  wrap.innerHTML = `
+    <div class="job-add-custom-form">
+      <div class="job-form-row"><label>Name</label><input type="text" class="job-form-input" id="custom-job-name" placeholder="My custom job"></div>
+      <div class="job-form-row"><label>Agent</label><select class="job-form-select" id="custom-job-agent"></select></div>
+      <div class="job-form-row"><label>Time</label><select class="job-form-select" id="custom-job-hour"></select><span class="job-card-time-sep">:</span><select class="job-form-select" id="custom-job-min"></select></div>
+      <div class="job-form-row"><label>Prompt</label><textarea class="job-form-textarea" id="custom-job-prompt" rows="4" placeholder="What should the agent do?"></textarea></div>
+      <div class="job-form-row job-form-actions">
+        <button class="job-form-submit">Add Job</button>
+      </div>
+    </div>
+  `;
+  fetch("/api/agents").then(r => r.json()).then(data => {
+    const agentSel = wrap.querySelector("#custom-job-agent");
+    const list = data.agents || data;
+    list.forEach(a => {
+      const opt = document.createElement("option");
+      opt.value = a.id;
+      opt.textContent = a.name || a.id;
+      agentSel.appendChild(opt);
+    });
+  }).catch(() => {});
+  const hourSel = wrap.querySelector("#custom-job-hour");
+  for (let h = 0; h < 24; h++) {
+    const opt = document.createElement("option");
+    opt.value = h;
+    const ap = h < 12 ? "AM" : "PM";
+    const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+    opt.textContent = `${h12} ${ap}`;
+    if (h === 8) opt.selected = true;
+    hourSel.appendChild(opt);
+  }
+  const minSel = wrap.querySelector("#custom-job-min");
+  for (let mn = 0; mn < 60; mn += 5) {
+    const opt = document.createElement("option");
+    opt.value = mn;
+    opt.textContent = String(mn).padStart(2, "0");
+    if (mn === 0) opt.selected = true;
+    minSel.appendChild(opt);
+  }
+  wrap.querySelector(".job-form-submit").addEventListener("click", async () => {
+    const name = wrap.querySelector("#custom-job-name").value.trim();
+    const agentId = wrap.querySelector("#custom-job-agent").value;
+    const prompt = wrap.querySelector("#custom-job-prompt").value.trim();
+    const hour = parseInt(wrap.querySelector("#custom-job-hour").value);
+    const minute = parseInt(wrap.querySelector("#custom-job-min").value);
+    if (!name || !agentId || !prompt) return;
+    try {
+      const res = await fetch("/api/scheduled-jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, agentId, prompt, schedule: { type: "daily", hour, minute }, enabled: false }),
+      });
+      if (res.ok) {
+        wrap.innerHTML = "";
+        loadJobsPanelData();
+        jobsPanel.querySelector('[data-tab="schedule"]').click();
+      }
+    } catch (err) { console.warn("Add custom job failed:", err); }
   });
 }
 

@@ -69,6 +69,7 @@ export async function runSubAgent(opts: {
   allTools: ToolImpl[];
   apiKey: string;
   model?: string;
+  onProgress?: (info: { toolName: string; iteration: number }) => void;
 }): Promise<SubAgentResult> {
   if (!opts.apiKey) throw new Error("Anthropic API key is not configured — cannot run sub-agents");
   const agent = getAgent(opts.agentId);
@@ -242,6 +243,9 @@ export async function runSubAgent(opts: {
 
       if (!toolsUsed.includes(toolCall.name)) toolsUsed.push(toolCall.name);
       console.log(`[agent:${agent.id}] calling tool: ${toolCall.name}`);
+      if (opts.onProgress) {
+        try { opts.onProgress({ toolName: toolCall.name, iteration }); } catch {}
+      }
 
       try {
         const result = await impl.execute(toolCall.id, toolCall.input);

@@ -3438,6 +3438,16 @@ app.delete("/api/scheduled-jobs/:id", (req: Request, res: Response) => {
   }
 });
 
+app.get("/api/scheduled-jobs/history", async (_req: Request, res: Response) => {
+  try {
+    const limit = Math.max(1, Math.min(parseInt((_req.query as any).limit) || 20, 100));
+    const history = await scheduledJobs.getJobHistory(limit);
+    res.json(history);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 app.post("/api/scheduled-jobs/:id/trigger", async (req: Request, res: Response) => {
   try {
     res.json({ ok: true, status: "started" });
@@ -3916,7 +3926,7 @@ async function startServer(maxRetries = 5) {
             }
           });
           scheduledJobs.startJobSystem(
-            async (agentId: string, task: string) => {
+            async (agentId: string, task: string, onProgress?: (info: { toolName: string; iteration: number }) => void) => {
               const agentTools = [
                 ...buildKnowledgeBaseTools(),
                 ...cachedStaticTools,
@@ -3926,6 +3936,7 @@ async function startServer(maxRetries = 5) {
                 task,
                 allTools: agentTools as any,
                 apiKey: ANTHROPIC_KEY,
+                onProgress,
               });
               return { response: result.response, timedOut: result.timedOut };
             },
@@ -3937,6 +3948,7 @@ async function startServer(maxRetries = 5) {
             },
             async (path) => kbList(path),
             async (from, to) => kbMove(from, to),
+            () => db.getPool(),
           );
           resolve();
         });
