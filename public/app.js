@@ -687,7 +687,7 @@ async function showLanding() {
         if (detail.messages && detail.messages.length > 0) {
           const previews = detail.messages.slice(-2);
           previewHtml = previews.map(m => {
-            const role = m.role === "user" ? "you" : "rickin";
+            const role = m.role === "user" ? "rickin" : "darknode";
             const text = (m.text || "").slice(0, 100) + ((m.text || "").length > 100 ? "..." : "");
             return `<span class="preview-role">${role}:</span> ${escapeHtml(text)}`;
           }).join("<br>");
