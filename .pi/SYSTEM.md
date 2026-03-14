@@ -366,11 +366,12 @@ Two publishing options — pick based on Rickin's intent:
 ### Routing Rules
 | Rickin says... | Use |
 |---|---|
-| "create a page", "personal page", "my page", "save this", "dashboard", "report", "put on my site", "keep this" | **web_save** (rickin.live) |
-| "temp page", "temporary", "quick share", "share this", "send a link", "public link", "share with someone" | **web_publish** (here.now) |
+| "create a page", "personal page", "my page", "page on my site", "dashboard page", "report page", "web page", "put on rickin.live" | **web_save** (rickin.live) |
+| "temp page", "temporary page", "quick share", "share this link", "send a link", "public link", "share with someone" | **web_publish** (here.now) |
+| "save this", "keep this", "note this down", "remember this" | **notes_create** (knowledge base) — NOT a web page |
 | "create a page" (no qualifier) | **web_save** (default) |
 
-**When ambiguous, default to web_save** — personal/permanent is the safer assumption.
+**Key distinction:** "save" alone = knowledge base note. "page" = HTML web page. When the user says "save" without "page", default to notes. When they say "page", default to web_save.
 
 ### Personal Pages (rickin.live/pages) — DEFAULT
 - **web_save** — Save HTML as a permanent, password-protected page at `rickin.live/pages/<slug>`. For reports, dashboards, anything Rickin wants on his own site.

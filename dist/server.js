@@ -7333,7 +7333,7 @@ ${stderr || stdout || err.message}`
     {
       name: "web_save",
       label: "Save Personal Page",
-      description: "Save HTML as a permanent, password-protected personal page on rickin.live/pages/<slug>. Use when the user says: 'personal page', 'my page', 'save to my site', 'keep this', 'private page', 'save this page', 'create a page', 'put on rickin.live', 'dashboard', 'report page', or wants something permanent and private. Default choice when no 'temp'/'share'/'public' keywords are present. NOT for sharing with others \u2014 use web_publish for temporary public links.",
+      description: "Save HTML as a permanent, password-protected personal page on rickin.live/pages/<slug>. Use when the user says: 'personal page', 'my page', 'page on my site', 'private page', 'create a page', 'put on rickin.live', 'dashboard page', 'report page', 'web page', or wants a rendered HTML page (not a note). This is for HTML pages \u2014 NOT for saving text/notes to the knowledge base (use notes_create for that). Default when page-related request has no 'temp'/'share'/'public' keywords. NOT for sharing with others \u2014 use web_publish for temporary public links.",
       parameters: Type.Object({
         slug: Type.String({
           description: "URL-friendly name for the page (lowercase, hyphens, no spaces). E.g. 'moody-report' becomes rickin.live/pages/moody-report"
