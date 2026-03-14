@@ -4779,63 +4779,77 @@ Process everything autonomously. Be thorough but efficient.`,
     id: "baby-dashboard-weekly-update",
     name: "Baby Dashboard Weekly Update",
     agentId: "deep-researcher",
-    prompt: `You are updating the Baby Boy pregnancy dashboard at rickin.live/pages/baby-dashboard. This is an autonomous job \u2014 do NOT ask for confirmation. Process everything directly.
+    prompt: `You are updating the Baby Chikki #2 dashboard at rickin.live/pages/baby-dashboard. This is an autonomous job \u2014 do NOT ask for confirmation. Process everything directly.
 
 ## Key Facts
 - Due date: July 7, 2026 (Week 40)
-- Week anchor: Week 23 = March 10, 2026 (advances every Tuesday)
 - OB: Dr. Boester
-- Baby Names Google Sheet: 1fhtMkDSTUlRCFqY4hQiSdZg7cOe4FYNkmOIIHWo4KSU (tab "Names" \u2014 columns: Name, Status where "fav" = favorite)
+- Google Sheet: 1fhtMkDSTUlRCFqY4hQiSdZg7cOe4FYNkmOIIHWo4KSU
 - Dashboard slug: baby-dashboard
 
-## Step 1: Calculate Current Week
-current_week = 23 + floor((today - March 10 2026) / 7)
-Clamp between 1 and 40.
+The dashboard HTML auto-calculates week/trimester/countdown/size via inline JS. Your job is to inject LIVE DATA that the static page can't compute on its own: appointments, names, tasks, and checklist progress from Google Sheets.
 
-## Step 2: Pull OB Appointments
+## Step 1: Pull OB Appointments from Calendar
 Use calendar_list with timeMin = today, timeMax = 2026-07-15.
-Filter for events containing "Dr. Boester", "OB", "appointment", "glucose", "NICU", "nursery", "ultrasound".
-Build a JSON array: [{title, date}] sorted by date ascending.
+Filter events containing "Dr. Boester", "OB", "appointment", "glucose", "NICU", "nursery", "ultrasound", "tour".
+Build a JSON array sorted by date: [{"title":"Video Appointment","date":"2026-03-19","time":"11:00 AM","detail":"Week 25 check-in via video call."},...]
+- title: event summary
+- date: YYYY-MM-DD format only (no time in date field)
+- time: optional, human-readable time if available
+- detail: optional one-line description
 
-## Step 3: Pull Baby Names from Google Sheets
-Use sheets_read on spreadsheet 1fhtMkDSTUlRCFqY4hQiSdZg7cOe4FYNkmOIIHWo4KSU, range "Names!A:B".
-Parse rows: column A = name, column B = status. If status is "fav" or "favorite", mark as favorite. All others are secondary names.
-If the sheet read fails or tab doesn't exist, fall back to these defaults:
-- Favorites: Kian, Neel, Nivaan, Shayan
-- Others: Aryan, Rohan, Veer, Kabir
+Always add a final entry: {"title":"\u{1F389} Due Date","date":"2026-07-07","detail":"Baby Chikki #2 arrives! \u{1F499}"}
 
-## Step 4: Read the Current Dashboard HTML
-Read the current dashboard HTML at data/pages/baby-dashboard.html using notes_read or by knowing its structure. The dashboard is a self-contained HTML file with embedded JavaScript that auto-calculates the week, trimester, days left, fruit of the week, baby development bullets, Pooja symptoms, names, and OB appointments from inline data.
+## Step 2: Pull Data from Google Sheets
+Read these tabs from spreadsheet 1fhtMkDSTUlRCFqY4hQiSdZg7cOe4FYNkmOIIHWo4KSU:
 
-DO NOT regenerate the full HTML from scratch. Instead, only inject dynamic data that the static JS cannot compute on its own:
+### 2a: Names (tab "Names", range A:C)
+Column A = name, B = meaning, C = status ("fav" or "favorite" = favorite, else secondary).
+Build two arrays of {name, meaning} objects \u2014 favorites and others.
+If tab doesn't exist or is empty, skip (HTML has defaults).
 
-### 4a: Inject OB Appointments (idempotent)
-If there is already a \`<script id="appt-data"\` block in the HTML, REPLACE it entirely. If not, insert it just before \`</body>\`. The element must look exactly like:
-\`\`\`
-<script id="appt-data" type="application/json">[{"title":"OB Checkup","date":"2026-04-15"},...]</script>
-\`\`\`
-Use date format YYYY-MM-DD (no time component). Never duplicate this element \u2014 always replace-or-create.
+### 2b: Tasks (tab "Tasks", range A:D)
+Column A = task text, B = priority ("high"/"medium"), C = target week number, D = done ("yes"/"true"/"done" = complete).
+Build array: [{"text":"Sign up for birthing class","priority":"high","week":25,"done":false},...]
+If tab doesn't exist, skip.
 
-### 4b: Update Names if Sheets Data Available
-If you got names from Sheets, find these exact lines in the script block:
+### 2c: Checklist Progress (tab "Shopping List", count rows)
+Count total items and items marked done/bought. Format as "X/Y".
+Also read tab "Tasks" done count. Format as "X/Y".
+Build: {"itemsBought":"5/38","tasksDone":"3/22"}
+If tabs don't exist, skip.
+
+## Step 3: Inject Data into Dashboard HTML
+Read the current file at "Scheduled Reports/baby-dashboard-source.html" using notes_read. If not found, read "data/pages/baby-dashboard.html".
+
+DO NOT regenerate the HTML. Only inject data blocks before </body>. For each data type, if a \`<script id="..."\` block already exists, REPLACE it. Otherwise INSERT before </body>.
+
+### 3a: Appointments
+\`<script id="appt-data" type="application/json">[...appointments array...]</script>\`
+
+### 3b: Tasks
+\`<script id="tasks-data" type="application/json">[...tasks array...]</script>\`
+
+### 3c: Checklist Progress
+\`<script id="checklist-data" type="application/json">{"itemsBought":"5/38","tasksDone":"3/22"}</script>\`
+
+### 3d: Names (only if Sheets data available)
+Find these lines and replace the array contents:
   var defaultFavNames = [...]
   var defaultOtherNames = [...]
-Replace the array contents with the Sheet values. Use single quotes around each name. Escape any apostrophes in names with backslash.
-
-### 4c: Update Footer Date
-Find the footer div and update the text to show the current date.
+Use format: {name:'Kian',meaning:'Ancient / King'}
+Escape apostrophes in names/meanings with backslash.
 
 Save the modified HTML using web_save with slug "baby-dashboard".
 
-## Step 5: Output Summary
-End your response with:
+## Step 4: Output Summary
 
 # Baby Dashboard Update \u2014 {date}
-
-- **Week**: {N} of 40 ({trimester} trimester)
-- **Size**: {emoji} {fruit} (~{size} cm)
-- **Next OB**: {date} \u2014 {title} (or "None scheduled")
-- **Names**: {count} favorites, {count} others (source: Sheets / fallback)
+- **Week**: {N} of 40 ({trimester})
+- **Appointments**: {count} injected, next: {title} on {date}
+- **Names**: {fav count} favorites, {other count} others (source: Sheets / fallback)
+- **Tasks**: {done}/{total} complete
+- **Shopping**: {bought}/{total} items
 - **Dashboard**: Updated at rickin.live/pages/baby-dashboard
 
 Process everything autonomously. Be thorough but efficient.`,
