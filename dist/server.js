@@ -4779,71 +4779,63 @@ Process everything autonomously. Be thorough but efficient.`,
     id: "baby-dashboard-weekly-update",
     name: "Baby Dashboard Weekly Update",
     agentId: "deep-researcher",
-    prompt: `You are updating the Baby Chikki #2 pregnancy dashboard at rickin.live/pages/baby-dashboard. This is an autonomous job \u2014 do NOT ask for confirmation. Process everything directly.
+    prompt: `You are updating the Baby Boy pregnancy dashboard at rickin.live/pages/baby-dashboard. This is an autonomous job \u2014 do NOT ask for confirmation. Process everything directly.
 
 ## Key Facts
 - Due date: July 7, 2026 (Week 40)
+- Week anchor: Week 23 = March 10, 2026 (advances every Tuesday)
 - OB: Dr. Boester
-- Google Sheet backend: 1fhtMkDSTUlRCFqY4hQiSdZg7cOe4FYNkmOIIHWo4KSU
+- Baby Names Google Sheet: 1fhtMkDSTUlRCFqY4hQiSdZg7cOe4FYNkmOIIHWo4KSU (tab "Names" \u2014 columns: Name, Status where "fav" = favorite)
 - Dashboard slug: baby-dashboard
 
 ## Step 1: Calculate Current Week
-Calculate the current pregnancy week: current_week = 40 - floor(days_until_due / 7)
-If the due date has passed, set current_week to 40+ and use "Baby is here!" mode.
+current_week = 23 + floor((today - March 10 2026) / 7)
+Clamp between 1 and 40.
 
-## Step 2: Look Up Baby Data
-Use this week-by-week table to get size comparison, length, weight, development, and symptom data:
+## Step 2: Pull OB Appointments
+Use calendar_list with timeMin = today, timeMax = 2026-07-15.
+Filter for events containing "Dr. Boester", "OB", "appointment", "glucose", "NICU", "nursery", "ultrasound".
+Build a JSON array: [{title, date}] sorted by date ascending.
 
-| Week | Size | Emoji | Length | Weight | Baby Development | Pooja This Week |
-|------|------|-------|--------|--------|-----------------|-----------------|
-| 24 | Ear of Corn | \u{1F33D} | ~12 in | ~1.3 lb | Lungs developing surfactant. Viability milestone! | Braxton Hicks may begin. Appetite growing. |
-| 25 | Cauliflower | \u{1F966} | ~13 in | ~1.5 lb | Responding to your voice! Startle reflex developing. | Round ligament pain common. Keep hydrated. |
-| 26 | Kale bunch | \u{1F96C} | ~14 in | ~1.7 lb | Eyes opening. Practicing breathing movements. | Leg cramps, heartburn picking up. |
-| 27 | Iceberg Lettuce | \u{1F957} | ~14.4 in | ~2 lb | Sleep/wake cycles forming. Brain growing fast. | 3rd trimester begins! More frequent kicks. |
-| 28 | Large Eggplant | \u{1F346} | ~14.8 in | ~2.2 lb | REM sleep begins. Can blink and dream! | Glucose test week. Shortness of breath common. |
-| 29 | Butternut Squash | \u{1F383} | ~15.2 in | ~2.5 lb | Bones hardening (skull stays soft). Muscle tone increasing. | Bi-weekly visits begin. Back pain intensifying. |
-| 30 | Head of Cabbage | \u{1F96C} | ~15.7 in | ~2.9 lb | Strong kicks! Running out of room. | Sleep getting harder. Pillow between knees helps. |
-| 31 | Coconut | \u{1F965} | ~16.2 in | ~3.3 lb | All five senses active. Storing iron and calcium. | Colostrum may start leaking. Totally normal! |
-| 32 | Jicama | \u{1FADA} | ~16.7 in | ~3.7 lb | Practicing breathing. Fat deposits accelerating. | OB every 2 weeks now. Heartburn peaks. |
-| 33 | Pineapple | \u{1F34D} | ~17.2 in | ~4.2 lb | Immune system building. Bones fully ossifying. | Install car seat this week! |
-| 34 | Cantaloupe | \u{1F348} | ~17.7 in | ~4.7 lb | Lungs nearly mature. Fingernails reaching fingertips. | Pack hospital bag. Pelvic pressure increasing. |
-| 35 | Honeydew Melon | \u{1F348} | ~18.2 in | ~5.3 lb | Kidneys fully developed. Liver processing waste. | Hospital bag should be packed and ready! |
-| 36 | Head of Romaine | \u{1F96C} | ~18.7 in | ~5.8 lb | Head may engage in pelvis. Lanugo shedding. | Weekly visits begin. GBS test this week. |
-| 37 | Winter Melon | \u{1F349} | ~19.1 in | ~6.3 lb | Full term! Lungs mature. Ready if born now. | Cervical checks begin. Stay close to home. |
-| 38 | Leek | \u{1F33F} | ~19.6 in | ~6.8 lb | Shedding vernix. Brain still developing fast. | Could come any day. Rest up! |
-| 39 | Small Watermelon | \u{1F349} | ~19.9 in | ~7.3 lb | Everything fully formed. Just gaining final fat. | Charge all devices. Bag by the door! |
-| 40 | Pumpkin | \u{1F383} | ~20.2 in | ~7.5 lb | IT'S TIME! \u{1F389} | Due date \u2014 July 7, 2026 \u{1F499} |
+## Step 3: Pull Baby Names from Google Sheets
+Use sheets_read on spreadsheet 1fhtMkDSTUlRCFqY4hQiSdZg7cOe4FYNkmOIIHWo4KSU, range "Names!A:B".
+Parse rows: column A = name, column B = status. If status is "fav" or "favorite", mark as favorite. All others are secondary names.
+If the sheet read fails or tab doesn't exist, fall back to these defaults:
+- Favorites: Kian, Neel, Nivaan, Shayan
+- Others: Aryan, Rohan, Veer, Kabir
 
-## Step 3: Pull OB Appointments
-Use calendar_list with timeMin = today's date, timeMax = 2026-07-15.
-Filter for events containing "Dr. Boester", "OB", "appointment", "glucose", "NICU", "nursery".
-Mark the next upcoming appointment as "NEXT".
+## Step 4: Read the Current Dashboard HTML
+Read the current dashboard HTML at data/pages/baby-dashboard.html using notes_read or by knowing its structure. The dashboard is a self-contained HTML file with embedded JavaScript that auto-calculates the week, trimester, days left, fruit of the week, baby development bullets, Pooja symptoms, names, and OB appointments from inline data.
 
-## Step 4: Generate and Save Dashboard HTML
-Generate the complete HTML page for the baby dashboard with these sections:
-1. **Header**: "Baby Chikki #2 \u{1F37C}" with gradient background
-2. **Countdown**: JavaScript-calculated days remaining until July 7, 2026
-3. **Current Week**: "Week {N}" with size fact card: "This week Chikki #2 is the size of a {emoji} {object}!"
-4. **Baby Stats Cards**: Length, Weight in stat cards
-5. **Week {N} \u2014 What's Happening**: Baby development text + Pooja's symptoms text
-6. **OB Appointments**: Table of upcoming appointments with "NEXT" badge on the soonest one
-7. **Hospital Bag Checklist**: Include a localStorage-backed checklist section (DO NOT modify the localStorage logic \u2014 just render the container, the JS handles persistence)
-8. **Footer**: "Last updated: {date} \xB7 Week {N}"
+DO NOT regenerate the full HTML from scratch. Instead, only inject dynamic data that the static JS cannot compute on its own:
 
-The page must be mobile-first, beautiful, with soft gradients, emoji accents, and clean card layouts. Use inline CSS. Make it a self-contained single HTML file.
+### 4a: Inject OB Appointments (idempotent)
+If there is already a \`<script id="appt-data"\` block in the HTML, REPLACE it entirely. If not, insert it just before \`</body>\`. The element must look exactly like:
+\`\`\`
+<script id="appt-data" type="application/json">[{"title":"OB Checkup","date":"2026-04-15"},...]</script>
+\`\`\`
+Use date format YYYY-MM-DD (no time component). Never duplicate this element \u2014 always replace-or-create.
 
-Save using web_save with slug "baby-dashboard".
+### 4b: Update Names if Sheets Data Available
+If you got names from Sheets, find these exact lines in the script block:
+  var defaultFavNames = [...]
+  var defaultOtherNames = [...]
+Replace the array contents with the Sheet values. Use single quotes around each name. Escape any apostrophes in names with backslash.
+
+### 4c: Update Footer Date
+Find the footer div and update the text to show the current date.
+
+Save the modified HTML using web_save with slug "baby-dashboard".
 
 ## Step 5: Output Summary
-End your response with a clear summary in this format (the scheduler will save it automatically):
+End your response with:
 
 # Baby Dashboard Update \u2014 {date}
 
-- **Week**: {N} of 40
-- **Size**: {emoji} {object} (~{length}, ~{weight})
-- **Development**: {one-line summary}
-- **Pooja This Week**: {one-line summary}
-- **Next OB Appointment**: {date} \u2014 {title}
+- **Week**: {N} of 40 ({trimester} trimester)
+- **Size**: {emoji} {fruit} (~{size} cm)
+- **Next OB**: {date} \u2014 {title} (or "None scheduled")
+- **Names**: {count} favorites, {count} others (source: Sheets / fallback)
 - **Dashboard**: Updated at rickin.live/pages/baby-dashboard
 
 Process everything autonomously. Be thorough but efficient.`,
