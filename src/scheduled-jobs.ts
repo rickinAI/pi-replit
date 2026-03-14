@@ -38,7 +38,9 @@ function getJobSavePath(jobId: string, dateStr: string, safeName: string): strin
   if (jobId === "real-estate-daily-scan") return `Scheduled Reports/Real Estate/${dateStr}-Property-Scan.md`;
   if (jobId === "darknode-inbox-monitor") return `Scheduled Reports/Inbox Monitor/${dateStr}-${safeName}.md`;
   if (jobId === "life-audit") return `Scheduled Reports/Life-Audit/${dateStr}.md`;
-  if (jobId === "weekly-inbox-cleanup") return `Scheduled Reports/Inbox Cleanup/${dateStr}-Inbox-Cleanup.md`;
+  if (jobId === "daily-inbox-triage-am") return `Scheduled Reports/Inbox Cleanup/${dateStr}-AM-triage.md`;
+  if (jobId === "daily-inbox-triage-pm") return `Scheduled Reports/Inbox Cleanup/${dateStr}-PM-triage.md`;
+  if (jobId === "weekly-inbox-deep-clean") return `Scheduled Reports/Inbox Cleanup/${dateStr}-weekly-summary.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 
@@ -398,16 +400,16 @@ Be thorough. Be specific. Calculate exact gestational weeks, exact ages, exact d
     enabled: true,
   },
   {
-    id: "weekly-inbox-cleanup",
-    name: "Weekly Inbox Cleanup",
+    id: "daily-inbox-triage-am",
+    name: "Daily Inbox Triage (AM)",
     agentId: "email-drafter",
-    prompt: `You are running a weekly inbox cleanup for Rickin. This is an autonomous job — do NOT use interview forms or ask for confirmation. Process everything directly.
+    prompt: `You are running a daily inbox triage for Rickin. This is an autonomous job — do NOT use interview forms or ask for confirmation. Process everything directly.
 
 ## Step 1: Read Label Structure
 Read "Preferences/Gmail Label Structure.md" from the vault using notes_read. This contains all label IDs you'll need.
 
-## Step 2: Scan Inbox
-Use email_list with query "in:inbox" and maxResults 20. This returns the 20 most recent inbox emails with sender, subject, and snippet. To get more, make additional calls with narrower queries (e.g., "in:inbox older_than:1d", "in:inbox category:promotions", "in:inbox from:linkedin.com"). Track message IDs you've already processed to avoid duplicates. Aim for up to 50 emails per run — prioritize labeling accuracy over volume.
+## Step 2: Scan New Emails
+Use email_list with query "in:inbox newer_than:1d" and maxResults 20. This scans only recent emails since roughly the last run. Process up to 50 emails. Track message IDs to avoid duplicates if you make multiple calls with narrower queries.
 
 For each email, read the sender (From), subject, and snippet. If the category is unclear from metadata alone, use email_read to check the body.
 
@@ -453,37 +455,184 @@ Do NOT archive:
 - Security alerts from Google, Apple, or banks — always keep these in inbox
 - Anything you're unsure about — when in doubt, leave it in inbox
 
-## Step 5: Subscription Detection
-While scanning, note any senders that appear to be subscriptions or recurring newsletters. After processing all emails, append detected subscriptions to Google Sheet "Bhatt Family — Subscriptions & Bills Tracker" (spreadsheet ID: 1j5-EOdfIyqMFewDkXQ09a1o9HZAeSDGv4w52zWa0ELs) in the "Email Subscriptions" tab using sheets_append. Columns: Sender, Email Address, Type (newsletter/subscription/marketing), Frequency (daily/weekly/monthly), First Seen Date.
+## Step 5: Save Triage Log
+Save a lightweight log using notes_create to "Scheduled Reports/Inbox Cleanup/{today YYYY-MM-DD}-AM-triage.md":
 
-## Step 6: Save Report
-Save a summary report using notes_create to "Scheduled Reports/Inbox Cleanup/{today YYYY-MM-DD}-Inbox-Cleanup.md":
+# Inbox Triage — {date} AM
 
-# Inbox Cleanup — {date}
-
-## Summary
 - Emails processed: X
 - Labeled: X
 - Archived: X
-- Left in inbox: X
+- Action items left in inbox: X
 
-## Labels Applied
+### Action Items
+1. [Subject] — [Sender] — reason flagged
+
+Process everything autonomously. Be thorough but efficient.`,
+    schedule: { type: "daily", hour: 6, minute: 0 },
+    enabled: true,
+  },
+  {
+    id: "daily-inbox-triage-pm",
+    name: "Daily Inbox Triage (PM)",
+    agentId: "email-drafter",
+    prompt: `You are running a daily inbox triage for Rickin. This is an autonomous job — do NOT use interview forms or ask for confirmation. Process everything directly.
+
+## Step 1: Read Label Structure
+Read "Preferences/Gmail Label Structure.md" from the vault using notes_read. This contains all label IDs you'll need.
+
+## Step 2: Scan New Emails
+Use email_list with query "in:inbox newer_than:1d" and maxResults 20. This scans only recent emails since roughly the last run. Process up to 50 emails. Track message IDs to avoid duplicates if you make multiple calls with narrower queries.
+
+For each email, read the sender (From), subject, and snippet. If the category is unclear from metadata alone, use email_read to check the body.
+
+## Step 3: Apply Labels
+Apply labels using email_label with the label IDs from Step 1. Each email gets a CATEGORY label + an ACTION label:
+
+### Category Rules (apply the FIRST match):
+- From contains "@delta.com", "@jetblue.com", "@united.com", "@aa.com", "@spirit.com", "@southwest.com" OR subject contains "flight", "boarding pass", "itinerary" → Travel/Flights (Label_32)
+- Subject contains "reservation", "hotel", "resort", "check-in", "booking" (non-flight) → Travel/Bookings (Label_31)
+- Subject contains "Marriott", "Hilton", "Hyatt", "Airbnb" → Travel/Hotels (Label_33)
+- From contains "@schools.nyc.gov" or "KCicio" OR subject contains "school", "class", "PTA", "curriculum" → Family/School (Label_22)
+- From "pooja.bhatt@gmail.com" → Family/Pooja (Label_20)
+- Subject contains "Reya" or relates to Reya's schedule → Family/Reya (Label_21)
+- Subject contains "baby", "prenatal", "OB", "nursery", "registry" → Family/Baby (Label_23)
+- From contains "@chase.com", "@bankofamerica.com", "@citi.com", "@wellsfargo.com", "@capitalone.com" OR subject contains "bank", "account", "statement" → Finance/Banking (Label_24)
+- From contains "@fidelity.com", "@vanguard.com", "@schwab.com", "@robinhood.com" OR subject contains "investment", "portfolio", "dividend", "401k" → Finance/Investments (Label_25)
+- Subject contains "tax", "W-2", "1099", "TurboTax", "CPA" → Finance/Tax (Label_26)
+- Subject contains "bill", "invoice", "payment due", "autopay", "utility" → Finance/Bills (Label_27)
+- From contains "@zillow.com", "@redfin.com", "@realtor.com", "@streeteasy.com" OR subject contains "listing", "open house", "property" → Real Estate/Listings (Label_28)
+- Subject contains "mortgage", "pre-approval", "loan", "rate lock" → Real Estate/Mortgage (Label_30)
+- Subject contains "closing", "title", "deed" (real estate) → Real Estate/Legal (Label_29)
+- From contains "@healthfirst.org", "@mycharthealth.com", "@zocdoc.com" OR subject contains "appointment", "prescription", "lab results", "doctor" → Health (Label_34 for Pooja-related, Label_35 for Rickin-related)
+- Subject contains "subscription", "renewal", "your plan", "membership" → Personal/Subscriptions (Label_36)
+- From contains "@amazon.com", "@ebay.com", "@target.com" OR subject contains "order", "shipped", "delivered", "tracking" → Personal/Shopping (Label_37)
+- Subject contains "insurance", "policy", "claim", "coverage", "premium" → Personal/Insurance (Label_38)
+
+### Action Rules (apply ONE per email):
+- Needs a response or decision from Rickin → ⚡ Action Required (Label_16)
+- Rickin sent something and is waiting for reply → ⏳ Waiting On (Label_17)
+- Confirms a scheduled event/appointment → 📅 Scheduled (Label_18)
+- Informational only, no action needed → 🔁 Reference (Label_19)
+
+## Step 4: Auto-Archive
+After labeling, archive (email_archive) these:
+- From "@linkedin.com" with subject containing "invitation", "endorsed", "who viewed", "new connection"
+- From marketing/noreply addresses (sender contains "noreply@", "no-reply@", "marketing@", "news@", "promo@")
+- Calendar sharing notifications ("added you to the shared calendar", "shared a calendar")
+- Newsletters — if the body or snippet mentions "unsubscribe" and the sender is not a known contact (family, school, financial institution)
+
+Do NOT archive:
+- Anything labeled ⚡ Action Required (Label_16)
+- Emails from Pooja, family, school, or financial institutions with action items
+- Security alerts from Google, Apple, or banks — always keep these in inbox
+- Anything you're unsure about — when in doubt, leave it in inbox
+
+## Step 5: Save Triage Log
+Save a lightweight log using notes_create to "Scheduled Reports/Inbox Cleanup/{today YYYY-MM-DD}-PM-triage.md":
+
+# Inbox Triage — {date} PM
+
+- Emails processed: X
+- Labeled: X
+- Archived: X
+- Action items left in inbox: X
+
+### Action Items
+1. [Subject] — [Sender] — reason flagged
+
+Process everything autonomously. Be thorough but efficient.`,
+    schedule: { type: "daily", hour: 18, minute: 0 },
+    enabled: true,
+  },
+  {
+    id: "weekly-inbox-deep-clean",
+    name: "Weekly Inbox Deep Clean",
+    agentId: "email-drafter",
+    prompt: `You are running a weekly deep clean of Rickin's inbox. This is an autonomous job — do NOT use interview forms or ask for confirmation. Process everything directly.
+
+This job catches anything the daily triage jobs missed and does subscription detection.
+
+## Step 1: Read Label Structure
+Read "Preferences/Gmail Label Structure.md" from the vault using notes_read. This contains all label IDs you'll need.
+
+## Step 2: Full Inbox Scan
+Use email_list with query "in:inbox" and maxResults 20. This returns the 20 most recent inbox emails. Make additional calls with narrower queries (e.g., "in:inbox older_than:3d", "in:inbox from:linkedin.com", "in:inbox category:promotions") to catch more. Track message IDs to avoid duplicates. Aim for up to 100 emails total.
+
+For each email, read the sender (From), subject, and snippet. If the category is unclear from metadata alone, use email_read to check the body.
+
+## Step 3: Apply Labels (catch-all pass)
+Apply labels using email_label with the label IDs from Step 1. Each email gets a CATEGORY label + an ACTION label. Skip emails that already have the correct labels from daily triage.
+
+### Category Rules (apply the FIRST match):
+- From contains "@delta.com", "@jetblue.com", "@united.com", "@aa.com", "@spirit.com", "@southwest.com" OR subject contains "flight", "boarding pass", "itinerary" → Travel/Flights (Label_32)
+- Subject contains "reservation", "hotel", "resort", "check-in", "booking" (non-flight) → Travel/Bookings (Label_31)
+- Subject contains "Marriott", "Hilton", "Hyatt", "Airbnb" → Travel/Hotels (Label_33)
+- From contains "@schools.nyc.gov" or "KCicio" OR subject contains "school", "class", "PTA", "curriculum" → Family/School (Label_22)
+- From "pooja.bhatt@gmail.com" → Family/Pooja (Label_20)
+- Subject contains "Reya" or relates to Reya's schedule → Family/Reya (Label_21)
+- Subject contains "baby", "prenatal", "OB", "nursery", "registry" → Family/Baby (Label_23)
+- From contains "@chase.com", "@bankofamerica.com", "@citi.com", "@wellsfargo.com", "@capitalone.com" OR subject contains "bank", "account", "statement" → Finance/Banking (Label_24)
+- From contains "@fidelity.com", "@vanguard.com", "@schwab.com", "@robinhood.com" OR subject contains "investment", "portfolio", "dividend", "401k" → Finance/Investments (Label_25)
+- Subject contains "tax", "W-2", "1099", "TurboTax", "CPA" → Finance/Tax (Label_26)
+- Subject contains "bill", "invoice", "payment due", "autopay", "utility" → Finance/Bills (Label_27)
+- From contains "@zillow.com", "@redfin.com", "@realtor.com", "@streeteasy.com" OR subject contains "listing", "open house", "property" → Real Estate/Listings (Label_28)
+- Subject contains "mortgage", "pre-approval", "loan", "rate lock" → Real Estate/Mortgage (Label_30)
+- Subject contains "closing", "title", "deed" (real estate) → Real Estate/Legal (Label_29)
+- From contains "@healthfirst.org", "@mycharthealth.com", "@zocdoc.com" OR subject contains "appointment", "prescription", "lab results", "doctor" → Health (Label_34 for Pooja-related, Label_35 for Rickin-related)
+- Subject contains "subscription", "renewal", "your plan", "membership" → Personal/Subscriptions (Label_36)
+- From contains "@amazon.com", "@ebay.com", "@target.com" OR subject contains "order", "shipped", "delivered", "tracking" → Personal/Shopping (Label_37)
+- Subject contains "insurance", "policy", "claim", "coverage", "premium" → Personal/Insurance (Label_38)
+
+### Action Rules (apply ONE per email):
+- Needs a response or decision from Rickin → ⚡ Action Required (Label_16)
+- Rickin sent something and is waiting for reply → ⏳ Waiting On (Label_17)
+- Confirms a scheduled event/appointment → 📅 Scheduled (Label_18)
+- Informational only, no action needed → 🔁 Reference (Label_19)
+
+## Step 4: Auto-Archive
+After labeling, archive (email_archive) these:
+- From "@linkedin.com" with subject containing "invitation", "endorsed", "who viewed", "new connection"
+- From marketing/noreply addresses (sender contains "noreply@", "no-reply@", "marketing@", "news@", "promo@")
+- Calendar sharing notifications ("added you to the shared calendar", "shared a calendar")
+- Newsletters — if the body or snippet mentions "unsubscribe" and the sender is not a known contact (family, school, financial institution)
+
+Do NOT archive:
+- Anything labeled ⚡ Action Required (Label_16)
+- Emails from Pooja, family, school, or financial institutions with action items
+- Security alerts from Google, Apple, or banks — always keep these in inbox
+- Anything you're unsure about — when in doubt, leave it in inbox
+
+## Step 5: Subscription Detection
+While scanning, note any senders that appear to be subscriptions or recurring newsletters. After processing, append detected subscriptions to Google Sheet "Bhatt Family — Subscriptions & Bills Tracker" (spreadsheet ID: 1j5-EOdfIyqMFewDkXQ09a1o9HZAeSDGv4w52zWa0ELs) in the "Email Subscriptions" tab using sheets_append. Columns: Sender, Email Address, Type (newsletter/subscription/marketing), Frequency (daily/weekly/monthly), First Seen Date. Check existing rows first with sheets_read to avoid duplicates.
+
+## Step 6: Save Weekly Summary
+Save a summary report using notes_create to "Scheduled Reports/Inbox Cleanup/{today YYYY-MM-DD}-weekly-summary.md":
+
+# Weekly Inbox Summary — {date}
+
+## Week at a Glance
+- Total emails processed: X
+- Labeled: X | Archived: X | Left in inbox: X
+
+## Label Breakdown
 | Label | Count |
 |-------|-------|
 | Travel/Flights | 3 |
+| Finance/Bills | 2 |
+| Family/School | 4 |
 | ... | ... |
 
-## ⚡ Action Items (left in inbox)
-1. [Subject] — from [Sender] — why it needs attention
+## Action Items Remaining
+1. [Subject] — [Sender] — flagged reason
 
-## 📦 Archived
+## New Subscriptions Detected
+- sender@domain.com — "Newsletter Name" — added to tracker sheet
+
+## Archived Noise
 - Xx LinkedIn notifications
 - Xx promotional emails
 - Xx newsletters
-- ...
-
-## 📧 Subscriptions Detected
-- [sender] — [type] — logged to Bills Tracker sheet
 
 Process everything autonomously. Be thorough but efficient.`,
     schedule: { type: "weekly", hour: 10, minute: 0, daysOfWeek: [6] },
@@ -924,7 +1073,7 @@ async function checkJobs(): Promise<void> {
 
         console.log(`[scheduled-jobs] Job completed${isPartial ? " (partial)" : ""}: ${job.name}`);
 
-        if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit" || job.id === "weekly-inbox-cleanup") && kbListFn && kbMoveFn) {
+        if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit" || job.id === "weekly-inbox-deep-clean") && kbListFn && kbMoveFn) {
           await archiveOldReports();
         }
       }
@@ -1021,7 +1170,7 @@ export async function triggerJob(jobId: string): Promise<string> {
       try { await writeJobStatus(job.id, { lastRun: job.lastRun, status: job.lastStatus!, savedTo: vaultSaved ? savePath : null, error: vaultSaved ? null : "vault save failed" }); } catch {}
     }
 
-    if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit" || job.id === "weekly-inbox-cleanup") && kbListFn && kbMoveFn) {
+    if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit" || job.id === "weekly-inbox-deep-clean") && kbListFn && kbMoveFn) {
       await archiveOldReports();
     }
 
