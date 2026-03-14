@@ -6347,9 +6347,11 @@ var PORT = parseInt(process.env.PORT || "3000", 10);
 var ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
 var APP_PASSWORD = process.env.APP_PASSWORD || "";
 var POOJA_PASSWORD = process.env.POOJA_PASSWORD || "";
+var DARKNODE_PASSWORD = process.env.DARKNODE_PASSWORD || "";
 var USERS = {
   rickin: { password: APP_PASSWORD, displayName: "Rickin" },
-  pooja: { password: POOJA_PASSWORD, displayName: "Pooja" }
+  pooja: { password: POOJA_PASSWORD, displayName: "Pooja" },
+  darknode: { password: DARKNODE_PASSWORD, displayName: "DarkNode" }
 };
 var SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 var __filename = fileURLToPath(import.meta.url);

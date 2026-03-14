@@ -47,9 +47,11 @@ const PORT = parseInt(process.env.PORT || "3000", 10);
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
 const APP_PASSWORD = process.env.APP_PASSWORD || "";
 const POOJA_PASSWORD = process.env.POOJA_PASSWORD || "";
+const DARKNODE_PASSWORD = process.env.DARKNODE_PASSWORD || "";
 const USERS: Record<string, { password: string; displayName: string }> = {
   rickin: { password: APP_PASSWORD, displayName: "Rickin" },
   pooja: { password: POOJA_PASSWORD, displayName: "Pooja" },
+  darknode: { password: DARKNODE_PASSWORD, displayName: "DarkNode" },
 };
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 
