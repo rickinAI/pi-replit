@@ -357,6 +357,129 @@ function buildGmailTools(): ToolDefinition[] {
         return { content: [{ type: "text" as const, text: result }], details: {} };
       },
     },
+    {
+      name: "email_get_attachment",
+      label: "Email Attachment",
+      description: "Download and read an email attachment. For PDFs, extracts text content automatically. Specify the email message ID and optionally a filename to target a specific attachment. Use email_read first to see what attachments exist.",
+      parameters: Type.Object({
+        messageId: Type.String({ description: "The Gmail message ID containing the attachment." }),
+        attachmentId: Type.Optional(Type.String({ description: "Specific attachment ID (from email_read). If omitted, reads the first attachment." })),
+        filename: Type.Optional(Type.String({ description: "Partial filename to match (e.g. 'invoice' to find 'invoice.pdf'). Used if attachmentId not provided." })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gmail.getAttachment(params.messageId, params.attachmentId, params.filename);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "email_send",
+      label: "Send Email",
+      description: "Send a new email. IMPORTANT: Always confirm with the user via interview form BEFORE calling this tool — show them the recipient, subject, and full body for review. Never auto-send.",
+      parameters: Type.Object({
+        to: Type.String({ description: "Recipient email address(es), comma-separated for multiple." }),
+        subject: Type.String({ description: "Email subject line." }),
+        body: Type.String({ description: "Email body text (plain text)." }),
+        cc: Type.Optional(Type.String({ description: "CC recipients, comma-separated." })),
+        bcc: Type.Optional(Type.String({ description: "BCC recipients, comma-separated." })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gmail.sendEmail(params.to, params.subject, params.body, params.cc, params.bcc);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "email_reply",
+      label: "Reply to Email",
+      description: "Reply to an existing email in-thread with proper threading headers. IMPORTANT: Always confirm with the user via interview form BEFORE calling this tool — show them the reply body for review. Never auto-send.",
+      parameters: Type.Object({
+        messageId: Type.String({ description: "The Gmail message ID to reply to." }),
+        body: Type.String({ description: "Reply body text (plain text)." }),
+        replyAll: Type.Optional(Type.Boolean({ description: "If true, reply to all recipients. Default: false (reply to sender only)." })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gmail.replyToEmail(params.messageId, params.body, params.replyAll ?? false);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "email_thread",
+      label: "Email Thread",
+      description: "Read an entire email conversation thread. Returns all messages in order. Get the threadId from email_list or email_read results.",
+      parameters: Type.Object({
+        threadId: Type.String({ description: "The Gmail thread ID." }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gmail.getThread(params.threadId);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "email_draft",
+      label: "Save Email Draft",
+      description: "Save a composed email as a Gmail draft without sending it. The draft will appear in Gmail's Drafts folder for later review and sending.",
+      parameters: Type.Object({
+        to: Type.String({ description: "Recipient email address(es)." }),
+        subject: Type.String({ description: "Email subject line." }),
+        body: Type.String({ description: "Email body text (plain text)." }),
+        cc: Type.Optional(Type.String({ description: "CC recipients, comma-separated." })),
+        bcc: Type.Optional(Type.String({ description: "BCC recipients, comma-separated." })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gmail.createDraft(params.to, params.subject, params.body, params.cc, params.bcc);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "email_archive",
+      label: "Archive Email",
+      description: "Archive an email (remove from inbox without deleting). The email remains searchable and in All Mail.",
+      parameters: Type.Object({
+        messageId: Type.String({ description: "The Gmail message ID to archive." }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gmail.archiveEmail(params.messageId);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "email_label",
+      label: "Email Labels",
+      description: "Add or remove Gmail labels on an email. Use Gmail system label IDs: STARRED, IMPORTANT, UNREAD, SPAM, TRASH, CATEGORY_PERSONAL, CATEGORY_SOCIAL, CATEGORY_PROMOTIONS, CATEGORY_UPDATES, CATEGORY_FORUMS.",
+      parameters: Type.Object({
+        messageId: Type.String({ description: "The Gmail message ID." }),
+        addLabels: Type.Optional(Type.Array(Type.String(), { description: "Label IDs to add." })),
+        removeLabels: Type.Optional(Type.Array(Type.String(), { description: "Label IDs to remove." })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gmail.modifyLabels(params.messageId, params.addLabels, params.removeLabels);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "email_mark_read",
+      label: "Mark Email Read/Unread",
+      description: "Mark an email as read or unread.",
+      parameters: Type.Object({
+        messageId: Type.String({ description: "The Gmail message ID." }),
+        read: Type.Boolean({ description: "true to mark as read, false to mark as unread." }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gmail.markRead(params.messageId, params.read);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "email_trash",
+      label: "Trash Email",
+      description: "Move an email to the trash. It can be recovered from Trash within 30 days.",
+      parameters: Type.Object({
+        messageId: Type.String({ description: "The Gmail message ID to trash." }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gmail.trashEmail(params.messageId);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
   ];
 }
 

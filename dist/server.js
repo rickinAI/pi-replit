@@ -829,7 +829,7 @@ function rowToConversation(row) {
 // src/gmail.ts
 import { google } from "googleapis";
 var SCOPES = [
-  "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/gmail.modify",
   "https://www.googleapis.com/auth/calendar",
   "https://www.googleapis.com/auth/drive",
   "https://www.googleapis.com/auth/spreadsheets",
@@ -1010,6 +1010,7 @@ async function listEmails(query, maxResults = 10) {
         const headers2 = msg.data.payload?.headers || [];
         return {
           id: ref.id,
+          threadId: msg.data.threadId || "",
           from: decodeHeader(headers2, "From"),
           subject: decodeHeader(headers2, "Subject") || "(no subject)",
           date: decodeHeader(headers2, "Date"),
@@ -1020,7 +1021,7 @@ async function listEmails(query, maxResults = 10) {
     );
     const lines = details.map((e, i) => {
       const marker = e.unread ? "*" : " ";
-      return `${marker} ${i + 1}. [${e.id}]
+      return `${marker} ${i + 1}. [${e.id}] (thread: ${e.threadId})
    From: ${e.from}
    Subject: ${e.subject}
    Date: ${e.date}
@@ -1056,14 +1057,23 @@ async function readEmail(messageId) {
     const to = decodeHeader(headers2, "To");
     const subject = decodeHeader(headers2, "Subject") || "(no subject)";
     const date = decodeHeader(headers2, "Date");
+    const threadId = msg.data.threadId || "";
     const body = decodeBody(msg.data.payload) || "(no readable content)";
+    const attachments = findAttachments(msg.data.payload);
     const truncatedBody = body.length > 3e3 ? body.slice(0, 3e3) + "\n\n[...truncated]" : body;
-    return `From: ${from}
+    let result = `From: ${from}
 To: ${to}
 Subject: ${subject}
 Date: ${date}
-
+Thread ID: ${threadId}
+`;
+    if (attachments.length > 0) {
+      result += `Attachments: ${attachments.map((a) => `${a.filename} (${a.mimeType}, ${Math.round(a.size / 1024)}KB) [id: ${a.attachmentId}]`).join("; ")}
+`;
+    }
+    result += `
 ${truncatedBody}`;
+    return result;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("Gmail readEmail error:", msg);
@@ -1219,6 +1229,294 @@ async function markDarkNodeProcessed(messageId) {
     );
   } catch (err) {
     console.error("[gmail] markDarkNodeProcessed error:", err);
+  }
+}
+function findAttachments(payload) {
+  const attachments = [];
+  function walk(part) {
+    if (part.filename && part.body?.attachmentId) {
+      attachments.push({
+        filename: part.filename,
+        mimeType: part.mimeType || "application/octet-stream",
+        attachmentId: part.body.attachmentId,
+        size: part.body.size || 0
+      });
+    }
+    if (part.parts) {
+      for (const p of part.parts) walk(p);
+    }
+  }
+  walk(payload);
+  return attachments;
+}
+async function getAttachment(messageId, attachmentId, filename) {
+  try {
+    const gmail = await getGmailClient();
+    const msg = await gmail.users.messages.get({ userId: "me", id: messageId, format: "full" });
+    const allAttachments = findAttachments(msg.data.payload);
+    if (allAttachments.length === 0) {
+      return "This email has no attachments.";
+    }
+    let target = allAttachments[0];
+    if (attachmentId) {
+      const found = allAttachments.find((a) => a.attachmentId === attachmentId);
+      if (found) {
+        target = found;
+      } else {
+        const listStr2 = allAttachments.map((a) => `- ${a.filename} (${a.mimeType}) [id: ${a.attachmentId}]`).join("\n");
+        return `Attachment ID not found. Available attachments:
+${listStr2}`;
+      }
+    } else if (filename) {
+      const found = allAttachments.find((a) => a.filename.toLowerCase().includes(filename.toLowerCase()));
+      if (found) {
+        target = found;
+      } else {
+        const listStr2 = allAttachments.map((a) => `- ${a.filename} (${a.mimeType})`).join("\n");
+        return `No attachment matching "${filename}". Available attachments:
+${listStr2}`;
+      }
+    }
+    const attRes = await gmail.users.messages.attachments.get({
+      userId: "me",
+      messageId,
+      id: target.attachmentId
+    });
+    const rawData = attRes.data.data;
+    if (!rawData) return "Attachment data could not be retrieved.";
+    const buffer = Buffer.from(rawData, "base64url");
+    if (target.mimeType === "application/pdf" || target.filename.toLowerCase().endsWith(".pdf")) {
+      try {
+        const pdfParse = (await import("pdf-parse")).default;
+        const parsed = await pdfParse(buffer);
+        const text = parsed.text?.trim();
+        if (text && text.length > 0) {
+          const truncated = text.length > 8e3 ? text.slice(0, 8e3) + "\n\n[...truncated]" : text;
+          return `\u{1F4CE} ${target.filename} (PDF, ${parsed.numpages} pages)
+
+${truncated}`;
+        }
+        return `\u{1F4CE} ${target.filename} \u2014 PDF has no extractable text (may be scanned/image-based).`;
+      } catch (pdfErr) {
+        return `\u{1F4CE} ${target.filename} \u2014 PDF parsing failed: ${pdfErr instanceof Error ? pdfErr.message : String(pdfErr)}`;
+      }
+    }
+    if (target.mimeType.startsWith("text/") || target.mimeType === "application/json" || target.mimeType === "application/xml") {
+      const textContent = buffer.toString("utf-8");
+      const truncated = textContent.length > 8e3 ? textContent.slice(0, 8e3) + "\n\n[...truncated]" : textContent;
+      return `\u{1F4CE} ${target.filename}
+
+${truncated}`;
+    }
+    if (target.mimeType.startsWith("image/")) {
+      const b64 = buffer.toString("base64");
+      return `\u{1F4CE} ${target.filename} (${target.mimeType}, ${Math.round(buffer.length / 1024)}KB)
+[Image attachment \u2014 base64 data available but not displayed as text]`;
+    }
+    const listStr = allAttachments.map((a, i) => `${i + 1}. ${a.filename} (${a.mimeType}, ${Math.round(a.size / 1024)}KB) [attachmentId: ${a.attachmentId}]`).join("\n");
+    return `\u{1F4CE} ${target.filename} is a binary file (${target.mimeType}, ${Math.round(buffer.length / 1024)}KB). Cannot display as text.
+
+All attachments:
+${listStr}`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Gmail getAttachment error:", msg);
+    if (msg.includes("not connected")) return "Gmail is not connected.";
+    if (msg.includes("404")) return "Email or attachment not found.";
+    return `Unable to read attachment: ${msg}`;
+  }
+}
+function sanitizeHeader(value) {
+  return value.replace(/[\r\n]+/g, " ").trim();
+}
+function buildRfc2822Message(to, subject, body, options) {
+  const lines = [];
+  lines.push(`To: ${sanitizeHeader(to)}`);
+  if (options?.cc) lines.push(`Cc: ${sanitizeHeader(options.cc)}`);
+  if (options?.bcc) lines.push(`Bcc: ${sanitizeHeader(options.bcc)}`);
+  lines.push(`Subject: ${sanitizeHeader(subject)}`);
+  lines.push(`Content-Type: text/plain; charset="UTF-8"`);
+  if (options?.inReplyTo) lines.push(`In-Reply-To: ${sanitizeHeader(options.inReplyTo)}`);
+  if (options?.references) lines.push(`References: ${sanitizeHeader(options.references)}`);
+  lines.push("");
+  lines.push(body);
+  return lines.join("\r\n");
+}
+async function sendEmail(to, subject, body, cc, bcc) {
+  try {
+    const gmail = await getGmailClient();
+    const raw = buildRfc2822Message(to, subject, body, { cc, bcc });
+    const encoded = Buffer.from(raw).toString("base64url");
+    const res = await gmail.users.messages.send({
+      userId: "me",
+      requestBody: { raw: encoded }
+    });
+    return `\u2705 Email sent successfully.
+To: ${to}
+Subject: ${subject}
+Message ID: ${res.data.id}`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Gmail sendEmail error:", msg);
+    if (msg.includes("not connected")) return "Gmail is not connected.";
+    if (msg.includes("invalid_grant") || msg.includes("authorization expired")) {
+      return "Gmail authorization expired \u2014 need to reconnect. Visit /api/gmail/auth.";
+    }
+    return `Failed to send email: ${msg}`;
+  }
+}
+async function replyToEmail(messageId, body, replyAll = false) {
+  try {
+    const gmail = await getGmailClient();
+    const original = await gmail.users.messages.get({ userId: "me", id: messageId, format: "full" });
+    const headers2 = original.data.payload?.headers || [];
+    const origFrom = decodeHeader(headers2, "From");
+    const origTo = decodeHeader(headers2, "To");
+    const origCc = decodeHeader(headers2, "Cc");
+    const origSubject = decodeHeader(headers2, "Subject");
+    const origMessageId = decodeHeader(headers2, "Message-ID") || decodeHeader(headers2, "Message-Id");
+    const origReferences = decodeHeader(headers2, "References");
+    const threadId = original.data.threadId || void 0;
+    const replyTo = origFrom;
+    let cc;
+    if (replyAll) {
+      const allRecipients = [origTo, origCc].filter(Boolean).join(", ");
+      cc = allRecipients || void 0;
+    }
+    const subject = origSubject.startsWith("Re:") ? origSubject : `Re: ${origSubject}`;
+    const references = origReferences ? `${origReferences} ${origMessageId}` : origMessageId;
+    const raw = buildRfc2822Message(replyTo, subject, body, {
+      cc,
+      inReplyTo: origMessageId,
+      references,
+      threadId
+    });
+    const encoded = Buffer.from(raw).toString("base64url");
+    const res = await gmail.users.messages.send({
+      userId: "me",
+      requestBody: { raw: encoded, threadId }
+    });
+    return `\u2705 Reply sent successfully.
+To: ${replyTo}${cc ? `
+Cc: ${cc}` : ""}
+Subject: ${subject}
+Message ID: ${res.data.id}`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Gmail replyToEmail error:", msg);
+    if (msg.includes("not connected")) return "Gmail is not connected.";
+    return `Failed to send reply: ${msg}`;
+  }
+}
+async function getThread(threadId) {
+  try {
+    const gmail = await getGmailClient();
+    const thread = await gmail.users.threads.get({ userId: "me", id: threadId, format: "full" });
+    const messages = thread.data.messages || [];
+    if (messages.length === 0) return "Thread has no messages.";
+    const formatted = messages.map((msg, i) => {
+      const headers2 = msg.payload?.headers || [];
+      const from = decodeHeader(headers2, "From");
+      const to = decodeHeader(headers2, "To");
+      const date = decodeHeader(headers2, "Date");
+      const subject = decodeHeader(headers2, "Subject");
+      const body = decodeBody(msg.payload) || "(no readable content)";
+      const truncatedBody = body.length > 2e3 ? body.slice(0, 2e3) + "\n[...truncated]" : body;
+      return `--- Message ${i + 1} of ${messages.length} [${msg.id}] ---
+From: ${from}
+To: ${to}
+Date: ${date}
+Subject: ${subject}
+
+${truncatedBody}`;
+    });
+    return `Thread: ${messages.length} messages
+
+${formatted.join("\n\n")}`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Gmail getThread error:", msg);
+    if (msg.includes("not connected")) return "Gmail is not connected.";
+    if (msg.includes("404")) return "Thread not found.";
+    return `Unable to read thread: ${msg}`;
+  }
+}
+async function createDraft(to, subject, body, cc, bcc) {
+  try {
+    const gmail = await getGmailClient();
+    const raw = buildRfc2822Message(to, subject, body, { cc, bcc });
+    const encoded = Buffer.from(raw).toString("base64url");
+    const res = await gmail.users.drafts.create({
+      userId: "me",
+      requestBody: { message: { raw: encoded } }
+    });
+    return `\u2705 Draft saved.
+To: ${to}
+Subject: ${subject}
+Draft ID: ${res.data.id}`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Gmail createDraft error:", msg);
+    return `Failed to save draft: ${msg}`;
+  }
+}
+async function archiveEmail(messageId) {
+  try {
+    const gmail = await getGmailClient();
+    await gmail.users.messages.modify({
+      userId: "me",
+      id: messageId,
+      requestBody: { removeLabelIds: ["INBOX"] }
+    });
+    return `\u2705 Email archived (removed from inbox).`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Gmail archiveEmail error:", msg);
+    if (msg.includes("404")) return "Email not found.";
+    return `Failed to archive: ${msg}`;
+  }
+}
+async function modifyLabels(messageId, addLabels, removeLabels) {
+  try {
+    const gmail = await getGmailClient();
+    const body = {};
+    if (addLabels && addLabels.length > 0) body.addLabelIds = addLabels;
+    if (removeLabels && removeLabels.length > 0) body.removeLabelIds = removeLabels;
+    await gmail.users.messages.modify({ userId: "me", id: messageId, requestBody: body });
+    const parts = [];
+    if (addLabels?.length) parts.push(`Added: ${addLabels.join(", ")}`);
+    if (removeLabels?.length) parts.push(`Removed: ${removeLabels.join(", ")}`);
+    return `\u2705 Labels updated. ${parts.join(". ")}`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Gmail modifyLabels error:", msg);
+    if (msg.includes("404")) return "Email not found.";
+    return `Failed to modify labels: ${msg}`;
+  }
+}
+async function markRead(messageId, read) {
+  try {
+    const gmail = await getGmailClient();
+    const body = read ? { removeLabelIds: ["UNREAD"] } : { addLabelIds: ["UNREAD"] };
+    await gmail.users.messages.modify({ userId: "me", id: messageId, requestBody: body });
+    return `\u2705 Email marked as ${read ? "read" : "unread"}.`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Gmail markRead error:", msg);
+    if (msg.includes("404")) return "Email not found.";
+    return `Failed to update read status: ${msg}`;
+  }
+}
+async function trashEmail(messageId) {
+  try {
+    const gmail = await getGmailClient();
+    await gmail.users.messages.trash({ userId: "me", id: messageId });
+    return `\u2705 Email moved to trash.`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Gmail trashEmail error:", msg);
+    if (msg.includes("404")) return "Email not found.";
+    return `Failed to trash email: ${msg}`;
   }
 }
 async function checkConnectionStatus() {
@@ -5413,6 +5711,129 @@ function buildGmailTools() {
       }),
       async execute(_toolCallId, params) {
         const result = await searchEmails(params.query);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "email_get_attachment",
+      label: "Email Attachment",
+      description: "Download and read an email attachment. For PDFs, extracts text content automatically. Specify the email message ID and optionally a filename to target a specific attachment. Use email_read first to see what attachments exist.",
+      parameters: Type.Object({
+        messageId: Type.String({ description: "The Gmail message ID containing the attachment." }),
+        attachmentId: Type.Optional(Type.String({ description: "Specific attachment ID (from email_read). If omitted, reads the first attachment." })),
+        filename: Type.Optional(Type.String({ description: "Partial filename to match (e.g. 'invoice' to find 'invoice.pdf'). Used if attachmentId not provided." }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = await getAttachment(params.messageId, params.attachmentId, params.filename);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "email_send",
+      label: "Send Email",
+      description: "Send a new email. IMPORTANT: Always confirm with the user via interview form BEFORE calling this tool \u2014 show them the recipient, subject, and full body for review. Never auto-send.",
+      parameters: Type.Object({
+        to: Type.String({ description: "Recipient email address(es), comma-separated for multiple." }),
+        subject: Type.String({ description: "Email subject line." }),
+        body: Type.String({ description: "Email body text (plain text)." }),
+        cc: Type.Optional(Type.String({ description: "CC recipients, comma-separated." })),
+        bcc: Type.Optional(Type.String({ description: "BCC recipients, comma-separated." }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = await sendEmail(params.to, params.subject, params.body, params.cc, params.bcc);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "email_reply",
+      label: "Reply to Email",
+      description: "Reply to an existing email in-thread with proper threading headers. IMPORTANT: Always confirm with the user via interview form BEFORE calling this tool \u2014 show them the reply body for review. Never auto-send.",
+      parameters: Type.Object({
+        messageId: Type.String({ description: "The Gmail message ID to reply to." }),
+        body: Type.String({ description: "Reply body text (plain text)." }),
+        replyAll: Type.Optional(Type.Boolean({ description: "If true, reply to all recipients. Default: false (reply to sender only)." }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = await replyToEmail(params.messageId, params.body, params.replyAll ?? false);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "email_thread",
+      label: "Email Thread",
+      description: "Read an entire email conversation thread. Returns all messages in order. Get the threadId from email_list or email_read results.",
+      parameters: Type.Object({
+        threadId: Type.String({ description: "The Gmail thread ID." })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await getThread(params.threadId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "email_draft",
+      label: "Save Email Draft",
+      description: "Save a composed email as a Gmail draft without sending it. The draft will appear in Gmail's Drafts folder for later review and sending.",
+      parameters: Type.Object({
+        to: Type.String({ description: "Recipient email address(es)." }),
+        subject: Type.String({ description: "Email subject line." }),
+        body: Type.String({ description: "Email body text (plain text)." }),
+        cc: Type.Optional(Type.String({ description: "CC recipients, comma-separated." })),
+        bcc: Type.Optional(Type.String({ description: "BCC recipients, comma-separated." }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = await createDraft(params.to, params.subject, params.body, params.cc, params.bcc);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "email_archive",
+      label: "Archive Email",
+      description: "Archive an email (remove from inbox without deleting). The email remains searchable and in All Mail.",
+      parameters: Type.Object({
+        messageId: Type.String({ description: "The Gmail message ID to archive." })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await archiveEmail(params.messageId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "email_label",
+      label: "Email Labels",
+      description: "Add or remove Gmail labels on an email. Use Gmail system label IDs: STARRED, IMPORTANT, UNREAD, SPAM, TRASH, CATEGORY_PERSONAL, CATEGORY_SOCIAL, CATEGORY_PROMOTIONS, CATEGORY_UPDATES, CATEGORY_FORUMS.",
+      parameters: Type.Object({
+        messageId: Type.String({ description: "The Gmail message ID." }),
+        addLabels: Type.Optional(Type.Array(Type.String(), { description: "Label IDs to add." })),
+        removeLabels: Type.Optional(Type.Array(Type.String(), { description: "Label IDs to remove." }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = await modifyLabels(params.messageId, params.addLabels, params.removeLabels);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "email_mark_read",
+      label: "Mark Email Read/Unread",
+      description: "Mark an email as read or unread.",
+      parameters: Type.Object({
+        messageId: Type.String({ description: "The Gmail message ID." }),
+        read: Type.Boolean({ description: "true to mark as read, false to mark as unread." })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await markRead(params.messageId, params.read);
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "email_trash",
+      label: "Trash Email",
+      description: "Move an email to the trash. It can be recovered from Trash within 30 days.",
+      parameters: Type.Object({
+        messageId: Type.String({ description: "The Gmail message ID to trash." })
+      }),
+      async execute(_toolCallId, params) {
+        const result = await trashEmail(params.messageId);
         return { content: [{ type: "text", text: result }], details: {} };
       }
     }
