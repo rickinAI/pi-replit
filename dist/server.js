@@ -4192,6 +4192,7 @@ function getJobSavePath(jobId, dateStr, safeName) {
   if (jobId === "moodys-weekly-digest") return `Scheduled Reports/Moody's Intelligence/Weekly/${dateStr}-Digest.md`;
   if (jobId === "real-estate-daily-scan") return `Scheduled Reports/Real Estate/${dateStr}-Property-Scan.md`;
   if (jobId === "darknode-inbox-monitor") return `Scheduled Reports/Inbox Monitor/${dateStr}-${safeName}.md`;
+  if (jobId === "life-audit") return `Scheduled Reports/Life-Audit/${dateStr}.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 var jobStatusCache = {};
@@ -4520,6 +4521,34 @@ If no properties are found in an area, note "No new listings matching criteria" 
     enabled: true
   },
   {
+    id: "life-audit",
+    name: "Weekly Life Audit",
+    agentId: "deep-researcher",
+    prompt: `You are running a proactive Life Audit for Rickin's family.
+
+## Your Task
+1. Read the constraints register: "About Me/Active Constraints.md"
+2. Read all notes in "Vacation Planning/" for upcoming trips
+3. Check the calendar for events in the next 60 days using calendar_list
+4. For EACH upcoming trip or travel event:
+   a. Cross-reference against EVERY active constraint (pregnancy weeks, age limits, passport requirements, visa needs, health restrictions)
+   b. Web search for specific policies (airline pregnancy cutoffs, cruise line policies, resort age minimums, entry requirements for destination)
+   c. Calculate exact dates/ages/weeks at time of travel
+5. Check all Watch Items & Deadlines in the constraints file for approaching deadlines (within 14 days)
+6. Check Document Checklist for any missing/unverified items needed before the next trip
+
+## Output Format
+Save a report to "Scheduled Reports/Life-Audit/" with:
+- \u{1F534} CRITICAL: Conflicts that could prevent travel (denied boarding, expired documents, policy violations)
+- \u{1F7E1} WARNING: Items that need attention within 14 days (deadlines, missing documents, insurance windows)
+- \u{1F7E2} OK: Confirmed-clear items (gives confidence)
+- \u{1F4CB} ACTION ITEMS: Numbered list of specific things Rickin should do, ordered by urgency
+
+Be thorough. Be specific. Calculate exact gestational weeks, exact ages, exact document dates. Don't assume \u2014 verify via web search.`,
+    schedule: { type: "weekly", hour: 8, minute: 0, daysOfWeek: [0] },
+    enabled: true
+  },
+  {
     id: "darknode-inbox-monitor",
     name: "Inbox Monitor (@darknode)",
     agentId: "orchestrator",
@@ -4548,7 +4577,8 @@ async function archiveOldReports() {
   const folders = [
     { src: "Scheduled Reports/Moody's Intelligence/Daily", dest: "Archive/Moody's Intelligence/Daily" },
     { src: "Scheduled Reports/Moody's Intelligence/Weekly", dest: "Archive/Moody's Intelligence/Weekly" },
-    { src: "Scheduled Reports/Real Estate", dest: "Archive/Real Estate" }
+    { src: "Scheduled Reports/Real Estate", dest: "Archive/Real Estate" },
+    { src: "Scheduled Reports/Life-Audit", dest: "Archive/Life-Audit" }
   ];
   let archived = 0;
   for (const { src, dest } of folders) {
@@ -4911,9 +4941,20 @@ ${result}`);
             summary: result.slice(0, 200),
             timestamp: Date.now()
           });
+          if (job.id === "life-audit" && result.includes("\u{1F534} CRITICAL")) {
+            const criticalLine = result.split("\n").find((l) => l.includes("\u{1F534} CRITICAL")) || "Critical finding detected";
+            broadcastFn2({
+              type: "alert",
+              alertType: "life-audit-critical",
+              title: "\u{1F534} Life Audit: Critical Finding",
+              content: criticalLine.slice(0, 300),
+              timestamp: Date.now()
+            });
+            console.log(`[scheduled-jobs] Life Audit CRITICAL alert broadcast`);
+          }
         }
         console.log(`[scheduled-jobs] Job completed${isPartial ? " (partial)" : ""}: ${job.name}`);
-        if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate")) && kbListFn && kbMoveFn) {
+        if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit") && kbListFn && kbMoveFn) {
           await archiveOldReports();
         }
       }
@@ -5001,7 +5042,7 @@ ${result}`);
       } catch {
       }
     }
-    if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate")) && kbListFn && kbMoveFn) {
+    if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit") && kbListFn && kbMoveFn) {
       await archiveOldReports();
     }
     if (broadcastFn2) {
