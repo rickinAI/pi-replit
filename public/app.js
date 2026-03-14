@@ -1277,6 +1277,8 @@ function handleAgentEvent(event) {
         }
         renderSuggestionChipsFromText(rawForChips);
       }
+      const thinkingDuration = thinkingStartTime ? Math.floor((Date.now() - thinkingStartTime) / 1000) : 0;
+      const completedText = agentText;
       isAgentRunning = false;
       agentBubble = null;
       agentText = "";
@@ -1284,6 +1286,10 @@ function handleAgentEvent(event) {
       hideStatus();
       input.focus();
       throttledScroll();
+      if (thinkingDuration >= 15 && document.hidden) {
+        playNotificationSound();
+        showBrowserNotification("DarkNode Complete", completedText ? completedText.replace(/[#*_`]/g, "").slice(0, 120) : `Response ready (${thinkingDuration}s)`);
+      }
       break;
 
     case "timeout":
