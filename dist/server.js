@@ -541,16 +541,25 @@ async function remove(id) {
   const result = await getPool().query(`DELETE FROM conversations WHERE id = $1`, [id]);
   return (result.rowCount ?? 0) > 0;
 }
-async function getRecentSummary(count = 3) {
-  const recent = (await list()).slice(0, count);
-  if (recent.length === 0) return "";
-  const lines = recent.map((c) => {
-    const date = new Date(c.createdAt).toLocaleDateString("en-US", {
+async function getRecentSummary(count = 5) {
+  const result = await getPool().query(
+    `SELECT id, title, messages, created_at, updated_at
+     FROM conversations
+     WHERE jsonb_array_length(messages) > 0
+     ORDER BY updated_at DESC LIMIT $1`,
+    [count]
+  );
+  if (result.rows.length === 0) return "";
+  const lines = result.rows.map((row) => {
+    const conv = rowToConversation(row);
+    const date = new Date(conv.createdAt).toLocaleDateString("en-US", {
+      timeZone: "America/New_York",
       month: "short",
-      day: "numeric",
-      year: "numeric"
+      day: "numeric"
     });
-    return `- "${c.title}" (${date}, ${c.messageCount} messages)`;
+    const userMsgs = conv.messages.filter((m) => m.role === "user").slice(0, 3).map((m) => m.text.length > 120 ? m.text.slice(0, 120) + "\u2026" : m.text);
+    const topicHint = userMsgs.length > 0 ? ` \u2014 Topics: ${userMsgs.join("; ")}` : "";
+    return `- "${conv.title}" (${date}, ${conv.messages.length} msgs)${topicHint}`;
   });
   return `Recent conversations:
 ${lines.join("\n")}`;
@@ -559,31 +568,39 @@ async function getLastConversationContext(maxMessages = 10) {
   const result = await getPool().query(
     `SELECT id, title, messages, created_at, updated_at FROM conversations
      WHERE jsonb_array_length(messages) > 0
-     ORDER BY updated_at DESC LIMIT 1`
+     ORDER BY updated_at DESC LIMIT 3`
   );
   if (result.rows.length === 0) return "";
-  const mostRecent = rowToConversation(result.rows[0]);
-  const relevantMsgs = mostRecent.messages.filter((m) => m.role !== "system").slice(-maxMessages);
-  if (relevantMsgs.length === 0) return "";
-  const date = new Date(mostRecent.createdAt).toLocaleDateString("en-US", {
-    timeZone: "America/New_York",
-    weekday: "short",
-    month: "short",
-    day: "numeric"
-  });
-  const time = new Date(mostRecent.updatedAt).toLocaleTimeString("en-US", {
-    timeZone: "America/New_York",
-    hour: "numeric",
-    minute: "2-digit"
-  });
-  const exchanges = relevantMsgs.map((m) => {
-    const role = m.role === "user" ? "Rickin" : "You";
-    const text = m.text.length > 600 ? m.text.slice(0, 600) + "\u2026" : m.text;
-    return `**${role}:** ${text}`;
-  }).join("\n\n");
-  return `Your last conversation with Rickin was "${mostRecent.title}" (${date}, last active ${time}). If Rickin refers to something briefly ("it", "that", "try again"), it likely relates to this conversation:
+  const sections = [];
+  for (let i = 0; i < result.rows.length; i++) {
+    const conv = rowToConversation(result.rows[i]);
+    const msgsToShow = i === 0 ? maxMessages : 4;
+    const relevantMsgs = conv.messages.filter((m) => m.role !== "system").slice(-msgsToShow);
+    if (relevantMsgs.length === 0) continue;
+    const date = new Date(conv.createdAt).toLocaleDateString("en-US", {
+      timeZone: "America/New_York",
+      weekday: "short",
+      month: "short",
+      day: "numeric"
+    });
+    const time = new Date(conv.updatedAt).toLocaleTimeString("en-US", {
+      timeZone: "America/New_York",
+      hour: "numeric",
+      minute: "2-digit"
+    });
+    const charLimit = i === 0 ? 800 : 400;
+    const exchanges = relevantMsgs.map((m) => {
+      const role = m.role === "user" ? "Rickin" : "You";
+      const text = m.text.length > charLimit ? m.text.slice(0, charLimit) + "\u2026" : m.text;
+      return `**${role}:** ${text}`;
+    }).join("\n\n");
+    const label = i === 0 ? "Most recent conversation" : `Earlier conversation`;
+    sections.push(`${label}: "${conv.title}" (${date}, last active ${time})
 
-${exchanges}`;
+${exchanges}`);
+  }
+  if (sections.length === 0) return "";
+  return sections.join("\n\n---\n\n");
 }
 function createConversation(sessionId) {
   return {
