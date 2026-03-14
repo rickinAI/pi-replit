@@ -2036,6 +2036,263 @@ ${lines.join("\n\n")}`;
   }
 }
 
+// src/webfetch.ts
+var USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+var ENTITY_MAP = {
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&quot;": '"',
+  "&#39;": "'",
+  "&apos;": "'",
+  "&nbsp;": " ",
+  "&ndash;": "\u2013",
+  "&mdash;": "\u2014",
+  "&lsquo;": "'",
+  "&rsquo;": "'",
+  "&ldquo;": "\u201C",
+  "&rdquo;": "\u201D",
+  "&bull;": "\u2022",
+  "&hellip;": "\u2026",
+  "&copy;": "\xA9",
+  "&reg;": "\xAE",
+  "&trade;": "\u2122",
+  "&euro;": "\u20AC",
+  "&pound;": "\xA3",
+  "&yen;": "\xA5",
+  "&cent;": "\xA2",
+  "&deg;": "\xB0",
+  "&times;": "\xD7",
+  "&divide;": "\xF7",
+  "&rarr;": "\u2192",
+  "&larr;": "\u2190",
+  "&uarr;": "\u2191",
+  "&darr;": "\u2193",
+  "&para;": "\xB6",
+  "&sect;": "\xA7",
+  "&frac12;": "\xBD",
+  "&frac14;": "\xBC",
+  "&frac34;": "\xBE"
+};
+function decodeEntities(text) {
+  let result = text;
+  for (const [entity, char] of Object.entries(ENTITY_MAP)) {
+    result = result.replaceAll(entity, char);
+  }
+  result = result.replace(/&#(\d+);/g, (_, code) => {
+    const n = parseInt(code, 10);
+    return n > 0 && n < 1114111 ? String.fromCodePoint(n) : "";
+  });
+  result = result.replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => {
+    const n = parseInt(hex, 16);
+    return n > 0 && n < 1114111 ? String.fromCodePoint(n) : "";
+  });
+  return result;
+}
+function extractTitle(html) {
+  const m = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  return m ? decodeEntities(m[1].replace(/<[^>]+>/g, "").trim()) : "";
+}
+function extractMetaDescription(html) {
+  const m = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([\s\S]*?)["'][^>]*>/i) || html.match(/<meta[^>]*content=["']([\s\S]*?)["'][^>]*name=["']description["'][^>]*>/i);
+  return m ? decodeEntities(m[1].trim()) : "";
+}
+function htmlToText(html) {
+  let text = html;
+  text = text.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "");
+  text = text.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "");
+  text = text.replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, "");
+  text = text.replace(/<svg[^>]*>[\s\S]*?<\/svg>/gi, "");
+  text = text.replace(/<!--[\s\S]*?-->/g, "");
+  text = text.replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, "");
+  text = text.replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, "");
+  text = text.replace(/<header[^>]*>[\s\S]*?<\/header>/gi, "\n");
+  text = text.replace(/<(h[1-6])[^>]*>([\s\S]*?)<\/\1>/gi, (_m, tag, content) => {
+    const level = parseInt(tag[1]);
+    const prefix = "#".repeat(level);
+    const clean = content.replace(/<[^>]+>/g, "").trim();
+    return `
+
+${prefix} ${clean}
+
+`;
+  });
+  text = text.replace(/<(p|div|section|article|main|blockquote)[^>]*>/gi, "\n\n");
+  text = text.replace(/<\/(p|div|section|article|main|blockquote)>/gi, "\n");
+  text = text.replace(/<br\s*\/?>/gi, "\n");
+  text = text.replace(/<hr\s*\/?>/gi, "\n---\n");
+  text = text.replace(/<li[^>]*>/gi, "\n\u2022 ");
+  text = text.replace(/<\/li>/gi, "");
+  text = text.replace(/<\/?[ou]l[^>]*>/gi, "\n");
+  text = text.replace(/<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_m, href, content) => {
+    const label = content.replace(/<[^>]+>/g, "").trim();
+    if (!label) return "";
+    if (href.startsWith("#") || href.startsWith("javascript:")) return label;
+    return `${label} (${href})`;
+  });
+  text = text.replace(/<img[^>]*alt=["']([^"']+)["'][^>]*>/gi, "[image: $1]");
+  text = text.replace(/<(td|th)[^>]*>/gi, " | ");
+  text = text.replace(/<\/tr>/gi, "\n");
+  text = text.replace(/<\/?table[^>]*>/gi, "\n");
+  text = text.replace(/<(strong|b)[^>]*>([\s\S]*?)<\/\1>/gi, "**$2**");
+  text = text.replace(/<(em|i)[^>]*>([\s\S]*?)<\/\1>/gi, "_$2_");
+  text = text.replace(/<code[^>]*>([\s\S]*?)<\/code>/gi, "`$1`");
+  text = text.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, (_m, content) => {
+    const code = content.replace(/<[^>]+>/g, "");
+    return `
+\`\`\`
+${code}
+\`\`\`
+`;
+  });
+  text = text.replace(/<[^>]+>/g, "");
+  text = decodeEntities(text);
+  text = text.replace(/[ \t]+/g, " ");
+  text = text.replace(/ *\n */g, "\n");
+  text = text.replace(/\n{3,}/g, "\n\n");
+  text = text.trim();
+  return text;
+}
+var BLOCKED_HOSTS = [
+  /^localhost$/i,
+  /^127\./,
+  /^10\./,
+  /^172\.(1[6-9]|2\d|3[01])\./,
+  /^192\.168\./,
+  /^169\.254\./,
+  /^0\./,
+  /^\[::1\]$/,
+  /^\[fc/i,
+  /^\[fd/i,
+  /^\[fe80:/i,
+  /metadata\.google\.internal/i
+];
+var MAX_BODY_BYTES = 2 * 1024 * 1024;
+function isBlockedHost(hostname) {
+  return BLOCKED_HOSTS.some((re) => re.test(hostname));
+}
+async function readBodyCapped(res, cap) {
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks = [];
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalBytes += value.byteLength;
+    chunks.push(decoder.decode(value, { stream: true }));
+    if (totalBytes >= cap) {
+      reader.cancel();
+      break;
+    }
+  }
+  return chunks.join("");
+}
+async function fetchPage(url, options) {
+  const maxLen = Math.min(Math.max(options?.maxLength ?? 8e4, 1e3), 2e5);
+  const timeoutMs = options?.timeoutMs ?? 15e3;
+  const parsed = new URL(url);
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    throw new Error(`Blocked: only http/https URLs are allowed (got ${parsed.protocol})`);
+  }
+  if (isBlockedHost(parsed.hostname)) {
+    throw new Error(`Blocked: cannot fetch private/internal addresses`);
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const headers2 = {
+      "User-Agent": USER_AGENT,
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.7",
+      "Accept-Language": "en-US,en;q=0.9",
+      ...options?.includeHeaders || {}
+    };
+    const res = await fetch(url, {
+      headers: headers2,
+      signal: controller.signal,
+      redirect: "follow"
+    });
+    const finalHost = new URL(res.url).hostname;
+    if (isBlockedHost(finalHost)) {
+      throw new Error(`Blocked: redirect to private/internal address`);
+    }
+    const contentType = res.headers.get("content-type") || "";
+    const rawBody = await readBodyCapped(res, MAX_BODY_BYTES);
+    if (contentType.includes("application/json")) {
+      let content2 = rawBody;
+      let truncated2 = false;
+      if (content2.length > maxLen) {
+        content2 = content2.slice(0, maxLen);
+        truncated2 = true;
+      }
+      return {
+        url: res.url || url,
+        title: "",
+        description: "",
+        content: content2,
+        statusCode: res.status,
+        contentType,
+        byteLength: rawBody.length,
+        truncated: truncated2
+      };
+    }
+    if (contentType.includes("text/plain")) {
+      let content2 = rawBody;
+      let truncated2 = false;
+      if (content2.length > maxLen) {
+        content2 = content2.slice(0, maxLen);
+        truncated2 = true;
+      }
+      return {
+        url: res.url || url,
+        title: "",
+        description: "",
+        content: content2,
+        statusCode: res.status,
+        contentType,
+        byteLength: rawBody.length,
+        truncated: truncated2
+      };
+    }
+    const title = extractTitle(rawBody);
+    const description = extractMetaDescription(rawBody);
+    let content = htmlToText(rawBody);
+    let truncated = false;
+    if (content.length > maxLen) {
+      content = content.slice(0, maxLen);
+      const lastNewline = content.lastIndexOf("\n");
+      if (lastNewline > maxLen * 0.8) {
+        content = content.slice(0, lastNewline);
+      }
+      truncated = true;
+    }
+    return {
+      url: res.url || url,
+      title,
+      description,
+      content,
+      statusCode: res.status,
+      contentType,
+      byteLength: rawBody.length,
+      truncated
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function formatResult(result) {
+  const parts = [];
+  if (result.title) parts.push(`# ${result.title}`);
+  parts.push(`URL: ${result.url}`);
+  parts.push(`Status: ${result.statusCode} | Type: ${result.contentType} | Size: ${(result.byteLength / 1024).toFixed(1)}KB`);
+  if (result.description) parts.push(`Description: ${result.description}`);
+  if (result.truncated) parts.push(`\u26A0\uFE0F Content truncated to ~${(result.content.length / 1024).toFixed(0)}KB`);
+  parts.push("");
+  parts.push(result.content);
+  return parts.join("\n");
+}
+
 // src/tasks.ts
 async function init5() {
   const existing = await getPool().query(`SELECT count(*) FROM tasks`);
@@ -6379,6 +6636,36 @@ function buildSearchTools() {
     }
   ];
 }
+function buildWebFetchTools() {
+  return [
+    {
+      name: "web_fetch",
+      label: "Web Fetch",
+      description: "Fetch a web page and return its content as clean readable text. Use when you need to read the actual content of a URL \u2014 articles, documentation, blog posts, product pages, API docs, etc. Returns the page title, description, and full text content with HTML stripped. Handles HTML, JSON, and plain text responses. For searching the web (when you don't have a URL), use web_search instead.",
+      parameters: Type.Object({
+        url: Type.String({ description: "The full URL to fetch (must start with http:// or https://)" }),
+        max_length: Type.Optional(Type.Number({ description: "Maximum content length in characters (default 80000). Use a smaller value like 20000 if you only need a summary or the beginning of a page." }))
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          let url = params.url.trim();
+          if (!url.match(/^https?:\/\//i)) url = "https://" + url;
+          const result = await fetchPage(url, { maxLength: params.max_length });
+          return {
+            content: [{ type: "text", text: formatResult(result) }],
+            details: { statusCode: result.statusCode, truncated: result.truncated }
+          };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return {
+            content: [{ type: "text", text: `Failed to fetch "${params.url}": ${msg}` }],
+            details: { error: msg }
+          };
+        }
+      }
+    }
+  ];
+}
 function buildCalendarTools() {
   if (!isConfigured4()) return [];
   return [
@@ -8588,6 +8875,7 @@ var cachedStaticTools = [
   ...buildCalendarTools(),
   ...buildWeatherTools(),
   ...buildSearchTools(),
+  ...buildWebFetchTools(),
   ...buildTaskTools(),
   ...buildNewsTools(),
   ...buildTwitterTools(),

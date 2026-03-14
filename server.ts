@@ -29,6 +29,7 @@ import * as gmail from "./src/gmail.js";
 import * as calendar from "./src/calendar.js";
 import * as weather from "./src/weather.js";
 import * as websearch from "./src/websearch.js";
+import * as webfetch from "./src/webfetch.js";
 import * as tasks from "./src/tasks.js";
 import * as news from "./src/news.js";
 import * as twitter from "./src/twitter.js";
@@ -555,6 +556,38 @@ function buildSearchTools(): ToolDefinition[] {
       async execute(_toolCallId, params) {
         const result = await websearch.search(params.query);
         return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+  ];
+}
+
+function buildWebFetchTools(): ToolDefinition[] {
+  return [
+    {
+      name: "web_fetch",
+      label: "Web Fetch",
+      description:
+        "Fetch a web page and return its content as clean readable text. Use when you need to read the actual content of a URL — articles, documentation, blog posts, product pages, API docs, etc. Returns the page title, description, and full text content with HTML stripped. Handles HTML, JSON, and plain text responses. For searching the web (when you don't have a URL), use web_search instead.",
+      parameters: Type.Object({
+        url: Type.String({ description: "The full URL to fetch (must start with http:// or https://)" }),
+        max_length: Type.Optional(Type.Number({ description: "Maximum content length in characters (default 80000). Use a smaller value like 20000 if you only need a summary or the beginning of a page." })),
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          let url = params.url.trim();
+          if (!url.match(/^https?:\/\//i)) url = "https://" + url;
+          const result = await webfetch.fetchPage(url, { maxLength: params.max_length });
+          return {
+            content: [{ type: "text" as const, text: webfetch.formatResult(result) }],
+            details: { statusCode: result.statusCode, truncated: result.truncated },
+          };
+        } catch (err: any) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return {
+            content: [{ type: "text" as const, text: `Failed to fetch "${params.url}": ${msg}` }],
+            details: { error: msg },
+          };
+        }
       },
     },
   ];
@@ -2836,6 +2869,7 @@ const cachedStaticTools: ToolDefinition[] = [
   ...buildCalendarTools(),
   ...buildWeatherTools(),
   ...buildSearchTools(),
+  ...buildWebFetchTools(),
   ...buildTaskTools(),
   ...buildNewsTools(),
   ...buildTwitterTools(),
