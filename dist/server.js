@@ -1287,12 +1287,17 @@ ${listStr2}`;
     const buffer = Buffer.from(rawData, "base64url");
     if (target.mimeType === "application/pdf" || target.filename.toLowerCase().endsWith(".pdf")) {
       try {
-        const pdfParse = (await import("pdf-parse")).default;
-        const parsed = await pdfParse(buffer);
-        const text = parsed.text?.trim();
-        if (text && text.length > 0) {
+        const { PDFParse } = await import("pdf-parse");
+        const parser = new PDFParse({ data: new Uint8Array(buffer) });
+        await parser.load();
+        const textResult = await parser.getText();
+        const text = (typeof textResult === "string" ? textResult : textResult?.text ?? "").trim();
+        const info = await parser.getInfo();
+        const numPages = info?.total ?? "?";
+        await parser.destroy();
+        if (text.length > 0) {
           const truncated = text.length > 8e3 ? text.slice(0, 8e3) + "\n\n[...truncated]" : text;
-          return `\u{1F4CE} ${target.filename} (PDF, ${parsed.numpages} pages)
+          return `\u{1F4CE} ${target.filename} (PDF, ${numPages} pages)
 
 ${truncated}`;
         }

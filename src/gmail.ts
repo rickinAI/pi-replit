@@ -507,12 +507,17 @@ export async function getAttachment(messageId: string, attachmentId?: string, fi
 
     if (target.mimeType === "application/pdf" || target.filename.toLowerCase().endsWith(".pdf")) {
       try {
-        const pdfParse = (await import("pdf-parse")).default;
-        const parsed = await pdfParse(buffer);
-        const text = parsed.text?.trim();
-        if (text && text.length > 0) {
+        const { PDFParse } = await import("pdf-parse");
+        const parser = new PDFParse({ data: new Uint8Array(buffer) });
+        await parser.load();
+        const textResult = await parser.getText();
+        const text = (typeof textResult === "string" ? textResult : textResult?.text ?? "").trim();
+        const info = await parser.getInfo();
+        const numPages = info?.total ?? "?";
+        await parser.destroy();
+        if (text.length > 0) {
           const truncated = text.length > 8000 ? text.slice(0, 8000) + "\n\n[...truncated]" : text;
-          return `📎 ${target.filename} (PDF, ${parsed.numpages} pages)\n\n${truncated}`;
+          return `📎 ${target.filename} (PDF, ${numPages} pages)\n\n${truncated}`;
         }
         return `📎 ${target.filename} — PDF has no extractable text (may be scanned/image-based).`;
       } catch (pdfErr) {
