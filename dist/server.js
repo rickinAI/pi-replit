@@ -4265,6 +4265,7 @@ function getJobSavePath(jobId, dateStr, safeName) {
   if (jobId === "real-estate-daily-scan") return `Scheduled Reports/Real Estate/${dateStr}-Property-Scan.md`;
   if (jobId === "darknode-inbox-monitor") return `Scheduled Reports/Inbox Monitor/${dateStr}-${safeName}.md`;
   if (jobId === "life-audit") return `Scheduled Reports/Life-Audit/${dateStr}.md`;
+  if (jobId === "weekly-inbox-cleanup") return `Scheduled Reports/Inbox Cleanup/${dateStr}-Inbox-Cleanup.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 var jobStatusCache = {};
@@ -4621,6 +4622,98 @@ Be thorough. Be specific. Calculate exact gestational weeks, exact ages, exact d
     enabled: true
   },
   {
+    id: "weekly-inbox-cleanup",
+    name: "Weekly Inbox Cleanup",
+    agentId: "email-drafter",
+    prompt: `You are running a weekly inbox cleanup for Rickin. This is an autonomous job \u2014 do NOT use interview forms or ask for confirmation. Process everything directly.
+
+## Step 1: Read Label Structure
+Read "Preferences/Gmail Label Structure.md" from the vault using notes_read. This contains all label IDs you'll need.
+
+## Step 2: Scan Inbox
+Use email_list with query "in:inbox" and maxResults 20. This returns the 20 most recent inbox emails with sender, subject, and snippet. To get more, make additional calls with narrower queries (e.g., "in:inbox older_than:1d", "in:inbox category:promotions", "in:inbox from:linkedin.com"). Track message IDs you've already processed to avoid duplicates. Aim for up to 50 emails per run \u2014 prioritize labeling accuracy over volume.
+
+For each email, read the sender (From), subject, and snippet. If the category is unclear from metadata alone, use email_read to check the body.
+
+## Step 3: Apply Labels
+Apply labels using email_label with the label IDs from Step 1. Each email gets a CATEGORY label + an ACTION label:
+
+### Category Rules (apply the FIRST match):
+- From contains "@delta.com", "@jetblue.com", "@united.com", "@aa.com", "@spirit.com", "@southwest.com" OR subject contains "flight", "boarding pass", "itinerary" \u2192 Travel/Flights (Label_32)
+- Subject contains "reservation", "hotel", "resort", "check-in", "booking" (non-flight) \u2192 Travel/Bookings (Label_31)
+- Subject contains "Marriott", "Hilton", "Hyatt", "Airbnb" \u2192 Travel/Hotels (Label_33)
+- From contains "@schools.nyc.gov" or "KCicio" OR subject contains "school", "class", "PTA", "curriculum" \u2192 Family/School (Label_22)
+- From "pooja.bhatt@gmail.com" \u2192 Family/Pooja (Label_20)
+- Subject contains "Reya" or relates to Reya's schedule \u2192 Family/Reya (Label_21)
+- Subject contains "baby", "prenatal", "OB", "nursery", "registry" \u2192 Family/Baby (Label_23)
+- From contains "@chase.com", "@bankofamerica.com", "@citi.com", "@wellsfargo.com", "@capitalone.com" OR subject contains "bank", "account", "statement" \u2192 Finance/Banking (Label_24)
+- From contains "@fidelity.com", "@vanguard.com", "@schwab.com", "@robinhood.com" OR subject contains "investment", "portfolio", "dividend", "401k" \u2192 Finance/Investments (Label_25)
+- Subject contains "tax", "W-2", "1099", "TurboTax", "CPA" \u2192 Finance/Tax (Label_26)
+- Subject contains "bill", "invoice", "payment due", "autopay", "utility" \u2192 Finance/Bills (Label_27)
+- From contains "@zillow.com", "@redfin.com", "@realtor.com", "@streeteasy.com" OR subject contains "listing", "open house", "property" \u2192 Real Estate/Listings (Label_28)
+- Subject contains "mortgage", "pre-approval", "loan", "rate lock" \u2192 Real Estate/Mortgage (Label_30)
+- Subject contains "closing", "title", "deed" (real estate) \u2192 Real Estate/Legal (Label_29)
+- From contains "@healthfirst.org", "@mycharthealth.com", "@zocdoc.com" OR subject contains "appointment", "prescription", "lab results", "doctor" \u2192 Health (Label_34 for Pooja-related, Label_35 for Rickin-related)
+- Subject contains "subscription", "renewal", "your plan", "membership" \u2192 Personal/Subscriptions (Label_36)
+- From contains "@amazon.com", "@ebay.com", "@target.com" OR subject contains "order", "shipped", "delivered", "tracking" \u2192 Personal/Shopping (Label_37)
+- Subject contains "insurance", "policy", "claim", "coverage", "premium" \u2192 Personal/Insurance (Label_38)
+
+### Action Rules (apply ONE per email):
+- Needs a response or decision from Rickin \u2192 \u26A1 Action Required (Label_16)
+- Rickin sent something and is waiting for reply \u2192 \u23F3 Waiting On (Label_17)
+- Confirms a scheduled event/appointment \u2192 \u{1F4C5} Scheduled (Label_18)
+- Informational only, no action needed \u2192 \u{1F501} Reference (Label_19)
+
+## Step 4: Auto-Archive
+After labeling, archive (email_archive) these:
+- From "@linkedin.com" with subject containing "invitation", "endorsed", "who viewed", "new connection"
+- From marketing/noreply addresses (sender contains "noreply@", "no-reply@", "marketing@", "news@", "promo@")
+- Calendar sharing notifications ("added you to the shared calendar", "shared a calendar")
+- Newsletters \u2014 if the body or snippet mentions "unsubscribe" and the sender is not a known contact (family, school, financial institution)
+
+Do NOT archive:
+- Anything labeled \u26A1 Action Required (Label_16)
+- Emails from Pooja, family, school, or financial institutions with action items
+- Security alerts from Google, Apple, or banks \u2014 always keep these in inbox
+- Anything you're unsure about \u2014 when in doubt, leave it in inbox
+
+## Step 5: Subscription Detection
+While scanning, note any senders that appear to be subscriptions or recurring newsletters. After processing all emails, append detected subscriptions to Google Sheet "Bhatt Family \u2014 Subscriptions & Bills Tracker" (spreadsheet ID: 1j5-EOdfIyqMFewDkXQ09a1o9HZAeSDGv4w52zWa0ELs) in the "Email Subscriptions" tab using sheets_append. Columns: Sender, Email Address, Type (newsletter/subscription/marketing), Frequency (daily/weekly/monthly), First Seen Date.
+
+## Step 6: Save Report
+Save a summary report using notes_create to "Scheduled Reports/Inbox Cleanup/{today YYYY-MM-DD}-Inbox-Cleanup.md":
+
+# Inbox Cleanup \u2014 {date}
+
+## Summary
+- Emails processed: X
+- Labeled: X
+- Archived: X
+- Left in inbox: X
+
+## Labels Applied
+| Label | Count |
+|-------|-------|
+| Travel/Flights | 3 |
+| ... | ... |
+
+## \u26A1 Action Items (left in inbox)
+1. [Subject] \u2014 from [Sender] \u2014 why it needs attention
+
+## \u{1F4E6} Archived
+- Xx LinkedIn notifications
+- Xx promotional emails
+- Xx newsletters
+- ...
+
+## \u{1F4E7} Subscriptions Detected
+- [sender] \u2014 [type] \u2014 logged to Bills Tracker sheet
+
+Process everything autonomously. Be thorough but efficient.`,
+    schedule: { type: "weekly", hour: 10, minute: 0, daysOfWeek: [6] },
+    enabled: true
+  },
+  {
     id: "darknode-inbox-monitor",
     name: "Inbox Monitor (@darknode)",
     agentId: "orchestrator",
@@ -4650,7 +4743,8 @@ async function archiveOldReports() {
     { src: "Scheduled Reports/Moody's Intelligence/Daily", dest: "Archive/Moody's Intelligence/Daily" },
     { src: "Scheduled Reports/Moody's Intelligence/Weekly", dest: "Archive/Moody's Intelligence/Weekly" },
     { src: "Scheduled Reports/Real Estate", dest: "Archive/Real Estate" },
-    { src: "Scheduled Reports/Life-Audit", dest: "Archive/Life-Audit" }
+    { src: "Scheduled Reports/Life-Audit", dest: "Archive/Life-Audit" },
+    { src: "Scheduled Reports/Inbox Cleanup", dest: "Archive/Inbox Cleanup" }
   ];
   let archived = 0;
   for (const { src, dest } of folders) {
@@ -5026,7 +5120,7 @@ ${result}`);
           }
         }
         console.log(`[scheduled-jobs] Job completed${isPartial ? " (partial)" : ""}: ${job.name}`);
-        if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit") && kbListFn && kbMoveFn) {
+        if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit" || job.id === "weekly-inbox-cleanup") && kbListFn && kbMoveFn) {
           await archiveOldReports();
         }
       }
@@ -5114,7 +5208,7 @@ ${result}`);
       } catch {
       }
     }
-    if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit") && kbListFn && kbMoveFn) {
+    if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit" || job.id === "weekly-inbox-cleanup") && kbListFn && kbMoveFn) {
       await archiveOldReports();
     }
     if (broadcastFn2) {
