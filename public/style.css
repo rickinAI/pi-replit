@@ -1211,7 +1211,7 @@ body.light-theme #mic-btn.recording {
 }
 
 .landing-header {
-  text-align: center;
+  text-align: left;
   padding: 4px 0;
   position: relative;
 }
