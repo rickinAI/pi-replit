@@ -6791,6 +6791,100 @@ ${snippetText}`;
     }
   ];
 }
+function buildWebPublishTools() {
+  const PUBLISH_SCRIPT = path4.join(
+    process.env.HOME || "/home/runner",
+    ".agents/skills/here-now/scripts/publish.sh"
+  );
+  return [
+    {
+      name: "web_publish",
+      label: "Publish to Web",
+      description: "Publish a file or folder to the web as a live, shareable URL using here.now. Use when asked to publish, host, deploy, or share something on the web/webpage/website, put something online, or generate a URL. Supports HTML sites, images, PDFs, and any file type.",
+      parameters: Type.Object({
+        path: Type.String({
+          description: "Path to the file or directory to publish. For HTML sites, the directory should contain index.html at its root."
+        }),
+        slug: Type.Optional(
+          Type.String({
+            description: "Slug of an existing site to update (e.g. 'bright-canvas-a7k2'). Omit to create a new site."
+          })
+        )
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const targetPath = path4.resolve(params.path);
+          if (!fs3.existsSync(targetPath)) {
+            return {
+              content: [{ type: "text", text: `Error: Path "${params.path}" does not exist.` }],
+              details: {}
+            };
+          }
+          const realTarget = fs3.realpathSync(targetPath);
+          const projectReal = fs3.realpathSync(PROJECT_ROOT);
+          if (!realTarget.startsWith(projectReal + "/") && realTarget !== projectReal) {
+            return {
+              content: [{ type: "text", text: `Error: Can only publish files within the project directory.` }],
+              details: {}
+            };
+          }
+          const blocked = [".env", "auth.json", "credentials", ".herenow"];
+          const relPath = path4.relative(projectReal, realTarget);
+          if (blocked.some((b) => relPath.split("/").includes(b) || relPath === b)) {
+            return {
+              content: [{ type: "text", text: `Error: Cannot publish sensitive files.` }],
+              details: {}
+            };
+          }
+          if (params.slug && !/^[a-z0-9][a-z0-9-]*$/.test(params.slug)) {
+            return {
+              content: [{ type: "text", text: `Error: Invalid slug format. Use only lowercase letters, numbers, and hyphens.` }],
+              details: {}
+            };
+          }
+          const args = [PUBLISH_SCRIPT, realTarget];
+          if (params.slug) {
+            args.push("--slug", params.slug);
+          }
+          args.push("--client", "darknode");
+          const { execFileSync } = await import("child_process");
+          const result = execFileSync("bash", args, {
+            encoding: "utf-8",
+            timeout: 6e4,
+            cwd: PROJECT_ROOT
+          });
+          const urlMatch = result.match(/https:\/\/[^\s]+\.here\.now\/?/);
+          const siteUrl = urlMatch ? urlMatch[0] : null;
+          let response = result.trim();
+          if (siteUrl) {
+            response = `Published successfully!
+
+Live URL: ${siteUrl}
+
+${response}`;
+          }
+          return {
+            content: [{ type: "text", text: response }],
+            details: { siteUrl }
+          };
+        } catch (err) {
+          const stderr = err.stderr ? err.stderr.toString() : "";
+          const stdout = err.stdout ? err.stdout.toString() : "";
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Publish failed:
+${stderr || stdout || err.message}`
+              }
+            ],
+            details: { error: true }
+          };
+        }
+      }
+    }
+  ];
+}
 function buildAgentTools(allToolsFn, sessionId) {
   return [
     {
@@ -7239,7 +7333,8 @@ var cachedStaticTools = [
   ...buildSlidesTools(),
   ...buildYouTubeTools(),
   ...buildRealEstateTools(),
-  ...buildConversationTools()
+  ...buildConversationTools(),
+  ...buildWebPublishTools()
 ];
 {
   const kbToolNames = buildKnowledgeBaseTools().map((t) => t.name);
