@@ -4268,6 +4268,7 @@ function getJobSavePath(jobId, dateStr, safeName) {
   if (jobId === "daily-inbox-triage-am") return `Scheduled Reports/Inbox Cleanup/${dateStr}-AM-triage.md`;
   if (jobId === "daily-inbox-triage-pm") return `Scheduled Reports/Inbox Cleanup/${dateStr}-PM-triage.md`;
   if (jobId === "weekly-inbox-deep-clean") return `Scheduled Reports/Inbox Cleanup/${dateStr}-weekly-summary.md`;
+  if (jobId === "baby-dashboard-weekly-update") return `Scheduled Reports/Baby Dashboard/${dateStr}-Weekly-Log.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 var jobStatusCache = {};
@@ -4770,6 +4771,81 @@ Process everything autonomously. Be thorough but efficient.`,
     enabled: true
   },
   {
+    id: "baby-dashboard-weekly-update",
+    name: "Baby Dashboard Weekly Update",
+    agentId: "deep-researcher",
+    prompt: `You are updating the Baby Chikki #2 pregnancy dashboard at rickin.live/pages/baby-dashboard. This is an autonomous job \u2014 do NOT ask for confirmation. Process everything directly.
+
+## Key Facts
+- Due date: July 7, 2026 (Week 40)
+- OB: Dr. Boester
+- Google Sheet backend: 1fhtMkDSTUlRCFqY4hQiSdZg7cOe4FYNkmOIIHWo4KSU
+- Dashboard slug: baby-dashboard
+
+## Step 1: Calculate Current Week
+Calculate the current pregnancy week: current_week = 40 - floor(days_until_due / 7)
+If the due date has passed, set current_week to 40+ and use "Baby is here!" mode.
+
+## Step 2: Look Up Baby Data
+Use this week-by-week table to get size comparison, length, weight, development, and symptom data:
+
+| Week | Size | Emoji | Length | Weight | Baby Development | Pooja This Week |
+|------|------|-------|--------|--------|-----------------|-----------------|
+| 24 | Ear of Corn | \u{1F33D} | ~12 in | ~1.3 lb | Lungs developing surfactant. Viability milestone! | Braxton Hicks may begin. Appetite growing. |
+| 25 | Cauliflower | \u{1F966} | ~13 in | ~1.5 lb | Responding to your voice! Startle reflex developing. | Round ligament pain common. Keep hydrated. |
+| 26 | Kale bunch | \u{1F96C} | ~14 in | ~1.7 lb | Eyes opening. Practicing breathing movements. | Leg cramps, heartburn picking up. |
+| 27 | Iceberg Lettuce | \u{1F957} | ~14.4 in | ~2 lb | Sleep/wake cycles forming. Brain growing fast. | 3rd trimester begins! More frequent kicks. |
+| 28 | Large Eggplant | \u{1F346} | ~14.8 in | ~2.2 lb | REM sleep begins. Can blink and dream! | Glucose test week. Shortness of breath common. |
+| 29 | Butternut Squash | \u{1F383} | ~15.2 in | ~2.5 lb | Bones hardening (skull stays soft). Muscle tone increasing. | Bi-weekly visits begin. Back pain intensifying. |
+| 30 | Head of Cabbage | \u{1F96C} | ~15.7 in | ~2.9 lb | Strong kicks! Running out of room. | Sleep getting harder. Pillow between knees helps. |
+| 31 | Coconut | \u{1F965} | ~16.2 in | ~3.3 lb | All five senses active. Storing iron and calcium. | Colostrum may start leaking. Totally normal! |
+| 32 | Jicama | \u{1FADA} | ~16.7 in | ~3.7 lb | Practicing breathing. Fat deposits accelerating. | OB every 2 weeks now. Heartburn peaks. |
+| 33 | Pineapple | \u{1F34D} | ~17.2 in | ~4.2 lb | Immune system building. Bones fully ossifying. | Install car seat this week! |
+| 34 | Cantaloupe | \u{1F348} | ~17.7 in | ~4.7 lb | Lungs nearly mature. Fingernails reaching fingertips. | Pack hospital bag. Pelvic pressure increasing. |
+| 35 | Honeydew Melon | \u{1F348} | ~18.2 in | ~5.3 lb | Kidneys fully developed. Liver processing waste. | Hospital bag should be packed and ready! |
+| 36 | Head of Romaine | \u{1F96C} | ~18.7 in | ~5.8 lb | Head may engage in pelvis. Lanugo shedding. | Weekly visits begin. GBS test this week. |
+| 37 | Winter Melon | \u{1F349} | ~19.1 in | ~6.3 lb | Full term! Lungs mature. Ready if born now. | Cervical checks begin. Stay close to home. |
+| 38 | Leek | \u{1F33F} | ~19.6 in | ~6.8 lb | Shedding vernix. Brain still developing fast. | Could come any day. Rest up! |
+| 39 | Small Watermelon | \u{1F349} | ~19.9 in | ~7.3 lb | Everything fully formed. Just gaining final fat. | Charge all devices. Bag by the door! |
+| 40 | Pumpkin | \u{1F383} | ~20.2 in | ~7.5 lb | IT'S TIME! \u{1F389} | Due date \u2014 July 7, 2026 \u{1F499} |
+
+## Step 3: Pull OB Appointments
+Use calendar_list with timeMin = today's date, timeMax = 2026-07-15.
+Filter for events containing "Dr. Boester", "OB", "appointment", "glucose", "NICU", "nursery".
+Mark the next upcoming appointment as "NEXT".
+
+## Step 4: Generate and Save Dashboard HTML
+Generate the complete HTML page for the baby dashboard with these sections:
+1. **Header**: "Baby Chikki #2 \u{1F37C}" with gradient background
+2. **Countdown**: JavaScript-calculated days remaining until July 7, 2026
+3. **Current Week**: "Week {N}" with size fact card: "This week Chikki #2 is the size of a {emoji} {object}!"
+4. **Baby Stats Cards**: Length, Weight in stat cards
+5. **Week {N} \u2014 What's Happening**: Baby development text + Pooja's symptoms text
+6. **OB Appointments**: Table of upcoming appointments with "NEXT" badge on the soonest one
+7. **Hospital Bag Checklist**: Include a localStorage-backed checklist section (DO NOT modify the localStorage logic \u2014 just render the container, the JS handles persistence)
+8. **Footer**: "Last updated: {date} \xB7 Week {N}"
+
+The page must be mobile-first, beautiful, with soft gradients, emoji accents, and clean card layouts. Use inline CSS. Make it a self-contained single HTML file.
+
+Save using web_save with slug "baby-dashboard".
+
+## Step 5: Output Summary
+End your response with a clear summary in this format (the scheduler will save it automatically):
+
+# Baby Dashboard Update \u2014 {date}
+
+- **Week**: {N} of 40
+- **Size**: {emoji} {object} (~{length}, ~{weight})
+- **Development**: {one-line summary}
+- **Pooja This Week**: {one-line summary}
+- **Next OB Appointment**: {date} \u2014 {title}
+- **Dashboard**: Updated at rickin.live/pages/baby-dashboard
+
+Process everything autonomously. Be thorough but efficient.`,
+    schedule: { type: "weekly", hour: 7, minute: 0, daysOfWeek: [1] },
+    enabled: true
+  },
+  {
     id: "weekly-inbox-deep-clean",
     name: "Weekly Inbox Deep Clean",
     agentId: "email-drafter",
@@ -4893,7 +4969,8 @@ async function archiveOldReports() {
     { src: "Scheduled Reports/Moody's Intelligence/Weekly", dest: "Archive/Moody's Intelligence/Weekly" },
     { src: "Scheduled Reports/Real Estate", dest: "Archive/Real Estate" },
     { src: "Scheduled Reports/Life-Audit", dest: "Archive/Life-Audit" },
-    { src: "Scheduled Reports/Inbox Cleanup", dest: "Archive/Inbox Cleanup" }
+    { src: "Scheduled Reports/Inbox Cleanup", dest: "Archive/Inbox Cleanup" },
+    { src: "Scheduled Reports/Baby Dashboard", dest: "Archive/Baby Dashboard" }
   ];
   let archived = 0;
   for (const { src, dest } of folders) {
@@ -5269,7 +5346,7 @@ ${result}`);
           }
         }
         console.log(`[scheduled-jobs] Job completed${isPartial ? " (partial)" : ""}: ${job.name}`);
-        if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit" || job.id === "weekly-inbox-deep-clean") && kbListFn && kbMoveFn) {
+        if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit" || job.id === "weekly-inbox-deep-clean" || job.id === "baby-dashboard-weekly-update") && kbListFn && kbMoveFn) {
           await archiveOldReports();
         }
       }
@@ -5357,7 +5434,7 @@ ${result}`);
       } catch {
       }
     }
-    if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit" || job.id === "weekly-inbox-deep-clean") && kbListFn && kbMoveFn) {
+    if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit" || job.id === "weekly-inbox-deep-clean" || job.id === "baby-dashboard-weekly-update") && kbListFn && kbMoveFn) {
       await archiveOldReports();
     }
     if (broadcastFn2) {
