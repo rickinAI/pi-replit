@@ -3449,3 +3449,88 @@ body.light-theme .job-form-cancel:hover {
   border-color: #4a7a6a;
   color: #5a8a7a;
 }
+
+.agent-dot {
+  position: fixed;
+  top: max(env(safe-area-inset-top, 12px), 12px);
+  right: 12px;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 8px;
+  border-radius: 20px;
+  font-family: 'Fira Code', monospace;
+  font-size: 0.65rem;
+  transition: opacity 0.3s, transform 0.3s;
+}
+.agent-dot.hidden { opacity: 0; pointer-events: none; transform: translateY(-10px); }
+.agent-dot.running {
+  background: rgba(30, 30, 30, 0.85);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: #f59e0b;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.dot-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f59e0b;
+  animation: dotPulse 1.5s ease-in-out infinite;
+  flex-shrink: 0;
+}
+@keyframes dotPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+}
+.dot-label { white-space: nowrap; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+body.light-theme .agent-dot.running {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(217, 119, 6, 0.3);
+  color: #b45309;
+}
+
+.job-toast {
+  position: fixed;
+  bottom: 80px;
+  left: 12px;
+  right: 12px;
+  max-width: 380px;
+  margin: 0 auto;
+  z-index: 9998;
+  background: rgba(20, 20, 20, 0.92);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  border-radius: 14px;
+  padding: 12px 14px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transform: translateY(20px);
+  opacity: 0;
+  transition: transform 0.35s ease, opacity 0.35s ease;
+  font-family: 'Fira Code', monospace;
+}
+.job-toast.visible { transform: translateY(0); opacity: 1; }
+.job-toast-error { border-color: rgba(239, 68, 68, 0.3); }
+.job-toast-header { font-size: 0.75rem; font-weight: 600; color: #22c55e; margin-bottom: 4px; }
+.job-toast-error .job-toast-header { color: #ef4444; }
+.job-toast-body { font-size: 0.68rem; color: #d1d5db; line-height: 1.45; margin-bottom: 4px; }
+.job-toast-path { font-size: 0.6rem; color: #6b7280; }
+.job-toast-close {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  background: none;
+  border: none;
+  color: #6b7280;
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+body.light-theme .job-toast {
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(34, 197, 94, 0.25);
+}
+body.light-theme .job-toast-body { color: #374151; }
+body.light-theme .job-toast-path { color: #9ca3af; }

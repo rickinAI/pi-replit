@@ -1317,6 +1317,15 @@ function handleAgentEvent(event) {
     case "alert":
       handleAlert(event);
       break;
+
+    case "job_start":
+      updateAgentDot("running", event.jobName);
+      break;
+
+    case "job_complete":
+      updateAgentDot("idle", null);
+      showJobToast(event);
+      break;
   }
 }
 
@@ -2809,6 +2818,70 @@ function timeAgo(isoStr) {
   if (hrs < 24) return `${hrs}h ago`;
   return `${Math.floor(hrs / 24)}d ago`;
 }
+
+function updateAgentDot(state, jobName) {
+  let dot = document.getElementById("agent-dot");
+  if (!dot) {
+    dot = document.createElement("div");
+    dot.id = "agent-dot";
+    dot.className = "agent-dot";
+    document.body.appendChild(dot);
+  }
+  dot.classList.remove("running", "idle", "hidden");
+  if (state === "running") {
+    dot.classList.add("running");
+    dot.innerHTML = `<span class="dot-pulse"></span><span class="dot-label">${escapeHtml(jobName || "Agent working...")}</span>`;
+    dot.title = jobName || "Agent running";
+  } else {
+    dot.classList.add("hidden");
+  }
+}
+
+function showJobToast(event) {
+  const existing = document.querySelectorAll(".job-toast");
+  existing.forEach(e => e.remove());
+
+  const toast = document.createElement("div");
+  toast.className = "job-toast" + (event.status === "error" ? " job-toast-error" : "");
+
+  const icon = event.status === "error" ? "🔴" : event.status === "partial" ? "🟡" : "🟢";
+  let html = `<div class="job-toast-header">${icon} ${escapeHtml(event.jobName || "Agent")}</div>`;
+
+  if (event.summary) {
+    const summary = event.summary.length > 150 ? event.summary.slice(0, 147) + "..." : event.summary;
+    html += `<div class="job-toast-body">${escapeHtml(summary)}</div>`;
+  }
+  if (event.savedTo) {
+    html += `<div class="job-toast-path">📁 ${escapeHtml(event.savedTo)}</div>`;
+  }
+  html += `<button class="job-toast-close" onclick="this.parentElement.remove()">×</button>`;
+
+  toast.innerHTML = html;
+  document.body.appendChild(toast);
+
+  requestAnimationFrame(() => toast.classList.add("visible"));
+  setTimeout(() => {
+    toast.classList.remove("visible");
+    setTimeout(() => toast.remove(), 400);
+  }, 12000);
+}
+
+async function pollAgentStatus() {
+  try {
+    const res = await fetch("/api/agents/status");
+    if (res.ok) {
+      const data = await res.json();
+      if (data.job && data.job.running) {
+        updateAgentDot("running", data.job.jobName);
+      } else {
+        updateAgentDot("idle", null);
+      }
+    }
+  } catch(e) {}
+}
+
+pollAgentStatus();
+setInterval(pollAgentStatus, 30000);
 
 async function fetchGlance() {
   const bar = document.getElementById("glance-bar");

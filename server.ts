@@ -3362,6 +3362,21 @@ app.get("/api/tasks/completed", async (_req: Request, res: Response) => {
   }
 });
 
+app.get("/api/agents/status", (_req: Request, res: Response) => {
+  const runningJob = scheduledJobs.getRunningJob();
+  const activeSessions: { id: string; running: boolean; tool?: string }[] = [];
+  for (const [id, entry] of sessions.entries()) {
+    if (entry.isAgentRunning) {
+      activeSessions.push({ id, running: true, tool: entry.currentToolName || undefined });
+    }
+  }
+  res.json({
+    job: runningJob,
+    sessions: activeSessions,
+    anyActive: runningJob.running || activeSessions.length > 0,
+  });
+});
+
 app.get("/api/scheduled-jobs", (_req: Request, res: Response) => {
   res.json(scheduledJobs.getJobs());
 });

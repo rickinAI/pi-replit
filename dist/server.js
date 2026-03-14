@@ -5250,6 +5250,7 @@ var config2 = {
 };
 var checkInterval = null;
 var jobRunning = false;
+var currentRunningJobId = null;
 var runAgentFn = null;
 var broadcastFn2 = null;
 var kbCreateFn = null;
@@ -5669,7 +5670,16 @@ async function checkJobs() {
       await saveConfig2();
     }
     jobRunning = true;
+    currentRunningJobId = job.id;
     console.log(`[scheduled-jobs] Running job: ${job.name} (${job.id})`);
+    if (broadcastFn2) {
+      broadcastFn2({
+        type: "job_start",
+        jobId: job.id,
+        jobName: job.name,
+        timestamp: Date.now()
+      });
+    }
     try {
       if (job.id === "darknode-inbox-monitor") {
         await runInboxMonitor(job);
@@ -5707,7 +5717,9 @@ ${result}`);
             type: "job_complete",
             jobId: job.id,
             jobName: job.name,
-            summary: result.slice(0, 200),
+            summary: result.slice(0, 300),
+            savedTo: vaultSaved ? savePath : null,
+            status: job.lastStatus,
             timestamp: Date.now()
           });
           if (job.id === "life-audit" && result.includes("\u{1F534} CRITICAL")) {
@@ -5738,9 +5750,21 @@ ${result}`);
         } catch {
         }
       }
+      if (broadcastFn2) {
+        broadcastFn2({
+          type: "job_complete",
+          jobId: job.id,
+          jobName: job.name,
+          summary: String(err).slice(0, 200),
+          savedTo: null,
+          status: "error",
+          timestamp: Date.now()
+        });
+      }
       console.error(`[scheduled-jobs] Job failed: ${job.name}`, err);
     } finally {
       jobRunning = false;
+      currentRunningJobId = null;
     }
   }
   const keys = Object.keys(config2.lastJobRun);
@@ -5768,6 +5792,11 @@ function startJobSystem(runAgent, broadcast, kbCreate2, kbList2, kbMove2) {
   }).join(", ") : "none enabled";
   console.log(`[scheduled-jobs] System started \u2014 ${jobList} (${config2.timezone})`);
 }
+function getRunningJob() {
+  if (!jobRunning || !currentRunningJobId) return { running: false, jobId: null, jobName: null };
+  const job = config2.jobs.find((j) => j.id === currentRunningJobId);
+  return { running: true, jobId: currentRunningJobId, jobName: job?.name || null };
+}
 function stopJobSystem() {
   if (checkInterval) clearInterval(checkInterval);
   runAgentFn = null;
@@ -5780,7 +5809,11 @@ async function triggerJob(jobId) {
   if (!runAgentFn) throw new Error("Job system not started");
   if (jobRunning) throw new Error("Another job is currently running");
   jobRunning = true;
+  currentRunningJobId = job.id;
   console.log(`[scheduled-jobs] Manual trigger: ${job.name}`);
+  if (broadcastFn2) {
+    broadcastFn2({ type: "job_start", jobId: job.id, jobName: job.name, timestamp: Date.now() });
+  }
   try {
     if (job.id === "darknode-inbox-monitor") {
       await runInboxMonitor(job);
@@ -5819,7 +5852,9 @@ ${result}`);
         type: "job_complete",
         jobId: job.id,
         jobName: job.name,
-        summary: result.slice(0, 200),
+        summary: result.slice(0, 300),
+        savedTo: vaultSaved ? savePath : null,
+        status: job.lastStatus,
         timestamp: Date.now()
       });
     }
@@ -5835,9 +5870,21 @@ ${result}`);
       } catch {
       }
     }
+    if (broadcastFn2) {
+      broadcastFn2({
+        type: "job_complete",
+        jobId: job.id,
+        jobName: job.name,
+        summary: String(err).slice(0, 200),
+        savedTo: null,
+        status: "error",
+        timestamp: Date.now()
+      });
+    }
     throw err;
   } finally {
     jobRunning = false;
+    currentRunningJobId = null;
   }
 }
 
@@ -9475,6 +9522,20 @@ app.get("/api/tasks/completed", async (_req, res) => {
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
+});
+app.get("/api/agents/status", (_req, res) => {
+  const runningJob = getRunningJob();
+  const activeSessions = [];
+  for (const [id, entry] of sessions.entries()) {
+    if (entry.isAgentRunning) {
+      activeSessions.push({ id, running: true, tool: entry.currentToolName || void 0 });
+    }
+  }
+  res.json({
+    job: runningJob,
+    sessions: activeSessions,
+    anyActive: runningJob.running || activeSessions.length > 0
+  });
 });
 app.get("/api/scheduled-jobs", (_req, res) => {
   res.json(getJobs());

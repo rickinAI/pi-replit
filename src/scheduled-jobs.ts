@@ -767,6 +767,7 @@ let config: ScheduledJobsConfig = {
 
 let checkInterval: ReturnType<typeof setInterval> | null = null;
 let jobRunning = false;
+let currentRunningJobId: string | null = null;
 let runAgentFn: RunAgentFn | null = null;
 let broadcastFn: BroadcastFn | null = null;
 let kbCreateFn: KbCreateFn | null = null;
@@ -1221,7 +1222,17 @@ async function checkJobs(): Promise<void> {
     }
 
     jobRunning = true;
+    currentRunningJobId = job.id;
     console.log(`[scheduled-jobs] Running job: ${job.name} (${job.id})`);
+
+    if (broadcastFn) {
+      broadcastFn({
+        type: "job_start",
+        jobId: job.id,
+        jobName: job.name,
+        timestamp: Date.now(),
+      });
+    }
 
     try {
       if (job.id === "darknode-inbox-monitor") {
@@ -1258,7 +1269,9 @@ async function checkJobs(): Promise<void> {
             type: "job_complete",
             jobId: job.id,
             jobName: job.name,
-            summary: result.slice(0, 200),
+            summary: result.slice(0, 300),
+            savedTo: vaultSaved ? savePath : null,
+            status: job.lastStatus,
             timestamp: Date.now(),
           });
 
@@ -1289,9 +1302,21 @@ async function checkJobs(): Promise<void> {
       if (kbCreateFn) {
         try { await writeJobStatus(job.id, { lastRun: job.lastRun, status: "error", savedTo: null, error: String(err).slice(0, 300) }); } catch {}
       }
+      if (broadcastFn) {
+        broadcastFn({
+          type: "job_complete",
+          jobId: job.id,
+          jobName: job.name,
+          summary: String(err).slice(0, 200),
+          savedTo: null,
+          status: "error",
+          timestamp: Date.now(),
+        });
+      }
       console.error(`[scheduled-jobs] Job failed: ${job.name}`, err);
     } finally {
       jobRunning = false;
+      currentRunningJobId = null;
     }
   }
 
@@ -1332,6 +1357,12 @@ export function startJobSystem(
   console.log(`[scheduled-jobs] System started — ${jobList} (${config.timezone})`);
 }
 
+export function getRunningJob(): { running: boolean; jobId: string | null; jobName: string | null } {
+  if (!jobRunning || !currentRunningJobId) return { running: false, jobId: null, jobName: null };
+  const job = config.jobs.find(j => j.id === currentRunningJobId);
+  return { running: true, jobId: currentRunningJobId, jobName: job?.name || null };
+}
+
 export function stopJobSystem(): void {
   if (checkInterval) clearInterval(checkInterval);
   runAgentFn = null;
@@ -1346,7 +1377,12 @@ export async function triggerJob(jobId: string): Promise<string> {
   if (jobRunning) throw new Error("Another job is currently running");
 
   jobRunning = true;
+  currentRunningJobId = job.id;
   console.log(`[scheduled-jobs] Manual trigger: ${job.name}`);
+
+  if (broadcastFn) {
+    broadcastFn({ type: "job_start", jobId: job.id, jobName: job.name, timestamp: Date.now() });
+  }
 
   try {
     if (job.id === "darknode-inbox-monitor") {
@@ -1383,7 +1419,9 @@ export async function triggerJob(jobId: string): Promise<string> {
         type: "job_complete",
         jobId: job.id,
         jobName: job.name,
-        summary: result.slice(0, 200),
+        summary: result.slice(0, 300),
+        savedTo: vaultSaved ? savePath : null,
+        status: job.lastStatus,
         timestamp: Date.now(),
       });
     }
@@ -1397,8 +1435,15 @@ export async function triggerJob(jobId: string): Promise<string> {
     if (kbCreateFn) {
       try { await writeJobStatus(job.id, { lastRun: job.lastRun, status: "error", savedTo: null, error: String(err).slice(0, 300) }); } catch {}
     }
+    if (broadcastFn) {
+      broadcastFn({
+        type: "job_complete", jobId: job.id, jobName: job.name,
+        summary: String(err).slice(0, 200), savedTo: null, status: "error", timestamp: Date.now(),
+      });
+    }
     throw err;
   } finally {
     jobRunning = false;
+    currentRunningJobId = null;
   }
 }
