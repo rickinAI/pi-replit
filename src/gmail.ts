@@ -746,6 +746,88 @@ export async function trashEmail(messageId: string): Promise<string> {
   }
 }
 
+export async function listLabels(): Promise<string> {
+  try {
+    const gmail = await getGmailClient();
+    const res = await gmail.users.labels.list({ userId: "me" });
+    const labels = res.data.labels || [];
+
+    if (labels.length === 0) return "No labels found.";
+
+    const system: Array<{ id: string; name: string }> = [];
+    const user: Array<{ id: string; name: string }> = [];
+
+    for (const l of labels) {
+      const entry = { id: l.id!, name: l.name! };
+      if (l.type === "system") system.push(entry);
+      else user.push(entry);
+    }
+
+    system.sort((a, b) => a.name.localeCompare(b.name));
+    user.sort((a, b) => a.name.localeCompare(b.name));
+
+    const lines: string[] = [];
+    if (user.length > 0) {
+      lines.push(`Custom labels (${user.length}):`);
+      for (const l of user) lines.push(`  • ${l.name}  [id: ${l.id}]`);
+    }
+    lines.push(`\nSystem labels (${system.length}):`);
+    for (const l of system) lines.push(`  • ${l.name}  [id: ${l.id}]`);
+
+    return lines.join("\n");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Gmail listLabels error:", msg);
+    if (msg.includes("not connected")) return "Gmail is not connected.";
+    return `Failed to list labels: ${msg}`;
+  }
+}
+
+export async function createLabel(name: string, options?: {
+  labelListVisibility?: string;
+  messageListVisibility?: string;
+  backgroundColor?: string;
+  textColor?: string;
+}): Promise<string> {
+  try {
+    const gmail = await getGmailClient();
+    const body: any = {
+      name,
+      labelListVisibility: options?.labelListVisibility || "labelShow",
+      messageListVisibility: options?.messageListVisibility || "show",
+    };
+    if (options?.backgroundColor || options?.textColor) {
+      body.color = {};
+      if (options.backgroundColor) body.color.backgroundColor = options.backgroundColor;
+      if (options.textColor) body.color.textColor = options.textColor;
+    }
+
+    const res = await gmail.users.labels.create({ userId: "me", requestBody: body });
+    return `✅ Label created.\nName: ${res.data.name}\nID: ${res.data.id}\n\nUse this ID with the email_label tool to apply it to emails.`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Gmail createLabel error:", msg);
+    if (msg.includes("not connected")) return "Gmail is not connected.";
+    if (msg.includes("already exists") || msg.includes("409")) return `Label "${name}" already exists. Use gmail_list_labels to find its ID.`;
+    return `Failed to create label: ${msg}`;
+  }
+}
+
+export async function deleteLabel(labelId: string): Promise<string> {
+  try {
+    const gmail = await getGmailClient();
+    await gmail.users.labels.delete({ userId: "me", id: labelId });
+    return `✅ Label deleted (ID: ${labelId}).`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Gmail deleteLabel error:", msg);
+    if (msg.includes("not connected")) return "Gmail is not connected.";
+    if (msg.includes("404")) return "Label not found. It may have already been deleted.";
+    if (msg.includes("invalid")) return "Cannot delete system labels — only custom labels can be deleted.";
+    return `Failed to delete label: ${msg}`;
+  }
+}
+
 export async function checkConnectionStatus(): Promise<{ connected: boolean; email?: string; error?: string }> {
   if (!isConfigured()) return { connected: false, error: "GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET not set" };
   if (!isConnected()) return { connected: false, error: "No OAuth tokens — visit /api/gmail/auth to connect" };

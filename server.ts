@@ -444,7 +444,7 @@ function buildGmailTools(): ToolDefinition[] {
     {
       name: "email_label",
       label: "Email Labels",
-      description: "Add or remove Gmail labels on an email. Use Gmail system label IDs: STARRED, IMPORTANT, UNREAD, SPAM, TRASH, CATEGORY_PERSONAL, CATEGORY_SOCIAL, CATEGORY_PROMOTIONS, CATEGORY_UPDATES, CATEGORY_FORUMS.",
+      description: "Add or remove Gmail labels on an email. Use system label IDs (STARRED, IMPORTANT, UNREAD, SPAM, TRASH, CATEGORY_PERSONAL, CATEGORY_SOCIAL, CATEGORY_PROMOTIONS, CATEGORY_UPDATES, CATEGORY_FORUMS) or custom label IDs from gmail_list_labels.",
       parameters: Type.Object({
         messageId: Type.String({ description: "The Gmail message ID." }),
         addLabels: Type.Optional(Type.Array(Type.String(), { description: "Label IDs to add." })),
@@ -477,6 +477,49 @@ function buildGmailTools(): ToolDefinition[] {
       }),
       async execute(_toolCallId, params) {
         const result = await gmail.trashEmail(params.messageId);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "gmail_list_labels",
+      label: "List Gmail Labels",
+      description: "List all Gmail labels (system and custom). Returns label names and IDs. Use before email_label to find the correct label ID, or before gmail_delete_label to find the ID of a label to remove.",
+      parameters: Type.Object({}),
+      async execute() {
+        const result = await gmail.listLabels();
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "gmail_create_label",
+      label: "Create Gmail Label",
+      description: "Create a new custom Gmail label for inbox organization. Supports nested labels with '/' separator (e.g. 'Family/School'). The returned label ID can be used with email_label to tag emails.",
+      parameters: Type.Object({
+        name: Type.String({ description: "Label name (e.g. 'Travel', 'Family/School', 'Finance')." }),
+        labelListVisibility: Type.Optional(Type.String({ description: "Visibility in label list: 'labelShow' (default), 'labelHide', or 'labelShowIfUnread'." })),
+        messageListVisibility: Type.Optional(Type.String({ description: "Visibility in message list: 'show' (default) or 'hide'." })),
+        backgroundColor: Type.Optional(Type.String({ description: "Background color hex (e.g. '#4986e7')." })),
+        textColor: Type.Optional(Type.String({ description: "Text color hex (e.g. '#ffffff')." })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gmail.createLabel(params.name, {
+          labelListVisibility: params.labelListVisibility,
+          messageListVisibility: params.messageListVisibility,
+          backgroundColor: params.backgroundColor,
+          textColor: params.textColor,
+        });
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "gmail_delete_label",
+      label: "Delete Gmail Label",
+      description: "Delete a custom Gmail label by its ID. System labels cannot be deleted. Use gmail_list_labels first to find the label ID.",
+      parameters: Type.Object({
+        labelId: Type.String({ description: "The Gmail label ID to delete (from gmail_list_labels)." }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await gmail.deleteLabel(params.labelId);
         return { content: [{ type: "text" as const, text: result }], details: {} };
       },
     },
