@@ -6224,6 +6224,11 @@ Rules:
 var PORT = parseInt(process.env.PORT || "3000", 10);
 var ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
 var APP_PASSWORD = process.env.APP_PASSWORD || "";
+var POOJA_PASSWORD = process.env.POOJA_PASSWORD || "";
+var USERS = {
+  rickin: { password: APP_PASSWORD, displayName: "Rickin" },
+  pooja: { password: POOJA_PASSWORD, displayName: "Pooja" }
+};
 var SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path4.dirname(__filename);
@@ -8678,7 +8683,13 @@ function authMiddleware(req, res, next) {
     return;
   }
   const token = req.signedCookies?.auth;
+  if (token && USERS[token]) {
+    req.user = token;
+    next();
+    return;
+  }
   if (token === "authenticated") {
+    req.user = "rickin";
     next();
     return;
   }
@@ -8699,20 +8710,39 @@ function authMiddleware(req, res, next) {
 }
 app.use(authMiddleware);
 app.post("/api/login", (req, res) => {
-  const { password } = req.body;
-  if (!password || password !== APP_PASSWORD) {
+  const { username, password } = req.body;
+  let matchedUser = null;
+  if (username && USERS[username.toLowerCase()]) {
+    const u = USERS[username.toLowerCase()];
+    if (password && u.password && password === u.password) matchedUser = username.toLowerCase();
+  } else if (!username && password && password === APP_PASSWORD) {
+    matchedUser = "rickin";
+  }
+  if (!matchedUser) {
     res.status(401).json({ error: "ACCESS DENIED" });
     return;
   }
   const isSecure = req.secure || req.headers["x-forwarded-proto"] === "https";
-  res.cookie("auth", "authenticated", {
+  res.cookie("auth", matchedUser, {
     signed: true,
     httpOnly: true,
     secure: isSecure,
     sameSite: "lax",
-    maxAge: 7 * 24 * 60 * 60 * 1e3
+    maxAge: 30 * 24 * 60 * 60 * 1e3
   });
-  res.json({ ok: true });
+  const user = USERS[matchedUser];
+  const redirect = matchedUser === "pooja" ? "/pages/baby-dashboard" : "/";
+  res.json({ ok: true, displayName: user.displayName, redirect });
+});
+app.get("/api/me", (req, res) => {
+  const token = req.signedCookies?.auth;
+  if (token && USERS[token]) {
+    res.json({ username: token, displayName: USERS[token].displayName });
+  } else if (token === "authenticated") {
+    res.json({ username: "rickin", displayName: "Rickin" });
+  } else {
+    res.status(401).json({ error: "Not logged in" });
+  }
 });
 app.get("/api/logout", (_req, res) => {
   res.clearCookie("auth");

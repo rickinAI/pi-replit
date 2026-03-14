@@ -46,9 +46,10 @@ import { extractAndFileInsights } from "./src/memory-extractor.js";
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
 const APP_PASSWORD = process.env.APP_PASSWORD || "";
+const POOJA_PASSWORD = process.env.POOJA_PASSWORD || "";
 const USERS: Record<string, { password: string; displayName: string }> = {
   rickin: { password: APP_PASSWORD, displayName: "Rickin" },
-  pooja: { password: "chicken", displayName: "Pooja" },
+  pooja: { password: POOJA_PASSWORD, displayName: "Pooja" },
 };
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 
@@ -2566,8 +2567,8 @@ function authMiddleware(req: Request, res: Response, next: NextFunction) {
   if (req.path === "/api/gmail/auth") { next(); return; }
 
   const token = req.signedCookies?.auth;
-  if (token && token !== "authenticated" && USERS[token]) { (req as any).user = token; next(); return; }
-  if (token === "authenticated") { next(); return; }
+  if (token && USERS[token]) { (req as any).user = token; next(); return; }
+  if (token === "authenticated") { (req as any).user = "rickin"; next(); return; }
 
   const devToken = process.env.DEV_TOKEN;
   if (devToken && req.query.dev_token === devToken) {
@@ -2589,20 +2590,44 @@ function authMiddleware(req: Request, res: Response, next: NextFunction) {
 app.use(authMiddleware);
 
 app.post("/api/login", (req: Request, res: Response) => {
-  const { password } = req.body as { password?: string };
-  if (!password || password !== APP_PASSWORD) {
+  const { username, password } = req.body as { username?: string; password?: string };
+
+  let matchedUser: string | null = null;
+  if (username && USERS[username.toLowerCase()]) {
+    const u = USERS[username.toLowerCase()];
+    if (password && u.password && password === u.password) matchedUser = username.toLowerCase();
+  } else if (!username && password && password === APP_PASSWORD) {
+    matchedUser = "rickin";
+  }
+
+  if (!matchedUser) {
     res.status(401).json({ error: "ACCESS DENIED" });
     return;
   }
+
   const isSecure = req.secure || req.headers["x-forwarded-proto"] === "https";
-  res.cookie("auth", "authenticated", {
+  res.cookie("auth", matchedUser, {
     signed: true,
     httpOnly: true,
     secure: isSecure,
     sameSite: "lax",
-    maxAge: 7 * 24 * 60 * 60 * 1000,
+    maxAge: 30 * 24 * 60 * 60 * 1000,
   });
-  res.json({ ok: true });
+
+  const user = USERS[matchedUser];
+  const redirect = matchedUser === "pooja" ? "/pages/baby-dashboard" : "/";
+  res.json({ ok: true, displayName: user.displayName, redirect });
+});
+
+app.get("/api/me", (req: Request, res: Response) => {
+  const token = req.signedCookies?.auth;
+  if (token && USERS[token]) {
+    res.json({ username: token, displayName: USERS[token].displayName });
+  } else if (token === "authenticated") {
+    res.json({ username: "rickin", displayName: "Rickin" });
+  } else {
+    res.status(401).json({ error: "Not logged in" });
+  }
 });
 
 app.get("/api/logout", (_req: Request, res: Response) => {

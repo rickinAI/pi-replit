@@ -39,6 +39,18 @@
 
     <form class="login-form" id="login-form">
       <div class="prompt-line">
+        <span class="prompt-label">user:</span>
+        <input
+          type="text"
+          id="username"
+          class="prompt-input"
+          autocomplete="username"
+          enterkeyhint="next"
+          autofocus
+        />
+        <span class="cursor-blink"></span>
+      </div>
+      <div class="prompt-line">
         <span class="prompt-label">password:</span>
         <input
           type="password"
@@ -46,7 +58,6 @@
           class="prompt-input"
           autocomplete="current-password"
           enterkeyhint="go"
-          autofocus
         />
         <span class="cursor-blink"></span>
       </div>
@@ -72,6 +83,7 @@
     const bootEl = document.getElementById("boot-lines");
     const form = document.getElementById("login-form");
     const errorMsg = document.getElementById("error-msg");
+    const usernameInput = document.getElementById("username");
     const passwordInput = document.getElementById("password");
     const submitBtn = document.getElementById("submit-btn");
     const terminal = document.getElementById("terminal");
@@ -88,7 +100,7 @@
     function typeLine() {
       if (i >= bootLines.length) {
         form.classList.add("visible");
-        passwordInput.focus();
+        usernameInput.focus();
         return;
       }
       const line = document.createElement("div");
@@ -110,12 +122,13 @@
         const res = await fetch("/api/login", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ password: passwordInput.value }),
+          body: JSON.stringify({ username: usernameInput.value, password: passwordInput.value }),
         });
 
         if (res.ok) {
+          const data = await res.json();
           submitBtn.textContent = "[OK]";
-          window.location.href = "/";
+          window.location.href = data.redirect || "/";
         } else {
           errorMsg.classList.remove("hidden");
           passwordInput.value = "";
