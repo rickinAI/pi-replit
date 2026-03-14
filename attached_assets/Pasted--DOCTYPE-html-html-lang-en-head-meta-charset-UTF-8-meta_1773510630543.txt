@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Baby Dashboard 👶</title>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet"/>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Nunito', sans-serif;
+      background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 50%, #e8f5e9 100%);
+      min-height: 100vh;
+      padding: 24px 16px 48px;
+    }
+    .header { text-align: center; margin-bottom: 28px; }
+    .header h1 { font-size: 2rem; font-weight: 900; color: #1565c0; }
+    .header .subtitle { font-size: 1rem; color: #5c88c5; margin-top: 4px; }
+    .header .heart { color: #e91e63; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 16px; max-width: 860px; margin: 0 auto 28px;
+    }
+    .kip {
+      background: white; border-radius: 18px; padding: 20px 16px;
+      text-align: center; box-shadow: 0 4px 16px rgba(21,101,192,0.10);
+      border-top: 4px solid #42a5f5; transition: transform 0.15s;
+    }
+    .kip:hover { transform: translateY(-3px); }
+    .kip .icon { font-size: 2rem; margin-bottom: 8px; }
+    .kip .value { font-size: 2.2rem; font-weight: 900; color: #1565c0; line-height: 1; }
+    .kip .label { font-size: 0.78rem; font-weight: 700; color: #90a4ae; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 6px; }
+    .section-card {
+      background: white; border-radius: 18px; padding: 22px 24px;
+      max-width: 860px; margin: 0 auto 20px;
+      box-shadow: 0 4px 16px rgba(21,101,192,0.10);
+    }
+    .section-card h2 { font-size: 1rem; font-weight: 800; color: #1565c0; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+    .fruit-block { display: flex; align-items: center; gap: 20px; }
+    .fruit-emoji { font-size: 4rem; line-height: 1; }
+    .fruit-info .fruit-name { font-size: 1.6rem; font-weight: 900; color: #1565c0; }
+    .fruit-info .fruit-desc { font-size: 0.9rem; color: #546e7a; margin-top: 4px; line-height: 1.5; }
+    .dev-list { list-style: none; display: flex; flex-direction: column; gap: 10px; }
+    .dev-list li { display: flex; align-items: flex-start; gap: 10px; font-size: 0.9rem; color: #455a64; line-height: 1.45; }
+    .dev-list li .dot { width: 8px; height: 8px; border-radius: 50%; background: #42a5f5; margin-top: 5px; flex-shrink: 0; }
+    .names-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+    .name-chip {
+      background: #e3f2fd; border: 2px solid #90caf9; border-radius: 50px;
+      padding: 8px 16px; font-size: 0.9rem; font-weight: 700; color: #1565c0;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .name-chip.fav {
+      background: #1565c0; color: white; border-color: #1565c0;
+      box-shadow: 0 3px 10px rgba(21,101,192,0.25);
+    }
+    .name-chip .tag { font-size: 0.72rem; font-weight: 800; background: rgba(255,255,255,0.22); padding: 2px 6px; border-radius: 20px; }
+    .progress-wrap { margin-top: 6px; }
+    .progress-label { display: flex; justify-content: space-between; font-size: 0.8rem; font-weight: 700; color: #78909c; margin-bottom: 8px; }
+    .progress-bar { height: 12px; background: #e3f2fd; border-radius: 20px; overflow: hidden; }
+    .progress-fill { height: 100%; background: linear-gradient(90deg, #42a5f5, #1565c0); border-radius: 20px; }
+    .footer { text-align: center; margin-top: 32px; font-size: 0.8rem; color: #90a4ae; }
+    .footer span { color: #e91e63; }
+    @media (max-width: 480px) {
+      .fruit-block { flex-direction: column; text-align: center; }
+      .kip .value { font-size: 1.8rem; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <h1>👶 Baby Boy Dashboard</h1>
+    <p class="subtitle">Pooja & Rickin <span class="heart">♥</span> — Live Pregnancy Tracker</p>
+  </div>
+
+  <div class="grid">
+    <div class="kip">
+      <div class="icon">🗓️</div>
+      <div class="value" id="week-num">—</div>
+      <div class="label">Week Pregnant</div>
+    </div>
+    <div class="kip">
+      <div class="icon">🍼</div>
+      <div class="value" id="days-left">—</div>
+      <div class="label">Days to Due Date</div>
+    </div>
+    <div class="kip">
+      <div class="icon">🌿</div>
+      <div class="value">2nd</div>
+      <div class="label">Trimester</div>
+    </div>
+    <div class="kip">
+      <div class="icon">📏</div>
+      <div class="value" id="baby-size">—</div>
+      <div class="label">cm Crown to Rump</div>
+    </div>
+  </div>
+
+  <div class="section-card">
+    <h2>📈 Pregnancy Progress</h2>
+    <div class="progress-wrap">
+      <div class="progress-label">
+        <span>Week 1</span>
+        <span id="progress-pct">—</span>
+        <span>Week 40</span>
+      </div>
+      <div class="progress-bar">
+        <div class="progress-fill" id="progress-fill" style="width:0%"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-card">
+    <h2>🍎 Fruit of the Week</h2>
+    <div class="fruit-block">
+      <div class="fruit-emoji" id="fruit-emoji">🥭</div>
+      <div class="fruit-info">
+        <div class="fruit-name" id="fruit-name">Large Mango</div>
+        <div class="fruit-desc" id="fruit-desc">Baby is about 28–29 cm long and weighs roughly 500 g. Hearing is developing fast — he can hear your voice!</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-card">
+    <h2>🧬 Baby's Development</h2>
+    <ul class="dev-list">
+      <li><div class="dot"></div>Lungs are developing rapidly, preparing for first breaths</li>
+      <li><div class="dot"></div>Inner ear is fully formed — baby responds to sounds & music</li>
+      <li><div class="dot"></div>Eyes can sense light through the womb</li>
+      <li><div class="dot"></div>Rapid brain growth continues this week</li>
+      <li><div class="dot"></div>Skin is developing pigmentation</li>
+    </ul>
+  </div>
+
+  <div class="section-card">
+    <h2>✨ Baby Names</h2>
+    <div class="names-grid">
+      <div class="name-chip fav">⭐ Kian <span class="tag">Fav</span></div>
+      <div class="name-chip fav">⭐ Neel <span class="tag">Fav</span></div>
+      <div class="name-chip fav">⭐ Nivaan <span class="tag">Fav</span></div>
+      <div class="name-chip fav">⭐ Shayan <span class="tag">Fav</span></div>
+      <div class="name-chip">Aryan</div>
+      <div class="name-chip">Rohan</div>
+      <div class="name-chip">Veer</div>
+      <div class="name-chip">Kabir</div>
+    </div>
+  </div>
+
+  <div class="footer">Updated automatically · Built with <span>♥</span> by DarkNode</div>
+
+  <script>
+    const ANCHOR_WEEK = 23;
+    const ANCHOR_DATE = new Date('2026-03-10T00:00:00');
+    const DUE_DATE = new Date(ANCHOR_DATE);
+    DUE_DATE.setDate(DUE_DATE.getDate() + (40 - ANCHOR_WEEK) * 7);
+
+    const fruitMap = {
+      20: { emoji:'🍌', name:'Banana', desc:'~25 cm, ~300 g. Swallowing amniotic fluid, taste buds forming.', size:'25' },
+      21: { emoji:'🥕', name:'Large Carrot', desc:'~26 cm, ~360 g. Baby can hear your heartbeat.', size:'26' },
+      22: { emoji:'🌽', name:'Corn on the Cob', desc:'~27 cm, ~430 g. Eyelids and brows fully formed.', size:'27' },
+      23: { emoji:'🥭', name:'Large Mango', desc:'About 28–29 cm, ~500 g. Hearing developing fast — he hears your voice!', size:'29' },
+      24: { emoji:'🌽', name:'Ear of Corn', desc:'~30 cm, ~600 g. Lungs developing surfactant for first breath.', size:'30' },
+      25: { emoji:'🥦', name:'Cauliflower', desc:'~34 cm, ~660 g. Hands fully formed, may be sucking thumb.', size:'34' },
+      26: { emoji:'🥬', name:'Butterhead Lettuce', desc:'~35 cm, ~760 g. Eyes beginning to open.', size:'35' },
+      27: { emoji:'🥦', name:'Head of Broccoli', desc:'~36 cm, ~875 g. Brain wave activity ramping up.', size:'36' },
+      28: { emoji:'🍆', name:'Eggplant', desc:'~37 cm, ~1 kg. Third trimester begins!', size:'37' },
+    };
+
+    function render() {
+      const now = new Date();
+      const weeksPassed = Math.floor((now - ANCHOR_DATE) / (7 * 24 * 60 * 60 * 1000));
+      const week = ANCHOR_WEEK + weeksPassed;
+      const daysLeft = Math.max(0, Math.ceil((DUE_DATE - now) / (1000 * 60 * 60 * 24)));
+      const pct = Math.min(100, Math.round((week / 40) * 100));
+      const fruit = fruitMap[week] || fruitMap[23];
+
+      document.getElementById('week-num').textContent = week;
+      document.getElementById('days-left').textContent = daysLeft;
+      document.getElementById('baby-size').textContent = fruit.size;
+      document.getElementById('progress-fill').style.width = pct + '%';
+      document.getElementById('progress-pct').textContent = pct + '%';
+      document.getElementById('fruit-emoji').textContent = fruit.emoji;
+      document.getElementById('fruit-name').textContent = fruit.name;
+      document.getElementById('fruit-desc').textContent = fruit.desc;
+    }
+
+    render();
+  </script>
+</body>
+</html
