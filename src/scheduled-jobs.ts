@@ -1,5 +1,6 @@
 import { getPool } from "./db.js";
 import { getDarkNodeEmails, markDarkNodeProcessed } from "./gmail.js";
+import * as gws from "./gws.js";
 
 export interface ScheduledJob {
   id: string;
@@ -648,6 +649,14 @@ Process everything autonomously. Be thorough but efficient.`,
     enabled: true,
   },
   {
+    id: "baby-timeline-advance",
+    name: "Baby Timeline Auto-Advance",
+    agentId: "system",
+    prompt: "Advances the ✅ Current Week marker in the Timeline tab to match the calculated pregnancy week.",
+    schedule: { type: "weekly", hour: 23, minute: 59, daysOfWeek: [0] },
+    enabled: true,
+  },
+  {
     id: "weekly-inbox-deep-clean",
     name: "Weekly Inbox Deep Clean",
     agentId: "email-drafter",
@@ -1015,6 +1024,96 @@ function shouldJobRun(job: ScheduledJob, now: Date, nowMinutes: number, todayKey
   return !config.lastJobRun[runKey];
 }
 
+const BABY_SHEET_ID = "1fhtMkDSTUlRCFqY4hQiSdZg7cOe4FYNkmOIIHWo4KSU";
+const BABY_DUE_DATE = new Date("2026-07-07T00:00:00");
+
+async function runTimelineAdvance(job: ScheduledJob): Promise<void> {
+  console.log(`[scheduled-jobs] Timeline advance: calculating current week...`);
+  try {
+    const now = getNow();
+    const msLeft = BABY_DUE_DATE.getTime() - now.getTime();
+    const weeksLeft = Math.floor(msLeft / (7 * 24 * 60 * 60 * 1000));
+    const currentWeek = Math.min(40, Math.max(1, 40 - weeksLeft));
+    console.log(`[scheduled-jobs] Timeline advance: current pregnancy week = ${currentWeek}`);
+
+    const raw = await gws.sheetsRead(BABY_SHEET_ID, "Timeline!A1:F50");
+    const lines = raw.split("\n").filter(l => l.trim());
+
+    let currentSheetRow = -1;
+    let currentWeekLabel = "?";
+    let targetSheetRow = -1;
+    let targetWeekNum = -1;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const rowMatch = line.match(/^Row\s+(\d+):\s*(.*)/);
+      if (!rowMatch) continue;
+      const sheetRow = parseInt(rowMatch[1], 10);
+      const cols = rowMatch[2].split(" | ").map(c => c.trim());
+      const weekNum = parseInt(cols[0], 10);
+      if (isNaN(weekNum)) continue;
+      if (cols.length > 5 && cols[5]?.includes("✅")) {
+        currentSheetRow = sheetRow;
+        currentWeekLabel = cols[0];
+      }
+      if (weekNum === currentWeek) {
+        targetSheetRow = sheetRow;
+        targetWeekNum = weekNum;
+      }
+    }
+
+    if (targetSheetRow === -1) {
+      console.log(`[scheduled-jobs] Timeline advance: week ${currentWeek} row not found in sheet, skipping`);
+      job.lastRun = now.toISOString();
+      job.lastResult = `Week ${currentWeek} row not found`;
+      job.lastStatus = "error";
+      await saveConfig();
+      return;
+    }
+
+    if (currentSheetRow === targetSheetRow) {
+      console.log(`[scheduled-jobs] Timeline advance: already at week ${currentWeek}, no change needed`);
+      job.lastRun = now.toISOString();
+      job.lastResult = `Already at week ${currentWeek}`;
+      job.lastStatus = "success";
+      await saveConfig();
+      return;
+    }
+
+    if (currentSheetRow >= 0 && currentSheetRow !== targetSheetRow) {
+      const prevWeek = parseInt(currentWeekLabel, 10);
+      const oldStatus = prevWeek >= 40 ? "🎊 Due Jul 7!" : `✔️ Week ${prevWeek}`;
+      await gws.sheetsUpdate(BABY_SHEET_ID, `Timeline!F${currentSheetRow}`, [[oldStatus]]);
+      console.log(`[scheduled-jobs] Timeline advance: marked row ${currentSheetRow} as "${oldStatus}"`);
+    }
+
+    const newStatus = targetWeekNum >= 40 ? "🎊 Due Jul 7!" : "✅ Current Week";
+    await gws.sheetsUpdate(BABY_SHEET_ID, `Timeline!F${targetSheetRow}`, [[newStatus]]);
+    console.log(`[scheduled-jobs] Timeline advance: set row ${targetSheetRow} (week ${currentWeek}) as "${newStatus}"`);
+
+    job.lastRun = now.toISOString();
+    job.lastResult = `Advanced from week ${currentWeekLabel} to week ${currentWeek}`;
+    job.lastStatus = "success";
+    await saveConfig();
+
+    if (broadcastFn) {
+      broadcastFn({
+        type: "job_complete",
+        jobId: job.id,
+        jobName: job.name,
+        summary: `Timeline advanced to week ${currentWeek}`,
+        timestamp: Date.now(),
+      });
+    }
+  } catch (err) {
+    console.error(`[scheduled-jobs] Timeline advance error:`, err);
+    job.lastRun = new Date().toISOString();
+    job.lastResult = String(err).slice(0, 300);
+    job.lastStatus = "error";
+    await saveConfig();
+  }
+}
+
 async function runInboxMonitor(job: ScheduledJob): Promise<void> {
   console.log(`[scheduled-jobs] Inbox monitor: checking for @darknode emails...`);
   let emails;
@@ -1127,6 +1226,8 @@ async function checkJobs(): Promise<void> {
     try {
       if (job.id === "darknode-inbox-monitor") {
         await runInboxMonitor(job);
+      } else if (job.id === "baby-timeline-advance") {
+        await runTimelineAdvance(job);
       } else {
         const agentResult = await runAgentFn(job.agentId, job.prompt);
         const result = agentResult.response;
