@@ -79,6 +79,7 @@ export async function runSubAgent(opts: {
   console.log(`[agent:${agent.id}] started — "${opts.task.slice(0, 80)}"`);
 
   const filteredTools = opts.allTools.filter(t => agent.tools.includes(t.name));
+  console.log(`[agent:${agent.id}] tools: ${filteredTools.length} of ${opts.allTools.length} (${filteredTools.map(t => t.name).join(", ")})`);
   const anthropicTools = convertToolsToAnthropicFormat(filteredTools);
   const toolsUsed: string[] = [];
 
