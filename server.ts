@@ -2596,6 +2596,153 @@ app.get("/pages", (_req: Request, res: Response) => {
   }
 });
 
+const BABY_SHEET_ID = "1fhtMkDSTUlRCFqY4hQiSdZg7cOe4FYNkmOIIHWo4KSU";
+let babyDashboardCache: { data: any; timestamp: number } | null = null;
+const BABY_CACHE_TTL = 60_000;
+
+app.get("/api/baby-dashboard/data", async (_req: Request, res: Response) => {
+  try {
+    if (babyDashboardCache && Date.now() - babyDashboardCache.timestamp < BABY_CACHE_TTL) {
+      res.json(babyDashboardCache.data);
+      return;
+    }
+
+    if (!gmail.isConnected()) {
+      res.status(503).json({ error: "google_disconnected", message: "Google not connected" });
+      return;
+    }
+
+    const tabErrors: string[] = [];
+    const readTab = async (range: string): Promise<string> => {
+      try {
+        const result = await gws.sheetsRead(BABY_SHEET_ID, range);
+        if (result.includes("Error") || result.includes("not connected") || result.includes("expired")) {
+          tabErrors.push(range.split("!")[0]);
+          return "";
+        }
+        return result;
+      } catch {
+        tabErrors.push(range.split("!")[0]);
+        return "";
+      }
+    };
+
+    const [apptResult, tasksResult, shoppingResult, hospitalResult, namesResult] = await Promise.all([
+      readTab("Appointments!A:D"),
+      readTab("To-Do!A:F"),
+      readTab("Shopping List!A:C"),
+      readTab("Hospital Bag!A:C"),
+      readTab("Names!A:C"),
+    ]);
+
+    function parseRows(raw: string): string[][] {
+      if (!raw || raw.includes("No data") || raw.includes("Error") || raw.includes("not connected")) return [];
+      return raw.split("\n").filter(l => l.startsWith("Row ")).map(l => {
+        const content = l.replace(/^Row \d+: /, "");
+        return content.split(" | ");
+      });
+    }
+
+    const apptRows = parseRows(apptResult);
+    const appointments = apptRows.slice(1).filter(r => r[0] && r[1]).map(r => ({
+      title: r[0]?.trim() || "",
+      date: r[1]?.trim() || "",
+      time: r[2]?.trim() || "",
+      detail: r[3]?.trim() || "",
+    }));
+
+    const taskRows = parseRows(tasksResult);
+    const taskHeader = taskRows[0]?.map(h => h.trim().toLowerCase()) || [];
+    const statusIdx = taskHeader.indexOf("status");
+    const tasks = taskRows.slice(1).filter(r => r[0]).map(r => ({
+      text: r[0]?.trim() || "",
+      owner: r[1]?.trim() || "",
+      priority: (r[2]?.trim() || "medium").toLowerCase(),
+      week: parseInt(r[3]?.trim()) || 0,
+      done: statusIdx >= 0 ? (r[statusIdx]?.trim().toLowerCase() === "done" || r[statusIdx]?.trim().toLowerCase() === "complete") : false,
+    }));
+
+    const shoppingRows = parseRows(shoppingResult);
+    const shoppingStatusIdx = (shoppingRows[0]?.map(h => h.trim().toLowerCase()) || []).findIndex(h => h === "status" || h === "bought");
+    const shoppingItems = shoppingRows.slice(1).filter(r => r[0]);
+    const itemsBought = shoppingItems.filter(r => {
+      const si = shoppingStatusIdx >= 0 ? shoppingStatusIdx : 2;
+      const val = (r[si] || "").trim().toLowerCase();
+      return val === "yes" || val === "done" || val === "bought" || val === "true" || val === "✓" || val === "✅";
+    }).length;
+
+    const hospitalRows = parseRows(hospitalResult);
+    const hospitalStatusIdx = (hospitalRows[0]?.map(h => h.trim().toLowerCase()) || []).findIndex(h => h === "status" || h === "packed");
+    const hospitalItems = hospitalRows.slice(1).filter(r => r[0]);
+    const itemsPacked = hospitalItems.filter(r => {
+      const si = hospitalStatusIdx >= 0 ? hospitalStatusIdx : 2;
+      const val = (r[si] || "").trim().toLowerCase();
+      return val === "yes" || val === "done" || val === "packed" || val === "true" || val === "✓" || val === "✅";
+    }).length;
+
+    const nameRows = parseRows(namesResult);
+    const favNames: { name: string; meaning: string }[] = [];
+    const otherNames: { name: string; meaning: string }[] = [];
+    nameRows.slice(1).filter(r => r[0]).forEach(r => {
+      const entry = { name: r[0]?.trim() || "", meaning: r[1]?.trim() || "" };
+      const fav = (r[2] || "").trim().toLowerCase();
+      if (fav === "yes" || fav === "true" || fav === "fav" || fav === "favorite" || fav === "favourite" || fav === "✓" || fav === "⭐") {
+        favNames.push(entry);
+      } else {
+        otherNames.push(entry);
+      }
+    });
+
+    const tasksDone = tasks.filter(t => t.done).length;
+    const allFailed = tabErrors.length === 5;
+
+    if (allFailed) {
+      res.status(502).json({ error: "sheets_unavailable", message: "All sheet reads failed", errors: tabErrors });
+      return;
+    }
+
+    const result = {
+      appointments,
+      tasks,
+      names: { fav: favNames, other: otherNames },
+      checklist: {
+        itemsBought: `${itemsBought}/${shoppingItems.length}`,
+        tasksDone: `${tasksDone}/${tasks.length}`,
+        hospitalPacked: `${itemsPacked}/${hospitalItems.length}`,
+      },
+      sync: {
+        source: "live" as const,
+        partial: tabErrors.length > 0,
+        errors: tabErrors,
+      },
+      updatedAt: new Date().toISOString(),
+    };
+
+    babyDashboardCache = { data: result, timestamp: Date.now() };
+    res.json(result);
+  } catch (err: any) {
+    console.error("[baby-dashboard] API error:", err.message);
+    res.status(500).json({ error: "fetch_failed", message: "Failed to fetch dashboard data" });
+  }
+});
+
+app.get("/api/baby-dashboard/status", async (_req: Request, res: Response) => {
+  const connected = gmail.isConnected();
+  let tokenValid = false;
+  if (connected) {
+    try {
+      const token = await gmail.getAccessToken();
+      tokenValid = !!token;
+    } catch { }
+  }
+  res.json({
+    googleConnected: connected,
+    tokenValid,
+    cacheAge: babyDashboardCache ? Math.round((Date.now() - babyDashboardCache.timestamp) / 1000) : null,
+    reconnectUrl: !tokenValid ? "/api/gmail/auth" : null,
+  });
+});
+
 app.get("/pages/:slug", (req: Request, res: Response) => {
   const slug = req.params.slug.toLowerCase().replace(/[^a-z0-9_-]/g, "");
   if (!slug) { res.status(400).send("Invalid page slug."); return; }
@@ -3595,6 +3742,19 @@ async function startServer(maxRetries = 5) {
     if (status.connected) console.log(`[boot] Google connected: ${status.email} (Gmail, Calendar, Drive, Sheets)`);
     else console.warn(`[boot] Google not connected: ${status.error}`);
   }).catch(() => {});
+
+  setInterval(async () => {
+    try {
+      const token = await gmail.getAccessToken();
+      if (token) {
+        console.log("[google-health] Token valid — auto-refreshed successfully");
+      } else {
+        console.warn("[google-health] Token refresh failed — Google auth needs reconnection at /api/gmail/auth");
+      }
+    } catch (err: any) {
+      console.error("[google-health] Auth check failed:", err.message);
+    }
+  }, 6 * 60 * 60 * 1000);
 
   const portReady = await waitForPort(PORT);
   if (!portReady) {

@@ -8356,6 +8356,139 @@ app.get("/pages", (_req, res) => {
     res.status(500).send("Error loading pages.");
   }
 });
+var BABY_SHEET_ID = "1fhtMkDSTUlRCFqY4hQiSdZg7cOe4FYNkmOIIHWo4KSU";
+var babyDashboardCache = null;
+var BABY_CACHE_TTL = 6e4;
+app.get("/api/baby-dashboard/data", async (_req, res) => {
+  try {
+    let parseRows2 = function(raw) {
+      if (!raw || raw.includes("No data") || raw.includes("Error") || raw.includes("not connected")) return [];
+      return raw.split("\n").filter((l) => l.startsWith("Row ")).map((l) => {
+        const content = l.replace(/^Row \d+: /, "");
+        return content.split(" | ");
+      });
+    };
+    var parseRows = parseRows2;
+    if (babyDashboardCache && Date.now() - babyDashboardCache.timestamp < BABY_CACHE_TTL) {
+      res.json(babyDashboardCache.data);
+      return;
+    }
+    if (!isConnected()) {
+      res.status(503).json({ error: "google_disconnected", message: "Google not connected" });
+      return;
+    }
+    const tabErrors = [];
+    const readTab = async (range) => {
+      try {
+        const result2 = await sheetsRead(BABY_SHEET_ID, range);
+        if (result2.includes("Error") || result2.includes("not connected") || result2.includes("expired")) {
+          tabErrors.push(range.split("!")[0]);
+          return "";
+        }
+        return result2;
+      } catch {
+        tabErrors.push(range.split("!")[0]);
+        return "";
+      }
+    };
+    const [apptResult, tasksResult, shoppingResult, hospitalResult, namesResult] = await Promise.all([
+      readTab("Appointments!A:D"),
+      readTab("To-Do!A:F"),
+      readTab("Shopping List!A:C"),
+      readTab("Hospital Bag!A:C"),
+      readTab("Names!A:C")
+    ]);
+    const apptRows = parseRows2(apptResult);
+    const appointments = apptRows.slice(1).filter((r) => r[0] && r[1]).map((r) => ({
+      title: r[0]?.trim() || "",
+      date: r[1]?.trim() || "",
+      time: r[2]?.trim() || "",
+      detail: r[3]?.trim() || ""
+    }));
+    const taskRows = parseRows2(tasksResult);
+    const taskHeader = taskRows[0]?.map((h) => h.trim().toLowerCase()) || [];
+    const statusIdx = taskHeader.indexOf("status");
+    const tasks = taskRows.slice(1).filter((r) => r[0]).map((r) => ({
+      text: r[0]?.trim() || "",
+      owner: r[1]?.trim() || "",
+      priority: (r[2]?.trim() || "medium").toLowerCase(),
+      week: parseInt(r[3]?.trim()) || 0,
+      done: statusIdx >= 0 ? r[statusIdx]?.trim().toLowerCase() === "done" || r[statusIdx]?.trim().toLowerCase() === "complete" : false
+    }));
+    const shoppingRows = parseRows2(shoppingResult);
+    const shoppingStatusIdx = (shoppingRows[0]?.map((h) => h.trim().toLowerCase()) || []).findIndex((h) => h === "status" || h === "bought");
+    const shoppingItems = shoppingRows.slice(1).filter((r) => r[0]);
+    const itemsBought = shoppingItems.filter((r) => {
+      const si = shoppingStatusIdx >= 0 ? shoppingStatusIdx : 2;
+      const val = (r[si] || "").trim().toLowerCase();
+      return val === "yes" || val === "done" || val === "bought" || val === "true" || val === "\u2713" || val === "\u2705";
+    }).length;
+    const hospitalRows = parseRows2(hospitalResult);
+    const hospitalStatusIdx = (hospitalRows[0]?.map((h) => h.trim().toLowerCase()) || []).findIndex((h) => h === "status" || h === "packed");
+    const hospitalItems = hospitalRows.slice(1).filter((r) => r[0]);
+    const itemsPacked = hospitalItems.filter((r) => {
+      const si = hospitalStatusIdx >= 0 ? hospitalStatusIdx : 2;
+      const val = (r[si] || "").trim().toLowerCase();
+      return val === "yes" || val === "done" || val === "packed" || val === "true" || val === "\u2713" || val === "\u2705";
+    }).length;
+    const nameRows = parseRows2(namesResult);
+    const favNames = [];
+    const otherNames = [];
+    nameRows.slice(1).filter((r) => r[0]).forEach((r) => {
+      const entry = { name: r[0]?.trim() || "", meaning: r[1]?.trim() || "" };
+      const fav = (r[2] || "").trim().toLowerCase();
+      if (fav === "yes" || fav === "true" || fav === "fav" || fav === "favorite" || fav === "favourite" || fav === "\u2713" || fav === "\u2B50") {
+        favNames.push(entry);
+      } else {
+        otherNames.push(entry);
+      }
+    });
+    const tasksDone = tasks.filter((t) => t.done).length;
+    const allFailed = tabErrors.length === 5;
+    if (allFailed) {
+      res.status(502).json({ error: "sheets_unavailable", message: "All sheet reads failed", errors: tabErrors });
+      return;
+    }
+    const result = {
+      appointments,
+      tasks,
+      names: { fav: favNames, other: otherNames },
+      checklist: {
+        itemsBought: `${itemsBought}/${shoppingItems.length}`,
+        tasksDone: `${tasksDone}/${tasks.length}`,
+        hospitalPacked: `${itemsPacked}/${hospitalItems.length}`
+      },
+      sync: {
+        source: "live",
+        partial: tabErrors.length > 0,
+        errors: tabErrors
+      },
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    babyDashboardCache = { data: result, timestamp: Date.now() };
+    res.json(result);
+  } catch (err) {
+    console.error("[baby-dashboard] API error:", err.message);
+    res.status(500).json({ error: "fetch_failed", message: "Failed to fetch dashboard data" });
+  }
+});
+app.get("/api/baby-dashboard/status", async (_req, res) => {
+  const connected = isConnected();
+  let tokenValid = false;
+  if (connected) {
+    try {
+      const token = await getAccessToken();
+      tokenValid = !!token;
+    } catch {
+    }
+  }
+  res.json({
+    googleConnected: connected,
+    tokenValid,
+    cacheAge: babyDashboardCache ? Math.round((Date.now() - babyDashboardCache.timestamp) / 1e3) : null,
+    reconnectUrl: !tokenValid ? "/api/gmail/auth" : null
+  });
+});
 app.get("/pages/:slug", (req, res) => {
   const slug = req.params.slug.toLowerCase().replace(/[^a-z0-9_-]/g, "");
   if (!slug) {
@@ -9373,6 +9506,18 @@ async function startServer(maxRetries = 5) {
     else console.warn(`[boot] Google not connected: ${status.error}`);
   }).catch(() => {
   });
+  setInterval(async () => {
+    try {
+      const token = await getAccessToken();
+      if (token) {
+        console.log("[google-health] Token valid \u2014 auto-refreshed successfully");
+      } else {
+        console.warn("[google-health] Token refresh failed \u2014 Google auth needs reconnection at /api/gmail/auth");
+      }
+    } catch (err) {
+      console.error("[google-health] Auth check failed:", err.message);
+    }
+  }, 6 * 60 * 60 * 1e3);
   const portReady = await waitForPort(PORT);
   if (!portReady) {
     console.error(`[boot] Port ${PORT} could not be freed after 30s \u2014 exiting`);

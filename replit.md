@@ -52,6 +52,15 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - 7-step daily scan: Zillow → Redfin → cross-reference → deep dive → X/social signals → commute research → Market Overview update
   - Saves to `Scheduled Reports/Real Estate/YYYY-MM-DD-Property-Scan.md`, appends to `Real Estate/Areas/`, saves ⭐ gems to `Real Estate/Favorites/`
   - Auto-archive >30 days to `Archive/Real Estate/`. Agent pre-reads Search Criteria + area files. Timeout: 600s
+- **Baby Dashboard** (`data/pages/baby-dashboard.html`) — Pregnancy tracker at `/pages/baby-dashboard`:
+  - Due date July 7, 2026; OB: Dr. Boester; Google Sheet ID: `1fhtMkDSTUlRCFqY4hQiSdZg7cOe4FYNkmOIIHWo4KSU`
+  - 5 Sheet tabs: Appointments (OB schedule), To-Do (21 tasks), Shopping List (37 items), Hospital Bag (50 items), Names (with meanings + fav status)
+  - Real-time API: `GET /api/baby-dashboard/data` reads all 5 tabs via `gws.sheetsRead()`, returns structured JSON with 60s server cache
+  - Sync metadata: response includes `sync.source` ("live"), `sync.partial` (boolean), `sync.errors` (failed tabs) — drives client badge (Live/Partial/Offline/Error)
+  - `GET /api/baby-dashboard/status` returns Google auth health (`tokenValid`, `cacheAge`, `reconnectUrl`)
+  - Client: fetches API on load + polls every 5 min; hardcoded fallback data in HTML for offline resilience
+  - Scheduled job: `baby-dashboard-weekly-update` (Monday 7 AM ET) — reads all tabs and injects updated JSON blocks into the HTML file
+  - Google auth health check: server proactively refreshes token every 6 hours, logs warnings if refresh fails
 - **@darknode Inbox Monitor** — Automated email-to-task pipeline:
   - Polls Gmail every 30 minutes for unread emails containing `@darknode` + instruction
   - Uses `getDarkNodeEmails()` from `src/gmail.ts` to search `is:unread @darknode`, extract instruction text after the `@darknode` tag
