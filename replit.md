@@ -6,7 +6,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 
 - **server.ts** — Express server wrapping the pi coding agent SDK
   - Creates agent sessions with Anthropic API
-  - Registers custom tools (100 total): knowledge base, email (12: list, read, search, get_attachment, thread, send, reply, draft, archive, label, mark_read, trash), calendar (3: list events, create event with calendar targeting, list available calendars), weather, web search, tasks, news, Google Drive, Google Sheets (13 tools), Google Docs (12 tools), Google Slides (12 tools), YouTube, Zillow (3 tools), Redfin (3 tools), X/Twitter (4 tools)
+  - Registers custom tools (103 total): knowledge base, email (12: list, read, search, get_attachment, thread, send, reply, draft, archive, label, mark_read, trash), calendar (3: list events, create event with calendar targeting, list available calendars), weather, web search, tasks, news, Google Drive, Google Sheets (13 tools), Google Docs (12 tools), Google Slides (12 tools), YouTube, Zillow (3 tools), Redfin (3 tools), X/Twitter (4 tools), web pages (4: web_publish, web_save, web_list_pages, web_delete_page)
   - Multi-agent system with 9 specialist agents defined in `data/agents.json` (hot-reloaded on file change)
   - Dual-source research default: all research-oriented agents search both web AND X (Twitter) for maximum coverage. X tools added to deep-researcher, analyst, real-estate, and moodys agents
   - Streams agent events via SSE (Server-Sent Events)

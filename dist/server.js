@@ -7329,6 +7329,112 @@ ${stderr || stdout || err.message}`
           };
         }
       }
+    },
+    {
+      name: "web_save",
+      label: "Save Page to Site",
+      description: "Save HTML content as a permanent, password-protected page on rickin.live. The page will be accessible at rickin.live/pages/<slug> behind the app's existing login. Use when asked to save, host, or create a page on the site. Use web_publish for quick external shares via here.now instead.",
+      parameters: Type.Object({
+        slug: Type.String({
+          description: "URL-friendly name for the page (lowercase, hyphens, no spaces). E.g. 'moody-report' becomes rickin.live/pages/moody-report"
+        }),
+        html: Type.String({
+          description: "The full HTML content to save. Should be a complete HTML document with <!DOCTYPE html>, <head>, and <body>."
+        })
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const slug = params.slug.toLowerCase().replace(/[^a-z0-9_-]/g, "-").replace(/--+/g, "-").replace(/^-|-$/g, "");
+          if (!slug) {
+            return { content: [{ type: "text", text: "Error: Invalid slug \u2014 must contain at least one alphanumeric character." }], details: {} };
+          }
+          const pagesDir = path4.join(PROJECT_ROOT, "data", "pages");
+          if (!fs3.existsSync(pagesDir)) fs3.mkdirSync(pagesDir, { recursive: true });
+          const filePath = path4.join(pagesDir, `${slug}.html`);
+          const existed = fs3.existsSync(filePath);
+          fs3.writeFileSync(filePath, params.html, "utf-8");
+          const domain = process.env.REPLIT_DEPLOYMENT_URL || process.env.REPLIT_DEV_DOMAIN || "rickin.live";
+          const protocol = domain.includes("localhost") ? "http" : "https";
+          const pageUrl = `${protocol}://${domain}/pages/${slug}`;
+          return {
+            content: [{
+              type: "text",
+              text: `\u2705 Page ${existed ? "updated" : "saved"}!
+
+URL: ${pageUrl}
+
+This page is password-protected behind your login. Visit rickin.live/pages to see all saved pages.`
+            }],
+            details: { pageUrl, slug }
+          };
+        } catch (err) {
+          return {
+            content: [{ type: "text", text: `Failed to save page: ${err.message}` }],
+            details: { error: true }
+          };
+        }
+      }
+    },
+    {
+      name: "web_list_pages",
+      label: "List Saved Pages",
+      description: "List all saved pages on rickin.live/pages. Returns slugs, file sizes, and last modified dates.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const pagesDir = path4.join(PROJECT_ROOT, "data", "pages");
+          if (!fs3.existsSync(pagesDir)) {
+            return { content: [{ type: "text", text: "No pages saved yet." }], details: {} };
+          }
+          const files = fs3.readdirSync(pagesDir).filter((f) => f.endsWith(".html")).sort();
+          if (files.length === 0) {
+            return { content: [{ type: "text", text: "No pages saved yet." }], details: {} };
+          }
+          const domain = process.env.REPLIT_DEPLOYMENT_URL || process.env.REPLIT_DEV_DOMAIN || "rickin.live";
+          const protocol = domain.includes("localhost") ? "http" : "https";
+          const list2 = files.map((f) => {
+            const slug = f.replace(/\.html$/, "");
+            const stat = fs3.statSync(path4.join(pagesDir, f));
+            const sizeKB = Math.round(stat.size / 1024);
+            const date = stat.mtime.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+            return `- ${slug} (${sizeKB}KB, ${date}) \u2014 ${protocol}://${domain}/pages/${slug}`;
+          }).join("\n");
+          return {
+            content: [{ type: "text", text: `${files.length} saved page(s):
+
+${list2}
+
+All pages: ${protocol}://${domain}/pages` }],
+            details: {}
+          };
+        } catch (err) {
+          return { content: [{ type: "text", text: `Error listing pages: ${err.message}` }], details: {} };
+        }
+      }
+    },
+    {
+      name: "web_delete_page",
+      label: "Delete Saved Page",
+      description: "Delete a previously saved page from rickin.live/pages.",
+      parameters: Type.Object({
+        slug: Type.String({ description: "The slug of the page to delete." })
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const slug = params.slug.toLowerCase().replace(/[^a-z0-9_-]/g, "-").replace(/--+/g, "-").replace(/^-|-$/g, "");
+          if (!slug) {
+            return { content: [{ type: "text", text: "Error: Invalid slug." }], details: {} };
+          }
+          const filePath = path4.join(PROJECT_ROOT, "data", "pages", `${slug}.html`);
+          if (!fs3.existsSync(filePath)) {
+            return { content: [{ type: "text", text: `Page "${slug}" not found.` }], details: {} };
+          }
+          fs3.unlinkSync(filePath);
+          return { content: [{ type: "text", text: `\u2705 Page "${slug}" deleted.` }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: `Failed to delete page: ${err.message}` }], details: {} };
+        }
+      }
     }
   ];
 }
@@ -7729,6 +7835,39 @@ app.get("/api/logout", (_req, res) => {
   res.redirect("/login.html");
 });
 app.use(express.static(PUBLIC_DIR));
+var PAGES_DIR = path4.join(PROJECT_ROOT, "data", "pages");
+if (!fs3.existsSync(PAGES_DIR)) fs3.mkdirSync(PAGES_DIR, { recursive: true });
+app.get("/pages", (_req, res) => {
+  try {
+    const files = fs3.readdirSync(PAGES_DIR).filter((f) => f.endsWith(".html")).sort();
+    if (files.length === 0) {
+      res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pages \u2014 RICKIN</title><style>body{font-family:-apple-system,system-ui,sans-serif;background:#0a0a0a;color:#e0e0e0;padding:2rem;max-width:600px;margin:0 auto}h1{font-size:1.4rem;color:#fff}p{color:#888}</style></head><body><h1>Pages</h1><p>No pages published yet.</p></body></html>`);
+      return;
+    }
+    const items = files.map((f) => {
+      const slug = f.replace(/\.html$/, "");
+      const stat = fs3.statSync(path4.join(PAGES_DIR, f));
+      const date = stat.mtime.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+      return `<a href="/pages/${slug}">${slug}</a><span class="date">${date}</span>`;
+    }).join("");
+    res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pages \u2014 RICKIN</title><style>body{font-family:-apple-system,system-ui,sans-serif;background:#0a0a0a;color:#e0e0e0;padding:2rem;max-width:600px;margin:0 auto}h1{font-size:1.4rem;color:#fff;margin-bottom:1.5rem}a{display:block;color:#7cacf8;text-decoration:none;padding:.75rem 0;border-bottom:1px solid #222;font-size:1rem}a:hover{color:#aac8ff}.date{float:right;color:#666;font-size:.85rem}</style></head><body><h1>Pages</h1>${items}</body></html>`);
+  } catch (err) {
+    res.status(500).send("Error loading pages.");
+  }
+});
+app.get("/pages/:slug", (req, res) => {
+  const slug = req.params.slug.toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  if (!slug) {
+    res.status(400).send("Invalid page slug.");
+    return;
+  }
+  const filePath = path4.join(PAGES_DIR, `${slug}.html`);
+  if (!fs3.existsSync(filePath)) {
+    res.status(404).send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Not Found</title><style>body{font-family:-apple-system,sans-serif;background:#0a0a0a;color:#e0e0e0;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}h1{font-size:1.2rem;color:#888}</style></head><body><h1>Page not found.</h1></body></html>`);
+    return;
+  }
+  res.sendFile(filePath);
+});
 app.get("/api/gmail/auth", (_req, res) => {
   if (!isConfigured3()) {
     res.status(500).json({ error: "Gmail not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET." });
