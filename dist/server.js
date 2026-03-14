@@ -8660,7 +8660,7 @@ app.set("trust proxy", 1);
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(cookieParser(SESSION_SECRET));
-var AUTH_PUBLIC_PATHS = /* @__PURE__ */ new Set(["/login.html", "/login.css", "/api/login", "/health", "/manifest.json", "/icons/icon-180.png", "/icons/icon-192.png", "/icons/icon-512.png", "/api/healthcheck"]);
+var AUTH_PUBLIC_PATHS = /* @__PURE__ */ new Set(["/login.html", "/login.css", "/api/login", "/health", "/manifest.json", "/baby-manifest.json", "/icons/icon-180.png", "/icons/icon-192.png", "/icons/icon-512.png", "/icons/baby/icon-180.png", "/icons/baby/icon-192.png", "/icons/baby/icon-512.png", "/api/healthcheck"]);
 function authMiddleware(req, res, next) {
   if (!APP_PASSWORD) {
     next();
