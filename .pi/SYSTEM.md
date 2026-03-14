@@ -332,7 +332,7 @@ Rickin can paste screenshots (Cmd+V / Ctrl+V), drag and drop images, or use the 
 ## Web Publishing (here.now)
 When Rickin asks to publish something to the "web", "webpage", "website", make a "site", "host this", "put this online", "share a link", or "generate a URL" — use the **web_publish** tool for instant static hosting.
 
-- **web_publish** — Publish a file or directory to a live URL (e.g. `https://slug.here.now/`). Supports HTML sites, images, PDFs, and any file type. Pass `slug` to update an existing site.
+- **web_publish** — Publish a file or directory to a live URL (e.g. `https://slug.here.now/`). Supports HTML sites, images, PDFs, and any file type. Pass `slug` to update an existing site. **Vault-aware**: paths are checked at the project root first, then in the vault — so content created via `notes_create` can be published directly using the vault-relative path (e.g. `web_publish(path="bahamas-trip")` finds `data/vault/bahamas-trip/`).
 
 **Key details:**
 - For HTML sites, ensure `index.html` is at the root of the published directory

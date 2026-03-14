@@ -1785,11 +1785,11 @@ function buildWebPublishTools(): ToolDefinition[] {
       name: "web_publish",
       label: "Publish to Web",
       description:
-        "Publish a file or folder to the web as a live, shareable URL using here.now. Use when asked to publish, host, deploy, or share something on the web/webpage/website, put something online, or generate a URL. Supports HTML sites, images, PDFs, and any file type.",
+        "Publish a file or folder to the web as a live, shareable URL using here.now. Use when asked to publish, host, deploy, or share something on the web/webpage/website, put something online, or generate a URL. Supports HTML sites, images, PDFs, and any file type. Paths are resolved from project root first, then the vault (data/vault/) as fallback — so vault content created via notes_create can be published directly.",
       parameters: Type.Object({
         path: Type.String({
           description:
-            "Path to the file or directory to publish. For HTML sites, the directory should contain index.html at its root.",
+            "Path to the file or directory to publish. Can be a project-relative path or a vault-relative path (e.g. 'bahamas-trip' resolves to data/vault/bahamas-trip). For HTML sites, the directory should contain index.html at its root.",
         }),
         slug: Type.Optional(
           Type.String({
@@ -1800,12 +1800,17 @@ function buildWebPublishTools(): ToolDefinition[] {
       }),
       async execute(_toolCallId, params) {
         try {
-          const targetPath = path.resolve(params.path);
+          let targetPath = path.resolve(params.path);
           if (!fs.existsSync(targetPath)) {
-            return {
-              content: [{ type: "text" as const, text: `Error: Path "${params.path}" does not exist.` }],
-              details: {},
-            };
+            const vaultPath = path.join(VAULT_DIR, params.path);
+            if (fs.existsSync(vaultPath)) {
+              targetPath = vaultPath;
+            } else {
+              return {
+                content: [{ type: "text" as const, text: `Error: Path "${params.path}" does not exist (checked project root and vault).` }],
+                details: {},
+              };
+            }
           }
 
           const realTarget = fs.realpathSync(targetPath);
