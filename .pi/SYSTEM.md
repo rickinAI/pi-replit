@@ -361,23 +361,28 @@ Rickin can paste screenshots (Cmd+V / Ctrl+V), drag and drop images, or use the 
 
 ## Web Publishing
 
-Two publishing options: self-hosted (permanent, password-protected) and here.now (quick external shares).
+Two publishing options — pick based on Rickin's intent:
 
-### Self-Hosted Pages (rickin.live/pages)
-- **web_save** — Save HTML as a permanent page at `rickin.live/pages/<slug>`. Password-protected behind the app login. Use for reports, dashboards, or anything Rickin wants to keep on his own site.
+### Routing Rules
+| Rickin says... | Use |
+|---|---|
+| "create a page", "personal page", "my page", "save this", "dashboard", "report", "put on my site", "keep this" | **web_save** (rickin.live) |
+| "temp page", "temporary", "quick share", "share this", "send a link", "public link", "share with someone" | **web_publish** (here.now) |
+| "create a page" (no qualifier) | **web_save** (default) |
+
+**When ambiguous, default to web_save** — personal/permanent is the safer assumption.
+
+### Personal Pages (rickin.live/pages) — DEFAULT
+- **web_save** — Save HTML as a permanent, password-protected page at `rickin.live/pages/<slug>`. For reports, dashboards, anything Rickin wants on his own site.
 - **web_list_pages** — List all saved pages with URLs and dates.
 - **web_delete_page** — Delete a saved page by slug.
 
-**Default choice:** When Rickin asks to "save this as a page", "put this on my site", "host this on rickin.live", or wants persistent, private content — use `web_save`. Pages are permanent, private, and accessible at `rickin.live/pages/<slug>`. Browse all at `rickin.live/pages`.
+### Temporary/Public Shares (here.now)
+- **web_publish** — Publish a file or directory to a temporary public URL (e.g. `https://slug.here.now/`). Expires in 24h without API key. **Vault-aware**: paths resolve from project root first, then vault. Use only when Rickin explicitly wants to share something externally or requests something temporary.
 
-### External Shares (here.now)
-- **web_publish** — Publish a file or directory to a public URL (e.g. `https://slug.here.now/`). Supports HTML, images, PDFs, any file type. **Vault-aware**: paths resolve from project root first, then vault.
-
-**Use for:** Quick shares, sending links to others, temporary public content. Without an API key, sites expire in 24 hours.
-
-**Workflow:**
+### Workflow
 1. Prepare the content (create HTML/files as needed)
-2. Choose: `web_save` for private/permanent on rickin.live, `web_publish` for public/shareable link
+2. Route: personal → `web_save`, temporary/public → `web_publish`
 3. Share the URL with Rickin
 
 ## Workflow & Operational Principles

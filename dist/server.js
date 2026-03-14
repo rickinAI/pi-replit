@@ -7241,8 +7241,8 @@ function buildWebPublishTools() {
   return [
     {
       name: "web_publish",
-      label: "Publish to Web",
-      description: "Publish a file or folder to the web as a live, shareable URL using here.now. Use when asked to publish, host, deploy, or share something on the web/webpage/website, put something online, or generate a URL. Supports HTML sites, images, PDFs, and any file type. Paths are resolved from project root first, then the vault (data/vault/) as fallback \u2014 so vault content created via notes_create can be published directly.",
+      label: "Publish Temp Page",
+      description: "Publish a file or folder as a temporary, public shareable link via here.now. Use when the user says: 'temp page', 'temporary', 'quick share', 'send a link', 'share this with someone', 'public link', or needs a URL to send to others. NOT for personal/private pages \u2014 use web_save for those. Sites expire in 24h without an API key. Supports HTML, images, PDFs, any file. Paths resolve from project root first, then vault.",
       parameters: Type.Object({
         path: Type.String({
           description: "Path to the file or directory to publish. Can be a project-relative path or a vault-relative path (e.g. 'bahamas-trip' resolves to data/vault/bahamas-trip). For HTML sites, the directory should contain index.html at its root."
@@ -7332,8 +7332,8 @@ ${stderr || stdout || err.message}`
     },
     {
       name: "web_save",
-      label: "Save Page to Site",
-      description: "Save HTML content as a permanent, password-protected page on rickin.live. The page will be accessible at rickin.live/pages/<slug> behind the app's existing login. Use when asked to save, host, or create a page on the site. Use web_publish for quick external shares via here.now instead.",
+      label: "Save Personal Page",
+      description: "Save HTML as a permanent, password-protected personal page on rickin.live/pages/<slug>. Use when the user says: 'personal page', 'my page', 'save to my site', 'keep this', 'private page', 'save this page', 'create a page', 'put on rickin.live', 'dashboard', 'report page', or wants something permanent and private. Default choice when no 'temp'/'share'/'public' keywords are present. NOT for sharing with others \u2014 use web_publish for temporary public links.",
       parameters: Type.Object({
         slug: Type.String({
           description: "URL-friendly name for the page (lowercase, hyphens, no spaces). E.g. 'moody-report' becomes rickin.live/pages/moody-report"
