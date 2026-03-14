@@ -2627,12 +2627,12 @@ app.get("/api/baby-dashboard/data", async (_req: Request, res: Response) => {
       }
     };
 
-    const [apptResult, tasksResult, shoppingResult, hospitalResult, namesResult] = await Promise.all([
-      readTab("Appointments!A:D"),
-      readTab("To-Do!A:F"),
-      readTab("Shopping List!A:C"),
-      readTab("Hospital Bag!A:C"),
-      readTab("Names!A:C"),
+    const [timelineResult, apptResult, tasksResult, shoppingResult, namesResult] = await Promise.all([
+      readTab("Timeline!A1:F19"),
+      readTab("Appointments!A1:E14"),
+      readTab("To-Do List!A1:F23"),
+      readTab("Shopping List!A1:F40"),
+      readTab("Baby Names!A1:F16"),
     ]);
 
     function parseRows(raw: string): string[][] {
@@ -2643,50 +2643,85 @@ app.get("/api/baby-dashboard/data", async (_req: Request, res: Response) => {
       });
     }
 
+    const timelineRows = parseRows(timelineResult);
+    let currentWeekData: any = null;
+    const timelineWeeks: any[] = [];
+    timelineRows.slice(1).forEach(r => {
+      const week = parseInt(r[0]?.trim()) || 0;
+      const status = (r[5] || "").trim();
+      const entry = {
+        week,
+        dates: r[1]?.trim() || "",
+        trimester: r[2]?.trim() || "",
+        development: r[3]?.trim() || "",
+        milestone: r[4]?.trim() || "",
+        status,
+      };
+      timelineWeeks.push(entry);
+      if (status.includes("✅") && status.toLowerCase().includes("current")) {
+        currentWeekData = entry;
+      }
+    });
+
     const apptRows = parseRows(apptResult);
-    const appointments = apptRows.slice(1).filter(r => r[0] && r[1]).map(r => ({
-      title: r[0]?.trim() || "",
-      date: r[1]?.trim() || "",
-      time: r[2]?.trim() || "",
-      detail: r[3]?.trim() || "",
-    }));
+    const appointments = apptRows.slice(1).filter(r => r[0]).map(r => {
+      const status = (r[4] || "").trim();
+      return {
+        date: r[0]?.trim() || "",
+        type: r[1]?.trim() || "",
+        provider: r[2]?.trim() || "",
+        notes: r[3]?.trim() || "",
+        status,
+        done: status.includes("✅"),
+      };
+    });
 
     const taskRows = parseRows(tasksResult);
-    const taskHeader = taskRows[0]?.map(h => h.trim().toLowerCase()) || [];
-    const statusIdx = taskHeader.indexOf("status");
-    const tasks = taskRows.slice(1).filter(r => r[0]).map(r => ({
-      text: r[0]?.trim() || "",
-      owner: r[1]?.trim() || "",
-      priority: (r[2]?.trim() || "medium").toLowerCase(),
-      week: parseInt(r[3]?.trim()) || 0,
-      done: statusIdx >= 0 ? (r[statusIdx]?.trim().toLowerCase() === "done" || r[statusIdx]?.trim().toLowerCase() === "complete") : false,
-    }));
+    const tasks = taskRows.slice(1).filter(r => r[0]).map(r => {
+      const status = (r[4] || "").trim();
+      return {
+        text: r[0]?.trim() || "",
+        category: r[1]?.trim() || "",
+        dueWeek: r[2]?.trim() || "",
+        owner: r[3]?.trim() || "",
+        status,
+        notes: r[5]?.trim() || "",
+        done: status.includes("✅"),
+        inProgress: status.includes("🔄"),
+      };
+    });
 
     const shoppingRows = parseRows(shoppingResult);
-    const shoppingStatusIdx = (shoppingRows[0]?.map(h => h.trim().toLowerCase()) || []).findIndex(h => h === "status" || h === "bought");
-    const shoppingItems = shoppingRows.slice(1).filter(r => r[0]);
-    const itemsBought = shoppingItems.filter(r => {
-      const si = shoppingStatusIdx >= 0 ? shoppingStatusIdx : 2;
-      const val = (r[si] || "").trim().toLowerCase();
-      return val === "yes" || val === "done" || val === "bought" || val === "true" || val === "✓" || val === "✅";
-    }).length;
-
-    const hospitalRows = parseRows(hospitalResult);
-    const hospitalStatusIdx = (hospitalRows[0]?.map(h => h.trim().toLowerCase()) || []).findIndex(h => h === "status" || h === "packed");
-    const hospitalItems = hospitalRows.slice(1).filter(r => r[0]);
-    const itemsPacked = hospitalItems.filter(r => {
-      const si = hospitalStatusIdx >= 0 ? hospitalStatusIdx : 2;
-      const val = (r[si] || "").trim().toLowerCase();
-      return val === "yes" || val === "done" || val === "packed" || val === "true" || val === "✓" || val === "✅";
-    }).length;
+    const shoppingItems = shoppingRows.slice(1).filter(r => r[1]);
+    const shopping = shoppingItems.map(r => {
+      const status = (r[3] || "").trim();
+      return {
+        category: r[0]?.trim() || "",
+        item: r[1]?.trim() || "",
+        priority: r[2]?.trim() || "",
+        status,
+        budget: r[4]?.trim() || "",
+        notes: r[5]?.trim() || "",
+        done: status.includes("✅"),
+        inProgress: status.includes("🔄"),
+      };
+    });
 
     const nameRows = parseRows(namesResult);
-    const favNames: { name: string; meaning: string }[] = [];
-    const otherNames: { name: string; meaning: string }[] = [];
+    const favNames: { name: string; meaning: string; origin: string; notes: string }[] = [];
+    const otherNames: { name: string; meaning: string; origin: string; notes: string }[] = [];
     nameRows.slice(1).filter(r => r[0]).forEach(r => {
-      const entry = { name: r[0]?.trim() || "", meaning: r[1]?.trim() || "" };
-      const fav = (r[2] || "").trim().toLowerCase();
-      if (fav === "yes" || fav === "true" || fav === "fav" || fav === "favorite" || fav === "favourite" || fav === "✓" || fav === "⭐") {
+      const nameVal = (r[0] || "").trim();
+      if (nameVal === "⭐ FAVORITES" || nameVal === "📋 SHORTLIST" || !nameVal) return;
+      const entry = {
+        name: nameVal,
+        meaning: r[1]?.trim() || "",
+        origin: r[2]?.trim() || "",
+        notes: r[5]?.trim() || "",
+      };
+      const rickinFav = (r[3] || "").trim();
+      const poojaFav = (r[4] || "").trim();
+      if (rickinFav.includes("⭐") || rickinFav.includes("🆕") || poojaFav.includes("⭐")) {
         favNames.push(entry);
       } else {
         otherNames.push(entry);
@@ -2694,6 +2729,8 @@ app.get("/api/baby-dashboard/data", async (_req: Request, res: Response) => {
     });
 
     const tasksDone = tasks.filter(t => t.done).length;
+    const shoppingDone = shopping.filter(s => s.done).length;
+    const apptsUpcoming = appointments.filter(a => !a.done && !a.status.includes("🎊")).length;
     const allFailed = tabErrors.length === 5;
 
     if (allFailed) {
@@ -2702,13 +2739,15 @@ app.get("/api/baby-dashboard/data", async (_req: Request, res: Response) => {
     }
 
     const result = {
+      timeline: { currentWeek: currentWeekData, weeks: timelineWeeks },
       appointments,
       tasks,
+      shopping,
       names: { fav: favNames, other: otherNames },
-      checklist: {
-        itemsBought: `${itemsBought}/${shoppingItems.length}`,
+      counters: {
+        shoppingDone: `${shoppingDone}/${shoppingItems.length}`,
         tasksDone: `${tasksDone}/${tasks.length}`,
-        hospitalPacked: `${itemsPacked}/${hospitalItems.length}`,
+        apptsUpcoming,
       },
       sync: {
         source: "live" as const,

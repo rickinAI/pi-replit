@@ -574,32 +574,39 @@ Always add a final entry: {"title":"🎉 Due Date","date":"2026-07-07","detail":
 ## Step 2: Pull Data from Google Sheets
 Read these tabs from spreadsheet 1fhtMkDSTUlRCFqY4hQiSdZg7cOe4FYNkmOIIHWo4KSU:
 
-### 2a: Names (tab "Names")
-Read range "Names!A:C". Column A = name, B = meaning, C = status ("fav" or "favorite" = favorite, else secondary).
-Build two arrays of {name, meaning} objects — favorites and others.
+### 2a: Timeline (tab "Timeline")
+Read range "Timeline!A1:F19". Row 1 = header (week, dates, trimester, development, milestone, status).
+Find the current week: the row where column F contains "✅ Current Week".
+Extract: week number, dates, trimester, development, milestone.
+
+### 2b: Baby Names (tab "Baby Names")
+Read range "Baby Names!A1:F16". Columns: A=name, B=meaning, C=origin, D=rickin rating, E=pooja rating, F=notes.
+SKIP section header rows where col A == "⭐ FAVORITES" or "📋 SHORTLIST".
+Favorites = rows where col D contains "⭐ Fav" or "🆕 New Fav" or col E contains "⭐ Fav".
+Build two arrays of {name, meaning} — favorites and others.
 If tab doesn't exist or is empty, skip (HTML has defaults).
 
-### 2b: To-Do Tasks (tab "To-Do")
-Read range "To-Do!A:E". Look at the header row to identify columns — expect columns like: Task, Owner, Priority, Week, Status/Done.
-Build array: [{"text":"Sign up for birthing class","priority":"high","week":25,"done":false},...]
-Mark done=true if status column contains "done", "yes", "true", "complete", or has a checkmark.
+### 2c: To-Do List (tab "To-Do List")
+Read range "To-Do List!A1:F23". Columns: A=task, B=category, C=due_week, D=owner, E=status, F=notes.
+Status values: "⬜ Pending", "🔄 In Progress", "✅ Done".
+Build array: [{"text":"...","priority":"high","week":25,"done":false,"owner":"Rickin","category":"🏥 Medical"},...]
+Mark done=true if status contains "✅ Done".
 If tab doesn't exist, skip.
 
-### 2c: Shopping List (tab "Shopping List")
-Read range "Shopping List!A:C". Look at header row — expect columns like: Item, Category, Bought/Status.
-Count total items (non-header rows) and items marked as bought/done. Format as "X/Y".
-If tab doesn't exist, skip.
-
-### 2d: Hospital Bag (tab "Hospital Bag")
-Read range "Hospital Bag!A:C". Count total items and items marked as packed/done. Format as "X/Y".
+### 2d: Shopping List (tab "Shopping List")
+Read range "Shopping List!A1:F40". Columns: A=category, B=item, C=priority, D=status, E=budget, F=notes.
+Status values: "⬜ Pending", "🔄 In Progress", "✅ Done".
+Count total items (non-header rows with item in col B) and items where col D contains "✅ Done". Format as "X/Y".
 If tab doesn't exist, skip.
 
 ### 2e: Appointments (tab "Appointments")
-Read range "Appointments!A:D". This has the full OB schedule. Use this data to SUPPLEMENT the calendar data from Step 1 — if the Sheet has appointments not found in Calendar, include them. Merge by date, preferring Calendar data for duplicates.
+Read range "Appointments!A1:E14". Columns: A=date, B=type, C=provider, D=notes, E=status.
+Status values: "🗓️ Upcoming", "⬜ Scheduled", "✅ Done", "🎊 Due Date!".
+Use this data to SUPPLEMENT the calendar data from Step 1 — if the Sheet has appointments not found in Calendar, include them. Merge by date, preferring Calendar data for duplicates.
 If tab doesn't exist, skip (Step 1 calendar data is still used).
 
 ### 2f: Build Checklist Progress Object
-Combine counts: {"itemsBought":"5/37","tasksDone":"3/21","hospitalBag":"0/50"}
+Combine counts: {"shoppingDone":"5/39","tasksDone":"3/22"}
 If any tab was missing, omit that field.
 
 ## Step 3: Inject Data into Dashboard HTML
@@ -614,7 +621,7 @@ DO NOT regenerate the HTML. Only inject data blocks before </body>. For each dat
 \`<script id="tasks-data" type="application/json">[...tasks array...]</script>\`
 
 ### 3c: Checklist Progress
-\`<script id="checklist-data" type="application/json">{"itemsBought":"5/37","tasksDone":"3/21"}</script>\`
+\`<script id="checklist-data" type="application/json">{"shoppingDone":"5/39","tasksDone":"3/22"}</script>\`
 
 ### 3d: Names (only if Sheets data available)
 Find these lines and replace the array contents:

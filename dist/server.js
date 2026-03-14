@@ -4803,32 +4803,39 @@ Always add a final entry: {"title":"\u{1F389} Due Date","date":"2026-07-07","det
 ## Step 2: Pull Data from Google Sheets
 Read these tabs from spreadsheet 1fhtMkDSTUlRCFqY4hQiSdZg7cOe4FYNkmOIIHWo4KSU:
 
-### 2a: Names (tab "Names")
-Read range "Names!A:C". Column A = name, B = meaning, C = status ("fav" or "favorite" = favorite, else secondary).
-Build two arrays of {name, meaning} objects \u2014 favorites and others.
+### 2a: Timeline (tab "Timeline")
+Read range "Timeline!A1:F19". Row 1 = header (week, dates, trimester, development, milestone, status).
+Find the current week: the row where column F contains "\u2705 Current Week".
+Extract: week number, dates, trimester, development, milestone.
+
+### 2b: Baby Names (tab "Baby Names")
+Read range "Baby Names!A1:F16". Columns: A=name, B=meaning, C=origin, D=rickin rating, E=pooja rating, F=notes.
+SKIP section header rows where col A == "\u2B50 FAVORITES" or "\u{1F4CB} SHORTLIST".
+Favorites = rows where col D contains "\u2B50 Fav" or "\u{1F195} New Fav" or col E contains "\u2B50 Fav".
+Build two arrays of {name, meaning} \u2014 favorites and others.
 If tab doesn't exist or is empty, skip (HTML has defaults).
 
-### 2b: To-Do Tasks (tab "To-Do")
-Read range "To-Do!A:E". Look at the header row to identify columns \u2014 expect columns like: Task, Owner, Priority, Week, Status/Done.
-Build array: [{"text":"Sign up for birthing class","priority":"high","week":25,"done":false},...]
-Mark done=true if status column contains "done", "yes", "true", "complete", or has a checkmark.
+### 2c: To-Do List (tab "To-Do List")
+Read range "To-Do List!A1:F23". Columns: A=task, B=category, C=due_week, D=owner, E=status, F=notes.
+Status values: "\u2B1C Pending", "\u{1F504} In Progress", "\u2705 Done".
+Build array: [{"text":"...","priority":"high","week":25,"done":false,"owner":"Rickin","category":"\u{1F3E5} Medical"},...]
+Mark done=true if status contains "\u2705 Done".
 If tab doesn't exist, skip.
 
-### 2c: Shopping List (tab "Shopping List")
-Read range "Shopping List!A:C". Look at header row \u2014 expect columns like: Item, Category, Bought/Status.
-Count total items (non-header rows) and items marked as bought/done. Format as "X/Y".
-If tab doesn't exist, skip.
-
-### 2d: Hospital Bag (tab "Hospital Bag")
-Read range "Hospital Bag!A:C". Count total items and items marked as packed/done. Format as "X/Y".
+### 2d: Shopping List (tab "Shopping List")
+Read range "Shopping List!A1:F40". Columns: A=category, B=item, C=priority, D=status, E=budget, F=notes.
+Status values: "\u2B1C Pending", "\u{1F504} In Progress", "\u2705 Done".
+Count total items (non-header rows with item in col B) and items where col D contains "\u2705 Done". Format as "X/Y".
 If tab doesn't exist, skip.
 
 ### 2e: Appointments (tab "Appointments")
-Read range "Appointments!A:D". This has the full OB schedule. Use this data to SUPPLEMENT the calendar data from Step 1 \u2014 if the Sheet has appointments not found in Calendar, include them. Merge by date, preferring Calendar data for duplicates.
+Read range "Appointments!A1:E14". Columns: A=date, B=type, C=provider, D=notes, E=status.
+Status values: "\u{1F5D3}\uFE0F Upcoming", "\u2B1C Scheduled", "\u2705 Done", "\u{1F38A} Due Date!".
+Use this data to SUPPLEMENT the calendar data from Step 1 \u2014 if the Sheet has appointments not found in Calendar, include them. Merge by date, preferring Calendar data for duplicates.
 If tab doesn't exist, skip (Step 1 calendar data is still used).
 
 ### 2f: Build Checklist Progress Object
-Combine counts: {"itemsBought":"5/37","tasksDone":"3/21","hospitalBag":"0/50"}
+Combine counts: {"shoppingDone":"5/39","tasksDone":"3/22"}
 If any tab was missing, omit that field.
 
 ## Step 3: Inject Data into Dashboard HTML
@@ -4843,7 +4850,7 @@ DO NOT regenerate the HTML. Only inject data blocks before </body>. For each dat
 \`<script id="tasks-data" type="application/json">[...tasks array...]</script>\`
 
 ### 3c: Checklist Progress
-\`<script id="checklist-data" type="application/json">{"itemsBought":"5/37","tasksDone":"3/21"}</script>\`
+\`<script id="checklist-data" type="application/json">{"shoppingDone":"5/39","tasksDone":"3/22"}</script>\`
 
 ### 3d: Names (only if Sheets data available)
 Find these lines and replace the array contents:
@@ -8391,72 +8398,111 @@ app.get("/api/baby-dashboard/data", async (_req, res) => {
         return "";
       }
     };
-    const [apptResult, tasksResult, shoppingResult, hospitalResult, namesResult] = await Promise.all([
-      readTab("Appointments!A:D"),
-      readTab("To-Do!A:F"),
-      readTab("Shopping List!A:C"),
-      readTab("Hospital Bag!A:C"),
-      readTab("Names!A:C")
+    const [timelineResult, apptResult, tasksResult, shoppingResult, namesResult] = await Promise.all([
+      readTab("Timeline!A1:F19"),
+      readTab("Appointments!A1:E14"),
+      readTab("To-Do List!A1:F23"),
+      readTab("Shopping List!A1:F40"),
+      readTab("Baby Names!A1:F16")
     ]);
+    const timelineRows = parseRows2(timelineResult);
+    let currentWeekData = null;
+    const timelineWeeks = [];
+    timelineRows.slice(1).forEach((r) => {
+      const week = parseInt(r[0]?.trim()) || 0;
+      const status = (r[5] || "").trim();
+      const entry = {
+        week,
+        dates: r[1]?.trim() || "",
+        trimester: r[2]?.trim() || "",
+        development: r[3]?.trim() || "",
+        milestone: r[4]?.trim() || "",
+        status
+      };
+      timelineWeeks.push(entry);
+      if (status.includes("\u2705") && status.toLowerCase().includes("current")) {
+        currentWeekData = entry;
+      }
+    });
     const apptRows = parseRows2(apptResult);
-    const appointments = apptRows.slice(1).filter((r) => r[0] && r[1]).map((r) => ({
-      title: r[0]?.trim() || "",
-      date: r[1]?.trim() || "",
-      time: r[2]?.trim() || "",
-      detail: r[3]?.trim() || ""
-    }));
+    const appointments = apptRows.slice(1).filter((r) => r[0]).map((r) => {
+      const status = (r[4] || "").trim();
+      return {
+        date: r[0]?.trim() || "",
+        type: r[1]?.trim() || "",
+        provider: r[2]?.trim() || "",
+        notes: r[3]?.trim() || "",
+        status,
+        done: status.includes("\u2705")
+      };
+    });
     const taskRows = parseRows2(tasksResult);
-    const taskHeader = taskRows[0]?.map((h) => h.trim().toLowerCase()) || [];
-    const statusIdx = taskHeader.indexOf("status");
-    const tasks = taskRows.slice(1).filter((r) => r[0]).map((r) => ({
-      text: r[0]?.trim() || "",
-      owner: r[1]?.trim() || "",
-      priority: (r[2]?.trim() || "medium").toLowerCase(),
-      week: parseInt(r[3]?.trim()) || 0,
-      done: statusIdx >= 0 ? r[statusIdx]?.trim().toLowerCase() === "done" || r[statusIdx]?.trim().toLowerCase() === "complete" : false
-    }));
+    const tasks = taskRows.slice(1).filter((r) => r[0]).map((r) => {
+      const status = (r[4] || "").trim();
+      return {
+        text: r[0]?.trim() || "",
+        category: r[1]?.trim() || "",
+        dueWeek: r[2]?.trim() || "",
+        owner: r[3]?.trim() || "",
+        status,
+        notes: r[5]?.trim() || "",
+        done: status.includes("\u2705"),
+        inProgress: status.includes("\u{1F504}")
+      };
+    });
     const shoppingRows = parseRows2(shoppingResult);
-    const shoppingStatusIdx = (shoppingRows[0]?.map((h) => h.trim().toLowerCase()) || []).findIndex((h) => h === "status" || h === "bought");
-    const shoppingItems = shoppingRows.slice(1).filter((r) => r[0]);
-    const itemsBought = shoppingItems.filter((r) => {
-      const si = shoppingStatusIdx >= 0 ? shoppingStatusIdx : 2;
-      const val = (r[si] || "").trim().toLowerCase();
-      return val === "yes" || val === "done" || val === "bought" || val === "true" || val === "\u2713" || val === "\u2705";
-    }).length;
-    const hospitalRows = parseRows2(hospitalResult);
-    const hospitalStatusIdx = (hospitalRows[0]?.map((h) => h.trim().toLowerCase()) || []).findIndex((h) => h === "status" || h === "packed");
-    const hospitalItems = hospitalRows.slice(1).filter((r) => r[0]);
-    const itemsPacked = hospitalItems.filter((r) => {
-      const si = hospitalStatusIdx >= 0 ? hospitalStatusIdx : 2;
-      const val = (r[si] || "").trim().toLowerCase();
-      return val === "yes" || val === "done" || val === "packed" || val === "true" || val === "\u2713" || val === "\u2705";
-    }).length;
+    const shoppingItems = shoppingRows.slice(1).filter((r) => r[1]);
+    const shopping = shoppingItems.map((r) => {
+      const status = (r[3] || "").trim();
+      return {
+        category: r[0]?.trim() || "",
+        item: r[1]?.trim() || "",
+        priority: r[2]?.trim() || "",
+        status,
+        budget: r[4]?.trim() || "",
+        notes: r[5]?.trim() || "",
+        done: status.includes("\u2705"),
+        inProgress: status.includes("\u{1F504}")
+      };
+    });
     const nameRows = parseRows2(namesResult);
     const favNames = [];
     const otherNames = [];
     nameRows.slice(1).filter((r) => r[0]).forEach((r) => {
-      const entry = { name: r[0]?.trim() || "", meaning: r[1]?.trim() || "" };
-      const fav = (r[2] || "").trim().toLowerCase();
-      if (fav === "yes" || fav === "true" || fav === "fav" || fav === "favorite" || fav === "favourite" || fav === "\u2713" || fav === "\u2B50") {
+      const nameVal = (r[0] || "").trim();
+      if (nameVal === "\u2B50 FAVORITES" || nameVal === "\u{1F4CB} SHORTLIST" || !nameVal) return;
+      const entry = {
+        name: nameVal,
+        meaning: r[1]?.trim() || "",
+        origin: r[2]?.trim() || "",
+        notes: r[5]?.trim() || ""
+      };
+      const rickinFav = (r[3] || "").trim();
+      const poojaFav = (r[4] || "").trim();
+      if (rickinFav.includes("\u2B50") || rickinFav.includes("\u{1F195}") || poojaFav.includes("\u2B50")) {
         favNames.push(entry);
       } else {
         otherNames.push(entry);
       }
     });
     const tasksDone = tasks.filter((t) => t.done).length;
+    const shoppingDone = shopping.filter((s) => s.done).length;
+    const apptsUpcoming = appointments.filter((a) => !a.done && !a.status.includes("\u{1F38A}")).length;
     const allFailed = tabErrors.length === 5;
     if (allFailed) {
       res.status(502).json({ error: "sheets_unavailable", message: "All sheet reads failed", errors: tabErrors });
       return;
     }
     const result = {
+      timeline: { currentWeek: currentWeekData, weeks: timelineWeeks },
       appointments,
       tasks,
+      shopping,
       names: { fav: favNames, other: otherNames },
-      checklist: {
-        itemsBought: `${itemsBought}/${shoppingItems.length}`,
+      counters: {
+        shoppingDone: `${shoppingDone}/${shoppingItems.length}`,
         tasksDone: `${tasksDone}/${tasks.length}`,
-        hospitalPacked: `${itemsPacked}/${hospitalItems.length}`
+        apptsUpcoming
       },
       sync: {
         source: "live",
