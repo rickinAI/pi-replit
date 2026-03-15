@@ -63,6 +63,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - **Collapsible Sections**: All sections collapsible with chevron toggles. State persisted in localStorage (`brief_collapsed_sections`). Listeners bound once (not re-attached on re-render)
   - API: `GET /api/daily-brief/data` aggregates all data. 2-min server cache; `?force=1` bypasses cache for manual refresh. `familyCards` and `xIntel` added to response
   - Client polls every 5 min. Manual refresh button (with cache bypass) in footer
+  - **Share Snapshot**: Share button in footer generates a self-contained HTML snapshot via `POST /api/pages/daily-brief/share`. Injects current data inline (no API calls needed), strips share/refresh buttons, publishes to `here.now` (24h expiry). Returns shareable URL shown in modal with Copy Link + Open buttons
 - **Baby Dashboard** (`data/pages/baby-dashboard.html`) — Pregnancy tracker at `/pages/baby-dashboard`:
   - Due date July 7, 2026; OB: Dr. Boester; Google Sheet ID: `1fhtMkDSTUlRCFqY4hQiSdZg7cOe4FYNkmOIIHWo4KSU`
   - 5 Sheet tabs: Appointments (OB schedule), To-Do (21 tasks), Shopping List (37 items), Hospital Bag (50 items), Names (with meanings + fav status)
@@ -72,6 +73,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Client: fetches API on load + polls every 5 min; hardcoded fallback data in HTML for offline resilience
   - Scheduled job: `baby-dashboard-weekly-update` (Monday 7 AM ET) — reads all tabs and injects updated JSON blocks into the HTML file
   - Google auth health check: server proactively refreshes token every 6 hours, logs warnings if refresh fails
+  - **Share Snapshot**: Share button in footer generates a self-contained HTML snapshot via `POST /api/pages/baby-dashboard/share`. Injects current Google Sheets data via SSR, strips share/interactive elements, publishes to `here.now` (24h expiry). Same modal UI as Daily Brief
 - **@darknode Inbox Monitor** — Automated email-to-task pipeline:
   - Polls Gmail every 30 minutes for unread emails containing `@darknode` + instruction
   - Uses `getDarkNodeEmails()` from `src/gmail.ts` to search `is:unread @darknode`, extract instruction text after the `@darknode` tag

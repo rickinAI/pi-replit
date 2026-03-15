@@ -3975,6 +3975,155 @@ app.get("/pages/:slug", async (req: Request, res: Response) => {
   res.sendFile(filePath);
 });
 
+app.post("/api/pages/:slug/share", async (req: Request, res: Response) => {
+  const slug = req.params.slug.toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  if (!["daily-brief", "baby-dashboard"].includes(slug)) {
+    res.status(400).json({ error: "Sharing not supported for this page" });
+    return;
+  }
+
+  try {
+    const filePath = path.join(PAGES_DIR, `${slug}.html`);
+    if (!fs.existsSync(filePath)) {
+      res.status(404).json({ error: "Page not found" });
+      return;
+    }
+
+    let html = fs.readFileSync(filePath, "utf-8");
+    const now = new Date();
+    const cfg = alerts.getConfig();
+    const tz = cfg.timezone || "America/New_York";
+    const snapTime = now.toLocaleString("en-US", { timeZone: tz, month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true });
+    const titleDate = now.toLocaleDateString("en-US", { timeZone: tz, month: "long", day: "numeric", year: "numeric" });
+
+    if (slug === "daily-brief") {
+      let data: any = dailyBriefCache?.data;
+      if (!data) {
+        try {
+          const resp = await fetch(`http://localhost:${process.env.PORT || 5000}/api/daily-brief/data?user=darknode&token=${encodeURIComponent(process.env.APP_PASSWORD || "")}`);
+          if (resp.ok) data = await resp.json();
+        } catch {}
+      }
+      if (!data) {
+        res.status(500).json({ error: "Could not fetch daily brief data" });
+        return;
+      }
+      const dataJson = JSON.stringify(data);
+      html = html.replace(
+        /fetchData\(\);\s*setInterval\(fetchData,\s*\d+\);/,
+        `var SNAPSHOT_DATA = ${dataJson};\nrender(SNAPSHOT_DATA);`
+      );
+      html = html.replace(/<button[^>]*onclick="fetchData\(true\)"[^>]*>Refresh<\/button>/g, "");
+    } else if (slug === "baby-dashboard") {
+      if (gmail.isConnected()) {
+        try {
+          const readTab = async (range: string): Promise<string> => {
+            try {
+              const result = await gws.sheetsRead(BABY_SHEET_ID, range);
+              if (result.includes("Error") || result.includes("not connected")) return "";
+              return result;
+            } catch { return ""; }
+          };
+          const [timelineResult, apptResult, tasksResult, shoppingResult, namesResult] = await Promise.all([
+            readTab("Timeline!A1:F19"), readTab("Appointments!A1:E14"), readTab("To-Do List!A1:F23"),
+            readTab("Shopping List!A1:F40"), readTab("Baby Names!A1:F16"),
+          ]);
+          function parseRows(raw: string): string[][] {
+            if (!raw || raw.includes("No data")) return [];
+            return raw.split("\n").filter(l => l.startsWith("Row ")).map(l => l.replace(/^Row \d+: /, "").split(" | "));
+          }
+          const apptRows = parseRows(apptResult);
+          const appointments = apptRows.slice(1).filter(r => r[0]).map(r => ({
+            title: (r[1] || "").trim(), date: (r[0] || "").trim(), time: "", detail: (r[3] || "").trim(), status: (r[4] || "").trim(),
+          }));
+          const taskRows = parseRows(tasksResult);
+          const tasks = taskRows.slice(1).filter(r => r[0]).map(r => {
+            const status = (r[4] || "").trim();
+            return { text: (r[0] || "").trim(), priority: "medium", week: parseInt(r[2]) || 0, done: status.includes("✅"), owner: (r[3] || "").trim(), category: (r[1] || "").trim() };
+          });
+          const shoppingRows = parseRows(shoppingResult);
+          const shoppingItems = shoppingRows.slice(1).filter(r => r[1]);
+          const shoppingDone = shoppingItems.filter(r => (r[3] || "").includes("✅")).length;
+          const tasksDone = tasks.filter(t => t.done).length;
+          const apptJson = JSON.stringify(appointments);
+          const tasksJson = JSON.stringify(tasks);
+          const checklistJson = JSON.stringify({ shoppingDone: `${shoppingDone}/${shoppingItems.length}`, tasksDone: `${tasksDone}/${tasks.length}` });
+          html = html.replace(/<script id="appt-data"[^>]*>.*?<\/script>/s, `<script id="appt-data" type="application/json">${apptJson}</script>`);
+          html = html.replace(/<script id="tasks-data"[^>]*>.*?<\/script>/s, `<script id="tasks-data" type="application/json">${tasksJson}</script>`);
+          html = html.replace(/<script id="checklist-data"[^>]*>.*?<\/script>/s, `<script id="checklist-data" type="application/json">${checklistJson}</script>`);
+          const timelineRows = parseRows(timelineResult);
+          let currentWeekData: any = null;
+          timelineRows.slice(1).forEach(r => {
+            const status = (r[5] || "").trim();
+            if (status.includes("✅") && status.toLowerCase().includes("current")) {
+              currentWeekData = { week: parseInt(r[0]) || 0, development: (r[3] || "").trim(), rickin: (r[4] || "").trim() };
+            }
+          });
+          if (currentWeekData) {
+            html = html.replace(/id="devNote">[^<]*</s, `id="devNote">${currentWeekData.development}<`);
+          }
+          const nameRows = parseRows(namesResult);
+          const favNames: any[] = [], otherNames: any[] = [];
+          nameRows.slice(1).filter(r => r[0]).forEach(r => {
+            const n = (r[0] || "").trim();
+            if (n === "⭐ FAVORITES" || n === "📋 SHORTLIST" || !n) return;
+            const entry = { name: n, meaning: (r[1] || "").trim() };
+            if ((r[3] || "").includes("⭐") || (r[3] || "").includes("🆕") || (r[4] || "").includes("⭐")) favNames.push(entry);
+            else otherNames.push(entry);
+          });
+          if (favNames.length) {
+            const favStr = favNames.map(n => `{name:'${n.name.replace(/'/g, "\\'")}',meaning:'${n.meaning.replace(/'/g, "\\'")}'}`).join(",");
+            html = html.replace(/var defaultFavNames\s*=\s*\[.*?\];/s, `var defaultFavNames = [${favStr}];`);
+          }
+          if (otherNames.length) {
+            const otherStr = otherNames.map(n => `{name:'${n.name.replace(/'/g, "\\'")}',meaning:'${n.meaning.replace(/'/g, "\\'")}'}`).join(",");
+            html = html.replace(/var defaultOtherNames\s*=\s*\[.*?\];/s, `var defaultOtherNames = [${otherStr}];`);
+          }
+        } catch (err) {
+          console.error("[share] baby-dashboard SSR error:", err);
+        }
+      }
+      html = html.replace(/fetchLiveData\(\);\s*setInterval\(fetchLiveData,\s*\d+\);/,
+        "// snapshot mode - no live fetching");
+      html = html.replace(/\(async function loadUser\(\)[\s\S]*?\}\)\(\);/, "// snapshot mode");
+    }
+
+    html = html.replace(/<div class="share-btn-wrap">.*?<\/div>/gs, "");
+    html = html.replace(/<div class="share-overlay"[^]*?<!-- \/share-overlay -->/g, "");
+    html = html.replace(/function shareSnapshot\(\)[^]*?function copyShareUrl\(\)[^]*?\n\}/g, "");
+
+    const snapshotFooter = `<div style="text-align:center;color:#555;font-size:0.65rem;padding:1.5rem 1rem 2rem;line-height:1.6;font-family:-apple-system,sans-serif;">
+      <div style="margin-bottom:2px;">📸 Snapshot · ${snapTime}</div>
+      <div style="color:#444;">This link expires in 24 hours</div>
+    </div>`;
+    html = html.replace(/<\/body>/, `${snapshotFooter}\n</body>`);
+
+    const tmpFile = `/tmp/snapshot-${slug}-${Date.now()}.html`;
+    fs.writeFileSync(tmpFile, html);
+
+    const publishScript = path.join(PROJECT_ROOT, "scripts", "herenow-publish.sh");
+    const titleStr = slug === "daily-brief" ? `Daily Brief — ${titleDate}` : `Baby Dashboard — ${titleDate}`;
+    const output = execSync(`bash "${publishScript}" "${tmpFile}" --title "${titleStr}" --client "darknode"`, {
+      encoding: "utf-8",
+      timeout: 30000,
+    });
+
+    try { fs.unlinkSync(tmpFile); } catch {}
+
+    const lines = output.trim().split("\n");
+    const url = lines[0]?.trim();
+    if (!url || !url.startsWith("http")) {
+      res.status(500).json({ error: "Failed to publish snapshot" });
+      return;
+    }
+
+    console.log(`[share] Published ${slug} snapshot: ${url}`);
+    res.json({ url, expiresIn: "24h" });
+  } catch (err: any) {
+    console.error("[share] Error:", err);
+    res.status(500).json({ error: err.message || "Failed to generate snapshot" });
+  }
+});
 
 app.get("/api/gmail/auth", (_req: Request, res: Response) => {
   if (!gmail.isConfigured()) {

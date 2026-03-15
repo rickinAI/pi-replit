@@ -285,6 +285,26 @@
     text-align: center; color: var(--text-muted); font-size: 0.68rem;
     margin-top: 2rem; padding: 1rem; line-height: 1.8;
   }
+  .footer .share-btn {
+    display: inline-block; margin-top: 0.5rem; padding: 0.4rem 1rem;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 99px;
+    color: var(--text-muted); font-size: 0.65rem; font-weight: 600; cursor: pointer;
+    font-family: inherit; transition: all 0.2s;
+  }
+  .footer .share-btn:active { background: #eee; border-color: var(--accent); color: var(--accent); }
+  .share-btn-wrap { display: inline; }
+  .share-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); z-index: 9999; display: none; align-items: center; justify-content: center; }
+  .share-overlay.active { display: flex; }
+  .share-modal { background: #fff; border: 1px solid var(--border); border-radius: 16px; padding: 1.5rem; width: 90%; max-width: 340px; text-align: center; box-shadow: 0 8px 32px rgba(0,0,0,0.15); }
+  .share-modal h3 { margin: 0 0 0.75rem; font-size: 0.9rem; color: var(--accent-dark); font-weight: 700; }
+  .share-modal .share-url { background: #f8fafc; border: 1px solid var(--border); border-radius: 10px; padding: 0.6rem 0.75rem; font-size: 0.72rem; color: var(--accent); word-break: break-all; margin-bottom: 1rem; font-family: monospace; }
+  .share-modal .share-actions { display: flex; gap: 0.5rem; justify-content: center; margin-bottom: 0.75rem; }
+  .share-modal .share-actions button { flex: 1; padding: 0.5rem 0.75rem; border-radius: 10px; font-size: 0.72rem; font-weight: 600; cursor: pointer; border: none; font-family: inherit; transition: all 0.2s; }
+  .share-modal .btn-copy { background: var(--accent); color: #fff; }
+  .share-modal .btn-copy:active { opacity: 0.8; }
+  .share-modal .btn-open { background: #f1f5f9; color: #64748b; border: 1px solid var(--border); }
+  .share-modal .share-expire { font-size: 0.62rem; color: var(--text-muted); margin-bottom: 0.75rem; }
+  .share-modal .btn-close { background: none; border: none; color: var(--text-muted); font-size: 0.68rem; cursor: pointer; font-family: inherit; padding: 0.25rem; }
 
   @media(max-width:400px) {
     .hero { padding: 3rem 1rem 1.75rem; }
@@ -414,8 +434,22 @@
   <div class="footer">
     <div>Baby Chikki #2 · Due July 7, 2026</div>
     <div>Live sync from Google Sheets</div>
+    <div class="share-btn-wrap"><button class="share-btn" id="shareBtn" onclick="shareSnapshot()">Share</button></div>
   </div>
 </div>
+
+<div class="share-overlay" id="shareModal" onclick="if(event.target===this)closeShareModal()">
+  <div class="share-modal">
+    <h3 id="shareTitle">Generating snapshot…</h3>
+    <div class="share-url" id="shareUrl" style="display:none"></div>
+    <div class="share-actions" id="shareActions" style="display:none">
+      <button class="btn-copy" onclick="copyShareUrl()">Copy Link</button>
+      <button class="btn-open" onclick="window.open(document.getElementById('shareUrl').textContent,'_blank')">Open</button>
+    </div>
+    <div class="share-expire" id="shareExpire" style="display:none">Link expires in 24 hours</div>
+    <button class="btn-close" onclick="closeShareModal()">Close</button>
+  </div>
+</div><!-- /share-overlay -->
 
 <script>
 var DUE = new Date('2026-07-07T00:00:00');
@@ -887,6 +921,57 @@ renderTasks();
 renderChecklist();
 fetchLiveData();
 setInterval(fetchLiveData, 300000);
+
+function shareSnapshot() {
+  var btn = document.getElementById('shareBtn');
+  btn.textContent = 'Sharing…';
+  btn.disabled = true;
+  document.getElementById('shareTitle').textContent = 'Generating snapshot…';
+  document.getElementById('shareUrl').style.display = 'none';
+  document.getElementById('shareActions').style.display = 'none';
+  document.getElementById('shareExpire').style.display = 'none';
+  document.getElementById('shareModal').classList.add('active');
+  fetch('/api/pages/baby-dashboard/share', { method: 'POST' })
+    .then(function(r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function(d) {
+      document.getElementById('shareTitle').textContent = 'Snapshot Ready';
+      document.getElementById('shareUrl').textContent = d.url;
+      document.getElementById('shareUrl').style.display = '';
+      document.getElementById('shareActions').style.display = '';
+      document.getElementById('shareExpire').style.display = '';
+      btn.textContent = 'Share';
+      btn.disabled = false;
+    })
+    .catch(function(err) {
+      document.getElementById('shareTitle').textContent = 'Failed to generate snapshot';
+      btn.textContent = 'Share';
+      btn.disabled = false;
+    });
+}
+function closeShareModal() {
+  document.getElementById('shareModal').classList.remove('active');
+}
+function copyShareUrl() {
+  var url = document.getElementById('shareUrl').textContent;
+  navigator.clipboard.writeText(url).then(function() {
+    var btn = document.querySelector('.btn-copy');
+    btn.textContent = 'Copied!';
+    setTimeout(function() { btn.textContent = 'Copy Link'; }, 2000);
+  }).catch(function() {
+    var ta = document.createElement('textarea');
+    ta.value = url;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    var btn = document.querySelector('.btn-copy');
+    btn.textContent = 'Copied!';
+    setTimeout(function() { btn.textContent = 'Copy Link'; }, 2000);
+  });
+}
 </script>
 </body>
 </html>
