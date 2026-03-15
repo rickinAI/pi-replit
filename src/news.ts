@@ -83,13 +83,23 @@ export async function getNews(category?: string): Promise<string> {
 
 export async function getTopHeadlines(count = 3): Promise<Array<{ title: string; source: string; link: string }>> {
   try {
-    const res = await fetch(RSS_FEEDS["top"], {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; pi-assistant/1.0)" },
-    });
-    if (!res.ok) return [];
-    const xml = await res.text();
-    const items = parseRssItems(xml);
-    return items.slice(0, count).map(item => ({ title: item.title, source: item.source, link: item.link }));
+    const ua = { "User-Agent": "Mozilla/5.0 (compatible; pi-assistant/1.0)" };
+    const [topRes, worldRes] = await Promise.all([
+      fetch(RSS_FEEDS["top"], { headers: ua }),
+      fetch(RSS_FEEDS["world"], { headers: ua }),
+    ]);
+    const topItems = topRes.ok ? parseRssItems(await topRes.text()) : [];
+    const worldItems = worldRes.ok ? parseRssItems(await worldRes.text()) : [];
+    const seen = new Set<string>();
+    const merged: Array<{ title: string; source: string; link: string }> = [];
+    for (const item of [...topItems, ...worldItems]) {
+      const key = item.title.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 60);
+      if (!seen.has(key)) {
+        seen.add(key);
+        merged.push({ title: item.title, source: item.source, link: item.link });
+      }
+    }
+    return merged.slice(0, count);
   } catch {
     return [];
   }
