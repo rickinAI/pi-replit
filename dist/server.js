@@ -9203,6 +9203,185 @@ app.get("/pages", (_req, res) => {
     res.status(500).send("Error loading pages.");
   }
 });
+var dailyBriefCache = null;
+var DAILY_BRIEF_TTL = 12e4;
+async function fetchQuoteStructured(symbol, type) {
+  try {
+    if (type === "crypto") {
+      const CRYPTO_MAP = { BTCUSD: "bitcoin", ETHUSD: "ethereum" };
+      const coinId = CRYPTO_MAP[symbol.toUpperCase()] || symbol.toLowerCase();
+      const url = `https://api.coingecko.com/api/v3/coins/${coinId}?localization=false&tickers=false&community_data=false&developer_data=false&sparkline=false`;
+      const res = await fetch(url, { headers: { "User-Agent": "pi-assistant/1.0" } });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const m = data.market_data;
+      if (!m?.current_price?.usd) return null;
+      return {
+        symbol: data.symbol.toUpperCase(),
+        name: data.name,
+        price: m.current_price.usd,
+        change24h: m.price_change_percentage_24h || 0,
+        change7d: m.price_change_percentage_7d || 0,
+        high24h: m.high_24h?.usd,
+        low24h: m.low_24h?.usd,
+        marketCap: m.market_cap?.usd
+      };
+    } else {
+      const ticker = symbol.toUpperCase();
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=5d&interval=1d&includePrePost=false`;
+      const res = await fetch(url, { headers: { "User-Agent": "pi-assistant/1.0" } });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const result = data?.chart?.result?.[0];
+      if (!result) return null;
+      const meta = result.meta;
+      const price = meta.regularMarketPrice;
+      if (price == null) return null;
+      const prevClose = meta.chartPreviousClose || meta.previousClose;
+      const change = prevClose ? price - prevClose : 0;
+      const changePct = prevClose ? change / prevClose * 100 : 0;
+      return {
+        symbol: ticker,
+        name: meta.shortName || meta.longName || ticker,
+        price,
+        change,
+        changePct,
+        prevClose,
+        currency: meta.currency || "USD"
+      };
+    }
+  } catch {
+    return null;
+  }
+}
+app.get("/api/daily-brief/data", async (_req, res) => {
+  try {
+    if (dailyBriefCache && Date.now() - dailyBriefCache.ts < DAILY_BRIEF_TTL) {
+      res.json(dailyBriefCache.data);
+      return;
+    }
+    const cfg = getConfig();
+    const tz = cfg.timezone || "America/New_York";
+    const loc = cfg.location || "New York";
+    const now = /* @__PURE__ */ new Date();
+    const result = {
+      timestamp: now.toISOString(),
+      greeting: "",
+      date: "",
+      weather: null,
+      markets: [],
+      tasks: [],
+      events: [],
+      headlines: [],
+      jobs: null
+    };
+    try {
+      const etHour = parseInt(now.toLocaleString("en-US", { timeZone: tz, hour: "numeric", hour12: false }));
+      result.greeting = etHour < 12 ? "Good morning" : etHour < 17 ? "Good afternoon" : "Good evening";
+      result.date = now.toLocaleDateString("en-US", { timeZone: tz, weekday: "long", month: "long", day: "numeric", year: "numeric" });
+      result.timeStr = now.toLocaleString("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hour12: true });
+    } catch {
+    }
+    const promises = [];
+    promises.push((async () => {
+      try {
+        const raw = await getWeather(loc);
+        const tempMatch = raw.match(/Temperature:\s*([\d.-]+)°C\s*\((\d+)°F\)/);
+        const condMatch = raw.match(/Condition:\s*(.+)/);
+        const feelsMatch = raw.match(/Feels like:\s*([\d.-]+)°C\s*\((\d+)°F\)/);
+        const humMatch = raw.match(/Humidity:\s*(\d+)%/);
+        const windMatch = raw.match(/Wind:\s*(.+)/);
+        if (tempMatch && condMatch) {
+          const condition = condMatch[1].trim();
+          const etHour = parseInt(now.toLocaleString("en-US", { timeZone: tz, hour: "numeric", hour12: false }));
+          const isNight = etHour >= 18 || etHour < 6;
+          let icon = "\u{1F321}\uFE0F";
+          const cl = condition.toLowerCase();
+          if (cl.includes("clear") || cl.includes("sunny")) icon = isNight ? "\u{1F319}" : "\u2600\uFE0F";
+          else if (cl.includes("partly")) icon = isNight ? "\u2601\uFE0F" : "\u26C5";
+          else if (cl.includes("cloud") || cl.includes("overcast")) icon = "\u2601\uFE0F";
+          else if (cl.includes("rain") || cl.includes("drizzle") || cl.includes("shower")) icon = "\u{1F327}\uFE0F";
+          else if (cl.includes("snow")) icon = "\u2744\uFE0F";
+          else if (cl.includes("thunder")) icon = "\u26C8\uFE0F";
+          else if (cl.includes("fog")) icon = "\u{1F32B}\uFE0F";
+          const w = { tempC: Math.round(parseFloat(tempMatch[1])), tempF: parseInt(tempMatch[2]), condition, icon };
+          if (feelsMatch) {
+            w.feelsLikeC = Math.round(parseFloat(feelsMatch[1]));
+            w.feelsLikeF = parseInt(feelsMatch[2]);
+          }
+          if (humMatch) w.humidity = parseInt(humMatch[1]);
+          if (windMatch) w.wind = windMatch[1].trim();
+          const forecastLines = raw.match(/\d{4}-\d{2}-\d{2}:\s*.+/g);
+          if (forecastLines) {
+            w.forecast = forecastLines.map((line) => {
+              const m = line.match(/(\d{4}-\d{2}-\d{2}):\s*(.+?),\s*([\d-]+)-([\d-]+)°C.*?Rain:\s*(\d+)%/);
+              if (!m) return null;
+              const lowC = parseInt(m[3]), highC = parseInt(m[4]);
+              return { date: m[1], condition: m[2].trim(), lowC, highC, lowF: Math.round(lowC * 9 / 5 + 32), highF: Math.round(highC * 9 / 5 + 32), rainPct: parseInt(m[5]) };
+            }).filter(Boolean);
+          }
+          result.weather = w;
+        }
+      } catch {
+      }
+    })());
+    const watchlistSymbols = [
+      { symbol: "BTCUSD", type: "crypto", display: "BTC", emoji: "\u20BF" },
+      { symbol: "MSTR", type: "stock", display: "MSTR", emoji: "\u{1F4CA}" },
+      { symbol: "GC=F", type: "stock", display: "GOLD", emoji: "\u{1F947}" },
+      { symbol: "SI=F", type: "stock", display: "SILVER", emoji: "\u{1F948}" }
+    ];
+    promises.push((async () => {
+      const quotePromises = watchlistSymbols.map(async (w) => {
+        const q = await fetchQuoteStructured(w.symbol, w.type);
+        if (q) return { ...q, display: w.display, emoji: w.emoji, type: w.type };
+        return null;
+      });
+      const quotes = await Promise.all(quotePromises);
+      result.markets = quotes.filter(Boolean);
+    })());
+    promises.push((async () => {
+      try {
+        const active = await getActiveTasks();
+        result.tasks = active.slice(0, 8);
+      } catch {
+      }
+    })());
+    if (isConfigured4()) {
+      promises.push((async () => {
+        try {
+          const utcStr = now.toLocaleString("en-US", { timeZone: "UTC" });
+          const tzStr = now.toLocaleString("en-US", { timeZone: tz });
+          const tzOffsetMs = new Date(tzStr).getTime() - new Date(utcStr).getTime();
+          const nowShifted = new Date(now.getTime() + tzOffsetMs);
+          const eodTomorrowInTz = new Date(Date.UTC(nowShifted.getUTCFullYear(), nowShifted.getUTCMonth(), nowShifted.getUTCDate() + 1, 23, 59, 59, 999));
+          const endOfTomorrowUTC = new Date(eodTomorrowInTz.getTime() - tzOffsetMs);
+          const events = await listEventsStructured({ maxResults: 8, timeMax: endOfTomorrowUTC.toISOString() });
+          result.events = events;
+        } catch {
+        }
+      })());
+    }
+    promises.push((async () => {
+      try {
+        const top = await getTopHeadlines(5);
+        result.headlines = top;
+      } catch {
+      }
+    })());
+    await Promise.all(promises);
+    const allJobs = getJobs();
+    const enabledJobs = allJobs.filter((j) => j.enabled);
+    const okCount = enabledJobs.filter((j) => j.lastStatus === "success").length;
+    const failedCount = enabledJobs.filter((j) => j.lastStatus === "error").length;
+    result.jobs = { total: enabledJobs.length, ok: okCount, failed: failedCount };
+    result.nextJob = getNextJob();
+    dailyBriefCache = { data: result, ts: Date.now() };
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch daily brief data" });
+  }
+});
 var BABY_SHEET_ID2 = "1fhtMkDSTUlRCFqY4hQiSdZg7cOe4FYNkmOIIHWo4KSU";
 var babyDashboardCache = null;
 var BABY_CACHE_TTL = 6e4;

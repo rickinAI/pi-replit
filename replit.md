@@ -53,6 +53,11 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - 7-step daily scan: Zillow → Redfin → cross-reference → deep dive → X/social signals → commute research → Market Overview update
   - Saves to `Scheduled Reports/Real Estate/YYYY-MM-DD-Property-Scan.md`, appends to `Real Estate/Areas/`, saves ⭐ gems to `Real Estate/Favorites/`
   - Auto-archive >30 days to `Archive/Real Estate/`. Agent pre-reads Search Criteria + area files. Timeout: 600s
+- **Daily Brief Dashboard** (`data/pages/daily-brief.html`) — Personal daily briefing at `/pages/daily-brief`:
+  - Dark, sleek design with blue/navy aesthetic. Hero greeting adapts to time of day
+  - Sections: Weather (current + 3-day forecast in F°), Markets (BTC, MSTR, GOLD, SILVER with live prices + % change), Calendar (today + tomorrow events), Tasks (active with priority badges), Headlines (top stories via Google News RSS), System status (job health)
+  - API: `GET /api/daily-brief/data` aggregates weather, structured stock/crypto quotes, tasks, calendar events, and news. 2-min server cache. Uses `fetchQuoteStructured()` helper for structured Yahoo Finance (stocks) and CoinGecko (crypto) data
+  - Client polls every 5 min. Manual refresh button in footer
 - **Baby Dashboard** (`data/pages/baby-dashboard.html`) — Pregnancy tracker at `/pages/baby-dashboard`:
   - Due date July 7, 2026; OB: Dr. Boester; Google Sheet ID: `1fhtMkDSTUlRCFqY4hQiSdZg7cOe4FYNkmOIIHWo4KSU`
   - 5 Sheet tabs: Appointments (OB schedule), To-Do (21 tasks), Shopping List (37 items), Hospital Bag (50 items), Names (with meanings + fav status)
@@ -182,6 +187,7 @@ Client-side session resume and background agent support:
 | `/api/tasks/completed` | GET | List completed tasks (id, title, priority, completedAt) sorted by most recent |
 | `/api/tasks/:id/restore` | PATCH | Restore a completed task back to active |
 | `/api/glance` | GET | Day-at-a-glance summary (weather, emails, tasks, calendar) — 5min server cache |
+| `/api/daily-brief/data` | GET | Daily brief dashboard data (weather, markets, tasks, events, news, jobs) — 2min cache |
 | `/health` | GET | Health check |
 | `/api/session/:id/interview-response` | POST | Submit interview form responses |
 | `/api/agents` | GET | List all agent configs (id, name, tools, enabled) |
