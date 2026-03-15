@@ -384,8 +384,7 @@ async function showLanding() {
     <div class="landing-header-actions">
       <button class="landing-header-btn" id="landing-jobs-btn" title="Agents">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="3"/>
-          <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
+          <rect x="3" y="11" width="18" height="10" rx="2"/><line x1="12" y1="2" x2="12" y2="6"/><circle cx="12" cy="6" r="2"/><circle cx="9" cy="16" r="1"/><circle cx="15" cy="16" r="1"/>
         </svg>
       </button>
       <button class="landing-header-btn" id="landing-settings-btn" title="Settings">
