@@ -54,10 +54,14 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Saves to `Scheduled Reports/Real Estate/YYYY-MM-DD-Property-Scan.md`, appends to `Real Estate/Areas/`, saves ⭐ gems to `Real Estate/Favorites/`
   - Auto-archive >30 days to `Archive/Real Estate/`. Agent pre-reads Search Criteria + area files. Timeout: 600s
 - **Daily Brief Dashboard** (`data/pages/daily-brief.html`) — Personal daily briefing at `/pages/daily-brief`:
-  - Dark, sleek design with blue/navy aesthetic. Hero greeting adapts to time of day
-  - Sections: Weather (current + 3-day forecast in F°), Markets (BTC, MSTR, GOLD, SILVER with live prices + % change), Calendar (today + tomorrow events), Tasks (active with priority badges), Headlines (top stories via Google News RSS), System status (job health)
-  - API: `GET /api/daily-brief/data` aggregates weather, structured stock/crypto quotes, tasks, calendar events, and news. 2-min server cache. Uses `fetchQuoteStructured()` helper for structured Yahoo Finance (stocks) and CoinGecko (crypto) data
-  - Client polls every 5 min. Manual refresh button in footer
+  - Dark, sleek design with blue/navy aesthetic. Single-scroll layout (no tabs). Hero greeting adapts to time of day
+  - **Family Cards**: Three horizontal cards — 👨‍💻 Rickin (tasks + emails count), 🤰 Pooja (pregnancy week + days to go), 👧 Reya (time-of-day tips with GenAI fallback). Smart content varies by morning/afternoon/evening
+  - **Markets**: 6-card grid (BTC, MSTR, SPX, Gold, Silver, Oil) with live prices + % change
+  - **X Intelligence**: 5 sections (Breaking, Macro, Global, Tech/AI, Bitcoin) with curated handle lists from KB (`data/vault/Research/x-intelligence-dashboard-accounts.md`). Each section shows Visionaries + Headlines sub-feeds. 5 random handles per sub-feed, 2 tweets each. Batched API calls (6 concurrent). Sections collapsed by default except Breaking
+  - **Other Sections**: Calendar (today + tomorrow), Real Estate (standalone), Moody's Intel, Tasks, Weather (Celsius), System status (job health)
+  - **Collapsible Sections**: All sections collapsible with chevron toggles. State persisted in localStorage (`brief_collapsed_sections`). Listeners bound once (not re-attached on re-render)
+  - API: `GET /api/daily-brief/data` aggregates all data. 2-min server cache; `?force=1` bypasses cache for manual refresh. `familyCards` and `xIntel` added to response
+  - Client polls every 5 min. Manual refresh button (with cache bypass) in footer
 - **Baby Dashboard** (`data/pages/baby-dashboard.html`) — Pregnancy tracker at `/pages/baby-dashboard`:
   - Due date July 7, 2026; OB: Dr. Boester; Google Sheet ID: `1fhtMkDSTUlRCFqY4hQiSdZg7cOe4FYNkmOIIHWo4KSU`
   - 5 Sheet tabs: Appointments (OB schedule), To-Do (21 tasks), Shopping List (37 items), Hospital Bag (50 items), Names (with meanings + fav status)

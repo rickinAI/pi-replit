@@ -1,0 +1,119 @@
+Here's your ready-to-paste Replit prompt:
+
+---
+
+```
+I need two changes to the daily brief dashboard (rickin.live/pages/daily-brief).
+
+─────────────────────────────────────────
+TASK 1 — DAILY BRIEF: FULL REDESIGN (HIGH PRIORITY)
+─────────────────────────────────────────
+
+Rebuild the daily brief from a tab-heavy interface into a single-scroll 
+mission control layout. No top-level tabs. Everything on one page. 
+Morning scan = scroll top to bottom.
+
+SECTION ORDER (top to bottom):
+
+1. 🤖 AI GREETING (hero, always visible)
+   - Personalized greeting: "Good morning, Rickin."
+   - Weather for New York (real-time)
+   - Today's calendar event count (from Google Calendar, all 3 calendars: Rickin/Pooja/Reya)
+   - Task count due today
+   - Live BTC price + 24h % change
+   - Hero gradient background (purple/blue), readable in 5 seconds
+
+2. 📋 TODAY (expanded by default)
+   - Calendar timeline: merged view of all 3 people (Rickin=blue, Pooja=pink, Reya=yellow)
+     sorted by time, showing title + location
+   - Tasks due today: priority-colored (high=red, medium=orange, low=green), with checkbox
+   - Follow-ups: Gmail emails tagged follow-up — sender + subject snippet
+
+3. 📈 MARKETS STRIP (always visible, one horizontal row)
+   - Tickers: S&P 500, NASDAQ, BTC, ETH, 10Y Yield, VIX, DXY
+   - Show: price + % change, green/red colored, updates every 60 seconds
+   - Horizontal scroll on mobile
+
+4. 🔥 BREAKING (expanded by default)
+   Two sub-sections side by side (stack vertically on mobile):
+   - "Visionaries" — random 5 of 10 personal accounts
+   - "Headlines" — random 5 of 10 news outlet accounts
+   Per post: author name + handle, post text, relative timestamp, likes/retweets
+
+5. 🏦 MOODY'S INTELLIGENCE (expanded by default)
+   - Top 3 competitive/regulatory signals from internal scheduled reports
+   - Source: /data/vault/Scheduled Reports/Moody's Intelligence/
+   - Color-coded: competitor=blue, regulatory=orange, deal=green
+
+6. 💰 MACRO (collapsed by default) — same 2-section format as Breaking
+
+7. 🌍 GLOBAL (collapsed by default) — same 2-section format
+
+8. ⚡ TECH/AI (collapsed by default) — same 2-section format
+
+9. ₿ BITCOIN (collapsed by default) — same 2-section format
+
+10. 🏠 REAL ESTATE (collapsed by default)
+    - New listings from most recent scan
+    - Source: /data/vault/Scheduled Reports/Real Estate/
+    - Show: address, price, beds/baths as small cards
+
+11. ⚙️ SYSTEM (footer, always visible)
+    - DARKNODE status, last sync time, refresh button
+
+INTERACTION RULES:
+- Click section header to expand/collapse
+- Collapse state persists in localStorage key: brief_collapsed_sections
+- Manual refresh button re-randomizes all X feeds + reloads live data
+- X sections auto-refresh every 5 minutes in background
+- Hero + markets strip load first; X sections lazy-load below the fold
+- Mobile: single column, markets strip horizontal-scrolls
+
+─────────────────────────────────────────
+TASK 2 — X INTELLIGENCE: HANDLE WIRING (MEDIUM PRIORITY)
+─────────────────────────────────────────
+
+Wire the 5 X intelligence sections (Breaking, Global, Macro, Tech/AI, Bitcoin) 
+to the following curated handle lists. Each section has two sub-sections:
+- Visionaries: 10 personal accounts → show random 5 on each refresh
+- Headlines: 10 news outlets → show random 5 on each refresh
+Both re-randomize on every page load and manual refresh.
+
+🔥 BREAKING
+Visionaries: @DeItaone @unusual_whales @sentdefender @pmarca @IntelCrab 
+             @spectatorindex @zeynep @BillAckman @ElbridgeColby @adam_tooze
+Headlines:   @Reuters @AP @BBCBreaking @business @CNN @CNBC 
+             @AJEnglish @axios @politico @FT
+
+🌍 GLOBAL
+Visionaries: @ianbremmer @michaelxpettis @RnaudBertrand @Jkylebass 
+             @FareedZakaria @RichardHaass @PeterZeihan @anneapplebaum 
+             @nouriel @BrankoMilan
+Headlines:   @BBCWorld @nytimes @TheEconomist @ForeignPolicy @ForeignAffairs 
+             @guardian @CFR_org @AJEnglish @FRANCE24 @DWNews
+
+💰 MACRO
+Visionaries: @LynAldenContact @NickTimiraos @LukeGromen @josephwang 
+             @RaoulGMI @biancoresearch @elerianm @naval @KobeissiLetter @balajis
+Headlines:   @FT @WSJ @business @TheEconomist @IMFNews @federalreserve 
+             @BISbank @CNBC @axios @markets
+
+⚡ TECH/AI
+Visionaries: @karpathy @sama @DarioAmodei @emollick @AndrewYNg 
+             @AravSrinivas @ylecun @DrJimFan @gdb @alexandr_wang
+Headlines:   @Wired @MITTechReview @TechCrunch @verge @ArsTechnica 
+             @VentureBeat @IEEE_Spectrum @NewScientist @NatureNews @axios
+
+₿ BITCOIN
+Visionaries: @saylor @LynAldenContact @APompliano @PrestonPysh @nic__carter 
+             @dergigi @pete_rizzo_ @WClementeIII @bitfinexed @SaifedeanAmmous
+Headlines:   @CoinDesk @Cointelegraph @theblockCrypto @BitcoinMagazine 
+             @DecryptMedia @Blockworks_ @TheDefiant @DLnews_ 
+             @WuBlockchain @cryptobriefing
+
+Full watchlist reference: /data/vault/Research/x-intelligence-dashboard-accounts.md
+```
+
+---
+
+That's ready to drop straight into the Replit agent. Task 1 is the big rebuild, Task 2 is the handle wiring — ordered by priority so if it runs out of context it still ships the most important change first.

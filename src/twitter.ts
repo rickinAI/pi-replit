@@ -182,6 +182,55 @@ async function resolveUserId(username: string): Promise<string | null> {
   return data?.result?.data?.user?.result?.rest_id || null;
 }
 
+export interface TweetData {
+  text: string;
+  author: string;
+  handle: string;
+  likes: number;
+  retweets: number;
+  views: string | null;
+  date: string;
+  id: string;
+}
+
+export async function getUserTimelineStructured(username: string, count = 5): Promise<TweetData[]> {
+  try {
+    if (!RAPIDAPI_KEY) return [];
+    const handle = cleanUsername(username);
+    const maxTweets = Math.min(count, 20);
+    const userId = await resolveUserId(handle);
+    if (!userId) return [];
+    const data = await apiFetch("/user-tweets", { user: userId, count: String(maxTweets) });
+    const instructions = data?.result?.timeline?.instructions || [];
+    const tweets: TweetData[] = [];
+    const seen = new Set<string>();
+    for (const inst of instructions) {
+      const allTweets = extractTweetsFromEntries(inst.entries || []);
+      for (const tweet of allTweets) {
+        const formatted = formatTweetData(tweet);
+        if (formatted && !seen.has(formatted.id) && !formatted.text.startsWith("RT @")) {
+          seen.add(formatted.id);
+          tweets.push({
+            text: formatted.text.slice(0, 280),
+            author: formatted.author,
+            handle: formatted.handle,
+            likes: formatted.likes,
+            retweets: formatted.retweets,
+            views: formatted.views,
+            date: formatted.date,
+            id: formatted.id,
+          });
+          if (tweets.length >= maxTweets) break;
+        }
+      }
+      if (tweets.length >= maxTweets) break;
+    }
+    return tweets;
+  } catch {
+    return [];
+  }
+}
+
 export async function getUserTimeline(username: string, count = 10): Promise<string> {
   try {
     if (!RAPIDAPI_KEY) return "X/Twitter API not configured (missing API key).";

@@ -2827,6 +2827,43 @@ async function resolveUserId(username) {
   const data = await apiFetch("/user", { username });
   return data?.result?.data?.user?.result?.rest_id || null;
 }
+async function getUserTimelineStructured(username, count = 5) {
+  try {
+    if (!RAPIDAPI_KEY) return [];
+    const handle = cleanUsername(username);
+    const maxTweets = Math.min(count, 20);
+    const userId = await resolveUserId(handle);
+    if (!userId) return [];
+    const data = await apiFetch("/user-tweets", { user: userId, count: String(maxTweets) });
+    const instructions = data?.result?.timeline?.instructions || [];
+    const tweets = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const inst of instructions) {
+      const allTweets = extractTweetsFromEntries(inst.entries || []);
+      for (const tweet of allTweets) {
+        const formatted = formatTweetData(tweet);
+        if (formatted && !seen.has(formatted.id) && !formatted.text.startsWith("RT @")) {
+          seen.add(formatted.id);
+          tweets.push({
+            text: formatted.text.slice(0, 280),
+            author: formatted.author,
+            handle: formatted.handle,
+            likes: formatted.likes,
+            retweets: formatted.retweets,
+            views: formatted.views,
+            date: formatted.date,
+            id: formatted.id
+          });
+          if (tweets.length >= maxTweets) break;
+        }
+      }
+      if (tweets.length >= maxTweets) break;
+    }
+    return tweets;
+  } catch {
+    return [];
+  }
+}
 async function getUserTimeline(username, count = 10) {
   try {
     if (!RAPIDAPI_KEY) return "X/Twitter API not configured (missing API key).";
@@ -9607,7 +9644,13 @@ app.get("/api/vault/real-estate-scan", async (_req, res) => {
 });
 app.get("/api/daily-brief/data", async (_req, res) => {
   try {
-    if (dailyBriefCache && Date.now() - dailyBriefCache.ts < DAILY_BRIEF_TTL) {
+    let pickRandom2 = function(arr, n) {
+      const shuffled = [...arr].sort(() => Math.random() - 0.5);
+      return shuffled.slice(0, n);
+    };
+    var pickRandom = pickRandom2;
+    const forceRefresh = _req.query.force === "1";
+    if (!forceRefresh && dailyBriefCache && Date.now() - dailyBriefCache.ts < DAILY_BRIEF_TTL) {
       res.json(dailyBriefCache.data);
       return;
     }
@@ -9626,10 +9669,8 @@ app.get("/api/daily-brief/data", async (_req, res) => {
       tasks: [],
       calendars: { rickin: [], pooja: [], reya: [], other: [] },
       headlines: [],
-      headlinesBtc: [],
-      headlinesMacro: [],
-      headlinesTech: [],
-      xSignals: [],
+      xIntel: null,
+      familyCards: [],
       baby: null,
       reya: null,
       moodys: null,
@@ -9754,55 +9795,56 @@ app.get("/api/daily-brief/data", async (_req, res) => {
         }
       })());
     }
-    const xHeadlineQueries = [
-      { key: "headlines", query: "breaking news OR just announced OR developing story" },
-      { key: "headlinesBtc", query: "world news OR geopolitics OR international conflict OR diplomacy" },
-      { key: "headlinesMacro", query: "Federal Reserve OR inflation OR GDP OR interest rates OR economy" },
-      { key: "headlinesTech", query: "artificial intelligence OR AI startup OR LLM OR GPT OR Anthropic OR OpenAI" }
-    ];
-    for (const { key, query } of xHeadlineQueries) {
-      promises.push((async () => {
-        try {
-          const raw = await searchTweets(query, 7, "Top");
-          if (!raw.startsWith("Error") && !raw.includes("not configured")) {
-            const items = [];
-            const blocks = raw.split(/\n\d+\.\s+@/);
-            for (let i = 1; i < blocks.length && items.length < 5; i++) {
-              const b = blocks[i];
-              const handleMatch = b.match(/^(\w+)/);
-              const textMatch = b.match(/\n\s+(.+?)(?:\n\s+\d|$)/s);
-              if (handleMatch && textMatch) {
-                const text = textMatch[1].trim().slice(0, 200);
-                items.push({ title: text, source: "@" + handleMatch[1] });
-              }
-            }
-            result[key] = items;
-          }
-        } catch {
-        }
-      })());
-    }
+    const xIntelSections = {
+      breaking: {
+        visionaries: ["DeItaone", "unusual_whales", "sentdefender", "pmarca", "IntelCrab", "spectatorindex", "zeynep", "BillAckman", "ElbridgeColby", "adam_tooze"],
+        headlines: ["Reuters", "AP", "BBCBreaking", "business", "CNN", "CNBC", "AJEnglish", "axios", "politico", "FT"]
+      },
+      global: {
+        visionaries: ["ianbremmer", "michaelxpettis", "RnaudBertrand", "Jkylebass", "FareedZakaria", "RichardHaass", "PeterZeihan", "anneapplebaum", "nouriel", "BrankoMilan"],
+        headlines: ["BBCWorld", "nytimes", "TheEconomist", "ForeignPolicy", "ForeignAffairs", "guardian", "CFR_org", "AJEnglish", "FRANCE24", "DWNews"]
+      },
+      macro: {
+        visionaries: ["LynAldenContact", "NickTimiraos", "LukeGromen", "josephwang", "RaoulGMI", "biancoresearch", "elerianm", "naval", "KobeissiLetter", "balajis"],
+        headlines: ["FT", "WSJ", "business", "TheEconomist", "IMFNews", "federalreserve", "BISbank", "CNBC", "axios", "markets"]
+      },
+      techAi: {
+        visionaries: ["karpathy", "sama", "DarioAmodei", "emollick", "AndrewYNg", "AravSrinivas", "ylecun", "DrJimFan", "gdb", "alexandr_wang"],
+        headlines: ["Wired", "MITTechReview", "TechCrunch", "verge", "ArsTechnica", "VentureBeat", "IEEE_Spectrum", "NewScientist", "NatureNews", "axios"]
+      },
+      bitcoin: {
+        visionaries: ["saylor", "LynAldenContact", "APompliano", "PrestonPysh", "nic__carter", "dergigi", "pete_rizzo_", "WClementeIII", "bitfinexed", "SaifedeanAmmous"],
+        headlines: ["CoinDesk", "Cointelegraph", "theblockCrypto", "BitcoinMagazine", "DecryptMedia", "Blockworks_", "TheDefiant", "DLnews_", "WuBlockchain", "cryptobriefing"]
+      }
+    };
     promises.push((async () => {
       try {
-        const raw = await searchTweets("AI OR artificial intelligence OR AGI OR OpenAI OR Anthropic OR GPT", 5, "Top");
-        if (!raw.startsWith("Error") && !raw.includes("not configured")) {
-          const tweets = [];
-          const blocks = raw.split(/\n\d+\.\s+@/);
-          for (let i = 1; i < blocks.length && tweets.length < 5; i++) {
-            const b = blocks[i];
-            const handleMatch = b.match(/^(\w+)/);
-            const textMatch = b.match(/\n\s+(.+?)(?:\n\s+\d|$)/s);
-            const statsMatch = b.match(/([\d,]+)\s*likes/);
-            if (handleMatch && textMatch) {
-              tweets.push({
-                handle: handleMatch[1],
-                text: textMatch[1].trim().slice(0, 200),
-                likes: statsMatch ? statsMatch[1] : "0"
-              });
-            }
-          }
-          result.xSignals = tweets;
+        const xIntelResult = {};
+        const sections = Object.entries(xIntelSections);
+        for (const [section] of sections) {
+          xIntelResult[section] = { visionaries: [], headlines: [] };
         }
+        const allFetches = [];
+        for (const [section, handles] of sections) {
+          const pickedVis = pickRandom2(handles.visionaries, 5);
+          const pickedHead = pickRandom2(handles.headlines, 5);
+          for (const h of pickedVis) allFetches.push({ section, type: "visionaries", handle: h });
+          for (const h of pickedHead) allFetches.push({ section, type: "headlines", handle: h });
+        }
+        const BATCH = 6;
+        for (let i = 0; i < allFetches.length; i += BATCH) {
+          const batch = allFetches.slice(i, i + BATCH);
+          await Promise.all(batch.map(async (f) => {
+            try {
+              const tweets = await getUserTimelineStructured(f.handle, 2);
+              if (tweets.length > 0) {
+                xIntelResult[f.section][f.type].push(...tweets);
+              }
+            } catch {
+            }
+          }));
+        }
+        result.xIntel = xIntelResult;
       } catch {
       }
     })());
@@ -10064,6 +10106,97 @@ app.get("/api/daily-brief/data", async (_req, res) => {
       }
     })());
     await Promise.all(promises);
+    try {
+      const etHourForCards = parseInt(now.toLocaleString("en-US", { timeZone: tz, hour: "numeric", hour12: false }));
+      const cals = result.calendars || { rickin: [], pooja: [], reya: [], other: [] };
+      const familyCards = [];
+      const rickinCard = { name: "Rickin", emoji: "\u{1F468}\u200D\u{1F4BB}", headline: "", subtext: "" };
+      const rickinEvents = [...cals.rickin || [], ...cals.other || []];
+      if (etHourForCards < 12 && rickinEvents.length > 0) {
+        const next = rickinEvents[0];
+        rickinCard.headline = next.title || "Meeting";
+        rickinCard.subtext = next.time || "";
+      } else if (etHourForCards < 17 && result.focusToday) {
+        const tc = result.focusToday.tasks?.length || 0;
+        const ec = result.focusToday.actionCount || 0;
+        rickinCard.headline = `${tc} task${tc !== 1 ? "s" : ""}, ${ec} email${ec !== 1 ? "s" : ""}`;
+        rickinCard.subtext = "to action";
+      } else if (rickinEvents.length > 0) {
+        rickinCard.headline = rickinEvents[0].title || "Event tomorrow";
+        rickinCard.subtext = rickinEvents[0].time || "";
+      } else {
+        rickinCard.headline = "";
+        rickinCard.subtext = "";
+      }
+      familyCards.push(rickinCard);
+      const poojaCard = { name: "Pooja", emoji: "\u{1F930}", headline: "", subtext: "" };
+      if (result.baby) {
+        if (etHourForCards < 12) {
+          poojaCard.headline = `Week ${result.baby.weeksPregnant}`;
+          poojaCard.subtext = `${result.baby.daysLeft} days to go`;
+        } else if (result.baby.nextAppt) {
+          poojaCard.headline = `Next appt: ${result.baby.nextAppt.date}`;
+          poojaCard.subtext = result.baby.nextAppt.title || "";
+        } else {
+          poojaCard.headline = `Week ${result.baby.weeksPregnant}`;
+          poojaCard.subtext = `${result.baby.daysLeft} days to go`;
+        }
+      }
+      const poojaEvents = cals.pooja || [];
+      if (!poojaCard.headline && poojaEvents.length > 0) {
+        poojaCard.headline = poojaEvents[0].title || "Event";
+        poojaCard.subtext = poojaEvents[0].time || "";
+      }
+      familyCards.push(poojaCard);
+      const reyaCard = { name: "Reya", emoji: "\u{1F467}", headline: "", subtext: "" };
+      if (result.reya && result.reya.schoolInSession) {
+        if (etHourForCards < 12) {
+          reyaCard.headline = result.reya.lunch || "School day";
+          reyaCard.subtext = "Today's lunch";
+        } else if (etHourForCards < 17) {
+          reyaCard.headline = `Pickup ${result.reya.pickupCountdown}`;
+          reyaCard.subtext = "4:30 PM";
+        } else {
+          reyaCard.headline = "School day done";
+          reyaCard.subtext = result.reya.alert || "";
+        }
+      } else {
+        const reyaEvents = cals.reya || [];
+        if (reyaEvents.length > 0) {
+          reyaCard.headline = reyaEvents[0].title || "Event";
+          reyaCard.subtext = reyaEvents[0].time || "";
+        }
+      }
+      familyCards.push(reyaCard);
+      const needsTips = familyCards.filter((c) => !c.headline);
+      if (needsTips.length > 0) {
+        try {
+          const tipPrompt = needsTips.map((c) => {
+            if (c.name === "Rickin") return "A short productivity or market insight for a tech strategist";
+            if (c.name === "Pooja") return `A pregnancy wellness tip for week ${result.baby?.weeksPregnant || 24}`;
+            return "A fun fact or learning prompt for a 4-year-old girl";
+          }).join("\n");
+          const tipResp = await anthropic.messages.create({
+            model: "claude-haiku-4-5-20251001",
+            max_tokens: 200,
+            messages: [{ role: "user", content: `Generate ${needsTips.length} micro-tips (one per line, max 40 chars each, no numbering, no quotes):
+${tipPrompt}` }]
+          });
+          const tips = tipResp.content[0].text.split("\n").filter((l) => l.trim());
+          needsTips.forEach((c, i) => {
+            c.headline = tips[i]?.trim().slice(0, 50) || "Have a great day!";
+            c.subtext = "Daily tip";
+          });
+        } catch {
+          needsTips.forEach((c) => {
+            c.headline = "Have a great day!";
+            c.subtext = "";
+          });
+        }
+      }
+      result.familyCards = familyCards;
+    } catch {
+    }
     try {
       const dayOfWeek = now.toLocaleString("en-US", { timeZone: tz, weekday: "long" });
       const cals = result.calendars || { rickin: [], pooja: [], reya: [], other: [] };
