@@ -3096,8 +3096,38 @@ app.get("/api/vault/real-estate-scan", async (_req: Request, res: Response) => {
 
 let xIntelCache: { data: any; ts: number } | null = null;
 const X_INTEL_TTL = 2 * 60 * 1000;
+const AI_FILTER_THRESHOLD = 7;
 
-async function fetchXIntelData(): Promise<Record<string, { visionaries: any[]; headlines: any[] }>> {
+async function filterTweetsWithAI(sectionName: string, tweets: any[]): Promise<any[]> {
+  if (!tweets || tweets.length === 0 || !ANTHROPIC_KEY) return tweets;
+  try {
+    const { default: Anthropic } = await import("@anthropic-ai/sdk");
+    const client = new Anthropic({ apiKey: ANTHROPIC_KEY });
+    const tweetList = tweets.map((t, i) => `[${i}] @${t.handle}: ${(t.text || "").slice(0, 280)}`).join("\n");
+    const response = await client.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 1500,
+      messages: [{ role: "user", content: `Score these ${sectionName} tweets 1-10 for importance/newsworthiness.\nScore 7+ = breaking news, significant development, novel expert insight.\nScore <7 = opinion, self-promotion, old news, noise, engagement bait.\nFor each scoring 7+, write a one-line insight (max 15 words) explaining why it matters.\nReturn ONLY valid JSON array: [{\"index\":0,\"score\":8,\"insight\":\"...\"}]\n\n${tweetList}` }],
+      system: "You are a senior intelligence analyst. Return ONLY a JSON array, no other text.",
+    });
+    const text = response.content.map((b: any) => b.type === "text" ? b.text : "").join("");
+    const jsonMatch = text.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return tweets;
+    const scores: Array<{ index: number; score: number; insight?: string }> = JSON.parse(jsonMatch[0]);
+    const filtered: any[] = [];
+    for (const s of scores) {
+      if (s.score >= AI_FILTER_THRESHOLD && s.index >= 0 && s.index < tweets.length) {
+        filtered.push({ ...tweets[s.index], score: s.score, insight: s.insight || "" });
+      }
+    }
+    return filtered.length > 0 ? filtered : tweets.slice(0, 3);
+  } catch (err: any) {
+    console.warn(`[x-intel] AI filter failed for ${sectionName}:`, err.message);
+    return tweets;
+  }
+}
+
+async function fetchXIntelData(): Promise<Record<string, { visionaries: any[]; headlines: any[]; filtered?: boolean }>> {
   const xIntelSections: Record<string, { visionaries: string[]; headlines: string[] }> = {
     breaking: {
       visionaries: ["DeItaone", "unusual_whales", "sentdefender", "pmarca", "IntelCrab", "spectatorindex", "zeynep", "BillAckman", "ElbridgeColby", "adam_tooze"],
@@ -3148,6 +3178,26 @@ async function fetchXIntelData(): Promise<Record<string, { visionaries: any[]; h
       } catch {}
     }));
   }
+
+  const filterPromises: Promise<void>[] = [];
+  for (const [section, data] of Object.entries(xIntelResult)) {
+    if (data.visionaries.length > 0) {
+      filterPromises.push(
+        filterTweetsWithAI(`${section}/visionaries`, data.visionaries).then(filtered => { data.visionaries = filtered; })
+      );
+    }
+    if (data.headlines.length > 0) {
+      filterPromises.push(
+        filterTweetsWithAI(`${section}/headlines`, data.headlines).then(filtered => { data.headlines = filtered; })
+      );
+    }
+  }
+  await Promise.all(filterPromises);
+
+  for (const data of Object.values(xIntelResult)) {
+    (data as any).filtered = true;
+  }
+
   return xIntelResult;
 }
 

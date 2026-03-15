@@ -211,6 +211,8 @@
   .xi-handle { font-size: 0.6rem; font-weight: 700; color: var(--accent); }
   .xi-text { font-size: 0.72rem; font-weight: 400; color: var(--text); line-height: 1.4; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
   .xi-stats { font-size: 0.52rem; color: var(--text-muted); margin-top: 3px; display: flex; gap: 0.5rem; }
+  .xi-insight { font-size: 0.62rem; color: var(--accent); font-style: italic; line-height: 1.35; margin-top: 2px; opacity: 0.85; }
+  .xi-ai-badge { font-size: 0.48rem; padding: 1px 5px; border-radius: 99px; font-weight: 600; background: rgba(59,130,246,0.08); color: var(--accent); border: 1px solid rgba(59,130,246,0.12); margin-left: 0.3rem; vertical-align: middle; }
   @media(max-width: 480px) {
     .xi-cols { grid-template-columns: 1fr; }
   }
@@ -539,6 +541,7 @@ function renderXSection(containerId, data) {
       div.className = 'xi-tweet';
       div.innerHTML = '<div class="xi-handle">@' + esc(t.handle) + '</div>' +
         '<div class="xi-text">' + esc(t.text) + '</div>' +
+        (t.insight ? '<div class="xi-insight">\u2192 ' + esc(t.insight) + '</div>' : '') +
         '<div class="xi-stats"><span>\u2665 ' + (t.likes || 0).toLocaleString() + '</span><span>\u{1F504} ' + (t.retweets || 0).toLocaleString() + '</span><span>' + timeAgo(t.date) + '</span></div>';
       visCol.appendChild(div);
     });
@@ -553,6 +556,7 @@ function renderXSection(containerId, data) {
       div.className = 'xi-tweet';
       div.innerHTML = '<div class="xi-handle">@' + esc(t.handle) + '</div>' +
         '<div class="xi-text">' + esc(t.text) + '</div>' +
+        (t.insight ? '<div class="xi-insight">\u2192 ' + esc(t.insight) + '</div>' : '') +
         '<div class="xi-stats"><span>\u2665 ' + (t.likes || 0).toLocaleString() + '</span><span>\u{1F504} ' + (t.retweets || 0).toLocaleString() + '</span><span>' + timeAgo(t.date) + '</span></div>';
       headCol.appendChild(div);
     });
@@ -727,26 +731,30 @@ function render(data) {
 
   var xi = data.xIntel;
   if (xi) {
-    if (xi.breaking && (xi.breaking.visionaries.length > 0 || xi.breaking.headlines.length > 0)) {
-      document.getElementById('xBreakingSection').style.display = '';
-      renderXSection('xBreakingCols', xi.breaking);
-    }
-    if (xi.macro && (xi.macro.visionaries.length > 0 || xi.macro.headlines.length > 0)) {
-      document.getElementById('xMacroSection').style.display = '';
-      renderXSection('xMacroCols', xi.macro);
-    }
-    if (xi.global && (xi.global.visionaries.length > 0 || xi.global.headlines.length > 0)) {
-      document.getElementById('xGlobalSection').style.display = '';
-      renderXSection('xGlobalCols', xi.global);
-    }
-    if (xi.techAi && (xi.techAi.visionaries.length > 0 || xi.techAi.headlines.length > 0)) {
-      document.getElementById('xTechSection').style.display = '';
-      renderXSection('xTechCols', xi.techAi);
-    }
-    if (xi.bitcoin && (xi.bitcoin.visionaries.length > 0 || xi.bitcoin.headlines.length > 0)) {
-      document.getElementById('xBitcoinSection').style.display = '';
-      renderXSection('xBitcoinCols', xi.bitcoin);
-    }
+    var xSections = [
+      { key: 'breaking', id: 'xBreakingSection', cols: 'xBreakingCols' },
+      { key: 'macro', id: 'xMacroSection', cols: 'xMacroCols' },
+      { key: 'global', id: 'xGlobalSection', cols: 'xGlobalCols' },
+      { key: 'techAi', id: 'xTechSection', cols: 'xTechCols' },
+      { key: 'bitcoin', id: 'xBitcoinSection', cols: 'xBitcoinCols' },
+    ];
+    xSections.forEach(function(s) {
+      var sec = xi[s.key];
+      if (sec && (sec.visionaries.length > 0 || sec.headlines.length > 0)) {
+        document.getElementById(s.id).style.display = '';
+        renderXSection(s.cols, sec);
+        var allTweets = (sec.visionaries || []).concat(sec.headlines || []);
+        if (allTweets.some(function(t) { return t.insight; })) {
+          var badge = document.getElementById(s.id).querySelector('.section-badge');
+          if (badge && !badge.nextElementSibling?.classList?.contains('xi-ai-badge')) {
+            var aiBadge = document.createElement('span');
+            aiBadge.className = 'xi-ai-badge';
+            aiBadge.textContent = 'AI';
+            badge.parentNode.insertBefore(aiBadge, badge.nextSibling);
+          }
+        }
+      }
+    });
   }
 
   if (data.moodys && data.moodys.available) {

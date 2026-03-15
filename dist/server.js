@@ -9644,6 +9644,41 @@ app.get("/api/vault/real-estate-scan", async (_req, res) => {
 });
 var xIntelCache = null;
 var X_INTEL_TTL = 2 * 60 * 1e3;
+var AI_FILTER_THRESHOLD = 7;
+async function filterTweetsWithAI(sectionName, tweets) {
+  if (!tweets || tweets.length === 0 || !ANTHROPIC_KEY) return tweets;
+  try {
+    const { default: Anthropic5 } = await import("@anthropic-ai/sdk");
+    const client = new Anthropic5({ apiKey: ANTHROPIC_KEY });
+    const tweetList = tweets.map((t, i) => `[${i}] @${t.handle}: ${(t.text || "").slice(0, 280)}`).join("\n");
+    const response = await client.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 1500,
+      messages: [{ role: "user", content: `Score these ${sectionName} tweets 1-10 for importance/newsworthiness.
+Score 7+ = breaking news, significant development, novel expert insight.
+Score <7 = opinion, self-promotion, old news, noise, engagement bait.
+For each scoring 7+, write a one-line insight (max 15 words) explaining why it matters.
+Return ONLY valid JSON array: [{"index":0,"score":8,"insight":"..."}]
+
+${tweetList}` }],
+      system: "You are a senior intelligence analyst. Return ONLY a JSON array, no other text."
+    });
+    const text = response.content.map((b) => b.type === "text" ? b.text : "").join("");
+    const jsonMatch = text.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return tweets;
+    const scores = JSON.parse(jsonMatch[0]);
+    const filtered = [];
+    for (const s of scores) {
+      if (s.score >= AI_FILTER_THRESHOLD && s.index >= 0 && s.index < tweets.length) {
+        filtered.push({ ...tweets[s.index], score: s.score, insight: s.insight || "" });
+      }
+    }
+    return filtered.length > 0 ? filtered : tweets.slice(0, 3);
+  } catch (err) {
+    console.warn(`[x-intel] AI filter failed for ${sectionName}:`, err.message);
+    return tweets;
+  }
+}
 async function fetchXIntelData() {
   const xIntelSections = {
     breaking: {
@@ -9695,6 +9730,27 @@ async function fetchXIntelData() {
       } catch {
       }
     }));
+  }
+  const filterPromises = [];
+  for (const [section, data] of Object.entries(xIntelResult)) {
+    if (data.visionaries.length > 0) {
+      filterPromises.push(
+        filterTweetsWithAI(`${section}/visionaries`, data.visionaries).then((filtered) => {
+          data.visionaries = filtered;
+        })
+      );
+    }
+    if (data.headlines.length > 0) {
+      filterPromises.push(
+        filterTweetsWithAI(`${section}/headlines`, data.headlines).then((filtered) => {
+          data.headlines = filtered;
+        })
+      );
+    }
+  }
+  await Promise.all(filterPromises);
+  for (const data of Object.values(xIntelResult)) {
+    data.filtered = true;
   }
   return xIntelResult;
 }
