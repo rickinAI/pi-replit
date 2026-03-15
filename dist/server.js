@@ -1129,7 +1129,8 @@ async function searchEmailsStructured(query, maxResults = 5) {
           subject: getH("Subject") || "(no subject)",
           from: getH("From").replace(/<.*>/, "").trim(),
           date: getH("Date"),
-          unread: (msg.data.labelIds || []).includes("UNREAD")
+          unread: (msg.data.labelIds || []).includes("UNREAD"),
+          snippet: (msg.data.snippet || "").slice(0, 150)
         };
       })
     );
@@ -10231,6 +10232,37 @@ app.get("/api/daily-brief/data", async (_req, res) => {
             actionCount = typeof countResult === "number" && countResult >= 0 ? countResult : emails.length;
           }
         } catch {
+        }
+        if (actionEmails.length > 0 && ANTHROPIC_KEY) {
+          try {
+            const { default: Anthropic5 } = await import("@anthropic-ai/sdk");
+            const client = new Anthropic5({ apiKey: ANTHROPIC_KEY, timeout: 5e3 });
+            const emailList = actionEmails.map(
+              (e, i) => `[${i}] From: ${e.from} | Subject: ${e.subject}${e.snippet ? ` | Preview: ${e.snippet}` : ""}`
+            ).join("\n");
+            const response = await client.messages.create({
+              model: "claude-haiku-4-5-20251001",
+              max_tokens: 500,
+              messages: [{ role: "user", content: `For each email below, write a brief action insight (max 12 words) describing what the recipient likely needs to do.
+Focus on the action: approve, reply, review, schedule, follow up, etc.
+Return ONLY valid JSON array: [{"index":0,"insight":"..."}]
+
+${emailList}` }],
+              system: "You are a concise executive assistant. Return ONLY a JSON array, no other text."
+            });
+            const text = response.content.map((b) => b.type === "text" ? b.text : "").join("");
+            const jsonMatch = text.match(/\[[\s\S]*\]/);
+            if (jsonMatch) {
+              const insights = JSON.parse(jsonMatch[0]);
+              for (const ins of insights) {
+                if (ins.index >= 0 && ins.index < actionEmails.length && ins.insight) {
+                  actionEmails[ins.index].insight = ins.insight;
+                }
+              }
+            }
+          } catch (err) {
+            console.warn("[daily-brief] Email insight AI failed:", err.message);
+          }
         }
         result.focusToday = { tasks: focusTasks, actionEmails, actionCount };
       } catch {

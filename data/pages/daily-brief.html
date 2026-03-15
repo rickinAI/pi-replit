@@ -167,6 +167,7 @@
   .focus-task:last-child { border-bottom: none; }
   .focus-email { padding: 0.35rem 0; font-size: 0.72rem; color: var(--text); line-height: 1.35; border-bottom: 1px solid var(--border); }
   .focus-email:last-child { border-bottom: none; }
+  .focus-email-insight { font-size: 0.6rem; color: var(--text-muted); font-style: italic; line-height: 1.35; margin-top: 1px; }
 
   .re-card {
     background: var(--surface);
@@ -670,7 +671,9 @@ function render(data) {
         ft.actionEmails.forEach(function(e) {
           var div = document.createElement('div');
           div.className = 'focus-email';
-          div.innerHTML = '<div>' + esc(e.subject) + '</div>';
+          var html = '<div>' + esc(e.subject) + '</div>';
+          if (e.insight) html += '<div class="focus-email-insight">' + esc(e.insight) + '</div>';
+          div.innerHTML = html;
           emailCol.appendChild(div);
         });
       } else {

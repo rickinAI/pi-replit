@@ -3645,6 +3645,33 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
             actionCount = typeof countResult === "number" && countResult >= 0 ? countResult : emails.length;
           }
         } catch {}
+        if (actionEmails.length > 0 && ANTHROPIC_KEY) {
+          try {
+            const { default: Anthropic } = await import("@anthropic-ai/sdk");
+            const client = new Anthropic({ apiKey: ANTHROPIC_KEY, timeout: 5000 });
+            const emailList = actionEmails.map((e: any, i: number) =>
+              `[${i}] From: ${e.from} | Subject: ${e.subject}${e.snippet ? ` | Preview: ${e.snippet}` : ""}`
+            ).join("\n");
+            const response = await client.messages.create({
+              model: "claude-haiku-4-5-20251001",
+              max_tokens: 500,
+              messages: [{ role: "user", content: `For each email below, write a brief action insight (max 12 words) describing what the recipient likely needs to do.\nFocus on the action: approve, reply, review, schedule, follow up, etc.\nReturn ONLY valid JSON array: [{\"index\":0,\"insight\":\"...\"}]\n\n${emailList}` }],
+              system: "You are a concise executive assistant. Return ONLY a JSON array, no other text.",
+            });
+            const text = response.content.map((b: any) => b.type === "text" ? b.text : "").join("");
+            const jsonMatch = text.match(/\[[\s\S]*\]/);
+            if (jsonMatch) {
+              const insights: Array<{ index: number; insight: string }> = JSON.parse(jsonMatch[0]);
+              for (const ins of insights) {
+                if (ins.index >= 0 && ins.index < actionEmails.length && ins.insight) {
+                  actionEmails[ins.index].insight = ins.insight;
+                }
+              }
+            }
+          } catch (err: any) {
+            console.warn("[daily-brief] Email insight AI failed:", err.message);
+          }
+        }
         result.focusToday = { tasks: focusTasks, actionEmails, actionCount };
       } catch {}
     })());

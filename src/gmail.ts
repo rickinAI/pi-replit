@@ -283,7 +283,7 @@ export async function searchEmails(query: string): Promise<string> {
   return listEmails(query, 10);
 }
 
-export async function searchEmailsStructured(query: string, maxResults = 5): Promise<Array<{ subject: string; from: string; date: string; unread: boolean }>> {
+export async function searchEmailsStructured(query: string, maxResults = 5): Promise<Array<{ subject: string; from: string; date: string; unread: boolean; snippet: string }>> {
   try {
     const client = await getGmailClient();
     const listRes = await client.users.messages.list({
@@ -308,6 +308,7 @@ export async function searchEmailsStructured(query: string, maxResults = 5): Pro
           from: getH("From").replace(/<.*>/, "").trim(),
           date: getH("Date"),
           unread: ((msg.data as any).labelIds || []).includes("UNREAD"),
+          snippet: ((msg.data as any).snippet || "").slice(0, 150),
         };
       })
     );
