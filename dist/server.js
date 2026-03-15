@@ -6884,6 +6884,61 @@ function buildWebFetchTools() {
     }
   ];
 }
+function buildImageTools() {
+  if (!ANTHROPIC_KEY) return [];
+  return [
+    {
+      name: "describe_image",
+      label: "Describe Image",
+      description: "Fetch an image from a URL and describe its visual content using a vision model. Use when you need to 'see' an image, verify how a web page looks, check a chart/graph, or describe a photo. Supports JPEG, PNG, WebP, GIF. Returns a detailed text description of what the image contains.",
+      parameters: Type.Object({
+        url: Type.String({ description: "The URL of the image to describe (must be a direct image URL ending in .jpg, .png, .webp, .gif, or a URL that returns an image content type)" }),
+        question: Type.Optional(Type.String({ description: "Optional specific question about the image, e.g. 'What text is visible?' or 'Are the appointments showing correctly?'" }))
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          let url = params.url.trim();
+          if (!url.match(/^https?:\/\//i)) url = "https://" + url;
+          const imgRes = await fetch(url, {
+            headers: { "User-Agent": "DarkNode/1.0" },
+            signal: AbortSignal.timeout(15e3)
+          });
+          if (!imgRes.ok) return { content: [{ type: "text", text: `Failed to fetch image: HTTP ${imgRes.status}` }], details: { error: `HTTP ${imgRes.status}` } };
+          const contentType = imgRes.headers.get("content-type") || "";
+          const validTypes = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+          const mediaType = validTypes.find((t) => contentType.includes(t.split("/")[1])) || "image/jpeg";
+          const buffer = Buffer.from(await imgRes.arrayBuffer());
+          if (buffer.length > 20 * 1024 * 1024) return { content: [{ type: "text", text: "Image too large (>20MB)" }], details: { error: "too_large" } };
+          const base64 = buffer.toString("base64");
+          const prompt = params.question ? `Describe this image in detail, then answer this specific question: ${params.question}` : "Describe this image in detail. Include all visible text, layout, colors, and any notable elements.";
+          const { default: Anthropic5 } = await import("@anthropic-ai/sdk");
+          const client = new Anthropic5({ apiKey: ANTHROPIC_KEY });
+          const response = await client.messages.create({
+            model: "claude-haiku-4-5-20251001",
+            max_tokens: 1500,
+            messages: [{
+              role: "user",
+              content: [
+                { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } },
+                { type: "text", text: prompt }
+              ]
+            }]
+          });
+          const description = response.content.map((b) => b.type === "text" ? b.text : "").join("");
+          return {
+            content: [{ type: "text", text: `**Image Description** (${url})
+
+${description}` }],
+            details: { size: buffer.length, contentType: mediaType }
+          };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { content: [{ type: "text", text: `Failed to describe image: ${msg}` }], details: { error: msg } };
+        }
+      }
+    }
+  ];
+}
 function buildCalendarTools() {
   if (!isConfigured4()) return [];
   return [
@@ -9255,6 +9310,7 @@ var cachedStaticTools = [
   ...buildWeatherTools(),
   ...buildSearchTools(),
   ...buildWebFetchTools(),
+  ...buildImageTools(),
   ...buildTaskTools(),
   ...buildNewsTools(),
   ...buildTwitterTools(),
