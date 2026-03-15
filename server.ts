@@ -3191,32 +3191,36 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
 
     promises.push((async () => {
       try {
-        const babyRes = await fetch(`http://localhost:${process.env.PORT || 5000}/api/baby-dashboard/data?user=darknode&token=dn@rickin26`);
-        if (babyRes.ok) {
-          const babyData = await babyRes.json() as any;
-          const dueDate = new Date("2026-07-07");
-          const daysLeft = Math.ceil((dueDate.getTime() - now.getTime()) / 86400000);
-          const weeksPregnant = 40 - Math.ceil(daysLeft / 7);
-          let nextAppt: any = null;
-          if (babyData.appointments) {
-            const today = now.toISOString().split("T")[0];
-            for (const a of babyData.appointments) {
-              if (a.date && a.date >= today) { nextAppt = a; break; }
-            }
-          }
-          result.baby = { weeksPregnant, daysLeft, nextAppt };
-        } else {
-          const dueDate = new Date("2026-07-07");
-          const daysLeft = Math.ceil((dueDate.getTime() - now.getTime()) / 86400000);
-          const weeksPregnant = 40 - Math.ceil(daysLeft / 7);
-          result.baby = { weeksPregnant, daysLeft, nextAppt: null };
-        }
-      } catch {
         const dueDate = new Date("2026-07-07");
         const daysLeft = Math.ceil((dueDate.getTime() - now.getTime()) / 86400000);
         const weeksPregnant = 40 - Math.ceil(daysLeft / 7);
-        result.baby = { weeksPregnant, daysLeft, nextAppt: null };
-      }
+        let nextAppt: any = null;
+        if (gmail.isConnected()) {
+          try {
+            const readTab = async (range: string): Promise<string> => {
+              try {
+                const r = await gws.sheetsRead(BABY_SHEET_ID, range);
+                if (r.includes("Error") || r.includes("not connected")) return "";
+                return r;
+              } catch { return ""; }
+            };
+            const apptResult = await readTab("Appointments!A1:E14");
+            if (apptResult && !apptResult.includes("No data")) {
+              const apptRows = apptResult.split("\n").filter(l => l.startsWith("Row ")).map(l => l.replace(/^Row \d+: /, "").split(" | "));
+              const today = now.toISOString().split("T")[0];
+              for (let i = 1; i < apptRows.length; i++) {
+                const r = apptRows[i];
+                const date = (r[0] || "").trim();
+                if (date && date >= today) {
+                  nextAppt = { date, title: (r[1] || "").trim() };
+                  break;
+                }
+              }
+            }
+          } catch {}
+        }
+        result.baby = { weeksPregnant, daysLeft, nextAppt };
+      } catch {}
     })());
 
     promises.push((async () => {
@@ -3365,12 +3369,18 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
         const focus = active.filter((t: any) => t.priority === "high" || (t.dueDate && t.dueDate <= today)).slice(0, 3);
         const focusTasks = focus.length > 0 ? focus : active.slice(0, 3);
         let actionEmails: any[] = [];
+        let actionCount = 0;
         try {
           if (gmail.isConnected()) {
-            actionEmails = await gmail.searchEmailsStructured("label:Action-Required is:unread", 3);
+            const [emails, countResult] = await Promise.all([
+              gmail.searchEmailsStructured("label:Action-Required is:unread", 3),
+              gmail.countUnread ? gmail.countUnread("label:Action-Required is:unread") : Promise.resolve(-1),
+            ]);
+            actionEmails = emails;
+            actionCount = typeof countResult === "number" && countResult >= 0 ? countResult : emails.length;
           }
         } catch {}
-        result.focusToday = { tasks: focusTasks, actionEmails, actionCount: actionEmails.filter((e: any) => e.unread).length };
+        result.focusToday = { tasks: focusTasks, actionEmails, actionCount };
       } catch {}
     })());
 

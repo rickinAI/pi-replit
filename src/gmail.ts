@@ -332,6 +332,21 @@ export async function getUnreadCount(): Promise<number> {
   }
 }
 
+export async function countUnread(query: string): Promise<number> {
+  try {
+    const client = await getGmailClient();
+    const res = await client.users.messages.list({
+      userId: "me",
+      q: query,
+      maxResults: 1,
+    });
+    return (res.data as any).resultSizeEstimate || 0;
+  } catch (err) {
+    console.error("Gmail countUnread error:", err instanceof Error ? err.message : err);
+    return 0;
+  }
+}
+
 export async function getConnectedEmail(): Promise<string | null> {
   try {
     const client = await getGmailClient();
