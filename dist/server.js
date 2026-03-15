@@ -9280,6 +9280,31 @@ app.get("/pages", (_req, res) => {
   }
 });
 var dailyBriefCache = null;
+var welcomeCache = null;
+var WELCOME_CACHE_TTL = 30 * 60 * 1e3;
+async function generateWelcomeMessage(context) {
+  try {
+    if (welcomeCache && Date.now() - welcomeCache.ts < WELCOME_CACHE_TTL) return welcomeCache.message;
+    const { default: Anthropic5 } = await import("@anthropic-ai/sdk");
+    const client = new Anthropic5({ apiKey: ANTHROPIC_KEY });
+    const weatherPart = context.tempC !== null && context.condition ? `Current weather in NYC: ${context.tempC}\xB0C, ${context.condition}.` : "";
+    const babyPart = context.babyWeeks !== null ? `His wife is ${context.babyWeeks} weeks pregnant with a baby boy.` : "";
+    const prompt = `Generate a short, warm, friendly greeting for Rickin who is checking his daily brief dashboard. Time: ${context.greeting.toLowerCase()} on ${context.dayOfWeek}. ${weatherPart} He has ${context.taskCount} tasks and ${context.eventCount} calendar events today. ${babyPart} Keep it to 1-2 sentences. Be conversational and natural \u2014 mention the weather casually if available. Don't use emojis. Don't say "I" or reference yourself. Just the greeting text.`;
+    const response = await client.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 100,
+      messages: [{ role: "user", content: prompt }]
+    });
+    const text = response.content[0].text?.trim() || "";
+    if (text) {
+      welcomeCache = { message: text, ts: Date.now() };
+      return text;
+    }
+  } catch (err) {
+    console.error("Welcome message generation failed:", err);
+  }
+  return `${context.greeting}, Rickin. Here's your brief for ${context.dayOfWeek}.`;
+}
 var DAILY_BRIEF_TTL = 12e4;
 async function fetchQuoteStructured(symbol, type) {
   try {
@@ -9515,12 +9540,13 @@ app.get("/api/daily-brief/data", async (_req, res) => {
     }
     const cfg = getConfig();
     const tz = cfg.timezone || "America/New_York";
-    const loc = cfg.location || "New York";
+    const loc = cfg.location || "10016";
     const now = /* @__PURE__ */ new Date();
     const result = {
       timestamp: now.toISOString(),
       greeting: "",
       date: "",
+      welcomeMessage: "",
       weather: null,
       commuteAlert: null,
       markets: [],
@@ -9919,6 +9945,24 @@ app.get("/api/daily-brief/data", async (_req, res) => {
       }
     })());
     await Promise.all(promises);
+    try {
+      const dayOfWeek = now.toLocaleString("en-US", { timeZone: tz, weekday: "long" });
+      const cals = result.calendars || { rickin: [], pooja: [], reya: [], other: [] };
+      const eventCount = cals.rickin.length + cals.pooja.length + cals.reya.length + (cals.other || []).length;
+      const taskCount = result.tasks ? result.tasks.length : 0;
+      result.welcomeMessage = await generateWelcomeMessage({
+        greeting: result.greeting,
+        dayOfWeek,
+        tempC: result.weather?.tempC ?? null,
+        condition: result.weather?.condition ?? null,
+        taskCount,
+        eventCount,
+        babyWeeks: result.baby?.weeksPregnant ?? null
+      });
+    } catch {
+      const dayOfWeek = now.toLocaleString("en-US", { timeZone: tz, weekday: "long" });
+      result.welcomeMessage = `${result.greeting}, Rickin. Here's your brief for ${dayOfWeek}.`;
+    }
     const allJobs = getJobs();
     const enabledJobs = allJobs.filter((j) => j.enabled);
     const okCount = enabledJobs.filter((j) => j.lastStatus === "success").length;

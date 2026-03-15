@@ -3414,6 +3414,25 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
 
     await Promise.all(promises);
 
+    try {
+      const dayOfWeek = now.toLocaleString("en-US", { timeZone: tz, weekday: "long" });
+      const cals = result.calendars || { rickin: [], pooja: [], reya: [], other: [] };
+      const eventCount = cals.rickin.length + cals.pooja.length + cals.reya.length + (cals.other || []).length;
+      const taskCount = result.tasks ? result.tasks.length : 0;
+      result.welcomeMessage = await generateWelcomeMessage({
+        greeting: result.greeting,
+        dayOfWeek,
+        tempC: result.weather?.tempC ?? null,
+        condition: result.weather?.condition ?? null,
+        taskCount,
+        eventCount,
+        babyWeeks: result.baby?.weeksPregnant ?? null,
+      });
+    } catch {
+      const dayOfWeek = now.toLocaleString("en-US", { timeZone: tz, weekday: "long" });
+      result.welcomeMessage = `${result.greeting}, Rickin. Here's your brief for ${dayOfWeek}.`;
+    }
+
     const allJobs = scheduledJobs.getJobs();
     const enabledJobs = allJobs.filter((j: any) => j.enabled);
     const okCount = enabledJobs.filter((j: any) => j.lastStatus === "success").length;
