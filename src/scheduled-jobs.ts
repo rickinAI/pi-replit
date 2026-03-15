@@ -1,6 +1,7 @@
 import { getPool } from "./db.js";
 import { getDarkNodeEmails, markDarkNodeProcessed } from "./gmail.js";
 import * as gws from "./gws.js";
+import { findOrCreateCalendar, createRecurringEvent } from "./calendar.js";
 
 export interface ScheduledJob {
   id: string;
@@ -43,6 +44,7 @@ function getJobSavePath(jobId: string, dateStr: string, safeName: string): strin
   if (jobId === "daily-inbox-triage-pm") return `Scheduled Reports/Inbox Cleanup/${dateStr}-PM-triage.md`;
   if (jobId === "weekly-inbox-deep-clean") return `Scheduled Reports/Inbox Cleanup/${dateStr}-weekly-summary.md`;
   if (jobId === "baby-dashboard-weekly-update") return `Scheduled Reports/Baby Dashboard/${dateStr}-Weekly-Log.md`;
+  if (jobId === "birthday-calendar-sync") return `Scheduled Reports/Birthday Sync/${dateStr}-Sync.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 
@@ -750,6 +752,14 @@ Process everything autonomously. Be thorough but efficient.`,
     enabled: true,
   },
   {
+    id: "birthday-calendar-sync",
+    name: "Birthday Calendar Sync",
+    agentId: "system",
+    prompt: "Reads unsynced rows from the Birthday Tracker sheet and creates recurring annual events in the Birthdays calendar.",
+    schedule: { type: "daily", hour: 8, minute: 0 },
+    enabled: true,
+  },
+  {
     id: "darknode-inbox-monitor",
     name: "Inbox Monitor (@darknode)",
     agentId: "orchestrator",
@@ -1153,6 +1163,167 @@ async function runTimelineAdvance(job: ScheduledJob): Promise<void> {
   }
 }
 
+const BIRTHDAY_SHEET_ID = "1m4T-vniOylUSyVMSirtun5u9M6gJZlXS3iLy5hGxfuY";
+
+const RELATIONSHIP_COLORS: Record<string, string> = {
+  family: "11",
+  friend: "9",
+  coworker: "10",
+};
+
+async function runBirthdayCalendarSync(job: ScheduledJob): Promise<void> {
+  console.log(`[scheduled-jobs] Birthday sync: reading sheet...`);
+  const now = getNow();
+  const results: string[] = [];
+  let created = 0;
+  let skipped = 0;
+  let errors = 0;
+
+  try {
+    const raw = await gws.sheetsRead(BIRTHDAY_SHEET_ID, "Sheet1!A1:F100");
+    const lines = raw.split("\n").filter(l => l.trim());
+
+    const rows: Array<{ sheetRow: number; name: string; relationship: string; birthday: string; birthYear: string; notes: string; synced: string }> = [];
+    for (const line of lines) {
+      const rowMatch = line.match(/^Row\s+(\d+):\s*(.*)/);
+      if (!rowMatch) continue;
+      const sheetRow = parseInt(rowMatch[1], 10);
+      if (sheetRow === 1) continue;
+      const cols = rowMatch[2].split(" | ").map(c => c.trim());
+      rows.push({
+        sheetRow,
+        name: cols[0] || "",
+        relationship: cols[1] || "",
+        birthday: cols[2] || "",
+        birthYear: cols[3] || "",
+        notes: cols[4] || "",
+        synced: cols[5] || "",
+      });
+    }
+
+    const unsynced = rows.filter(r => r.name && r.birthday && r.synced.toLowerCase() !== "yes");
+    if (unsynced.length === 0) {
+      console.log(`[scheduled-jobs] Birthday sync: no unsynced rows`);
+      job.lastRun = now.toISOString();
+      job.lastResult = "No unsynced birthdays";
+      job.lastStatus = "success";
+      await saveConfig();
+      await writeJobHistory(job.id, job.name, "success", "No unsynced birthdays", null, null);
+      return;
+    }
+
+    console.log(`[scheduled-jobs] Birthday sync: ${unsynced.length} unsynced row(s) found`);
+
+    const calendarId = await findOrCreateCalendar("Birthdays");
+    console.log(`[scheduled-jobs] Birthday sync: using calendar ${calendarId}`);
+
+    for (const row of unsynced) {
+      try {
+        const parts = row.birthday.match(/^(\d{1,2})\/(\d{1,2})$/);
+        if (!parts) {
+          console.log(`[scheduled-jobs] Birthday sync: invalid date "${row.birthday}" for ${row.name}, skipping`);
+          results.push(`⚠️ Skipped ${row.name}: invalid date "${row.birthday}"`);
+          await gws.sheetsUpdate(BIRTHDAY_SHEET_ID, `Sheet1!F${row.sheetRow}`, [["Invalid"]]);
+          errors++;
+          continue;
+        }
+
+        const month = parseInt(parts[1], 10);
+        const day = parseInt(parts[2], 10);
+        if (month < 1 || month > 12 || day < 1 || day > 31) {
+          console.log(`[scheduled-jobs] Birthday sync: out-of-range date "${row.birthday}" for ${row.name}, skipping`);
+          results.push(`⚠️ Skipped ${row.name}: invalid month/day "${row.birthday}"`);
+          await gws.sheetsUpdate(BIRTHDAY_SHEET_ID, `Sheet1!F${row.sheetRow}`, [["Invalid"]]);
+          errors++;
+          continue;
+        }
+        const testDate = new Date(2024, month - 1, day);
+        if (testDate.getMonth() !== month - 1 || testDate.getDate() !== day) {
+          console.log(`[scheduled-jobs] Birthday sync: non-existent date "${row.birthday}" for ${row.name}, skipping`);
+          results.push(`⚠️ Skipped ${row.name}: date doesn't exist "${row.birthday}"`);
+          await gws.sheetsUpdate(BIRTHDAY_SHEET_ID, `Sheet1!F${row.sheetRow}`, [["Invalid"]]);
+          errors++;
+          continue;
+        }
+
+        let year = now.getFullYear();
+        const thisYearDate = new Date(year, month - 1, day);
+        if (thisYearDate < now) {
+          year++;
+        }
+        const dateStr = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+
+        const description = [
+          `Relationship: ${row.relationship}`,
+          row.birthYear ? `Birth Year: ${row.birthYear}` : "",
+          row.notes ? `Notes: ${row.notes}` : "",
+        ].filter(Boolean).join("\n");
+
+        const colorId = RELATIONSHIP_COLORS[row.relationship.toLowerCase()] || "9";
+
+        const eventId = await createRecurringEvent(calendarId, {
+          summary: `🎂 ${row.name}'s Birthday`,
+          date: dateStr,
+          description,
+          colorId,
+          recurrence: ["RRULE:FREQ=YEARLY"],
+          reminders: {
+            useDefault: false,
+            overrides: [{ method: "popup", minutes: 0 }],
+          },
+        });
+
+        try {
+          await gws.sheetsUpdate(BIRTHDAY_SHEET_ID, `Sheet1!F${row.sheetRow}`, [["Yes"]]);
+        } catch (markErr) {
+          console.error(`[scheduled-jobs] Birthday sync: event created for ${row.name} (${eventId}) but failed to mark sheet — may create duplicate on next run`);
+        }
+        results.push(`✅ ${row.name} — ${row.birthday} (${row.relationship})`);
+        created++;
+        console.log(`[scheduled-jobs] Birthday sync: created event for ${row.name} (${eventId})`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[scheduled-jobs] Birthday sync error for ${row.name}:`, msg);
+        results.push(`❌ ${row.name}: ${msg.slice(0, 100)}`);
+        errors++;
+      }
+    }
+
+    const summary = `Synced ${created}, skipped/errors ${errors + skipped}`;
+    job.lastRun = now.toISOString();
+    job.lastResult = summary;
+    job.lastStatus = errors > 0 && created === 0 ? "error" : errors > 0 ? "partial" : "success";
+    await saveConfig();
+
+    const reportContent = `# Birthday Calendar Sync\n*${now.toLocaleString("en-US", { timeZone: "America/New_York" })}*\n\n## Results\n- Created: ${created}\n- Errors: ${errors}\n\n${results.join("\n")}`;
+    const savePath = getJobSavePath(job.id, getTodayKey(), "Birthday-Sync");
+    if (kbCreateFn) {
+      try { await kbCreateFn(savePath, reportContent); } catch {}
+    }
+
+    await writeJobHistory(job.id, job.name, job.lastStatus, summary, savePath, null);
+
+    if (broadcastFn) {
+      broadcastFn({
+        type: "job_complete",
+        jobId: job.id,
+        jobName: job.name,
+        summary,
+        timestamp: Date.now(),
+      });
+    }
+
+    console.log(`[scheduled-jobs] Birthday sync complete: ${summary}`);
+  } catch (err) {
+    console.error(`[scheduled-jobs] Birthday sync error:`, err);
+    job.lastRun = now.toISOString();
+    job.lastResult = String(err).slice(0, 300);
+    job.lastStatus = "error";
+    await saveConfig();
+    await writeJobHistory(job.id, job.name, "error", String(err).slice(0, 300), null, null);
+  }
+}
+
 async function runInboxMonitor(job: ScheduledJob): Promise<void> {
   console.log(`[scheduled-jobs] Inbox monitor: checking for @darknode emails...`);
   let emails;
@@ -1280,6 +1451,8 @@ async function checkJobs(): Promise<void> {
         await runInboxMonitor(job);
       } else if (job.id === "baby-timeline-advance") {
         await runTimelineAdvance(job);
+      } else if (job.id === "birthday-calendar-sync") {
+        await runBirthdayCalendarSync(job);
       } else {
         const jobStartMs = Date.now();
         const progressCb = (info: { toolName: string; iteration: number }) => {
@@ -1439,6 +1612,16 @@ export async function triggerJob(jobId: string): Promise<string> {
     if (job.id === "darknode-inbox-monitor") {
       await runInboxMonitor(job);
       return job.lastResult || "Inbox monitor completed";
+    }
+
+    if (job.id === "baby-timeline-advance") {
+      await runTimelineAdvance(job);
+      return job.lastResult || "Timeline advance completed";
+    }
+
+    if (job.id === "birthday-calendar-sync") {
+      await runBirthdayCalendarSync(job);
+      return job.lastResult || "Birthday sync completed";
     }
 
     const triggerStartMs = Date.now();

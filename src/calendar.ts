@@ -310,3 +310,42 @@ export async function createEvent(summary: string, options: { startTime: string;
     return `Unable to create event: ${msg}`;
   }
 }
+
+export async function findOrCreateCalendar(name: string): Promise<string> {
+  const cal = await getCalendarClient();
+  const list = await cal.calendarList.list({ minAccessRole: "owner" });
+  const existing = (list.data.items || []).find(
+    (c: any) => (c.summaryOverride || c.summary || "").toLowerCase() === name.toLowerCase()
+  );
+  if (existing?.id) return existing.id;
+
+  const res = await cal.calendars.insert({ requestBody: { summary: name, timeZone: "America/New_York" } });
+  return res.data.id!;
+}
+
+export async function createRecurringEvent(calendarId: string, options: {
+  summary: string;
+  date: string;
+  description?: string;
+  colorId?: string;
+  recurrence?: string[];
+  reminders?: { useDefault: boolean; overrides?: Array<{ method: string; minutes: number }> };
+}): Promise<string> {
+  const cal = await getCalendarClient();
+  const d = new Date(options.date);
+  d.setDate(d.getDate() + 1);
+  const endDate = d.toISOString().split("T")[0];
+
+  const event: any = {
+    summary: options.summary,
+    start: { date: options.date },
+    end: { date: endDate },
+  };
+  if (options.description) event.description = options.description;
+  if (options.colorId) event.colorId = options.colorId;
+  if (options.recurrence) event.recurrence = options.recurrence;
+  if (options.reminders) event.reminders = options.reminders;
+
+  const res = await cal.events.insert({ calendarId, requestBody: event });
+  return res.data.id || "created";
+}
