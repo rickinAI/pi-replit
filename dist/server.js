@@ -9501,7 +9501,7 @@ Keep each bullet concise (under 15 words). Don't use emojis. Don't say "I" or re
   }
   return `${context.greeting}, Rickin. Here's your brief for ${context.dayOfWeek}.`;
 }
-var DAILY_BRIEF_TTL = 12e4;
+var DAILY_BRIEF_TTL = 18e5;
 async function fetchQuoteStructured(symbol, type) {
   try {
     if (type === "crypto") {
@@ -9768,7 +9768,7 @@ app.get("/api/vault/real-estate-scan", async (_req, res) => {
   }
 });
 var xIntelCache = null;
-var X_INTEL_TTL = 2 * 60 * 1e3;
+var X_INTEL_TTL = 30 * 60 * 1e3;
 var AI_FILTER_THRESHOLD = 7;
 async function filterTweetsWithAI(sectionName, tweets) {
   if (!tweets || tweets.length === 0 || !ANTHROPIC_KEY) return tweets;

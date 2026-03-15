@@ -2842,7 +2842,7 @@ Keep each bullet concise (under 15 words). Don't use emojis. Don't say "I" or re
   }
   return `${context.greeting}, Rickin. Here's your brief for ${context.dayOfWeek}.`;
 }
-const DAILY_BRIEF_TTL = 120_000;
+const DAILY_BRIEF_TTL = 1_800_000;
 
 async function fetchQuoteStructured(symbol: string, type: "stock" | "crypto"): Promise<any> {
   try {
@@ -3095,7 +3095,7 @@ app.get("/api/vault/real-estate-scan", async (_req: Request, res: Response) => {
 });
 
 let xIntelCache: { data: any; ts: number } | null = null;
-const X_INTEL_TTL = 2 * 60 * 1000;
+const X_INTEL_TTL = 30 * 60 * 1000;
 const AI_FILTER_THRESHOLD = 7;
 
 async function filterTweetsWithAI(sectionName: string, tweets: any[]): Promise<any[]> {
