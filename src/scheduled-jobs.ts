@@ -108,99 +108,86 @@ Save the report to "Scheduled Reports/Market Summary.md" (overwrite previous).`,
     id: "moodys-daily-intel",
     name: "Moody's Intelligence Brief",
     agentId: "moodys",
-    prompt: `Compile a comprehensive daily intelligence brief covering 5 categories. For each item, tag relevance: 🔴 High (directly impacts Moody's Banking), 🟡 Medium (industry trend worth watching), 🟢 Low (background context). Include source URLs for every item.
+    prompt: `You are a competitive intelligence analyst for Moody's Banking Solutions. Compile a comprehensive daily intelligence brief by ACTIVELY researching each category using web_search, web_fetch, AND x_search. You MUST call these tools — do not rely on prior knowledge.
 
-CATEGORY 1 — Moody's Corporate News:
-Search site:moodys.com and news for "Moody's" for any press releases, product announcements, leadership changes, earnings, or strategic moves. Focus on Banking Solutions, Lending, KYC, Risk Analytics, and data products.
-Also search X: x_search("from:MoodysAnalytics OR from:MoodysInvSvc OR from:Moodys") and x_search("Moody's Banking OR Credit Lens OR Moody's Analytics") for real-time announcements.
+RESEARCH METHOD — For EVERY category below:
+1. Run web_search with the specified queries to find articles
+2. Use web_fetch on the top 2-3 result URLs to read actual article content for richer summaries
+3. Run x_search with the specified queries for real-time signals
+4. Write 3-5 bullet items per category (not just 1)
 
-CATEGORY 2 — Banking Segment Specifics:
-Search for news about Moody's banking products: Credit Lens, Moody's Analytics banking, OnlineALM, Orbis, BvD. Include customer wins, partnerships, or product launches in the banking vertical.
+CATEGORY 1 — Moody's Corporate:
+web_search("Moody's Analytics news 2026") AND web_search("site:moodys.com press release")
+web_fetch the top 2 results from moodys.com
+x_search("from:MoodysAnalytics OR from:MoodysInvSvc OR Moody's Analytics OR Credit Lens")
+Focus: press releases, product launches, leadership, earnings, Credit Lens, Banking Solutions, KYC, risk analytics.
+
+CATEGORY 2 — Banking Segment:
+web_search("Moody's Credit Lens banking") AND web_search("Moody's Analytics banking product launch OR partnership")
+web_fetch any relevant moodys.com product pages
+x_search("Credit Lens OR Moody's banking OR OnlineALM OR BankFocus")
+Focus: Credit Lens updates, customer wins, partnerships, banking vertical product news.
 
 CATEGORY 3 — Competitor Intelligence:
-Search for latest news from ALL of these competitors using BOTH web_search AND x_search:
-
-Credit Rating & Data Peers:
-- Bloomberg — Bloomberg Data, Enterprise Data, AI initiatives
-- S&P Global — Market Intelligence, Capital IQ, data strategy
-- Fitch — Fitch Ratings, Fitch Solutions, banking analytics, data products
-- Nasdaq — Nasdaq Financial Technology, AxiomSL, Calypso, risk/regulatory tech
-X search: x_search("Bloomberg data AI OR S&P Global Capital IQ OR Fitch Solutions OR Nasdaq AxiomSL")
-
-Banking Tech / Lending Platforms:
-- nCino — Bank operating system, lending automation, AI in banking
-- QRM — Credit risk, ALM, FTP, balance sheet management (direct Credit Lens competitor)
-- Empyrean (Emperion) — Lending technology, credit decisioning, banking analytics
-X search: x_search("nCino OR QRM credit risk OR Empyrean lending")
-
-Data & AI Infrastructure:
-- Quantexa — Entity resolution, knowledge graph, agentic AI, banking deals
-- Databricks — Financial services, lakehouse for banking, Delta Sharing
-X search: x_search("Quantexa banking OR Databricks financial services")
-
-Regulatory & Compliance Partners:
-- Regnology — Regulatory reporting tech
-- FinregE — Regulatory intelligence automation
-- ValidMind — Model risk management, AI governance
-X search: x_search("Regnology OR FinregE OR ValidMind AI governance")
+Run SEPARATE searches for each competitor group:
+web_search("Bloomberg Terminal AI 2026 OR Bloomberg Enterprise Data") → web_fetch top result
+web_search("S&P Global Capital IQ AI OR S&P Market Intelligence 2026") → web_fetch top result
+web_search("Fitch Solutions banking analytics OR Fitch Ratings 2026") → web_fetch top result
+web_search("Nasdaq AxiomSL OR Nasdaq Financial Technology 2026") → web_fetch top result
+web_search("nCino banking AI OR nCino 2026 news") → web_fetch top result
+web_search("Quantexa banking OR Databricks financial services 2026")
+web_search("ValidMind AI governance OR Regnology regulatory reporting 2026")
+x_search("Bloomberg data AI OR S&P Global Capital IQ OR Fitch Solutions OR nCino")
+x_search("Quantexa OR Databricks financial services OR ValidMind OR Regnology")
+Write at least 3-5 competitor items with specific details from the articles.
 
 CATEGORY 4 — Enterprise AI Trends:
-Search for: agentic AI in banking/financial services, enterprise LLM deployments in regulated industries, AI governance and regulation (EU AI Act, US banking regulators), MCP (Model Context Protocol) enterprise adoption, CDM/data standards in financial services.
-Also search X: x_search("agentic AI banking OR enterprise LLM financial services OR AI governance banking") for cutting-edge discussions and announcements.
+web_search("agentic AI banking financial services 2026") → web_fetch top 2 results
+web_search("enterprise LLM deployment regulated industries") → web_fetch top result
+web_search("AI governance banking regulation EU AI Act")
+x_search("agentic AI banking OR enterprise LLM financial services OR AI governance banking")
+Focus: agentic AI in banking, LLM deployments, AI regulation, MCP adoption, CDM standards.
 
 CATEGORY 5 — Industry Analyst Coverage:
-Search site:celent.com for mentions of Moody's, Credit Lens, lending tech, risk analytics, ALM, banking AI, and competitors.
-Search site:chartis-research.com for RiskTech100, quadrant reports, credit risk, market risk, model risk, RegTech rankings.
-Search for reports from Forrester, Gartner, and IDC on banking technology, risk analytics, or enterprise AI in financial services.
-Also search X: x_search("from:CelentResearch OR from:Chartis_Research OR Celent banking OR RiskTech100") for analyst commentary and early report previews.
+web_search("site:celent.com Moody's OR Credit Lens OR banking AI")
+web_search("site:chartis-research.com RiskTech100 OR credit risk technology 2026")
+web_search("Forrester banking technology 2026 OR Gartner risk analytics OR IDC financial services AI")
+x_search("from:CelentResearch OR from:Chartis_Research OR Celent banking OR RiskTech100")
+web_fetch any analyst report pages found.
 
-OUTPUT FORMAT — Save using notes_create to "Scheduled Reports/Moody's Intelligence/Daily/{today's date YYYY-MM-DD}-Brief.md":
-
-# Moody's Intelligence Brief — {today's date}
+OUTPUT FORMAT — Do NOT use notes_create. Instead, output the full brief as your final response. The system will save it automatically. Format:
 
 ## 🏢 Moody's Corporate
-- {bullet summaries with source URLs and relevance tags}
+- 🔴/🟡/🟢 {item summary — 1-2 sentences with specific details} ([source](url))
+- {3-5 items minimum}
 
 ## 🏦 Banking Segment
-- {bullet summaries with source URLs and relevance tags}
+- 🔴/🟡/🟢 {item summary} ([source](url))
+- {3-5 items minimum}
 
 ## 🔍 Competitor Watch
-### Credit Rating & Data Peers
-#### Bloomberg
-#### S&P Global
-#### Fitch
-#### Nasdaq
-### Banking Tech & Lending
-#### nCino
-#### QRM
-#### Empyrean
-### Data & AI Infrastructure
-#### Quantexa
-#### Databricks
-### Regulatory & Compliance
-#### Regnology / FinregE / ValidMind
-- {bullet summaries with source URLs and relevance tags}
+- 🔴/🟡/🟢 **{Competitor Name}**: {what happened — specific details from article} ([source](url))
+- {5-8 items covering multiple competitors}
 
 ## 🤖 Enterprise AI Trends
-- {bullet summaries with source URLs and relevance tags}
+- 🔴/🟡/🟢 {item summary} ([source](url))
+- {3-5 items minimum}
 
 ## 📊 Industry Analyst Coverage
-### Celent
-### Chartis Research
-### Other Analysts (Forrester / Gartner / IDC)
-- {bullet summaries with source URLs and relevance tags}
-
-## 🐦 X/Twitter Signals
-- {notable tweets from competitors, analysts, or industry leaders that don't fit the categories above}
-- {early signals, hot takes, or viral threads relevant to Moody's positioning}
-- {include tweet author, handle, and URL for each}
+- 🔴/🟡/🟢 {item summary} ([source](url))
+- {3-5 items minimum}
 
 ## ⚡ Key Takeaways
-- {3-5 bullet executive summary of what matters most for Moody's Banking Solutions positioning}
+1. {takeaway with strategic implication for Moody's}
+2. {3-5 numbered takeaways}
 
-If a search returns no new results for a category, note "No new developments" rather than omitting the section.
-
-Do NOT update competitor or analyst profiles in this pass — a separate scheduled job handles that.`,
+IMPORTANT:
+- Each category MUST have at least 3 bullets. If web_search returns few results, broaden the query or try alternate terms.
+- Use web_fetch to read article content — summaries from search snippets alone are too thin.
+- Tag each item: 🔴 High (directly impacts Moody's Banking), 🟡 Medium (industry trend), 🟢 Low (background).
+- Do NOT produce a summary table — write full bullet content under each ## section header.
+- Do NOT use notes_create or notes_append — just output the brief directly. The system saves it for you.
+- Do NOT update competitor profiles — a separate job handles that.`,
     schedule: { type: "daily", hour: 6, minute: 0 },
     enabled: true,
   },
@@ -1631,7 +1618,7 @@ export async function triggerJob(jobId: string): Promise<string> {
       }
     };
     const agentResult = await runAgentFn(job.agentId, job.prompt, progressCb);
-    const result = agentResult.response;
+    let result = agentResult.response;
     const isPartial = agentResult.timedOut || result.includes("⚠️ PARTIAL");
     job.lastRun = new Date().toISOString();
     job.lastResult = result.slice(0, 500);
@@ -1641,6 +1628,26 @@ export async function triggerJob(jobId: string): Promise<string> {
     const todayKey = getTodayKey();
     const safeName = job.name.replace(/[^a-zA-Z0-9 ]/g, "").replace(/\s+/g, "-");
     const savePath = getJobSavePath(job.id, todayKey, safeName);
+
+    if (job.id === "moodys-daily-intel") {
+      try {
+        const fs = await import("fs");
+        const path = await import("path");
+        const briefDir = path.join(process.cwd(), "data/vault/Scheduled Reports/Moody's Intelligence/Daily");
+        if (fs.existsSync(briefDir)) {
+          const files = fs.readdirSync(briefDir).filter((f: string) => f.endsWith("-Brief.md") && f > `${todayKey}-Brief.md`).sort().reverse();
+          for (const fname of files) {
+            const content = fs.readFileSync(path.join(briefDir, fname), "utf-8");
+            if (content.length > 1000 && content.includes("## 🏢")) {
+              result = content;
+              console.log(`[scheduled-jobs] Moody's brief: using agent-saved file ${fname} (${result.length} chars)`);
+              break;
+            }
+          }
+        }
+      } catch (e) { console.error("[scheduled-jobs] Moody's brief recovery failed:", e); }
+    }
+
     let vaultSaved = false;
     if (kbCreateFn) {
       try {

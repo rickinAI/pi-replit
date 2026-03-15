@@ -2957,31 +2957,61 @@ app.get("/api/vault/moodys-brief", async (_req: Request, res: Response) => {
       return;
     }
     const categories: Record<string, string[]> = { corporate: [], banking: [], competitors: [], aiTrends: [], analysts: [] };
-    const catKeywords: Array<{ pattern: RegExp; key: string }> = [
-      { pattern: /moody'?s\s*corporate/i, key: "corporate" },
-      { pattern: /banking/i, key: "banking" },
-      { pattern: /competitor/i, key: "competitors" },
-      { pattern: /enterprise\s*ai/i, key: "aiTrends" },
-      { pattern: /industry\s*analyst/i, key: "analysts" },
+    const MAX_PER_CAT = 5;
+
+    const sectionMap: Array<{ pattern: RegExp; key: string }> = [
+      { pattern: /^##\s+🏢\s+Moody/im, key: "corporate" },
+      { pattern: /^##\s+🏦\s+Banking/im, key: "banking" },
+      { pattern: /^##\s+🔍\s+Competitor/im, key: "competitors" },
+      { pattern: /^##\s+🤖\s+Enterprise\s*AI/im, key: "aiTrends" },
+      { pattern: /^##\s+📊\s+Industry\s*Analyst/im, key: "analysts" },
     ];
-    const tableRows = briefContent.match(/^\|[^|]*\|[^|]*\|[^|]*\|/gm) || [];
-    for (const row of tableRows) {
-      const cells = row.split("|").map(c => c.trim()).filter(Boolean);
-      if (cells.length < 3 || /^[#-]+$/.test(cells[0])) continue;
-      const item = cells[1].replace(/\*\*/g, "").replace(/\(?\[.*?\]\(.*?\)\)?/g, "").trim();
-      const catCell = cells[2];
-      if (!item || !catCell || /^Category$/i.test(catCell) || /^-+$/.test(catCell)) continue;
-      for (const { pattern, key } of catKeywords) {
-        if (pattern.test(catCell)) {
-          if (categories[key].length < 3) {
-            const clean = item.length > 150 ? item.slice(0, 147) + "..." : item;
-            categories[key].push(clean);
-          }
-          break;
+    const bLines = briefContent.split("\n");
+    let curKey: string | null = null;
+    for (const line of bLines) {
+      for (const { pattern, key } of sectionMap) {
+        if (pattern.test(line)) { curKey = key; break; }
+      }
+      if (/^##\s+⚡\s+Key\s+Takeaway/i.test(line) || /^##\s+🐦/i.test(line)) { curKey = null; continue; }
+      if (curKey && /^-\s+.+/.test(line)) {
+        if (categories[curKey].length < MAX_PER_CAT) {
+          let text = line.replace(/^-\s+/, "").replace(/🔴|🟡|🟢/g, "").replace(/\*\*/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").trim();
+          if (text.length > 160) text = text.slice(0, 157) + "...";
+          if (text) categories[curKey].push(text);
         }
       }
     }
-    const totalItems = Object.values(categories).reduce((s, a) => s + a.length, 0);
+
+    let totalItems = Object.values(categories).reduce((s, a) => s + a.length, 0);
+
+    if (totalItems === 0) {
+      const catKeywords: Array<{ pattern: RegExp; key: string }> = [
+        { pattern: /moody'?s\s*corporate/i, key: "corporate" },
+        { pattern: /banking/i, key: "banking" },
+        { pattern: /competitor/i, key: "competitors" },
+        { pattern: /enterprise\s*ai/i, key: "aiTrends" },
+        { pattern: /industry\s*analyst/i, key: "analysts" },
+      ];
+      const tableRows = briefContent.match(/^\|[^|]*\|[^|]*\|[^|]*\|/gm) || [];
+      for (const row of tableRows) {
+        const cells = row.split("|").map(c => c.trim()).filter(Boolean);
+        if (cells.length < 3 || /^[#-]+$/.test(cells[0])) continue;
+        const item = cells[1].replace(/\*\*/g, "").replace(/\(?\[.*?\]\(.*?\)\)?/g, "").trim();
+        const catCell = cells[2];
+        if (!item || !catCell || /^Category$/i.test(catCell) || /^-+$/.test(catCell)) continue;
+        for (const { pattern, key } of catKeywords) {
+          if (pattern.test(catCell)) {
+            if (categories[key].length < MAX_PER_CAT) {
+              const clean = item.length > 160 ? item.slice(0, 157) + "..." : item;
+              categories[key].push(clean);
+            }
+            break;
+          }
+        }
+      }
+      totalItems = Object.values(categories).reduce((s, a) => s + a.length, 0);
+    }
+
     if (totalItems === 0) {
       const bullets = briefContent.match(/^- .+$/gm) || [];
       if (bullets.length === 0) {
@@ -2990,7 +3020,7 @@ app.get("/api/vault/moodys-brief", async (_req: Request, res: Response) => {
       }
       for (const b of bullets.slice(0, 5)) {
         let text = b.replace(/^- /, "").replace(/\*\*/g, "").trim();
-        if (text.length > 150) text = text.slice(0, 147) + "...";
+        if (text.length > 160) text = text.slice(0, 157) + "...";
         categories.corporate.push(text);
       }
     }
@@ -3351,43 +3381,75 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
           return;
         }
         const categories: Record<string, string[]> = { corporate: [], banking: [], competitors: [], aiTrends: [], analysts: [] };
-        const catKeywords: Array<{ pattern: RegExp; key: string }> = [
-          { pattern: /moody'?s\s*corporate/i, key: "corporate" },
-          { pattern: /banking/i, key: "banking" },
-          { pattern: /competitor/i, key: "competitors" },
-          { pattern: /enterprise\s*ai/i, key: "aiTrends" },
-          { pattern: /industry\s*analyst/i, key: "analysts" },
+        const MAX_PER_CAT = 5;
+
+        const sectionMap: Array<{ pattern: RegExp; key: string }> = [
+          { pattern: /^##\s+🏢\s+Moody/im, key: "corporate" },
+          { pattern: /^##\s+🏦\s+Banking/im, key: "banking" },
+          { pattern: /^##\s+🔍\s+Competitor/im, key: "competitors" },
+          { pattern: /^##\s+🤖\s+Enterprise\s*AI/im, key: "aiTrends" },
+          { pattern: /^##\s+📊\s+Industry\s*Analyst/im, key: "analysts" },
         ];
-        const tableRows = briefContent.match(/^\|[^|]*\|[^|]*\|[^|]*\|/gm) || [];
-        for (const row of tableRows) {
-          const cells = row.split("|").map(c => c.trim()).filter(Boolean);
-          if (cells.length < 3 || /^[#-]+$/.test(cells[0])) continue;
-          const item = cells[1].replace(/\*\*/g, "").replace(/\(?\[.*?\]\(.*?\)\)?/g, "").trim();
-          const catCell = cells[2];
-          if (!item || !catCell || /^Category$/i.test(catCell) || /^-+$/.test(catCell)) continue;
-          for (const { pattern, key } of catKeywords) {
-            if (pattern.test(catCell)) {
-              if (categories[key].length < 3) {
-                const clean = item.length > 150 ? item.slice(0, 147) + "..." : item;
-                categories[key].push(clean);
-              }
-              break;
+        const lines = briefContent.split("\n");
+        let currentKey: string | null = null;
+        for (const line of lines) {
+          for (const { pattern, key } of sectionMap) {
+            if (pattern.test(line)) { currentKey = key; break; }
+          }
+          if (/^##\s+⚡\s+Key\s+Takeaway/i.test(line) || /^##\s+🐦/i.test(line)) { currentKey = null; continue; }
+          if (currentKey && /^-\s+.+/.test(line)) {
+            if (categories[currentKey].length < MAX_PER_CAT) {
+              let text = line.replace(/^-\s+/, "").replace(/🔴|🟡|🟢/g, "").replace(/\*\*/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").trim();
+              if (text.length > 160) text = text.slice(0, 157) + "...";
+              if (text) categories[currentKey].push(text);
             }
           }
         }
-        const takeaways = briefContent.match(/^\d+\.\s+\*\*.+$/gm) || [];
-        const totalItems = Object.values(categories).reduce((s, a) => s + a.length, 0);
-        if (totalItems === 0 && takeaways.length === 0) {
-          result.moodys = { available: false, reason: "unstructured", message: "Brief format not recognized" };
-          return;
+
+        let totalItems = Object.values(categories).reduce((s, a) => s + a.length, 0);
+
+        if (totalItems === 0) {
+          const catKeywords: Array<{ pattern: RegExp; key: string }> = [
+            { pattern: /moody'?s\s*corporate/i, key: "corporate" },
+            { pattern: /banking/i, key: "banking" },
+            { pattern: /competitor/i, key: "competitors" },
+            { pattern: /enterprise\s*ai/i, key: "aiTrends" },
+            { pattern: /industry\s*analyst/i, key: "analysts" },
+          ];
+          const tableRows = briefContent.match(/^\|[^|]*\|[^|]*\|[^|]*\|/gm) || [];
+          for (const row of tableRows) {
+            const cells = row.split("|").map(c => c.trim()).filter(Boolean);
+            if (cells.length < 3 || /^[#-]+$/.test(cells[0])) continue;
+            const item = cells[1].replace(/\*\*/g, "").replace(/\(?\[.*?\]\(.*?\)\)?/g, "").trim();
+            const catCell = cells[2];
+            if (!item || !catCell || /^Category$/i.test(catCell) || /^-+$/.test(catCell)) continue;
+            for (const { pattern, key } of catKeywords) {
+              if (pattern.test(catCell)) {
+                if (categories[key].length < MAX_PER_CAT) {
+                  const clean = item.length > 160 ? item.slice(0, 157) + "..." : item;
+                  categories[key].push(clean);
+                }
+                break;
+              }
+            }
+          }
+          totalItems = Object.values(categories).reduce((s, a) => s + a.length, 0);
         }
+
         if (totalItems === 0) {
           const bullets = briefContent.match(/^- .+$/gm) || [];
           for (const b of bullets.slice(0, 5)) {
             let text = b.replace(/^- /, "").replace(/\*\*/g, "").trim();
-            if (text.length > 150) text = text.slice(0, 147) + "...";
+            if (text.length > 160) text = text.slice(0, 157) + "...";
             categories.corporate.push(text);
           }
+          totalItems = categories.corporate.length;
+        }
+
+        const takeaways = briefContent.match(/^\d+\.\s+\*\*.+$/gm) || [];
+        if (totalItems === 0 && takeaways.length === 0) {
+          result.moodys = { available: false, reason: "unstructured", message: "Brief format not recognized" };
+          return;
         }
         const tsMatch = briefContent.match(/Generated:\s*(.+)/);
         result.moodys = { available: true, date: briefDate, categories, timestamp: tsMatch ? tsMatch[1].trim() : null };

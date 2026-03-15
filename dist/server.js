@@ -4694,99 +4694,86 @@ Save the report to "Scheduled Reports/Market Summary.md" (overwrite previous).`,
     id: "moodys-daily-intel",
     name: "Moody's Intelligence Brief",
     agentId: "moodys",
-    prompt: `Compile a comprehensive daily intelligence brief covering 5 categories. For each item, tag relevance: \u{1F534} High (directly impacts Moody's Banking), \u{1F7E1} Medium (industry trend worth watching), \u{1F7E2} Low (background context). Include source URLs for every item.
+    prompt: `You are a competitive intelligence analyst for Moody's Banking Solutions. Compile a comprehensive daily intelligence brief by ACTIVELY researching each category using web_search, web_fetch, AND x_search. You MUST call these tools \u2014 do not rely on prior knowledge.
 
-CATEGORY 1 \u2014 Moody's Corporate News:
-Search site:moodys.com and news for "Moody's" for any press releases, product announcements, leadership changes, earnings, or strategic moves. Focus on Banking Solutions, Lending, KYC, Risk Analytics, and data products.
-Also search X: x_search("from:MoodysAnalytics OR from:MoodysInvSvc OR from:Moodys") and x_search("Moody's Banking OR Credit Lens OR Moody's Analytics") for real-time announcements.
+RESEARCH METHOD \u2014 For EVERY category below:
+1. Run web_search with the specified queries to find articles
+2. Use web_fetch on the top 2-3 result URLs to read actual article content for richer summaries
+3. Run x_search with the specified queries for real-time signals
+4. Write 3-5 bullet items per category (not just 1)
 
-CATEGORY 2 \u2014 Banking Segment Specifics:
-Search for news about Moody's banking products: Credit Lens, Moody's Analytics banking, OnlineALM, Orbis, BvD. Include customer wins, partnerships, or product launches in the banking vertical.
+CATEGORY 1 \u2014 Moody's Corporate:
+web_search("Moody's Analytics news 2026") AND web_search("site:moodys.com press release")
+web_fetch the top 2 results from moodys.com
+x_search("from:MoodysAnalytics OR from:MoodysInvSvc OR Moody's Analytics OR Credit Lens")
+Focus: press releases, product launches, leadership, earnings, Credit Lens, Banking Solutions, KYC, risk analytics.
+
+CATEGORY 2 \u2014 Banking Segment:
+web_search("Moody's Credit Lens banking") AND web_search("Moody's Analytics banking product launch OR partnership")
+web_fetch any relevant moodys.com product pages
+x_search("Credit Lens OR Moody's banking OR OnlineALM OR BankFocus")
+Focus: Credit Lens updates, customer wins, partnerships, banking vertical product news.
 
 CATEGORY 3 \u2014 Competitor Intelligence:
-Search for latest news from ALL of these competitors using BOTH web_search AND x_search:
-
-Credit Rating & Data Peers:
-- Bloomberg \u2014 Bloomberg Data, Enterprise Data, AI initiatives
-- S&P Global \u2014 Market Intelligence, Capital IQ, data strategy
-- Fitch \u2014 Fitch Ratings, Fitch Solutions, banking analytics, data products
-- Nasdaq \u2014 Nasdaq Financial Technology, AxiomSL, Calypso, risk/regulatory tech
-X search: x_search("Bloomberg data AI OR S&P Global Capital IQ OR Fitch Solutions OR Nasdaq AxiomSL")
-
-Banking Tech / Lending Platforms:
-- nCino \u2014 Bank operating system, lending automation, AI in banking
-- QRM \u2014 Credit risk, ALM, FTP, balance sheet management (direct Credit Lens competitor)
-- Empyrean (Emperion) \u2014 Lending technology, credit decisioning, banking analytics
-X search: x_search("nCino OR QRM credit risk OR Empyrean lending")
-
-Data & AI Infrastructure:
-- Quantexa \u2014 Entity resolution, knowledge graph, agentic AI, banking deals
-- Databricks \u2014 Financial services, lakehouse for banking, Delta Sharing
-X search: x_search("Quantexa banking OR Databricks financial services")
-
-Regulatory & Compliance Partners:
-- Regnology \u2014 Regulatory reporting tech
-- FinregE \u2014 Regulatory intelligence automation
-- ValidMind \u2014 Model risk management, AI governance
-X search: x_search("Regnology OR FinregE OR ValidMind AI governance")
+Run SEPARATE searches for each competitor group:
+web_search("Bloomberg Terminal AI 2026 OR Bloomberg Enterprise Data") \u2192 web_fetch top result
+web_search("S&P Global Capital IQ AI OR S&P Market Intelligence 2026") \u2192 web_fetch top result
+web_search("Fitch Solutions banking analytics OR Fitch Ratings 2026") \u2192 web_fetch top result
+web_search("Nasdaq AxiomSL OR Nasdaq Financial Technology 2026") \u2192 web_fetch top result
+web_search("nCino banking AI OR nCino 2026 news") \u2192 web_fetch top result
+web_search("Quantexa banking OR Databricks financial services 2026")
+web_search("ValidMind AI governance OR Regnology regulatory reporting 2026")
+x_search("Bloomberg data AI OR S&P Global Capital IQ OR Fitch Solutions OR nCino")
+x_search("Quantexa OR Databricks financial services OR ValidMind OR Regnology")
+Write at least 3-5 competitor items with specific details from the articles.
 
 CATEGORY 4 \u2014 Enterprise AI Trends:
-Search for: agentic AI in banking/financial services, enterprise LLM deployments in regulated industries, AI governance and regulation (EU AI Act, US banking regulators), MCP (Model Context Protocol) enterprise adoption, CDM/data standards in financial services.
-Also search X: x_search("agentic AI banking OR enterprise LLM financial services OR AI governance banking") for cutting-edge discussions and announcements.
+web_search("agentic AI banking financial services 2026") \u2192 web_fetch top 2 results
+web_search("enterprise LLM deployment regulated industries") \u2192 web_fetch top result
+web_search("AI governance banking regulation EU AI Act")
+x_search("agentic AI banking OR enterprise LLM financial services OR AI governance banking")
+Focus: agentic AI in banking, LLM deployments, AI regulation, MCP adoption, CDM standards.
 
 CATEGORY 5 \u2014 Industry Analyst Coverage:
-Search site:celent.com for mentions of Moody's, Credit Lens, lending tech, risk analytics, ALM, banking AI, and competitors.
-Search site:chartis-research.com for RiskTech100, quadrant reports, credit risk, market risk, model risk, RegTech rankings.
-Search for reports from Forrester, Gartner, and IDC on banking technology, risk analytics, or enterprise AI in financial services.
-Also search X: x_search("from:CelentResearch OR from:Chartis_Research OR Celent banking OR RiskTech100") for analyst commentary and early report previews.
+web_search("site:celent.com Moody's OR Credit Lens OR banking AI")
+web_search("site:chartis-research.com RiskTech100 OR credit risk technology 2026")
+web_search("Forrester banking technology 2026 OR Gartner risk analytics OR IDC financial services AI")
+x_search("from:CelentResearch OR from:Chartis_Research OR Celent banking OR RiskTech100")
+web_fetch any analyst report pages found.
 
-OUTPUT FORMAT \u2014 Save using notes_create to "Scheduled Reports/Moody's Intelligence/Daily/{today's date YYYY-MM-DD}-Brief.md":
-
-# Moody's Intelligence Brief \u2014 {today's date}
+OUTPUT FORMAT \u2014 Do NOT use notes_create. Instead, output the full brief as your final response. The system will save it automatically. Format:
 
 ## \u{1F3E2} Moody's Corporate
-- {bullet summaries with source URLs and relevance tags}
+- \u{1F534}/\u{1F7E1}/\u{1F7E2} {item summary \u2014 1-2 sentences with specific details} ([source](url))
+- {3-5 items minimum}
 
 ## \u{1F3E6} Banking Segment
-- {bullet summaries with source URLs and relevance tags}
+- \u{1F534}/\u{1F7E1}/\u{1F7E2} {item summary} ([source](url))
+- {3-5 items minimum}
 
 ## \u{1F50D} Competitor Watch
-### Credit Rating & Data Peers
-#### Bloomberg
-#### S&P Global
-#### Fitch
-#### Nasdaq
-### Banking Tech & Lending
-#### nCino
-#### QRM
-#### Empyrean
-### Data & AI Infrastructure
-#### Quantexa
-#### Databricks
-### Regulatory & Compliance
-#### Regnology / FinregE / ValidMind
-- {bullet summaries with source URLs and relevance tags}
+- \u{1F534}/\u{1F7E1}/\u{1F7E2} **{Competitor Name}**: {what happened \u2014 specific details from article} ([source](url))
+- {5-8 items covering multiple competitors}
 
 ## \u{1F916} Enterprise AI Trends
-- {bullet summaries with source URLs and relevance tags}
+- \u{1F534}/\u{1F7E1}/\u{1F7E2} {item summary} ([source](url))
+- {3-5 items minimum}
 
 ## \u{1F4CA} Industry Analyst Coverage
-### Celent
-### Chartis Research
-### Other Analysts (Forrester / Gartner / IDC)
-- {bullet summaries with source URLs and relevance tags}
-
-## \u{1F426} X/Twitter Signals
-- {notable tweets from competitors, analysts, or industry leaders that don't fit the categories above}
-- {early signals, hot takes, or viral threads relevant to Moody's positioning}
-- {include tweet author, handle, and URL for each}
+- \u{1F534}/\u{1F7E1}/\u{1F7E2} {item summary} ([source](url))
+- {3-5 items minimum}
 
 ## \u26A1 Key Takeaways
-- {3-5 bullet executive summary of what matters most for Moody's Banking Solutions positioning}
+1. {takeaway with strategic implication for Moody's}
+2. {3-5 numbered takeaways}
 
-If a search returns no new results for a category, note "No new developments" rather than omitting the section.
-
-Do NOT update competitor or analyst profiles in this pass \u2014 a separate scheduled job handles that.`,
+IMPORTANT:
+- Each category MUST have at least 3 bullets. If web_search returns few results, broaden the query or try alternate terms.
+- Use web_fetch to read article content \u2014 summaries from search snippets alone are too thin.
+- Tag each item: \u{1F534} High (directly impacts Moody's Banking), \u{1F7E1} Medium (industry trend), \u{1F7E2} Low (background).
+- Do NOT produce a summary table \u2014 write full bullet content under each ## section header.
+- Do NOT use notes_create or notes_append \u2014 just output the brief directly. The system saves it for you.
+- Do NOT update competitor profiles \u2014 a separate job handles that.`,
     schedule: { type: "daily", hour: 6, minute: 0 },
     enabled: true
   },
@@ -6146,7 +6133,7 @@ async function triggerJob(jobId) {
       }
     };
     const agentResult = await runAgentFn(job.agentId, job.prompt, progressCb);
-    const result = agentResult.response;
+    let result = agentResult.response;
     const isPartial = agentResult.timedOut || result.includes("\u26A0\uFE0F PARTIAL");
     job.lastRun = (/* @__PURE__ */ new Date()).toISOString();
     job.lastResult = result.slice(0, 500);
@@ -6155,6 +6142,26 @@ async function triggerJob(jobId) {
     const todayKey = getTodayKey2();
     const safeName = job.name.replace(/[^a-zA-Z0-9 ]/g, "").replace(/\s+/g, "-");
     const savePath = getJobSavePath(job.id, todayKey, safeName);
+    if (job.id === "moodys-daily-intel") {
+      try {
+        const fs4 = await import("fs");
+        const path5 = await import("path");
+        const briefDir = path5.join(process.cwd(), "data/vault/Scheduled Reports/Moody's Intelligence/Daily");
+        if (fs4.existsSync(briefDir)) {
+          const files = fs4.readdirSync(briefDir).filter((f) => f.endsWith("-Brief.md") && f > `${todayKey}-Brief.md`).sort().reverse();
+          for (const fname of files) {
+            const content = fs4.readFileSync(path5.join(briefDir, fname), "utf-8");
+            if (content.length > 1e3 && content.includes("## \u{1F3E2}")) {
+              result = content;
+              console.log(`[scheduled-jobs] Moody's brief: using agent-saved file ${fname} (${result.length} chars)`);
+              break;
+            }
+          }
+        }
+      } catch (e) {
+        console.error("[scheduled-jobs] Moody's brief recovery failed:", e);
+      }
+    }
     let vaultSaved = false;
     if (kbCreateFn) {
       try {
@@ -9449,31 +9456,63 @@ app.get("/api/vault/moodys-brief", async (_req, res) => {
       return;
     }
     const categories = { corporate: [], banking: [], competitors: [], aiTrends: [], analysts: [] };
-    const catKeywords = [
-      { pattern: /moody'?s\s*corporate/i, key: "corporate" },
-      { pattern: /banking/i, key: "banking" },
-      { pattern: /competitor/i, key: "competitors" },
-      { pattern: /enterprise\s*ai/i, key: "aiTrends" },
-      { pattern: /industry\s*analyst/i, key: "analysts" }
+    const MAX_PER_CAT = 5;
+    const sectionMap = [
+      { pattern: /^##\s+🏢\s+Moody/im, key: "corporate" },
+      { pattern: /^##\s+🏦\s+Banking/im, key: "banking" },
+      { pattern: /^##\s+🔍\s+Competitor/im, key: "competitors" },
+      { pattern: /^##\s+🤖\s+Enterprise\s*AI/im, key: "aiTrends" },
+      { pattern: /^##\s+📊\s+Industry\s*Analyst/im, key: "analysts" }
     ];
-    const tableRows = briefContent.match(/^\|[^|]*\|[^|]*\|[^|]*\|/gm) || [];
-    for (const row of tableRows) {
-      const cells = row.split("|").map((c) => c.trim()).filter(Boolean);
-      if (cells.length < 3 || /^[#-]+$/.test(cells[0])) continue;
-      const item = cells[1].replace(/\*\*/g, "").replace(/\(?\[.*?\]\(.*?\)\)?/g, "").trim();
-      const catCell = cells[2];
-      if (!item || !catCell || /^Category$/i.test(catCell) || /^-+$/.test(catCell)) continue;
-      for (const { pattern, key } of catKeywords) {
-        if (pattern.test(catCell)) {
-          if (categories[key].length < 3) {
-            const clean = item.length > 150 ? item.slice(0, 147) + "..." : item;
-            categories[key].push(clean);
-          }
+    const bLines = briefContent.split("\n");
+    let curKey = null;
+    for (const line of bLines) {
+      for (const { pattern, key } of sectionMap) {
+        if (pattern.test(line)) {
+          curKey = key;
           break;
         }
       }
+      if (/^##\s+⚡\s+Key\s+Takeaway/i.test(line) || /^##\s+🐦/i.test(line)) {
+        curKey = null;
+        continue;
+      }
+      if (curKey && /^-\s+.+/.test(line)) {
+        if (categories[curKey].length < MAX_PER_CAT) {
+          let text = line.replace(/^-\s+/, "").replace(/🔴|🟡|🟢/g, "").replace(/\*\*/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").trim();
+          if (text.length > 160) text = text.slice(0, 157) + "...";
+          if (text) categories[curKey].push(text);
+        }
+      }
     }
-    const totalItems = Object.values(categories).reduce((s, a) => s + a.length, 0);
+    let totalItems = Object.values(categories).reduce((s, a) => s + a.length, 0);
+    if (totalItems === 0) {
+      const catKeywords = [
+        { pattern: /moody'?s\s*corporate/i, key: "corporate" },
+        { pattern: /banking/i, key: "banking" },
+        { pattern: /competitor/i, key: "competitors" },
+        { pattern: /enterprise\s*ai/i, key: "aiTrends" },
+        { pattern: /industry\s*analyst/i, key: "analysts" }
+      ];
+      const tableRows = briefContent.match(/^\|[^|]*\|[^|]*\|[^|]*\|/gm) || [];
+      for (const row of tableRows) {
+        const cells = row.split("|").map((c) => c.trim()).filter(Boolean);
+        if (cells.length < 3 || /^[#-]+$/.test(cells[0])) continue;
+        const item = cells[1].replace(/\*\*/g, "").replace(/\(?\[.*?\]\(.*?\)\)?/g, "").trim();
+        const catCell = cells[2];
+        if (!item || !catCell || /^Category$/i.test(catCell) || /^-+$/.test(catCell)) continue;
+        for (const { pattern, key } of catKeywords) {
+          if (pattern.test(catCell)) {
+            if (categories[key].length < MAX_PER_CAT) {
+              const clean = item.length > 160 ? item.slice(0, 157) + "..." : item;
+              categories[key].push(clean);
+            }
+            break;
+          }
+        }
+      }
+      totalItems = Object.values(categories).reduce((s, a) => s + a.length, 0);
+    }
     if (totalItems === 0) {
       const bullets = briefContent.match(/^- .+$/gm) || [];
       if (bullets.length === 0) {
@@ -9482,7 +9521,7 @@ app.get("/api/vault/moodys-brief", async (_req, res) => {
       }
       for (const b of bullets.slice(0, 5)) {
         let text = b.replace(/^- /, "").replace(/\*\*/g, "").trim();
-        if (text.length > 150) text = text.slice(0, 147) + "...";
+        if (text.length > 160) text = text.slice(0, 157) + "...";
         categories.corporate.push(text);
       }
     }
@@ -9855,43 +9894,76 @@ app.get("/api/daily-brief/data", async (_req, res) => {
           return;
         }
         const categories = { corporate: [], banking: [], competitors: [], aiTrends: [], analysts: [] };
-        const catKeywords = [
-          { pattern: /moody'?s\s*corporate/i, key: "corporate" },
-          { pattern: /banking/i, key: "banking" },
-          { pattern: /competitor/i, key: "competitors" },
-          { pattern: /enterprise\s*ai/i, key: "aiTrends" },
-          { pattern: /industry\s*analyst/i, key: "analysts" }
+        const MAX_PER_CAT = 5;
+        const sectionMap = [
+          { pattern: /^##\s+🏢\s+Moody/im, key: "corporate" },
+          { pattern: /^##\s+🏦\s+Banking/im, key: "banking" },
+          { pattern: /^##\s+🔍\s+Competitor/im, key: "competitors" },
+          { pattern: /^##\s+🤖\s+Enterprise\s*AI/im, key: "aiTrends" },
+          { pattern: /^##\s+📊\s+Industry\s*Analyst/im, key: "analysts" }
         ];
-        const tableRows = briefContent.match(/^\|[^|]*\|[^|]*\|[^|]*\|/gm) || [];
-        for (const row of tableRows) {
-          const cells = row.split("|").map((c) => c.trim()).filter(Boolean);
-          if (cells.length < 3 || /^[#-]+$/.test(cells[0])) continue;
-          const item = cells[1].replace(/\*\*/g, "").replace(/\(?\[.*?\]\(.*?\)\)?/g, "").trim();
-          const catCell = cells[2];
-          if (!item || !catCell || /^Category$/i.test(catCell) || /^-+$/.test(catCell)) continue;
-          for (const { pattern, key } of catKeywords) {
-            if (pattern.test(catCell)) {
-              if (categories[key].length < 3) {
-                const clean = item.length > 150 ? item.slice(0, 147) + "..." : item;
-                categories[key].push(clean);
-              }
+        const lines = briefContent.split("\n");
+        let currentKey = null;
+        for (const line of lines) {
+          for (const { pattern, key } of sectionMap) {
+            if (pattern.test(line)) {
+              currentKey = key;
               break;
             }
           }
+          if (/^##\s+⚡\s+Key\s+Takeaway/i.test(line) || /^##\s+🐦/i.test(line)) {
+            currentKey = null;
+            continue;
+          }
+          if (currentKey && /^-\s+.+/.test(line)) {
+            if (categories[currentKey].length < MAX_PER_CAT) {
+              let text = line.replace(/^-\s+/, "").replace(/🔴|🟡|🟢/g, "").replace(/\*\*/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").trim();
+              if (text.length > 160) text = text.slice(0, 157) + "...";
+              if (text) categories[currentKey].push(text);
+            }
+          }
         }
-        const takeaways = briefContent.match(/^\d+\.\s+\*\*.+$/gm) || [];
-        const totalItems = Object.values(categories).reduce((s, a) => s + a.length, 0);
-        if (totalItems === 0 && takeaways.length === 0) {
-          result.moodys = { available: false, reason: "unstructured", message: "Brief format not recognized" };
-          return;
+        let totalItems = Object.values(categories).reduce((s, a) => s + a.length, 0);
+        if (totalItems === 0) {
+          const catKeywords = [
+            { pattern: /moody'?s\s*corporate/i, key: "corporate" },
+            { pattern: /banking/i, key: "banking" },
+            { pattern: /competitor/i, key: "competitors" },
+            { pattern: /enterprise\s*ai/i, key: "aiTrends" },
+            { pattern: /industry\s*analyst/i, key: "analysts" }
+          ];
+          const tableRows = briefContent.match(/^\|[^|]*\|[^|]*\|[^|]*\|/gm) || [];
+          for (const row of tableRows) {
+            const cells = row.split("|").map((c) => c.trim()).filter(Boolean);
+            if (cells.length < 3 || /^[#-]+$/.test(cells[0])) continue;
+            const item = cells[1].replace(/\*\*/g, "").replace(/\(?\[.*?\]\(.*?\)\)?/g, "").trim();
+            const catCell = cells[2];
+            if (!item || !catCell || /^Category$/i.test(catCell) || /^-+$/.test(catCell)) continue;
+            for (const { pattern, key } of catKeywords) {
+              if (pattern.test(catCell)) {
+                if (categories[key].length < MAX_PER_CAT) {
+                  const clean = item.length > 160 ? item.slice(0, 157) + "..." : item;
+                  categories[key].push(clean);
+                }
+                break;
+              }
+            }
+          }
+          totalItems = Object.values(categories).reduce((s, a) => s + a.length, 0);
         }
         if (totalItems === 0) {
           const bullets = briefContent.match(/^- .+$/gm) || [];
           for (const b of bullets.slice(0, 5)) {
             let text = b.replace(/^- /, "").replace(/\*\*/g, "").trim();
-            if (text.length > 150) text = text.slice(0, 147) + "...";
+            if (text.length > 160) text = text.slice(0, 157) + "...";
             categories.corporate.push(text);
           }
+          totalItems = categories.corporate.length;
+        }
+        const takeaways = briefContent.match(/^\d+\.\s+\*\*.+$/gm) || [];
+        if (totalItems === 0 && takeaways.length === 0) {
+          result.moodys = { available: false, reason: "unstructured", message: "Brief format not recognized" };
+          return;
         }
         const tsMatch = briefContent.match(/Generated:\s*(.+)/);
         result.moodys = { available: true, date: briefDate, categories, timestamp: tsMatch ? tsMatch[1].trim() : null };
