@@ -2326,12 +2326,25 @@ function buildAgentTools(allToolsFn: () => ToolDefinition[], sessionId: string):
             apiKey: ANTHROPIC_KEY,
             model: modelOverride,
           });
+          let savedTo: string | undefined;
           if (result.response && result.response.length > 200) {
             try {
               const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-              await kbCreate(`Scheduled Reports/Agent Results/${params.agent}-${ts}.md`, `# ${params.agent} result\n*Task: ${params.task.slice(0, 200)}*\n*Duration: ${((result.durationMs || 0) / 1000).toFixed(0)}s*\n\n${result.response}`);
-            } catch {}
+              savedTo = `Scheduled Reports/Agent Results/${params.agent}-${ts}.md`;
+              await kbCreate(savedTo, `# ${params.agent} result\n*Task: ${params.task.slice(0, 200)}*\n*Duration: ${((result.durationMs || 0) / 1000).toFixed(0)}s*\n\n${result.response}`);
+            } catch { savedTo = undefined; }
           }
+          const sessionEntry2 = sessions.get(sessionId);
+          agentCompletionLog.push({
+            timestamp: Date.now(),
+            agent: params.agent,
+            task: params.task.slice(0, 200),
+            conversationId: sessionEntry2?.conversation?.id,
+            conversationTitle: sessionEntry2?.conversation?.title,
+            duration: result.durationMs,
+            savedTo,
+          });
+          if (agentCompletionLog.length > 20) agentCompletionLog.splice(0, agentCompletionLog.length - 20);
           const details: any = { agent: result.agentId, toolsUsed: result.toolsUsed, durationMs: result.durationMs };
           if (result.error) details.error = result.error;
           if (result.timedOut) details.timedOut = true;
@@ -2398,6 +2411,7 @@ interface SessionEntry {
   startupContext?: string;
 }
 const sessions = new Map<string, SessionEntry>();
+const agentCompletionLog: Array<{ timestamp: number; agent: string; task: string; conversationId?: string; conversationTitle?: string; duration?: number; savedTo?: string }> = [];
 
 const FAST_MODEL_ID = "claude-haiku-4-5-20251001";
 const FULL_MODEL_ID = "claude-sonnet-4-6";
@@ -4012,6 +4026,9 @@ app.post("/api/session", async (req: Request, res: Response) => {
 
       if (event.type === "tool_execution_start") {
         entry.currentToolName = (event as any).toolName || null;
+        if ((event as any).toolName === "delegate" && (event as any).input) {
+          (event as any).toolInput = { agent: (event as any).input.agent };
+        }
       } else if (event.type === "tool_execution_end") {
         entry.currentToolName = null;
       }
@@ -4372,16 +4389,24 @@ app.get("/api/tasks/completed", async (_req: Request, res: Response) => {
 
 app.get("/api/agents/status", (_req: Request, res: Response) => {
   const runningJob = scheduledJobs.getRunningJob();
-  const activeSessions: { id: string; running: boolean; tool?: string }[] = [];
+  const activeSessions: { id: string; running: boolean; tool?: string; conversationId?: string; conversationTitle?: string }[] = [];
   for (const [id, entry] of sessions.entries()) {
     if (entry.isAgentRunning) {
-      activeSessions.push({ id, running: true, tool: entry.currentToolName || undefined });
+      activeSessions.push({
+        id,
+        running: true,
+        tool: entry.currentToolName || undefined,
+        conversationId: entry.conversation?.id,
+        conversationTitle: entry.conversation?.title,
+      });
     }
   }
+  const recentCompletions = agentCompletionLog.slice(-5).reverse();
   res.json({
     job: runningJob,
     sessions: activeSessions,
     anyActive: runningJob.running || activeSessions.length > 0,
+    recentCompletions,
   });
 });
 

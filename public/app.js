@@ -1222,7 +1222,22 @@ function handleAgentEvent(event) {
 
     case "tool_execution_start": {
       const name = event.toolName ?? "tool";
-      const label = TOOL_LABELS[name] || `⚙️ RUNNING ${name.toUpperCase()}`;
+      let label = TOOL_LABELS[name] || `⚙️ RUNNING ${name.toUpperCase()}`;
+      if (name === "delegate" && event.toolInput) {
+        const agentLabels = {
+          "deep-researcher": "📚 DEEP RESEARCH",
+          "analyst": "📈 MARKET ANALYSIS",
+          "moodys": "🏢 MOODY'S SPECIALIST",
+          "real-estate": "🏠 PROPERTY SEARCH",
+          "email-drafter": "📧 DRAFTING EMAIL",
+          "nutritionist": "🥗 MEAL PLANNING",
+          "family-planner": "👨‍👩‍👧 FAMILY PLANNING",
+          "knowledge-organizer": "📖 ORGANIZING VAULT",
+          "project-planner": "📋 PROJECT PLANNING",
+        };
+        const agentId = event.toolInput.agent || "";
+        label = agentLabels[agentId] || "🤖 CONSULTING SPECIALIST";
+      }
       showStatusWithTimer(label);
       break;
     }

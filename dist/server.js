@@ -8835,17 +8835,31 @@ function buildAgentTools(allToolsFn, sessionId) {
             apiKey: ANTHROPIC_KEY,
             model: modelOverride
           });
+          let savedTo;
           if (result.response && result.response.length > 200) {
             try {
               const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-").slice(0, 19);
-              await kbCreate(`Scheduled Reports/Agent Results/${params.agent}-${ts}.md`, `# ${params.agent} result
+              savedTo = `Scheduled Reports/Agent Results/${params.agent}-${ts}.md`;
+              await kbCreate(savedTo, `# ${params.agent} result
 *Task: ${params.task.slice(0, 200)}*
 *Duration: ${((result.durationMs || 0) / 1e3).toFixed(0)}s*
 
 ${result.response}`);
             } catch {
+              savedTo = void 0;
             }
           }
+          const sessionEntry2 = sessions.get(sessionId);
+          agentCompletionLog.push({
+            timestamp: Date.now(),
+            agent: params.agent,
+            task: params.task.slice(0, 200),
+            conversationId: sessionEntry2?.conversation?.id,
+            conversationTitle: sessionEntry2?.conversation?.title,
+            duration: result.durationMs,
+            savedTo
+          });
+          if (agentCompletionLog.length > 20) agentCompletionLog.splice(0, agentCompletionLog.length - 20);
           const details = { agent: result.agentId, toolsUsed: result.toolsUsed, durationMs: result.durationMs };
           if (result.error) details.error = result.error;
           if (result.timedOut) details.timedOut = true;
@@ -8884,6 +8898,7 @@ ${list2}` }],
   ];
 }
 var sessions = /* @__PURE__ */ new Map();
+var agentCompletionLog = [];
 var FAST_MODEL_ID = "claude-haiku-4-5-20251001";
 var FULL_MODEL_ID = "claude-sonnet-4-6";
 var MAX_MODEL_ID = "claude-opus-4-6";
@@ -10522,6 +10537,9 @@ app.post("/api/session", async (req, res) => {
       }
       if (event.type === "tool_execution_start") {
         entry.currentToolName = event.toolName || null;
+        if (event.toolName === "delegate" && event.input) {
+          event.toolInput = { agent: event.input.agent };
+        }
       } else if (event.type === "tool_execution_end") {
         entry.currentToolName = null;
       }
@@ -10911,13 +10929,21 @@ app.get("/api/agents/status", (_req, res) => {
   const activeSessions = [];
   for (const [id, entry] of sessions.entries()) {
     if (entry.isAgentRunning) {
-      activeSessions.push({ id, running: true, tool: entry.currentToolName || void 0 });
+      activeSessions.push({
+        id,
+        running: true,
+        tool: entry.currentToolName || void 0,
+        conversationId: entry.conversation?.id,
+        conversationTitle: entry.conversation?.title
+      });
     }
   }
+  const recentCompletions = agentCompletionLog.slice(-5).reverse();
   res.json({
     job: runningJob,
     sessions: activeSessions,
-    anyActive: runningJob.running || activeSessions.length > 0
+    anyActive: runningJob.running || activeSessions.length > 0,
+    recentCompletions
   });
 });
 app.get("/api/scheduled-jobs", (_req, res) => {
