@@ -177,9 +177,51 @@ export async function getTweet(tweetInput: string): Promise<string> {
   }
 }
 
+const KNOWN_USER_IDS: Record<string, string> = {
+  deltaone: "2704294333", unusual_whales: "1200616796295847936", sentdefender: "1457867047334031360",
+  pmarca: "5943622", intelcrab: "3331851939", spectatorindex: "1626294277", zeynep: "65375759",
+  billackman: "880412538625810432", elbridgecolby: "443181346", adam_tooze: "3311286493",
+  reuters: "1652541", ap: "51241574", bbcbreaking: "5402612", business: "34713362", cnn: "759251",
+  cnbc: "20402945", ajenglish: "4970411", axios: "800707492346925056", politico: "9300262", ft: "18949452",
+  ianbremmer: "60783724", michaelxpettis: "917683048782503937", rnaudbertrand: "43061739",
+  jkylebass: "3005733012", fareedzakaria: "41814169", richardhaass: "195826487", peterzeihan: "1688796138",
+  anneapplebaum: "297100174", nouriel: "19224439", brankomilan: "990009265",
+  bbcworld: "742143", nytimes: "807095", theeconomist: "5988062", foreignpolicy: "26792275",
+  foreignaffairs: "21114659", guardian: "87818409", cfr_org: "17469492", france24: "1994321", dwnews: "6134882",
+  lynaldencontact: "823766058909761536", nicktimiraos: "59603406", lukegromen: "2936015319",
+  josephwang: "718702333", raoulgmi: "2453385626", biancoresearch: "188369814", elerianm: "332617373",
+  naval: "745273", kobeissiletter: "3316376038", balajis: "2178012643",
+  wsj: "3108351", imfnews: "25098482", federalreserve: "26538229", bisbank: "90303963", markets: "69620713",
+  karpathy: "33836629", sama: "1605", darioamodei: "874126509245476864", emollick: "39125788",
+  andrewyngcourses: "216939636", aravsrinivas: "759894532649545732", ylecun: "48008938",
+  drjimfan: "1007413134", gdb: "162124540", alexandr_wang: "615818451",
+  wired: "1344951", techcrunch: "816653", verge: "275686563", arstechnica: "717313",
+  venturebeat: "60642052", newscientist: "19658826",
+  saylor: "244647486", apompliano: "339061487", prestonpysh: "538399586",
+  dergigi: "1810407120313221120", pete_rizzo_: "341746855", bitfinexed: "851583986270957568",
+  coindesk: "1333467482", cointelegraph: "2207129125", theblockcrypto: "916862424325570560",
+  bitcoinmagazine: "361289499", decryptmedia: "993530753014054912", thedefiant: "29531842",
+  wublockchain: "111533746", cryptobriefing: "1430225550",
+};
+
+const userIdCache = new Map<string, { id: string | null; ts: number }>();
+const USER_ID_CACHE_TTL = 24 * 60 * 60 * 1000;
+
 async function resolveUserId(username: string): Promise<string | null> {
-  const data = await apiFetch("/user", { username });
-  return data?.result?.data?.user?.result?.rest_id || null;
+  const key = username.toLowerCase();
+  const known = KNOWN_USER_IDS[key];
+  if (known) return known;
+  const cached = userIdCache.get(key);
+  if (cached && Date.now() - cached.ts < USER_ID_CACHE_TTL) return cached.id;
+  try {
+    const data = await apiFetch("/user", { username });
+    const id = data?.result?.data?.user?.result?.rest_id || null;
+    userIdCache.set(key, { id, ts: Date.now() });
+    return id;
+  } catch (err) {
+    if (cached) return cached.id;
+    return null;
+  }
 }
 
 export interface TweetData {

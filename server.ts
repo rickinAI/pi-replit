@@ -3143,11 +3143,11 @@ async function fetchXIntelData(): Promise<Record<string, { visionaries: any[]; h
     },
     techAi: {
       visionaries: ["karpathy", "sama", "DarioAmodei", "emollick", "AndrewYNg", "AravSrinivas", "ylecun", "DrJimFan", "gdb", "alexandr_wang"],
-      headlines: ["Wired", "MITTechReview", "TechCrunch", "verge", "ArsTechnica", "VentureBeat", "IEEE_Spectrum", "NewScientist", "NatureNews", "axios"],
+      headlines: ["Wired", "TechCrunch", "verge", "ArsTechnica", "VentureBeat", "NewScientist", "axios", "CNBC"],
     },
     bitcoin: {
-      visionaries: ["saylor", "LynAldenContact", "APompliano", "PrestonPysh", "nic__carter", "dergigi", "pete_rizzo_", "WClementeIII", "bitfinexed", "SaifedeanAmmous"],
-      headlines: ["CoinDesk", "Cointelegraph", "theblockCrypto", "BitcoinMagazine", "DecryptMedia", "Blockworks_", "TheDefiant", "DLnews_", "WuBlockchain", "cryptobriefing"],
+      visionaries: ["saylor", "LynAldenContact", "APompliano", "PrestonPysh", "dergigi", "pete_rizzo_", "bitfinexed", "KobeissiLetter", "balajis", "naval"],
+      headlines: ["CoinDesk", "Cointelegraph", "theblockCrypto", "BitcoinMagazine", "DecryptMedia", "TheDefiant", "WuBlockchain", "cryptobriefing"],
     },
   };
   function pickRandom<T>(arr: T[], n: number): T[] {
@@ -3161,23 +3161,31 @@ async function fetchXIntelData(): Promise<Record<string, { visionaries: any[]; h
   }
   const allFetches: Array<{ section: string; type: "visionaries" | "headlines"; handle: string }> = [];
   for (const [section, handles] of sections) {
-    const pickedVis = pickRandom(handles.visionaries, 5);
-    const pickedHead = pickRandom(handles.headlines, 5);
+    const pickedVis = pickRandom(handles.visionaries, 7);
+    const pickedHead = pickRandom(handles.headlines, 7);
     for (const h of pickedVis) allFetches.push({ section, type: "visionaries", handle: h });
     for (const h of pickedHead) allFetches.push({ section, type: "headlines", handle: h });
   }
-  const BATCH = 6;
+  let fetchOk = 0, fetchFail = 0;
+  const BATCH = 8;
   for (let i = 0; i < allFetches.length; i += BATCH) {
+    if (i > 0) await new Promise(r => setTimeout(r, 500));
     const batch = allFetches.slice(i, i + BATCH);
     await Promise.all(batch.map(async (f) => {
       try {
         const tweets = await twitter.getUserTimelineStructured(f.handle, 2);
         if (tweets.length > 0) {
           xIntelResult[f.section][f.type].push(...tweets);
+          fetchOk++;
+        } else {
+          fetchFail++;
         }
-      } catch {}
+      } catch {
+        fetchFail++;
+      }
     }));
   }
+  console.log(`[x-intel] Fetched ${allFetches.length} handles: ${fetchOk} ok, ${fetchFail} empty/failed`);
 
   const filterStatus: Record<string, boolean> = {};
   const filterPromises: Promise<void>[] = [];

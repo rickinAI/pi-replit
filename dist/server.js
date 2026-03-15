@@ -2848,9 +2848,109 @@ async function getTweet(tweetInput) {
     return `Error fetching tweet: ${msg}`;
   }
 }
+var KNOWN_USER_IDS = {
+  deltaone: "2704294333",
+  unusual_whales: "1200616796295847936",
+  sentdefender: "1457867047334031360",
+  pmarca: "5943622",
+  intelcrab: "3331851939",
+  spectatorindex: "1626294277",
+  zeynep: "65375759",
+  billackman: "880412538625810432",
+  elbridgecolby: "443181346",
+  adam_tooze: "3311286493",
+  reuters: "1652541",
+  ap: "51241574",
+  bbcbreaking: "5402612",
+  business: "34713362",
+  cnn: "759251",
+  cnbc: "20402945",
+  ajenglish: "4970411",
+  axios: "800707492346925056",
+  politico: "9300262",
+  ft: "18949452",
+  ianbremmer: "60783724",
+  michaelxpettis: "917683048782503937",
+  rnaudbertrand: "43061739",
+  jkylebass: "3005733012",
+  fareedzakaria: "41814169",
+  richardhaass: "195826487",
+  peterzeihan: "1688796138",
+  anneapplebaum: "297100174",
+  nouriel: "19224439",
+  brankomilan: "990009265",
+  bbcworld: "742143",
+  nytimes: "807095",
+  theeconomist: "5988062",
+  foreignpolicy: "26792275",
+  foreignaffairs: "21114659",
+  guardian: "87818409",
+  cfr_org: "17469492",
+  france24: "1994321",
+  dwnews: "6134882",
+  lynaldencontact: "823766058909761536",
+  nicktimiraos: "59603406",
+  lukegromen: "2936015319",
+  josephwang: "718702333",
+  raoulgmi: "2453385626",
+  biancoresearch: "188369814",
+  elerianm: "332617373",
+  naval: "745273",
+  kobeissiletter: "3316376038",
+  balajis: "2178012643",
+  wsj: "3108351",
+  imfnews: "25098482",
+  federalreserve: "26538229",
+  bisbank: "90303963",
+  markets: "69620713",
+  karpathy: "33836629",
+  sama: "1605",
+  darioamodei: "874126509245476864",
+  emollick: "39125788",
+  andrewyngcourses: "216939636",
+  aravsrinivas: "759894532649545732",
+  ylecun: "48008938",
+  drjimfan: "1007413134",
+  gdb: "162124540",
+  alexandr_wang: "615818451",
+  wired: "1344951",
+  techcrunch: "816653",
+  verge: "275686563",
+  arstechnica: "717313",
+  venturebeat: "60642052",
+  newscientist: "19658826",
+  saylor: "244647486",
+  apompliano: "339061487",
+  prestonpysh: "538399586",
+  dergigi: "1810407120313221120",
+  pete_rizzo_: "341746855",
+  bitfinexed: "851583986270957568",
+  coindesk: "1333467482",
+  cointelegraph: "2207129125",
+  theblockcrypto: "916862424325570560",
+  bitcoinmagazine: "361289499",
+  decryptmedia: "993530753014054912",
+  thedefiant: "29531842",
+  wublockchain: "111533746",
+  cryptobriefing: "1430225550"
+};
+var userIdCache = /* @__PURE__ */ new Map();
+var USER_ID_CACHE_TTL = 24 * 60 * 60 * 1e3;
 async function resolveUserId(username) {
-  const data = await apiFetch("/user", { username });
-  return data?.result?.data?.user?.result?.rest_id || null;
+  const key = username.toLowerCase();
+  const known = KNOWN_USER_IDS[key];
+  if (known) return known;
+  const cached = userIdCache.get(key);
+  if (cached && Date.now() - cached.ts < USER_ID_CACHE_TTL) return cached.id;
+  try {
+    const data = await apiFetch("/user", { username });
+    const id = data?.result?.data?.user?.result?.rest_id || null;
+    userIdCache.set(key, { id, ts: Date.now() });
+    return id;
+  } catch (err) {
+    if (cached) return cached.id;
+    return null;
+  }
 }
 async function getUserTimelineStructured(username, count = 5) {
   try {
@@ -9720,11 +9820,11 @@ async function fetchXIntelData() {
     },
     techAi: {
       visionaries: ["karpathy", "sama", "DarioAmodei", "emollick", "AndrewYNg", "AravSrinivas", "ylecun", "DrJimFan", "gdb", "alexandr_wang"],
-      headlines: ["Wired", "MITTechReview", "TechCrunch", "verge", "ArsTechnica", "VentureBeat", "IEEE_Spectrum", "NewScientist", "NatureNews", "axios"]
+      headlines: ["Wired", "TechCrunch", "verge", "ArsTechnica", "VentureBeat", "NewScientist", "axios", "CNBC"]
     },
     bitcoin: {
-      visionaries: ["saylor", "LynAldenContact", "APompliano", "PrestonPysh", "nic__carter", "dergigi", "pete_rizzo_", "WClementeIII", "bitfinexed", "SaifedeanAmmous"],
-      headlines: ["CoinDesk", "Cointelegraph", "theblockCrypto", "BitcoinMagazine", "DecryptMedia", "Blockworks_", "TheDefiant", "DLnews_", "WuBlockchain", "cryptobriefing"]
+      visionaries: ["saylor", "LynAldenContact", "APompliano", "PrestonPysh", "dergigi", "pete_rizzo_", "bitfinexed", "KobeissiLetter", "balajis", "naval"],
+      headlines: ["CoinDesk", "Cointelegraph", "theblockCrypto", "BitcoinMagazine", "DecryptMedia", "TheDefiant", "WuBlockchain", "cryptobriefing"]
     }
   };
   function pickRandom(arr, n) {
@@ -9738,24 +9838,31 @@ async function fetchXIntelData() {
   }
   const allFetches = [];
   for (const [section, handles] of sections) {
-    const pickedVis = pickRandom(handles.visionaries, 5);
-    const pickedHead = pickRandom(handles.headlines, 5);
+    const pickedVis = pickRandom(handles.visionaries, 7);
+    const pickedHead = pickRandom(handles.headlines, 7);
     for (const h of pickedVis) allFetches.push({ section, type: "visionaries", handle: h });
     for (const h of pickedHead) allFetches.push({ section, type: "headlines", handle: h });
   }
-  const BATCH = 6;
+  let fetchOk = 0, fetchFail = 0;
+  const BATCH = 8;
   for (let i = 0; i < allFetches.length; i += BATCH) {
+    if (i > 0) await new Promise((r) => setTimeout(r, 500));
     const batch = allFetches.slice(i, i + BATCH);
     await Promise.all(batch.map(async (f) => {
       try {
         const tweets = await getUserTimelineStructured(f.handle, 2);
         if (tweets.length > 0) {
           xIntelResult[f.section][f.type].push(...tweets);
+          fetchOk++;
+        } else {
+          fetchFail++;
         }
       } catch {
+        fetchFail++;
       }
     }));
   }
+  console.log(`[x-intel] Fetched ${allFetches.length} handles: ${fetchOk} ok, ${fetchFail} empty/failed`);
   const filterStatus = {};
   const filterPromises = [];
   for (const [section, data] of Object.entries(xIntelResult)) {
@@ -10256,7 +10363,8 @@ ${emailList}` }],
               const insights = JSON.parse(jsonMatch[0]);
               for (const ins of insights) {
                 if (ins.index >= 0 && ins.index < actionEmails.length && ins.insight) {
-                  actionEmails[ins.index].insight = ins.insight;
+                  const words = ins.insight.split(/\s+/);
+                  actionEmails[ins.index].insight = words.length > 12 ? words.slice(0, 12).join(" ") : ins.insight;
                 }
               }
             }
