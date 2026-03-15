@@ -760,20 +760,23 @@ async function showLanding() {
         }
       }
     } catch (err) { console.warn("Preview fetch failed:", err); }
-    let lastStatusHtml = "";
+    let lastStatusClass = "status-idle";
+    let lastStatusLabel = "";
     if (landingAgentStatus) {
       const activeSession = (landingAgentStatus.sessions || []).find(s => s.conversationId === last.id);
       if (activeSession) {
-        lastStatusHtml = `<span class="landing-last-status status-running"><span class="dot-pulse" style="width:6px;height:6px"></span> RUNNING</span>`;
+        lastStatusClass = "status-running";
+        lastStatusLabel = `<span class="landing-last-status status-running"><span class="dot-pulse" style="width:6px;height:6px"></span> RUNNING</span>`;
       } else {
         const recentCompletion = (landingAgentStatus.recentCompletions || []).find(c => c.conversationId === last.id);
         if (recentCompletion && Date.now() - recentCompletion.timestamp < 300000) {
-          lastStatusHtml = `<span class="landing-last-status status-completed">✓ COMPLETED</span>`;
+          lastStatusClass = "status-completed";
+          lastStatusLabel = `<span class="landing-last-status status-completed">✓ COMPLETED</span>`;
         }
       }
     }
     lastCardEl.innerHTML = `
-      <div class="landing-last-label">Last conversation${lastStatusHtml}</div>
+      <div class="landing-last-label"><span class="landing-card-status ${lastStatusClass}" style="display:inline-block;vertical-align:middle;margin-right:6px"></span>Last conversation${lastStatusLabel}</div>
       <div class="landing-last-title">${escapeHtml(last.title)}</div>
       <div class="landing-last-meta">${relativeTime(last.updatedAt || last.createdAt)} · ${last.messageCount} msgs</div>
       ${previewHtml ? `<div class="landing-last-preview">${previewHtml}</div>` : ""}
