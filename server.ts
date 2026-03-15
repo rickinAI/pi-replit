@@ -2948,7 +2948,7 @@ app.get("/api/vault/moodys-brief", async (_req: Request, res: Response) => {
         return text;
       });
     }
-    if (foundSections < 3) {
+    if (foundSections < 5) {
       res.json({ available: false, reason: "unstructured", message: "Brief format not recognized" });
       return;
     }
@@ -3324,7 +3324,7 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
             return text;
           });
         }
-        if (foundSections < 3) {
+        if (foundSections < 5) {
           result.moodys = { available: false, reason: "unstructured", message: "Brief format not recognized" };
           return;
         }
