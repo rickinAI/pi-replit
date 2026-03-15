@@ -1810,6 +1810,59 @@ body.light-theme #mic-btn.recording {
   margin-top: 2px;
 }
 
+.landing-card-status {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background 0.3s, box-shadow 0.3s;
+}
+.landing-card-status.status-running {
+  background: #f59e0b;
+  box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.5);
+  animation: statusPulseAmber 1.5s ease-in-out infinite;
+}
+.landing-card-status.status-completed {
+  background: #22c55e;
+  box-shadow: 0 0 4px rgba(34, 197, 94, 0.3);
+}
+.landing-card-status.status-idle {
+  background: var(--green-muted);
+  opacity: 0.3;
+}
+@keyframes statusPulseAmber {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.5); }
+  50% { box-shadow: 0 0 0 5px rgba(245, 158, 11, 0); }
+}
+.landing-card-tool {
+  font-size: 9px;
+  color: #f59e0b;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.landing-last-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 9px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-left: 8px;
+}
+.landing-last-status.status-running {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+}
+.landing-last-status.status-completed {
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.08);
+  border: 1px solid rgba(34, 197, 94, 0.15);
+}
 .landing-card-delete {
   background: none;
   border: none;
@@ -1821,6 +1874,99 @@ body.light-theme #mic-btn.recording {
   font-family: var(--font);
   transition: color 0.15s;
   line-height: 1;
+}
+.reconnect-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 3px 10px;
+  border-radius: 99px;
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.25);
+  color: #22c55e;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+  animation: badgeFadeIn 0.4s ease;
+}
+@keyframes badgeFadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.landing-queue-section {
+  margin-top: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(0, 255, 0, 0.02);
+}
+.landing-queue-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.landing-queue-label {
+  font-size: 10px;
+  color: var(--green-muted);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.landing-queue-count {
+  font-size: 9px;
+  color: var(--green-dim);
+  background: var(--green-subtle);
+  border: 1px solid var(--border);
+  padding: 1px 7px;
+  border-radius: 99px;
+  font-weight: 600;
+}
+.landing-queue-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.landing-queue-item:last-child { border-bottom: none; }
+.landing-queue-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.landing-queue-dot.q-running {
+  background: #f59e0b;
+  animation: statusPulseAmber 1.5s ease-in-out infinite;
+}
+.landing-queue-dot.q-done {
+  background: #22c55e;
+}
+.landing-queue-dot.q-error {
+  background: #ef4444;
+}
+.landing-queue-dot.q-scheduled {
+  background: var(--green-muted);
+  opacity: 0.4;
+}
+.landing-queue-name {
+  font-size: 11px;
+  color: var(--green);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.landing-queue-time {
+  font-size: 9px;
+  color: var(--green-muted);
+  flex-shrink: 0;
+}
+.landing-queue-empty {
+  font-size: 10px;
+  color: var(--green-dim);
+  text-align: center;
+  padding: 8px 0;
 }
 
 .landing-card-delete:active {
@@ -2510,6 +2656,23 @@ body.light-theme .pull-indicator {
 }
 
 body.light-theme .landing-card {
+  border-color: var(--border);
+}
+body.light-theme .landing-card-tool {
+  color: #b45309;
+}
+body.light-theme .landing-last-status.status-running {
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.15);
+}
+body.light-theme .reconnect-badge {
+  background: rgba(34, 197, 94, 0.08);
+  border-color: rgba(34, 197, 94, 0.2);
+  color: #15803d;
+}
+body.light-theme .landing-queue-section {
+  background: rgba(0, 128, 0, 0.02);
   border-color: var(--border);
 }
 

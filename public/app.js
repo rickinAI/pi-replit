@@ -134,9 +134,28 @@ const TOOL_LABELS = {
   slides_batch_update: "📽️ UPDATING SLIDES",
 };
 
+const DELEGATE_LABELS = {
+  "deep-researcher": "📚 Deep Research",
+  "analyst": "📈 Market Analysis",
+  "moodys": "🏢 Moody's Specialist",
+  "real-estate": "🏠 Property Search",
+  "email-drafter": "📧 Drafting Email",
+  "nutritionist": "🥗 Meal Planning",
+  "family-planner": "👨‍👩‍👧 Family Planning",
+  "knowledge-organizer": "📖 Organizing Vault",
+  "project-planner": "📋 Project Planning",
+};
 function getToolStatusLabel(toolName) {
   if (!toolName) return "🧠 THINKING...";
   return TOOL_LABELS[toolName] || `⚙️ ${toolName.toUpperCase().replace(/_/g, " ")}`;
+}
+function getReadableToolName(toolName) {
+  if (!toolName) return null;
+  if (toolName.startsWith("delegate:")) {
+    const agentId = toolName.split(":")[1];
+    return DELEGATE_LABELS[agentId] || "🤖 Specialist";
+  }
+  return TOOL_LABELS[toolName] || toolName.replace(/_/g, " ");
 }
 
 function checkAuth(res) {
@@ -380,13 +399,16 @@ async function showLanding() {
 
   let convos = [];
   let glanceData = null;
+  let landingAgentStatus = null;
   try {
-    const [convRes, glanceRes] = await Promise.all([
+    const [convRes, glanceRes, agentRes] = await Promise.all([
       fetch("/api/conversations").then(r => r.ok ? r.json() : []).catch(() => []),
       fetch("/api/glance").then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch("/api/agents/status").then(r => r.ok ? r.json() : null).catch(() => null),
     ]);
     convos = convRes;
     glanceData = glanceRes;
+    landingAgentStatus = agentRes;
   } catch (err) { console.warn("Landing data fetch failed:", err); }
 
   if (thisInvocation !== landingInvocationId) return;
@@ -630,6 +652,48 @@ async function showLanding() {
   taskSection.appendChild(completedWrap);
   landing.appendChild(taskSection);
 
+  if (landingAgentStatus) {
+    const queueSection = document.createElement("div");
+    queueSection.className = "landing-queue-section";
+    queueSection.id = "landing-queue";
+    const running = landingAgentStatus.job && landingAgentStatus.job.running;
+    const activeSessions = landingAgentStatus.sessions || [];
+    const completions = landingAgentStatus.recentCompletions || [];
+    const queueItems = [];
+    if (running) {
+      queueItems.push({ name: landingAgentStatus.job.jobName || "Background job", status: "running", time: "" });
+    }
+    activeSessions.forEach(s => {
+      const toolLabel = s.tool ? getReadableToolName(s.tool) || s.tool : "";
+      queueItems.push({ name: s.conversationTitle || "Session agent", status: "running", time: toolLabel ? `⚙ ${toolLabel}` : "" });
+    });
+    completions.forEach(c => {
+      const ago = Date.now() - c.timestamp;
+      let timeStr = "";
+      if (ago < 60000) timeStr = "just now";
+      else if (ago < 3600000) timeStr = Math.floor(ago / 60000) + "m ago";
+      else if (ago < 86400000) timeStr = Math.floor(ago / 3600000) + "h ago";
+      queueItems.push({ name: c.agent + ": " + (c.task || "").slice(0, 40), status: c.savedTo ? "done" : "done", time: timeStr });
+    });
+    if (queueItems.length > 0) {
+      const activeCount = queueItems.filter(q => q.status === "running").length;
+      queueSection.innerHTML = `<div class="landing-queue-header">
+        <span class="landing-queue-label">Agent Activity</span>
+        <span class="landing-queue-count">${activeCount > 0 ? activeCount + " running" : "idle"}</span>
+      </div>`;
+      queueItems.slice(0, 6).forEach(item => {
+        const dotClass = item.status === "running" ? "q-running" : item.status === "error" ? "q-error" : "q-done";
+        const el = document.createElement("div");
+        el.className = "landing-queue-item";
+        el.innerHTML = `<div class="landing-queue-dot ${dotClass}"></div>
+          <div class="landing-queue-name">${escapeHtml(item.name)}</div>
+          <div class="landing-queue-time">${escapeHtml(item.time)}</div>`;
+        queueSection.appendChild(el);
+      });
+      landing.appendChild(queueSection);
+    }
+  }
+
   const newBtn = document.createElement("button");
   newBtn.className = "landing-new-btn";
   newBtn.textContent = "[NEW MISSION]";
@@ -672,7 +736,7 @@ async function showLanding() {
         header.textContent = group;
         container.appendChild(header);
       }
-      container.appendChild(createLandingCard(convo));
+      container.appendChild(createLandingCard(convo, landingAgentStatus));
     }
   }
 
@@ -696,8 +760,20 @@ async function showLanding() {
         }
       }
     } catch (err) { console.warn("Preview fetch failed:", err); }
+    let lastStatusHtml = "";
+    if (landingAgentStatus) {
+      const activeSession = (landingAgentStatus.sessions || []).find(s => s.conversationId === last.id);
+      if (activeSession) {
+        lastStatusHtml = `<span class="landing-last-status status-running"><span class="dot-pulse" style="width:6px;height:6px"></span> RUNNING</span>`;
+      } else {
+        const recentCompletion = (landingAgentStatus.recentCompletions || []).find(c => c.conversationId === last.id);
+        if (recentCompletion && Date.now() - recentCompletion.timestamp < 300000) {
+          lastStatusHtml = `<span class="landing-last-status status-completed">✓ COMPLETED</span>`;
+        }
+      }
+    }
     lastCardEl.innerHTML = `
-      <div class="landing-last-label">Last conversation</div>
+      <div class="landing-last-label">Last conversation${lastStatusHtml}</div>
       <div class="landing-last-title">${escapeHtml(last.title)}</div>
       <div class="landing-last-meta">${relativeTime(last.updatedAt || last.createdAt)} · ${last.messageCount} msgs</div>
       ${previewHtml ? `<div class="landing-last-preview">${previewHtml}</div>` : ""}
@@ -865,13 +941,35 @@ async function showLanding() {
   }, { passive: true });
 }
 
-function createLandingCard(convo) {
+function createLandingCard(convo, agentStatus) {
   const card = document.createElement("div");
   card.className = "landing-card";
+  card.dataset.convoId = convo.id;
+
+  let statusClass = "status-idle";
+  let toolHtml = "";
+  if (agentStatus) {
+    const activeSession = (agentStatus.sessions || []).find(s => s.conversationId === convo.id);
+    if (activeSession) {
+      statusClass = "status-running";
+      if (activeSession.tool) {
+        const readableTool = getReadableToolName(activeSession.tool) || activeSession.tool;
+        toolHtml = `<div class="landing-card-tool">${escapeHtml(readableTool)}</div>`;
+      }
+    } else {
+      const recentCompletion = (agentStatus.recentCompletions || []).find(c => c.conversationId === convo.id);
+      if (recentCompletion && Date.now() - recentCompletion.timestamp < 300000) {
+        statusClass = "status-completed";
+      }
+    }
+  }
+
   card.innerHTML = `
+    <div class="landing-card-status ${statusClass}"></div>
     <div class="landing-card-main">
       <div class="landing-card-title">${escapeHtml(convo.title)}</div>
       <div class="landing-card-meta">${relativeTime(convo.updatedAt || convo.createdAt)} · ${convo.messageCount} msgs</div>
+      ${toolHtml}
     </div>
     <button class="landing-card-delete" title="Delete">×</button>
   `;
@@ -921,11 +1019,12 @@ function openEventStream(id) {
     setConnected(true);
     lastEventTime = Date.now();
     startHeartbeatMonitor();
-    if (reconnectAttempts > 0) {
-      catchUpSession(id);
+    const wasReconnecting = reconnectAttempts > 0;
+    reconnectAttempts = 0;
+    if (wasReconnecting) {
+      catchUpSession(id, 0, true);
       hideStatus();
     }
-    reconnectAttempts = 0;
   });
 
   eventSource.addEventListener("message", (e) => {
@@ -954,7 +1053,7 @@ function openEventStream(id) {
   });
 }
 
-async function catchUpSession(sid, retryCount = 0) {
+async function catchUpSession(sid, retryCount = 0, wasReconnecting = false) {
   if (catchUpInProgress) return;
   catchUpInProgress = true;
   try {
@@ -1001,6 +1100,18 @@ async function catchUpSession(sid, retryCount = 0) {
       removeSuggestionChips();
       agentBubble = null;
       agentText = "";
+      const newCount = serverMessages.length - domCount;
+      if (newCount > 0 && wasReconnecting) {
+        const badge = document.createElement("div");
+        badge.className = "reconnect-badge";
+        const agentMsgs = serverMessages.slice(domCount).filter(m => m.role === "agent").length;
+        if (agentMsgs > 0) {
+          badge.textContent = `✓ ${agentMsgs} response${agentMsgs > 1 ? "s" : ""} completed while away`;
+        } else {
+          badge.textContent = `↓ ${newCount} new message${newCount > 1 ? "s" : ""}`;
+        }
+        messages.appendChild(badge);
+      }
       for (let i = domCount; i < serverMessages.length; i++) {
         const msg = serverMessages[i];
         if (msg.role === "user") appendBubble("user", msg.text, msg.timestamp);
@@ -1368,6 +1479,12 @@ function handleAgentEvent(event) {
       jobsProgressTool = null;
       updateJobsBanner("idle");
       if (jobsPanel && jobsPanel.classList.contains("open")) loadJobsPanelData();
+      if (hasMessages && !landingVisible) {
+        const icon = event.status === "error" ? "🔴" : "🟢";
+        const jobLabel = event.jobName || "Background task";
+        const durationStr = event.durationMs ? ` (${Math.round(event.durationMs / 1000)}s)` : "";
+        showSystemMsg(`${icon} ${jobLabel} ${event.status === "error" ? "failed" : "completed"}${durationStr}`);
+      }
       break;
   }
 }
@@ -2219,7 +2336,10 @@ function updateJobsBanner(state, jobName, toolName) {
     banner.classList.add("active");
     dot.classList.add("active");
     let label = jobName || "Agent working...";
-    if (toolName) label += ` \u2014 ${toolName}`;
+    if (toolName) {
+      const readable = getReadableToolName(toolName) || toolName;
+      label += ` \u2014 ${readable}`;
+    }
     text.textContent = label;
   } else {
     banner.classList.remove("active");

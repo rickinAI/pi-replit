@@ -4025,9 +4025,13 @@ app.post("/api/session", async (req: Request, res: Response) => {
       }
 
       if (event.type === "tool_execution_start") {
-        entry.currentToolName = (event as any).toolName || null;
-        if ((event as any).toolName === "delegate" && (event as any).input) {
-          (event as any).toolInput = { agent: (event as any).input.agent };
+        const toolName = (event as any).toolName || null;
+        if (toolName === "delegate" && (event as any).input) {
+          const agentId = (event as any).input.agent || "";
+          entry.currentToolName = `delegate:${agentId}`;
+          (event as any).toolInput = { agent: agentId };
+        } else {
+          entry.currentToolName = toolName;
         }
       } else if (event.type === "tool_execution_end") {
         entry.currentToolName = null;
