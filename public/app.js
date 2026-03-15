@@ -2251,13 +2251,15 @@ function formatTimeAgo(iso) {
 }
 
 async function saveJobUpdate(jobId, updates) {
-  try {
-    await fetch(`/api/scheduled-jobs/${jobId}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(updates),
-    });
-  } catch (err) { console.warn("Save job update failed:", err); }
+  const res = await fetch(`/api/scheduled-jobs/${jobId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Save failed");
+  }
 }
 
 function createJobsPanel() {
@@ -2292,6 +2294,7 @@ function createJobsPanel() {
     <div class="jobs-report-overlay hidden" id="jobs-report-overlay">
       <div class="jobs-report-modal">
         <div class="jobs-report-header">
+          <button class="jobs-report-back">\u2190 Back</button>
           <span id="jobs-report-title"></span>
           <button class="jobs-report-close">\u2715</button>
         </div>
@@ -2303,9 +2306,11 @@ function createJobsPanel() {
   jobsPanel = panel;
 
   panel.querySelector(".jobs-panel-close").addEventListener("click", toggleJobsPanel);
-  panel.querySelector(".jobs-report-close").addEventListener("click", () => {
+  const closeReportOverlay = () => {
     panel.querySelector("#jobs-report-overlay").classList.add("hidden");
-  });
+  };
+  panel.querySelector(".jobs-report-close").addEventListener("click", closeReportOverlay);
+  panel.querySelector(".jobs-report-back").addEventListener("click", closeReportOverlay);
 
   panel.querySelectorAll(".jobs-tab").forEach(tab => {
     tab.addEventListener("click", () => {
@@ -2482,6 +2487,16 @@ function renderJobsSchedule() {
           <button class="job-run-btn" title="Run now">Run</button>
         </div>
       </div>
+      <div class="job-card-prompt-section">
+        <button class="job-prompt-toggle">Prompt \u25B8</button>
+        <div class="job-prompt-editor hidden">
+          <textarea class="job-prompt-textarea" rows="4">${escapeHtml(job.prompt || '')}</textarea>
+          <button class="job-prompt-save">Save</button>
+        </div>
+      </div>
+      <div class="job-card-footer">
+        <button class="job-delete-btn" title="Delete job">\uD83D\uDDD1 Delete</button>
+      </div>
     `;
     const hourSel = card.querySelector(".job-card-hour-select");
     for (let hr = 0; hr < 24; hr++) {
@@ -2503,11 +2518,11 @@ function renderJobsSchedule() {
     }
     hourSel.addEventListener("change", () => {
       job.schedule.hour = parseInt(hourSel.value);
-      saveJobUpdate(job.id, { schedule: job.schedule });
+      saveJobUpdate(job.id, { schedule: job.schedule }).catch(() => {});
     });
     minSel.addEventListener("change", () => {
       job.schedule.minute = parseInt(minSel.value);
-      saveJobUpdate(job.id, { schedule: job.schedule });
+      saveJobUpdate(job.id, { schedule: job.schedule }).catch(() => {});
     });
     const runBtn = card.querySelector(".job-run-btn");
     runBtn.addEventListener("click", async () => {
@@ -2523,9 +2538,44 @@ function renderJobsSchedule() {
     });
     card.querySelector(".job-card-toggle").addEventListener("change", (e) => {
       job.enabled = e.target.checked;
-      saveJobUpdate(job.id, { enabled: job.enabled });
+      saveJobUpdate(job.id, { enabled: job.enabled }).catch(() => {});
       runBtn.textContent = "Run";
       runBtn.disabled = false;
+    });
+    const promptToggle = card.querySelector(".job-prompt-toggle");
+    const promptEditor = card.querySelector(".job-prompt-editor");
+    promptToggle.addEventListener("click", () => {
+      const isHidden = promptEditor.classList.contains("hidden");
+      promptEditor.classList.toggle("hidden");
+      promptToggle.textContent = isHidden ? "Prompt \u25BE" : "Prompt \u25B8";
+    });
+    card.querySelector(".job-prompt-save").addEventListener("click", async () => {
+      const textarea = card.querySelector(".job-prompt-textarea");
+      const saveBtn = card.querySelector(".job-prompt-save");
+      const newPrompt = textarea.value.trim();
+      if (!newPrompt) return;
+      saveBtn.textContent = "Saving...";
+      saveBtn.disabled = true;
+      try {
+        await saveJobUpdate(job.id, { prompt: newPrompt });
+        job.prompt = newPrompt;
+        saveBtn.textContent = "\u2713 Saved";
+        setTimeout(() => { saveBtn.textContent = "Save"; saveBtn.disabled = false; }, 2000);
+      } catch (err) {
+        saveBtn.textContent = err.message || "Failed";
+        setTimeout(() => { saveBtn.textContent = "Save"; saveBtn.disabled = false; }, 3000);
+      }
+    });
+    card.querySelector(".job-delete-btn").addEventListener("click", async () => {
+      if (!confirm(`Delete "${job.name}"? This cannot be undone.`)) return;
+      try {
+        const res = await fetch(`/api/scheduled-jobs/${job.id}`, { method: "DELETE" });
+        if (!res.ok) throw new Error("delete failed");
+        card.remove();
+        scheduledJobsData = scheduledJobsData.filter(j => j.id !== job.id);
+      } catch {
+        alert("Failed to delete job");
+      }
     });
     container.appendChild(card);
   });

@@ -9930,7 +9930,7 @@ app.get("/api/daily-brief/data", async (_req, res) => {
           }
           result.reya = { schoolInSession: true, lunch, pickupCountdown, alert: schoolAlert };
         } else {
-          result.reya = { schoolInSession: false };
+          result.reya = { schoolInSession: false, isWeekend: true };
         }
       } catch {
       }
@@ -10165,6 +10165,9 @@ app.get("/api/daily-brief/data", async (_req, res) => {
         if (reyaEvents.length > 0) {
           reyaCard.headline = reyaEvents[0].title || "Event";
           reyaCard.subtext = reyaEvents[0].time || "";
+        } else if (result.reya && result.reya.isWeekend) {
+          reyaCard.headline = "No school today!";
+          reyaCard.subtext = "Enjoy the weekend!";
         }
       }
       familyCards.push(reyaCard);
@@ -11188,6 +11191,19 @@ app.post("/api/scheduled-jobs", (req, res) => {
     res.json({ ok: true, job });
   } catch (err) {
     res.status(500).json({ error: String(err) });
+  }
+});
+app.get("/api/kb/read", async (req, res) => {
+  try {
+    const path5 = req.query.path;
+    if (!path5) {
+      res.status(400).json({ error: "path required" });
+      return;
+    }
+    const content = await kbRead(path5);
+    res.json({ content });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to read" });
   }
 });
 app.delete("/api/scheduled-jobs/:id", (req, res) => {
