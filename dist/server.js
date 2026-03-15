@@ -9925,8 +9925,10 @@ app.get("/api/daily-brief/data", async (_req, res) => {
       try {
         const active = await getActiveTasks();
         const today = now.toISOString().split("T")[0];
-        const focus = active.filter((t) => t.priority === "high" || t.dueDate && t.dueDate <= today).slice(0, 3);
-        const focusTasks = focus.length > 0 ? focus : active.slice(0, 3);
+        const urgent = active.filter((t) => t.priority === "high" || t.dueDate && t.dueDate <= today);
+        const urgentIds = new Set(urgent.map((t) => t.id));
+        const rest = active.filter((t) => !urgentIds.has(t.id));
+        const focusTasks = [...urgent, ...rest].slice(0, 3);
         let actionEmails = [];
         let actionCount = 0;
         try {
