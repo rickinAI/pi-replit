@@ -2861,7 +2861,7 @@ app.get("/api/baby-dashboard/status", async (_req: Request, res: Response) => {
   });
 });
 
-app.get("/pages/:slug", (req: Request, res: Response) => {
+app.get("/pages/:slug", async (req: Request, res: Response) => {
   const slug = req.params.slug.toLowerCase().replace(/[^a-z0-9_-]/g, "");
   if (!slug) { res.status(400).send("Invalid page slug."); return; }
   const filePath = path.join(PAGES_DIR, `${slug}.html`);
@@ -2869,6 +2869,113 @@ app.get("/pages/:slug", (req: Request, res: Response) => {
     res.status(404).send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Not Found</title><style>body{font-family:-apple-system,sans-serif;background:#0a0a0a;color:#e0e0e0;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}h1{font-size:1.2rem;color:#888}</style></head><body><h1>Page not found.</h1></body></html>`);
     return;
   }
+
+  const isTokenAuth = !!(req.query.user && req.query.token) || !!req.headers.authorization?.startsWith("Bearer ");
+  if (slug === "baby-dashboard" && isTokenAuth && gmail.isConnected()) {
+    try {
+      let html = fs.readFileSync(filePath, "utf-8");
+
+      let data: any = babyDashboardCache?.data;
+      if (!data || Date.now() - (babyDashboardCache?.timestamp || 0) > BABY_CACHE_TTL) {
+        const readTab = async (range: string): Promise<string> => {
+          try {
+            const result = await gws.sheetsRead(BABY_SHEET_ID, range);
+            if (result.includes("Error") || result.includes("not connected")) return "";
+            return result;
+          } catch { return ""; }
+        };
+        const [timelineResult, apptResult, tasksResult, shoppingResult, namesResult] = await Promise.all([
+          readTab("Timeline!A1:F19"), readTab("Appointments!A1:E14"), readTab("To-Do List!A1:F23"),
+          readTab("Shopping List!A1:F40"), readTab("Baby Names!A1:F16"),
+        ]);
+        function parseRows(raw: string): string[][] {
+          if (!raw || raw.includes("No data")) return [];
+          return raw.split("\n").filter(l => l.startsWith("Row ")).map(l => l.replace(/^Row \d+: /, "").split(" | "));
+        }
+        const apptRows = parseRows(apptResult);
+        const appointments = apptRows.slice(1).filter(r => r[0]).map(r => ({
+          title: (r[1] || "").trim(), date: (r[0] || "").trim(), time: "", detail: (r[3] || "").trim(), status: (r[4] || "").trim(),
+        }));
+        const taskRows = parseRows(tasksResult);
+        const tasks = taskRows.slice(1).filter(r => r[0]).map(r => {
+          const status = (r[4] || "").trim();
+          return { text: (r[0] || "").trim(), priority: "medium", week: parseInt(r[2]) || 0, done: status.includes("✅"), owner: (r[3] || "").trim(), category: (r[1] || "").trim() };
+        });
+        const shoppingRows = parseRows(shoppingResult);
+        const shoppingItems = shoppingRows.slice(1).filter(r => r[1]);
+        const shoppingDone = shoppingItems.filter(r => (r[3] || "").includes("✅")).length;
+        const tasksDone = tasks.filter(t => t.done).length;
+        const timelineRows = parseRows(timelineResult);
+        let currentWeekData: any = null;
+        timelineRows.slice(1).forEach(r => {
+          const status = (r[5] || "").trim();
+          if (status.includes("✅") && status.toLowerCase().includes("current")) {
+            currentWeekData = { week: parseInt(r[0]) || 0, development: (r[3] || "").trim(), milestone: (r[4] || "").trim() };
+          }
+        });
+        const nameRows = parseRows(namesResult);
+        const favNames: any[] = [], otherNames: any[] = [];
+        nameRows.slice(1).filter(r => r[0]).forEach(r => {
+          const n = (r[0] || "").trim();
+          if (n === "⭐ FAVORITES" || n === "📋 SHORTLIST" || !n) return;
+          const entry = { name: n, meaning: (r[1] || "").trim() };
+          if ((r[3] || "").includes("⭐") || (r[3] || "").includes("🆕") || (r[4] || "").includes("⭐")) favNames.push(entry);
+          else otherNames.push(entry);
+        });
+
+        const apptJson = JSON.stringify(appointments);
+        const tasksJson = JSON.stringify(tasks);
+        const checklistJson = JSON.stringify({ shoppingDone: `${shoppingDone}/${shoppingItems.length}`, tasksDone: `${tasksDone}/${tasks.length}` });
+
+        html = html.replace(/<script id="appt-data"[^>]*>.*?<\/script>/s, `<script id="appt-data" type="application/json">${apptJson}</script>`);
+        html = html.replace(/<script id="tasks-data"[^>]*>.*?<\/script>/s, `<script id="tasks-data" type="application/json">${tasksJson}</script>`);
+        html = html.replace(/<script id="checklist-data"[^>]*>.*?<\/script>/s, `<script id="checklist-data" type="application/json">${checklistJson}</script>`);
+
+        if (currentWeekData) {
+          html = html.replace(/id="devNote">[^<]*</s, `id="devNote">${currentWeekData.development}<`);
+          html = html.replace(/id="milestoneNote">[^<]*</s, `id="milestoneNote">${currentWeekData.milestone}<`);
+        }
+
+        if (favNames.length) {
+          const favStr = favNames.map(n => `{name:'${n.name.replace(/'/g, "\\'")}',meaning:'${n.meaning.replace(/'/g, "\\'")}'}`).join(",");
+          html = html.replace(/var defaultFavNames\s*=\s*\[.*?\];/s, `var defaultFavNames = [${favStr}];`);
+        }
+        if (otherNames.length) {
+          const otherStr = otherNames.map(n => `{name:'${n.name.replace(/'/g, "\\'")}',meaning:'${n.meaning.replace(/'/g, "\\'")}'}`).join(",");
+          html = html.replace(/var defaultOtherNames\s*=\s*\[.*?\];/s, `var defaultOtherNames = [${otherStr}];`);
+        }
+      } else {
+        const apptJson = JSON.stringify((data.appointments || []).map((a: any) => ({
+          title: a.type || a.title, date: a.date, time: a.time || "", detail: a.notes || a.detail || "", status: a.status || "",
+        })));
+        const tasksJson = JSON.stringify((data.tasks || []).map((t: any) => ({
+          text: t.text, priority: "medium", week: parseInt(t.dueWeek) || 0, done: t.done, owner: t.owner || "", category: t.category || "",
+        })));
+        const checklistJson = JSON.stringify(data.counters || {});
+        html = html.replace(/<script id="appt-data"[^>]*>.*?<\/script>/s, `<script id="appt-data" type="application/json">${apptJson}</script>`);
+        html = html.replace(/<script id="tasks-data"[^>]*>.*?<\/script>/s, `<script id="tasks-data" type="application/json">${tasksJson}</script>`);
+        html = html.replace(/<script id="checklist-data"[^>]*>.*?<\/script>/s, `<script id="checklist-data" type="application/json">${checklistJson}</script>`);
+        if (data.timeline?.currentWeek) {
+          html = html.replace(/id="devNote">[^<]*</s, `id="devNote">${data.timeline.currentWeek.development || ""}<`);
+          html = html.replace(/id="milestoneNote">[^<]*</s, `id="milestoneNote">${data.timeline.currentWeek.milestone || ""}<`);
+        }
+        if (data.names?.fav?.length) {
+          const favStr = data.names.fav.map((n: any) => `{name:'${n.name.replace(/'/g, "\\'")}',meaning:'${(n.meaning || "").replace(/'/g, "\\'")}'}`).join(",");
+          html = html.replace(/var defaultFavNames\s*=\s*\[.*?\];/s, `var defaultFavNames = [${favStr}];`);
+        }
+        if (data.names?.other?.length) {
+          const otherStr = data.names.other.map((n: any) => `{name:'${n.name.replace(/'/g, "\\'")}',meaning:'${(n.meaning || "").replace(/'/g, "\\'")}'}`).join(",");
+          html = html.replace(/var defaultOtherNames\s*=\s*\[.*?\];/s, `var defaultOtherNames = [${otherStr}];`);
+        }
+      }
+
+      res.type("html").send(html);
+      return;
+    } catch (err) {
+      console.error("[baby-dashboard] SSR error:", err);
+    }
+  }
+
   res.sendFile(filePath);
 });
 
