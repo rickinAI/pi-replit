@@ -3181,7 +3181,7 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
     })());
 
     promises.push((async () => {
-      try { result.headlinesBtc = await news.searchHeadlines("bitcoin OR crypto OR cryptocurrency", 5); } catch {}
+      try { result.headlinesBtc = await news.searchHeadlines("world OR global OR international OR geopolitics OR conflict", 5); } catch {}
     })());
     promises.push((async () => {
       try { result.headlinesMacro = await news.searchHeadlines("Federal Reserve OR inflation OR geopolitics OR economy", 5); } catch {}

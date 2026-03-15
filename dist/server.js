@@ -9690,7 +9690,7 @@ app.get("/api/daily-brief/data", async (_req, res) => {
     })());
     promises.push((async () => {
       try {
-        result.headlinesBtc = await searchHeadlines("bitcoin OR crypto OR cryptocurrency", 5);
+        result.headlinesBtc = await searchHeadlines("world OR global OR international OR geopolitics OR conflict", 5);
       } catch {
       }
     })());
