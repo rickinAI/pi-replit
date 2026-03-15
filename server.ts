@@ -2326,6 +2326,12 @@ function buildAgentTools(allToolsFn: () => ToolDefinition[], sessionId: string):
             apiKey: ANTHROPIC_KEY,
             model: modelOverride,
           });
+          if (result.response && result.response.length > 200) {
+            try {
+              const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+              await kbCreate(`Scheduled Reports/Agent Results/${params.agent}-${ts}.md`, `# ${params.agent} result\n*Task: ${params.task.slice(0, 200)}*\n*Duration: ${((result.durationMs || 0) / 1000).toFixed(0)}s*\n\n${result.response}`);
+            } catch {}
+          }
           const details: any = { agent: result.agentId, toolsUsed: result.toolsUsed, durationMs: result.durationMs };
           if (result.error) details.error = result.error;
           if (result.timedOut) details.timedOut = true;
@@ -4075,6 +4081,12 @@ app.get("/api/session/:id/stream", (req: Request, res: Response) => {
   req.on("close", () => {
     clearInterval(heartbeat);
     entry.subscribers.delete(res);
+    if (entry.subscribers.size === 0 && entry.isAgentRunning && entry.currentAgentText) {
+      console.log(`[sse] All subscribers dropped while agent running — saving partial text (${entry.currentAgentText.length} chars)`);
+      conversations.addMessage(entry.conversation, "agent", entry.currentAgentText + "\n\n⚠️ *Connection dropped — response may be incomplete. Ask me to continue if needed.*");
+      entry.currentAgentText = "";
+      conversations.save(entry.conversation).catch(err => console.error("[conversations] partial save error:", err));
+    }
   });
 });
 
