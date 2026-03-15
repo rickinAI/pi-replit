@@ -2839,7 +2839,7 @@ app.get("/api/baby-dashboard/data", async (_req: Request, res: Response) => {
         dates: r[1]?.trim() || "",
         trimester: r[2]?.trim() || "",
         development: r[3]?.trim() || "",
-        milestone: r[4]?.trim() || "",
+        rickin: r[4]?.trim() || "",
         status,
       };
       timelineWeeks.push(entry);
@@ -3016,7 +3016,7 @@ app.get("/pages/:slug", async (req: Request, res: Response) => {
         timelineRows.slice(1).forEach(r => {
           const status = (r[5] || "").trim();
           if (status.includes("✅") && status.toLowerCase().includes("current")) {
-            currentWeekData = { week: parseInt(r[0]) || 0, development: (r[3] || "").trim(), milestone: (r[4] || "").trim() };
+            currentWeekData = { week: parseInt(r[0]) || 0, development: (r[3] || "").trim(), rickin: (r[4] || "").trim() };
           }
         });
         const nameRows = parseRows(namesResult);
