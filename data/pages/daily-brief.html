@@ -227,6 +227,19 @@
     .xi-cols { grid-template-columns: 1fr; }
   }
 
+  .intel-tabs { display: flex; gap: 0; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--border); margin-bottom: 0.85rem; }
+  .intel-tabs::-webkit-scrollbar { display: none; }
+  .intel-tab {
+    flex-shrink: 0; padding: 0.55rem 0.65rem; text-align: center; font-size: 0.62rem; font-weight: 700;
+    color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent;
+    transition: all 0.2s; background: none; border-top: none; border-left: none; border-right: none;
+    font-family: inherit; white-space: nowrap; letter-spacing: 0.3px;
+  }
+  .intel-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .intel-tab .intel-count { font-size: 0.5rem; margin-left: 2px; opacity: 0.6; }
+  .intel-panel { display: none; }
+  .intel-panel.active { display: block; }
+
   .status-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; }
   .status-card { background: var(--surface); border-radius: var(--radius-sm); padding: 0.85rem 0.5rem; text-align: center; border: 1px solid var(--border); }
   .status-val { font-size: 1.3rem; font-weight: 800; color: white; }
@@ -323,13 +336,25 @@
       </div>
     </div>
 
-    <div class="section" id="newsSection" style="display:none">
-      <div class="section-header" data-section="news">
-        <div class="section-header-left"><div class="section-title">&#x1F4F0; News</div><span class="section-chevron">&#9662;</span></div>
-        <div class="section-badge" id="newsBadge">0</div>
+    <div class="section" id="xBreakingSection" style="display:none">
+      <div class="section-header" data-section="xBreaking">
+        <div class="section-header-left"><div class="section-title">&#x1F525; Breaking</div><span class="section-chevron">&#9662;</span></div>
+        <div class="section-badge">&#x1D54F;</div>
       </div>
-      <div class="section-body" id="newsBody">
-        <div class="card" id="newsCard"></div>
+      <div class="section-body" id="xBreakingBody">
+        <div class="card"><div class="xi-cols" id="xBreakingCols"></div></div>
+      </div>
+    </div>
+
+    <div class="section" id="intelSection" style="display:none">
+      <div class="section-header" data-section="intel">
+        <div class="section-header-left"><div class="section-title">News & X Intelligence</div><span class="section-chevron">&#9662;</span></div>
+      </div>
+      <div class="section-body" id="intelBody">
+        <div class="card">
+          <div class="intel-tabs" id="intelTabs"></div>
+          <div id="intelPanels"></div>
+        </div>
       </div>
     </div>
 
@@ -352,16 +377,6 @@
       </div>
     </div>
 
-    <div class="section" id="xBreakingSection" style="display:none">
-      <div class="section-header" data-section="xBreaking">
-        <div class="section-header-left"><div class="section-title">&#x1F525; Breaking</div><span class="section-chevron">&#9662;</span></div>
-        <div class="section-badge">&#x1D54F;</div>
-      </div>
-      <div class="section-body" id="xBreakingBody">
-        <div class="card"><div class="xi-cols" id="xBreakingCols"></div></div>
-      </div>
-    </div>
-
     <div class="section" id="moodysSection" style="display:none">
       <div class="section-header" data-section="moodys">
         <div class="section-header-left"><div class="section-title">Moody's Intelligence</div><span class="section-chevron">&#9662;</span></div>
@@ -376,45 +391,6 @@
       </div>
     </div>
 
-    <div class="section" id="xMacroSection" style="display:none">
-      <div class="section-header" data-section="xMacro">
-        <div class="section-header-left"><div class="section-title">&#x1F4B0; Macro</div><span class="section-chevron">&#9662;</span></div>
-        <div class="section-badge">&#x1D54F;</div>
-      </div>
-      <div class="section-body collapsed" id="xMacroBody">
-        <div class="card"><div class="xi-cols" id="xMacroCols"></div></div>
-      </div>
-    </div>
-
-    <div class="section" id="xGlobalSection" style="display:none">
-      <div class="section-header" data-section="xGlobal">
-        <div class="section-header-left"><div class="section-title">&#x1F30D; Global</div><span class="section-chevron">&#9662;</span></div>
-        <div class="section-badge">&#x1D54F;</div>
-      </div>
-      <div class="section-body collapsed" id="xGlobalBody">
-        <div class="card"><div class="xi-cols" id="xGlobalCols"></div></div>
-      </div>
-    </div>
-
-    <div class="section" id="xTechSection" style="display:none">
-      <div class="section-header" data-section="xTech">
-        <div class="section-header-left"><div class="section-title">&#x26A1; Tech/AI</div><span class="section-chevron">&#9662;</span></div>
-        <div class="section-badge">&#x1D54F;</div>
-      </div>
-      <div class="section-body collapsed" id="xTechBody">
-        <div class="card"><div class="xi-cols" id="xTechCols"></div></div>
-      </div>
-    </div>
-
-    <div class="section" id="xBitcoinSection" style="display:none">
-      <div class="section-header" data-section="xBitcoin">
-        <div class="section-header-left"><div class="section-title">&#x20BF; Bitcoin</div><span class="section-chevron">&#9662;</span></div>
-        <div class="section-badge">&#x1D54F;</div>
-      </div>
-      <div class="section-body collapsed" id="xBitcoinBody">
-        <div class="card"><div class="xi-cols" id="xBitcoinCols"></div></div>
-      </div>
-    </div>
 
     <div class="section" id="statusSection" style="display:none">
       <div class="section-header" data-section="status">
@@ -485,7 +461,7 @@ try {
   collapsedSections = JSON.parse(localStorage.getItem('brief_collapsed_sections') || '{}');
 } catch(e) {}
 
-var defaultCollapsed = { xMacro: true, xGlobal: true, xTech: true, xBitcoin: true };
+var defaultCollapsed = {};
 
 function isCollapsed(key) {
   if (collapsedSections.hasOwnProperty(key)) return collapsedSections[key];
@@ -729,10 +705,8 @@ function render(data) {
     });
   }
 
+  var intelTabs = [];
   if (data.headlines && data.headlines.length > 0) {
-    document.getElementById('newsSection').style.display = '';
-    document.getElementById('newsBadge').textContent = data.headlines.length;
-    var newsCard = document.getElementById('newsCard');
     var globalItems = data.headlines.filter(function(h) { return h.category === 'global'; });
     var nycItems = data.headlines.filter(function(h) { return h.category === 'nyc'; });
     var newsHtml = '';
@@ -752,7 +726,7 @@ function render(data) {
       newsHtml += '<div class="news-subheader">\uD83D\uDDFD NYC</div>';
       nycItems.forEach(function(h) { newsHtml += renderNewsItem(h); });
     }
-    newsCard.innerHTML = newsHtml;
+    intelTabs.push({ key: 'news', label: '\uD83D\uDCF0 News', count: data.headlines.length, html: newsHtml });
   }
 
   if (data.markets && data.markets.length > 0) {
@@ -784,28 +758,63 @@ function render(data) {
 
   var xi = data.xIntel;
   if (xi) {
-    var xSections = [
-      { key: 'breaking', id: 'xBreakingSection', cols: 'xBreakingCols' },
-      { key: 'macro', id: 'xMacroSection', cols: 'xMacroCols' },
-      { key: 'global', id: 'xGlobalSection', cols: 'xGlobalCols' },
-      { key: 'techAi', id: 'xTechSection', cols: 'xTechCols' },
-      { key: 'bitcoin', id: 'xBitcoinSection', cols: 'xBitcoinCols' },
-    ];
-    xSections.forEach(function(s) {
-      var sec = xi[s.key];
-      if (sec && (sec.visionaries.length > 0 || sec.headlines.length > 0)) {
-        document.getElementById(s.id).style.display = '';
-        renderXSection(s.cols, sec);
-        if (sec.filtered) {
-          var badge = document.getElementById(s.id).querySelector('.section-badge');
-          if (badge && !(badge.nextElementSibling && badge.nextElementSibling.classList && badge.nextElementSibling.classList.contains('xi-ai-badge'))) {
-            var aiBadge = document.createElement('span');
-            aiBadge.className = 'xi-ai-badge';
-            aiBadge.textContent = 'AI-filtered';
-            badge.parentNode.insertBefore(aiBadge, badge.nextSibling);
-          }
+    if (xi.breaking && (xi.breaking.visionaries.length > 0 || xi.breaking.headlines.length > 0)) {
+      document.getElementById('xBreakingSection').style.display = '';
+      renderXSection('xBreakingCols', xi.breaking);
+      if (xi.breaking.filtered) {
+        var badge = document.getElementById('xBreakingSection').querySelector('.section-badge');
+        if (badge && !(badge.nextElementSibling && badge.nextElementSibling.classList && badge.nextElementSibling.classList.contains('xi-ai-badge'))) {
+          var aiBadge = document.createElement('span');
+          aiBadge.className = 'xi-ai-badge';
+          aiBadge.textContent = 'AI-filtered';
+          badge.parentNode.insertBefore(aiBadge, badge.nextSibling);
         }
       }
+    }
+    var xTabDefs = [
+      { key: 'macro', label: '\uD83D\uDCB0 Macro' },
+      { key: 'global', label: '\uD83C\uDF0D Global' },
+      { key: 'techAi', label: '\u26A1 Tech/AI' },
+      { key: 'bitcoin', label: '\u20BF Bitcoin' },
+    ];
+    xTabDefs.forEach(function(t) {
+      var sec = xi[t.key];
+      if (sec && (sec.visionaries.length > 0 || sec.headlines.length > 0)) {
+        var count = sec.visionaries.length + sec.headlines.length;
+        var filterTag = sec.filtered ? ' <span class="xi-ai-badge">AI</span>' : '';
+        var panelHtml = '<div class="xi-cols" id="xiTab_' + t.key + '"></div>';
+        intelTabs.push({ key: t.key, label: t.label + filterTag, count: count, html: panelHtml, xData: sec });
+      }
+    });
+  }
+
+  if (intelTabs.length > 0) {
+    document.getElementById('intelSection').style.display = '';
+    var savedTab = localStorage.getItem('intelActiveTab') || intelTabs[0].key;
+    var hasActive = intelTabs.some(function(t) { return t.key === savedTab; });
+    if (!hasActive) savedTab = intelTabs[0].key;
+    var tabsHtml = '';
+    var panelsHtml = '';
+    intelTabs.forEach(function(t) {
+      var active = t.key === savedTab ? ' active' : '';
+      tabsHtml += '<button class="intel-tab' + active + '" data-ikey="' + t.key + '">' + t.label +
+        '<span class="intel-count">' + t.count + '</span></button>';
+      panelsHtml += '<div class="intel-panel' + active + '" id="intelPanel_' + t.key + '">' + t.html + '</div>';
+    });
+    document.getElementById('intelTabs').innerHTML = tabsHtml;
+    document.getElementById('intelPanels').innerHTML = panelsHtml;
+    intelTabs.forEach(function(t) {
+      if (t.xData) renderXSection('xiTab_' + t.key, t.xData);
+    });
+    document.querySelectorAll('.intel-tab').forEach(function(tab) {
+      tab.addEventListener('click', function(e) {
+        e.stopPropagation();
+        document.querySelectorAll('.intel-tab').forEach(function(t) { t.classList.remove('active'); });
+        document.querySelectorAll('.intel-panel').forEach(function(p) { p.classList.remove('active'); });
+        tab.classList.add('active');
+        document.getElementById('intelPanel_' + tab.dataset.ikey).classList.add('active');
+        localStorage.setItem('intelActiveTab', tab.dataset.ikey);
+      });
     });
   }
 
