@@ -78,8 +78,22 @@
       <div class="spinner"></div>
     </div>
 
+    <div id="plan-mode-banner" class="plan-mode-banner hidden">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+      </svg>
+      <span>PLAN MODE</span>
+    </div>
     <footer id="input-area">
       <div class="input-row">
+        <button id="plan-toggle" class="plan-toggle" aria-label="Toggle planning mode" title="Toggle planning mode">
+          <svg class="plan-toggle-icon-exec" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+          </svg>
+          <svg class="plan-toggle-icon-plan" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+          </svg>
+        </button>
         <span class="prompt-prefix">></span>
         <textarea
           id="input"

@@ -76,6 +76,8 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - Results saved to `Scheduled Reports/Inbox Monitor/` with timestamps
   - Usage: forward any email to `rickin.patel@gmail.com` and reply/add `@darknode [instruction]` in the body
 - **public/** — Static frontend (terminal/hacker aesthetic, branded as "RICKIN")
+  - Swipe navigation: swipe right from chat → Mission Control (iOS-style slide), swipe left from Mission Control → resume chat. Mid-stream safe (SSE stays open if agent is running). Excludes interactive areas (inputs, code blocks, tables). Uses `lastKnownConversations` for resume target; falls back to active session if one exists
+  - Planning mode toggle: lightning bolt / checkmark icon button in `.input-row` before prompt prefix. Cycles plan/execute on tap, syncs to server via `PUT /api/session/:id/planning-mode`. Amber "PLAN MODE" banner appears above input when active. Persists preference in localStorage across sessions. Server injects system prompt prefix instructing AI to plan-then-confirm before tool use (applies to both `/prompt` and queued messages)
   - Landing screen: "Mission Control" full-screen overlay on fresh load (no active session). Shows date, glance strip (weather/email/tasks/calendar from `/api/glance`), interactive task section (checklist with checkboxes, priority dots, "Go" quick-launch, inline add-task form), last conversation card with preview + RESUME button, NEW MISSION button, recent conversation cards with delete, VIEW ALL to expand full history inline
   - Conversation search: search input on landing screen filters conversations by title in real-time
   - Date-grouped conversations: Recent list grouped into Today/Yesterday/This Week/Earlier headers

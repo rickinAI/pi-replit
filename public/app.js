@@ -23,6 +23,8 @@ let lastEventTime = 0;
 let ambientTickerTimer = null;
 let ambientTickerItems = [];
 let ambientTickerIndex = 0;
+let planningMode = localStorage.getItem("planningMode") === "true";
+let lastKnownConversations = [];
 
 const messages      = document.getElementById("messages");
 const scrollAnchor  = document.getElementById("scroll-anchor");
@@ -44,6 +46,8 @@ const modelBadge    = document.getElementById("model-badge");
 const modelModeEl   = document.getElementById("model-mode");
 const modelNameEl   = document.getElementById("model-name");
 const scrollBottomBtn = document.getElementById("scroll-bottom-btn");
+const planToggle     = document.getElementById("plan-toggle");
+const planBanner     = document.getElementById("plan-mode-banner");
 let currentModelMode = "auto";
 const FULL_MODEL_ID = "claude-sonnet-4-6";
 
@@ -249,6 +253,13 @@ if (window.visualViewport) {
           startSyncPolling();
           scrollToBottom();
           showSystemMsg("SESSION RESUMED.");
+          if (planningMode) {
+            fetch(`/api/session/${sessionId}/planning-mode`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ enabled: true }),
+            }).catch(() => {});
+          }
           return;
         }
       }
@@ -279,6 +290,13 @@ async function startSession() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode: currentModelMode }),
     }).catch((err) => console.warn("Initial model-mode sync failed:", err));
+    if (planningMode) {
+      fetch(`/api/session/${sessionId}/planning-mode`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: true }),
+      }).catch((err) => console.warn("Initial planning-mode sync failed:", err));
+    }
   } catch (err) {
     showSystemMsg("ERR: " + err.message);
     hideStatus();
@@ -414,6 +432,7 @@ async function showLanding() {
   if (thisInvocation !== landingInvocationId) return;
 
   convos.sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt));
+  lastKnownConversations = convos;
 
   if (glanceData) {
     const cycles = buildLandingTickerCycles(glanceData);
@@ -989,7 +1008,7 @@ function createLandingCard(convo, agentStatus) {
   return card;
 }
 
-function hideLandingAndRun(fn) {
+function hideLandingAndRun(fn, slideDirection) {
   const landing = document.getElementById("landing");
   if (landing) {
     let done = false;
@@ -1002,7 +1021,13 @@ function hideLandingAndRun(fn) {
       sendBtn.disabled = false;
       fn();
     };
-    landing.classList.add("landing-hidden");
+    if (slideDirection === "left") {
+      landing.style.transform = "translateX(-40px)";
+      landing.style.opacity = "0";
+      landing.style.pointerEvents = "none";
+    } else {
+      landing.classList.add("landing-hidden");
+    }
     landing.addEventListener("transitionend", finish, { once: true });
     setTimeout(finish, 500);
   } else {
@@ -2727,6 +2752,29 @@ modelBadge.addEventListener("click", async () => {
   } catch (err) { console.warn("Model mode switch failed:", err); }
 });
 
+function updatePlanningModeUI(enabled) {
+  planningMode = enabled;
+  localStorage.setItem("planningMode", enabled ? "true" : "false");
+  planToggle.classList.toggle("active", enabled);
+  planBanner.classList.toggle("hidden", !enabled);
+}
+
+updatePlanningModeUI(planningMode);
+
+planToggle.addEventListener("click", async () => {
+  if (landingVisible) return;
+  const newMode = !planningMode;
+  updatePlanningModeUI(newMode);
+  if (!sessionId) return;
+  try {
+    await fetch(`/api/session/${sessionId}/planning-mode`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: newMode }),
+    });
+  } catch (err) { console.warn("Planning mode switch failed:", err); }
+});
+
 generateBriefBtn.addEventListener("click", async () => {
   const hour = new Date().getHours();
   const type = hour < 12 ? "morning" : hour < 17 ? "afternoon" : "evening";
@@ -3056,6 +3104,13 @@ async function resumeConversation(conversationId) {
     startSyncPolling();
     showSystemMsg("CONVERSATION RESUMED — CONTEXT LOADED");
     scrollToBottom();
+    if (planningMode) {
+      fetch(`/api/session/${sessionId}/planning-mode`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: true }),
+      }).catch(() => {});
+    }
   } catch (err) {
     showSystemMsg("ERR: Failed to resume — " + err.message);
     await startSession();
@@ -3452,3 +3507,131 @@ function copyTable(btn) {
 function formatTime(date) {
   return date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
+
+(function initSwipeNavigation() {
+  const SWIPE_THRESHOLD = 60;
+  const SWIPE_RATIO = 1.3;
+  let swipeStartX = 0;
+  let swipeStartY = 0;
+  let swiping = false;
+  let swipeHintEl = null;
+
+  function createSwipeHint(side) {
+    removeSwipeHint();
+    swipeHintEl = document.createElement("div");
+    swipeHintEl.className = `swipe-hint swipe-hint-${side}`;
+    document.body.appendChild(swipeHintEl);
+    requestAnimationFrame(() => swipeHintEl && swipeHintEl.classList.add("visible"));
+  }
+
+  function removeSwipeHint() {
+    if (swipeHintEl) {
+      swipeHintEl.remove();
+      swipeHintEl = null;
+    }
+  }
+
+  function swipeToMissionControl() {
+    if (!isAgentRunning) {
+      stopSyncPolling();
+      if (eventSource) { eventSource.close(); eventSource = null; }
+    }
+    showLanding();
+    const landing = document.getElementById("landing");
+    if (landing) landing.classList.add("landing-slide-in");
+  }
+
+  function swipeToChat() {
+    const savedSession = localStorage.getItem("activeSession");
+    if (savedSession && sessionId === savedSession) {
+      hideLandingAndRun(() => {
+        if (!eventSource) openEventStream(sessionId);
+        startSyncPolling();
+        scrollToBottom();
+      }, "left");
+    } else if (lastKnownConversations.length > 0) {
+      hideLandingAndRun(() => resumeConversation(lastKnownConversations[0].id), "left");
+    } else {
+      hideLandingAndRun(async () => {
+        clearMessages();
+        showEmptyState();
+        await startSession();
+      }, "left");
+    }
+  }
+
+  appEl.addEventListener("touchstart", (e) => {
+    if (document.body.classList.contains("keyboard-open")) return;
+    const target = e.target;
+    if (target.closest && (target.closest("textarea, input, select, .input-row, pre, code, table, [contenteditable]"))) {
+      swipeStartX = 0;
+      return;
+    }
+    const t = e.touches[0];
+    swipeStartX = t.clientX;
+    swipeStartY = t.clientY;
+    swiping = false;
+  }, { passive: true });
+
+  appEl.addEventListener("touchmove", (e) => {
+    if (!swipeStartX) return;
+    if (document.body.classList.contains("keyboard-open")) return;
+    const t = e.touches[0];
+    const dx = t.clientX - swipeStartX;
+    const dy = t.clientY - swipeStartY;
+    const adx = Math.abs(dx);
+    const ady = Math.abs(dy);
+
+    if (adx < 20 && ady < 20) return;
+
+    if (!swiping && adx > ady * SWIPE_RATIO && adx > 20) {
+      swiping = true;
+    }
+
+    if (!swiping) return;
+
+    if (landingVisible && dx < -20) {
+      createSwipeHint("left");
+    } else if (!landingVisible && dx > 20) {
+      createSwipeHint("right");
+    } else {
+      removeSwipeHint();
+    }
+  }, { passive: true });
+
+  appEl.addEventListener("touchend", (e) => {
+    if (!swiping) {
+      swipeStartX = 0;
+      swipeStartY = 0;
+      removeSwipeHint();
+      return;
+    }
+
+    const endX = e.changedTouches[0].clientX;
+    const endY = e.changedTouches[0].clientY;
+    const dx = endX - swipeStartX;
+    const dy = endY - swipeStartY;
+    const adx = Math.abs(dx);
+    const ady = Math.abs(dy);
+
+    removeSwipeHint();
+    swipeStartX = 0;
+    swipeStartY = 0;
+    swiping = false;
+
+    if (adx < SWIPE_THRESHOLD || adx < ady * SWIPE_RATIO) return;
+
+    if (dx > 0 && !landingVisible) {
+      swipeToMissionControl();
+    } else if (dx < 0 && landingVisible) {
+      swipeToChat();
+    }
+  }, { passive: true });
+
+  appEl.addEventListener("touchcancel", () => {
+    swipeStartX = 0;
+    swipeStartY = 0;
+    swiping = false;
+    removeSwipeHint();
+  }, { passive: true });
+})();

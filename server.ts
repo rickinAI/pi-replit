@@ -2403,6 +2403,7 @@ interface SessionEntry {
   currentAgentText: string;
   currentToolName: string | null;
   modelMode: ModelMode;
+  planningMode: boolean;
   activeModelName: string;
   interviewWaiter?: InterviewWaiter;
   pendingInterviewForm?: { toolCallId: string; title?: string; description?: string; questions: any[] };
@@ -2571,7 +2572,11 @@ async function processNextPendingMessage(sessionId: string) {
   const queuedPromptStart = Date.now();
   const etNow = new Date().toLocaleString("en-US", { timeZone: "America/New_York", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" });
   const queueContext = "[Note: This message was sent while the previous task was still running. The previous task has now completed.]\n\n";
-  const augmentedText = `[Current date/time in Rickin's timezone (Eastern): ${etNow}]\n\n${queueContext}${pending.text}`;
+  let augmentedText = `[Current date/time in Rickin's timezone (Eastern): ${etNow}]\n\n${queueContext}`;
+  if (entry.planningMode) {
+    augmentedText += `[PLANNING MODE] Before taking any action or calling any tools, you must first present a clear, numbered plan of what you intend to do. Explain each step briefly. Then ask for my approval before proceeding. Do NOT execute any tools or actions until I explicitly confirm the plan (e.g. "go ahead", "yes", "approved", "do it"). If I ask you to modify the plan, revise it and ask for approval again.\n\n`;
+  }
+  augmentedText += pending.text;
   const promptImages = pending.images?.map(i => ({ type: "image" as const, data: i.data, mimeType: i.mimeType }));
 
   const PROMPT_TIMEOUT = 900_000;
@@ -4005,6 +4010,7 @@ app.post("/api/session", async (req: Request, res: Response) => {
       currentAgentText: "",
       currentToolName: null,
       modelMode: "auto",
+      planningMode: false,
       activeModelName: FULL_MODEL_ID,
       isAgentRunning: false,
       pendingMessages: [],
@@ -4227,6 +4233,9 @@ app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
     augmentedText += `[Session Context]\n${entry.startupContext}\n\n`;
     entry.startupContext = undefined;
   }
+  if (entry.planningMode) {
+    augmentedText += `[PLANNING MODE] Before taking any action or calling any tools, you must first present a clear, numbered plan of what you intend to do. Explain each step briefly. Then ask for my approval before proceeding. Do NOT execute any tools or actions until I explicitly confirm the plan (e.g. "go ahead", "yes", "approved", "do it"). If I ask you to modify the plan, revise it and ask for approval again.\n\n`;
+  }
   augmentedText += text;
   const promptImages = images?.map(i => ({ type: "image" as const, data: i.data, mimeType: i.mimeType }));
 
@@ -4286,6 +4295,24 @@ app.get("/api/session/:id/model-mode", (req: Request, res: Response) => {
   const entry = sessions.get(req.params["id"] as string);
   if (!entry) { res.status(404).json({ error: "Session not found" }); return; }
   res.json({ mode: entry.modelMode, activeModel: entry.activeModelName });
+});
+
+app.put("/api/session/:id/planning-mode", (req: Request, res: Response) => {
+  const entry = sessions.get(req.params["id"] as string);
+  if (!entry) { res.status(404).json({ error: "Session not found" }); return; }
+  const { enabled } = req.body as { enabled?: boolean };
+  if (typeof enabled !== "boolean") {
+    res.status(400).json({ error: "enabled must be a boolean" }); return;
+  }
+  entry.planningMode = enabled;
+  console.log(`[planning] Session ${req.params["id"]} planning mode: ${enabled}`);
+  res.json({ ok: true, planningMode: enabled });
+});
+
+app.get("/api/session/:id/planning-mode", (req: Request, res: Response) => {
+  const entry = sessions.get(req.params["id"] as string);
+  if (!entry) { res.status(404).json({ error: "Session not found" }); return; }
+  res.json({ planningMode: entry.planningMode });
 });
 
 app.post("/api/session/:id/interview-response", (req: Request, res: Response) => {
