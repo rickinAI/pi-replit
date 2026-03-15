@@ -9496,11 +9496,15 @@ app.get("/api/vault/real-estate-scan", async (_req, res) => {
       res.json({ available: false });
       return;
     }
-    const listingsMatch = scanContent.match(/(\d+)\s*new\s*listing/i);
-    const newListings = listingsMatch ? parseInt(listingsMatch[1]) : 0;
+    const totalMatch = scanContent.match(/\*\*(\d+)\*\*\s*total\s*active\s*listings/i);
+    const totalListings = totalMatch ? parseInt(totalMatch[1]) : 0;
+    const favMatch = scanContent.match(/\*\*(\d+)\*\*\s*total\s*favorites/i);
+    const totalFavorites = favMatch ? parseInt(favMatch[1]) : 0;
+    const newFavMatch = scanContent.match(/(\d+)\s*new\s*today/i);
+    const newToday = newFavMatch ? parseInt(newFavMatch[1]) : 0;
     const tsMatch = scanContent.match(/Generated:\s*(.+)/);
     const scanTime = tsMatch ? tsMatch[1].trim() : null;
-    res.json({ available: true, date: scanDate, newListings, scanTime });
+    res.json({ available: true, date: scanDate, totalListings, totalFavorites, newToday, scanTime });
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch real estate scan" });
   }
@@ -9883,9 +9887,12 @@ app.get("/api/daily-brief/data", async (_req, res) => {
           }
         }
         if (scanContent) {
-          const listingsMatch = scanContent.match(/(\d+)\s*new\s*listing/i);
+          const totalMatch = scanContent.match(/\*\*(\d+)\*\*\s*total\s*active\s*listings/i);
+          const totalListings = totalMatch ? parseInt(totalMatch[1]) : 0;
+          const newFavMatch = scanContent.match(/(\d+)\s*new\s*today/i);
+          const newToday = newFavMatch ? parseInt(newFavMatch[1]) : 0;
           const tsMatch = scanContent.match(/Generated:\s*(.+)/);
-          result.realEstate = { available: true, date: scanDate, newListings: listingsMatch ? parseInt(listingsMatch[1]) : 0, scanTime: tsMatch ? tsMatch[1].trim() : null };
+          result.realEstate = { available: true, date: scanDate, totalListings, newToday, scanTime: tsMatch ? tsMatch[1].trim() : null };
         }
       } catch {
       }
