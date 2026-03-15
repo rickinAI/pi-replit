@@ -9420,20 +9420,18 @@ app.get("/api/vault/moodys-brief", async (_req, res) => {
       `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief.md`
     ];
     const etHour = parseInt(now.toLocaleString("en-US", { timeZone: tz, hour: "numeric", hour12: false }));
-    if (etHour < 6) {
-      res.json({ available: false, reason: "pending", message: "Daily brief generates at 6:00 AM" });
-      return;
-    }
     let briefContent = null;
     let briefDate = dateStr;
-    for (const p of paths) {
-      try {
-        const content = await kbRead(p);
-        if (content && content.length > 100) {
-          briefContent = content;
-          break;
+    if (etHour >= 6) {
+      for (const p of paths) {
+        try {
+          const content = await kbRead(p);
+          if (content && content.length > 100) {
+            briefContent = content;
+            break;
+          }
+        } catch {
         }
-      } catch {
       }
     }
     if (!briefContent) {
@@ -9824,16 +9822,14 @@ app.get("/api/daily-brief/data", async (_req, res) => {
         const day = now.toLocaleString("en-US", { timeZone: tz, day: "2-digit" });
         const dateStr = `${year}-${month}-${day}`;
         const etHour = parseInt(now.toLocaleString("en-US", { timeZone: tz, hour: "numeric", hour12: false }));
-        if (etHour < 6) {
-          result.moodys = { available: false, reason: "pending", message: "Daily brief generates at 6:00 AM" };
-          return;
-        }
         let briefContent = null;
         let briefDate = dateStr;
-        try {
-          const content = await kbRead(`Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief.md`);
-          if (content && content.length > 100) briefContent = content;
-        } catch {
+        if (etHour >= 6) {
+          try {
+            const content = await kbRead(`Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief.md`);
+            if (content && content.length > 100) briefContent = content;
+          } catch {
+          }
         }
         if (!briefContent) {
           const yesterday = new Date(now.getTime() - 864e5);
@@ -9848,7 +9844,7 @@ app.get("/api/daily-brief/data", async (_req, res) => {
           }
         }
         if (!briefContent) {
-          result.moodys = { available: false, reason: "missing", message: "Brief unavailable \u2014 check pipeline" };
+          result.moodys = { available: false, reason: etHour < 6 ? "pending" : "missing", message: etHour < 6 ? "Daily brief generates at 6:00 AM" : "Brief unavailable \u2014 check pipeline" };
           return;
         }
         const categories = { corporate: [], banking: [], competitors: [], aiTrends: [], analysts: [] };

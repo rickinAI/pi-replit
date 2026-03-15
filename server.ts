@@ -2922,17 +2922,15 @@ app.get("/api/vault/moodys-brief", async (_req: Request, res: Response) => {
       `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief.md`,
     ];
     const etHour = parseInt(now.toLocaleString("en-US", { timeZone: tz, hour: "numeric", hour12: false }));
-    if (etHour < 6) {
-      res.json({ available: false, reason: "pending", message: "Daily brief generates at 6:00 AM" });
-      return;
-    }
     let briefContent: string | null = null;
     let briefDate = dateStr;
-    for (const p of paths) {
-      try {
-        const content = await kbRead(p);
-        if (content && content.length > 100) { briefContent = content; break; }
-      } catch {}
+    if (etHour >= 6) {
+      for (const p of paths) {
+        try {
+          const content = await kbRead(p);
+          if (content && content.length > 100) { briefContent = content; break; }
+        } catch {}
+      }
     }
     if (!briefContent) {
       const yesterday = new Date(now.getTime() - 86400000);
@@ -3303,16 +3301,14 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
         const day = now.toLocaleString("en-US", { timeZone: tz, day: "2-digit" });
         const dateStr = `${year}-${month}-${day}`;
         const etHour = parseInt(now.toLocaleString("en-US", { timeZone: tz, hour: "numeric", hour12: false }));
-        if (etHour < 6) {
-          result.moodys = { available: false, reason: "pending", message: "Daily brief generates at 6:00 AM" };
-          return;
-        }
         let briefContent: string | null = null;
         let briefDate = dateStr;
-        try {
-          const content = await kbRead(`Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief.md`);
-          if (content && content.length > 100) briefContent = content;
-        } catch {}
+        if (etHour >= 6) {
+          try {
+            const content = await kbRead(`Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief.md`);
+            if (content && content.length > 100) briefContent = content;
+          } catch {}
+        }
         if (!briefContent) {
           const yesterday = new Date(now.getTime() - 86400000);
           const yDateStr = `${yesterday.toLocaleString("en-US", { timeZone: tz, year: "numeric" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, month: "2-digit" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, day: "2-digit" })}`;
@@ -3322,7 +3318,7 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
           } catch {}
         }
         if (!briefContent) {
-          result.moodys = { available: false, reason: "missing", message: "Brief unavailable — check pipeline" };
+          result.moodys = { available: false, reason: etHour < 6 ? "pending" : "missing", message: etHour < 6 ? "Daily brief generates at 6:00 AM" : "Brief unavailable — check pipeline" };
           return;
         }
         const categories: Record<string, string[]> = { corporate: [], banking: [], competitors: [], aiTrends: [], analysts: [] };
