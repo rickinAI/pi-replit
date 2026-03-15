@@ -187,7 +187,7 @@
   .moodys-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.5rem; }
   .moodys-col { min-width: 0; }
   .moodys-col-title { font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 0.45rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .moodys-bullet { padding: 0.3rem 0; border-bottom: 1px solid var(--border); font-size: 0.68rem; color: var(--text); line-height: 1.4; }
+  .moodys-bullet { padding: 0.55rem 0; border-bottom: 1px solid var(--border); font-size: 0.68rem; color: var(--text); line-height: 1.5; }
   .moodys-bullet:last-child { border-bottom: none; }
   .moodys-tabs { display: none; gap: 0; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--border); margin-bottom: 0.75rem; }
   .moodys-tabs::-webkit-scrollbar { display: none; }
@@ -760,9 +760,8 @@ function render(data) {
       var sec = xi[t.key];
       if (sec && (sec.visionaries.length > 0 || sec.headlines.length > 0)) {
         var count = Math.min(sec.visionaries.length + sec.headlines.length, 5);
-        var filterTag = sec.filtered ? ' <span class="xi-ai-badge">AI</span>' : '';
         var panelHtml = '<div id="xiTab_' + t.key + '"></div>';
-        intelTabs.push({ key: t.key, label: t.label + filterTag, count: count, html: panelHtml, xData: sec });
+        intelTabs.push({ key: t.key, label: t.label, count: count, html: panelHtml, xData: sec });
       }
     });
   }
