@@ -2572,6 +2572,20 @@ function authMiddleware(req: Request, res: Response, next: NextFunction) {
   if (token && USERS[token]) { (req as any).user = token; next(); return; }
   if (token === "authenticated") { (req as any).user = "rickin"; next(); return; }
 
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith("Bearer ")) {
+    const bearerToken = authHeader.slice(7);
+    for (const [uname, u] of Object.entries(USERS)) {
+      if (u.password && bearerToken === u.password) { (req as any).user = uname; next(); return; }
+    }
+  }
+
+  const queryUser = req.query.user as string | undefined;
+  const queryToken = req.query.token as string | undefined;
+  if (queryUser && queryToken && USERS[queryUser.toLowerCase()]?.password === queryToken) {
+    (req as any).user = queryUser.toLowerCase(); next(); return;
+  }
+
   const devToken = process.env.DEV_TOKEN;
   if (devToken && req.query.dev_token === devToken) {
     const isSecure = req.secure || req.headers["x-forwarded-proto"] === "https";
