@@ -3664,7 +3664,8 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
               const insights: Array<{ index: number; insight: string }> = JSON.parse(jsonMatch[0]);
               for (const ins of insights) {
                 if (ins.index >= 0 && ins.index < actionEmails.length && ins.insight) {
-                  actionEmails[ins.index].insight = ins.insight;
+                  const words = ins.insight.split(/\s+/);
+                  actionEmails[ins.index].insight = words.length > 12 ? words.slice(0, 12).join(" ") : ins.insight;
                 }
               }
             }
