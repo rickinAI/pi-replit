@@ -6,7 +6,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 
 - **server.ts** — Express server wrapping the pi coding agent SDK
   - Creates agent sessions with Anthropic API
-  - Registers custom tools (107 total): knowledge base, email (15: list, read, search, get_attachment, thread, send, reply, draft, archive, label, mark_read, trash, gmail_list_labels, gmail_create_label, gmail_delete_label), calendar (3: list events, create event with calendar targeting, list available calendars), weather, web search, web fetch (reads full page content from URLs), tasks, news, Google Drive, Google Sheets (13 tools), Google Docs (12 tools), Google Slides (12 tools), YouTube, Zillow (3 tools), Redfin (3 tools), X/Twitter (4 tools), web pages (4: web_publish, web_save, web_list_pages, web_delete_page)
+  - Registers custom tools (110 total): knowledge base (10), email (15: list, read, search, get_attachment, thread, send, reply, draft, archive, label, mark_read, trash, gmail_list_labels, gmail_create_label, gmail_delete_label), calendar (3: list events, create event with calendar targeting, list available calendars), weather, web search, web fetch (reads full page content from URLs), render_page (Lightpanda headless browser for JS pages), describe_image (Claude vision), tasks (5), news (2), Google Drive (6), Google Sheets (13), Google Docs (12), Google Slides (12), YouTube (4), Zillow (3), Redfin (3), X/Twitter (4), maps (2: directions, search places), web pages (4: web_publish, web_save, web_list_pages, web_delete_page), interview, conversation_search
   - Multi-agent system with 9 specialist agents defined in `data/agents.json` (hot-reloaded on file change)
   - Dual-source research default: all research-oriented agents search both web AND X (Twitter) for maximum coverage. X tools added to deep-researcher, analyst, real-estate, and moodys agents
   - Streams agent events via SSE (Server-Sent Events)
@@ -23,7 +23,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **src/calendar.ts** — Google Calendar integration (shares OAuth tokens with Gmail via PostgreSQL). Queries all selected calendars (not just primary). `listEventsStructured()` returns events with calendar source names for family calendar awareness (Rickin, Pooja, Reya). `listCalendars()` exposes available calendars. `createEvent()` accepts optional `calendarName` for fuzzy-matching target calendar (e.g. "Reya" matches "Reya's Schedule")
 - **src/weather.ts** — Weather via Open-Meteo (free, no API key)
 - **src/websearch.ts** — Web search via DuckDuckGo HTML (free, no API key)
-- **src/webfetch.ts** — Fetches web pages and converts HTML to clean readable text. Extracts title, meta description, and page content. Strips scripts/styles/nav/footer, converts headings to markdown, preserves links/images/tables/code blocks, decodes HTML entities. Handles HTML, JSON, and plain text responses. 80KB default content limit with smart truncation. 15s timeout. Used by `web_fetch` tool — available to 7 agents (deep-researcher, project-planner, analyst, real-estate, nutritionist, moodys, family-planner)
+- **src/webfetch.ts** — Fetches web pages and converts HTML to clean readable text. Extracts title, meta description, and page content. Strips scripts/styles/nav/footer, converts headings to markdown, preserves links/images/tables/code blocks, decodes HTML entities. Handles HTML, JSON, and plain text responses. 80KB default content limit with smart truncation. 15s timeout. Used by `web_fetch` tool — available to all 9 agents
 - **src/tasks.ts** — Task manager with PostgreSQL storage (tasks table)
 - **src/scheduled-jobs.ts** — Scheduled agent jobs system. Runs agents autonomously on configurable schedules. 9 jobs (7 enabled): KB Audit 2AM (disabled), Daily News 6:30AM (disabled), Market Summary 7:30AM (disabled), Moody's Intel Brief 6:00AM, Moody's Profile Updates 6:15AM, Moody's Weekly Digest Sun 7:00AM, Real Estate Scan 7:30AM, **Weekly Life Audit Sun 8:00AM** (cross-references active constraints against travel/calendar, flags conflicts), **Inbox Monitor every 30m** (polls Gmail for @darknode emails). Config stored in `app_config` key='scheduled_jobs'. 60s check loop with run-key dedup (interval jobs use timestamp-based dedup). Schedule types: `daily`, `weekly`, `interval` (with `intervalMinutes`). Status tracking: `success`, `partial` (timedOut or "PARTIAL" in response), `error`. Writes `Scheduled Reports/job-status.json` to vault after each job. API: GET/PUT/DELETE `/api/scheduled-jobs`, PUT `/api/scheduled-jobs/:id`, POST `/api/scheduled-jobs/:id/trigger`
 - **src/news.ts** — News headlines via Google News RSS feeds
@@ -35,7 +35,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **.pi/agent/models.json** — Custom model registry entries (`claude-sonnet-4-6`, `claude-haiku-4-5-20251001`, `claude-opus-4-6`) so the Pi SDK's ModelRegistry can resolve them. These must match exact Anthropic API model IDs (no `-latest` aliases — Anthropic doesn't support them)
   - Three-tier model system with 4 modes: Auto (routes fast/full/max by intent), Fast (Haiku), Full (Sonnet), Max (Opus)
   - Auto mode uses MAX_PATTERNS to detect work/project keywords and route to Opus
-  - All sub-agents default to Opus (`data/agents.json` model field + orchestrator fallback)
+  - Two-tier agent models: heavy-duty agents (deep-researcher, email-drafter, analyst, real-estate, moodys) use Opus; lighter agents (project-planner, nutritionist, family-planner, knowledge-organizer) use Sonnet for cost efficiency. Orchestrator fallback uses Opus
   - All sub-agents use the custom `web_search` tool (DuckDuckGo-based) — Anthropic native server tools removed to avoid container_id API issues
   - Orchestrator: container_id tracking (future-proofing), graceful API error handling (400/429/529 with retry), soft timeout at 80% of budget (nudges agent to save partial results), hard timeout at 100%, fallback summary if no response. `SubAgentResult.timedOut` and `.error` flags propagated to job system
   - Agent loader validates tool names against registered tools at startup — logs warnings for unknown tools
@@ -87,8 +87,9 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 - **public/manifest.json** — PWA web app manifest (name, icons, display mode)
 - **public/icons/** — App icons (180x180 apple-touch-icon, 192x192, 512x512)
 - **tunnel-setup/** — macOS cloudflared named tunnel startup script with auto-restart loop
-- **data/agents.json** — Agent definitions (9 agents: deep-researcher, project-planner, email-drafter, analyst, real-estate, nutritionist, moodys, family-planner, knowledge-organizer). Hot-reloaded on file change via `src/agents/loader.ts`
+- **data/agents.json** — Agent definitions (9 agents: deep-researcher, project-planner, email-drafter, analyst, real-estate, nutritionist, moodys, family-planner, knowledge-organizer). Hot-reloaded on file change via `src/agents/loader.ts`. 103 of 110 tools assigned across agents
 - **data/vault/Replit Agent/** — Self-referencing system documentation in the vault (Architecture, Memory System, Alerts & Briefs, Agent Team, Tools Reference, Rules & Behavior, UI & Frontend, Changelog). Updated on major changes so all DarkNode agents understand the system
+- **data/vault/Agents/** — Per-agent documentation (all 9 agents: Agents Overview, Deep Researcher, Project Planner, Email Drafter, Market Analyst, Real Estate Agent, Nutritionist, Moodys Researcher, Family Planner, Knowledge Organizer)
 
 ## PostgreSQL Storage
 
@@ -405,14 +406,18 @@ Config-driven specialist agents that RICKIN can delegate complex tasks to. Each 
 - **API**: `GET /api/agents` — Returns all agent configs (behind auth)
 - **Vault docs**: `data/vault/Agents/` folder with overview and per-agent documentation
 
-### Current Agents
-| ID | Name | Tools |
-|----|------|-------|
-| `deep-researcher` | Deep Researcher | web_search, notes_create |
-| `project-planner` | Project Planner | task_add, notes_create, notes_read, notes_list, web_search |
-| `email-drafter` | Email Drafter | email_list, email_search, notes_read |
-| `analyst` | Market Analyst | stock_quote, crypto_price, news_headlines, news_search, web_search |
-| `knowledge-organizer` | Knowledge Organizer | notes_list, notes_read, notes_create, notes_append, notes_search |
+### Current Agents (9)
+| ID | Name | Model | Tools | Key Capabilities |
+|----|------|-------|-------|-----------------|
+| `deep-researcher` | Deep Researcher | Opus | 26 | Web + X + YouTube research, image analysis, page rendering, vault, weather, tasks, publishing |
+| `project-planner` | Project Planner | Sonnet | 17 | Full task CRUD, calendar scheduling, interview forms, vault search |
+| `email-drafter` | Email Drafter | Opus | 25 | Full Gmail management, web_fetch for linked pages, describe_image for attachments, calendar |
+| `analyst` | Market Analyst | Opus | 20 | Stocks, crypto, news, full X access, YouTube, chart analysis, vault persistence |
+| `real-estate` | Real Estate Agent | Opus | 21 | Zillow + Redfin, Maps commutes/nearby, photo analysis, YouTube neighborhood tours, X |
+| `nutritionist` | Nutritionist | Sonnet | 10 | Recipes, YouTube tutorials, food photo analysis, vault |
+| `moodys` | Moody's Researcher | Opus | 75 | Full Google Workspace, news, X, YouTube, image/page analysis, tasks, interview |
+| `family-planner` | Family Planner | Sonnet | 13 | Financial/legal planning, YouTube, spreadsheets, calendar, tasks |
+| `knowledge-organizer` | Knowledge Organizer | Sonnet | 12 | Full vault management (10 tools), web search/fetch for enrichment |
 
 ## Dependencies
 
