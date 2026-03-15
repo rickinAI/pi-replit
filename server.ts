@@ -3388,6 +3388,29 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
 
     promises.push((async () => {
       try {
+        const [globalHeadlines, nycHeadlines] = await Promise.all([
+          news.getTopHeadlines(8),
+          news.searchHeadlines("New York City", 5),
+        ]);
+        const globalTagged = globalHeadlines.map(h => ({ ...h, category: "global" as const }));
+        const nycTagged = nycHeadlines.map(h => ({ ...h, category: "nyc" as const }));
+        const seen = new Set<string>();
+        const deduped: typeof globalTagged = [];
+        for (const h of [...globalTagged, ...nycTagged]) {
+          const key = h.title.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 60);
+          if (!seen.has(key)) {
+            seen.add(key);
+            deduped.push(h);
+          }
+        }
+        result.headlines = deduped;
+      } catch {
+        result.headlines = [];
+      }
+    })());
+
+    promises.push((async () => {
+      try {
         const dueDate = new Date("2026-07-07");
         const daysLeft = Math.ceil((dueDate.getTime() - now.getTime()) / 86400000);
         const weeksPregnant = 40 - Math.ceil(daysLeft / 7);

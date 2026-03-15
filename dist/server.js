@@ -2629,12 +2629,26 @@ ${lines.join("\n\n")}`;
 async function getTopHeadlines(count = 3) {
   try {
     const res = await fetch(RSS_FEEDS["top"], {
-      headers: { "User-Agent": "pi-assistant/1.0" }
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; pi-assistant/1.0)" }
     });
     if (!res.ok) return [];
     const xml = await res.text();
     const items = parseRssItems(xml);
-    return items.slice(0, count).map((item) => ({ title: item.title, source: item.source }));
+    return items.slice(0, count).map((item) => ({ title: item.title, source: item.source, link: item.link }));
+  } catch {
+    return [];
+  }
+}
+async function searchHeadlines(query, count = 5) {
+  try {
+    const feedUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`;
+    const res = await fetch(feedUrl, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; pi-assistant/1.0)" }
+    });
+    if (!res.ok) return [];
+    const xml = await res.text();
+    const items = parseRssItems(xml);
+    return items.slice(0, count).map((item) => ({ title: item.title, source: item.source, link: item.link }));
   } catch {
     return [];
   }
@@ -9931,6 +9945,28 @@ app.get("/api/daily-brief/data", async (_req, res) => {
           result.xIntel = xData;
         }
       } catch {
+      }
+    })());
+    promises.push((async () => {
+      try {
+        const [globalHeadlines, nycHeadlines] = await Promise.all([
+          getTopHeadlines(8),
+          searchHeadlines("New York City", 5)
+        ]);
+        const globalTagged = globalHeadlines.map((h) => ({ ...h, category: "global" }));
+        const nycTagged = nycHeadlines.map((h) => ({ ...h, category: "nyc" }));
+        const seen = /* @__PURE__ */ new Set();
+        const deduped = [];
+        for (const h of [...globalTagged, ...nycTagged]) {
+          const key = h.title.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 60);
+          if (!seen.has(key)) {
+            seen.add(key);
+            deduped.push(h);
+          }
+        }
+        result.headlines = deduped;
+      } catch {
+        result.headlines = [];
       }
     })());
     promises.push((async () => {

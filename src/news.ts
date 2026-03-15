@@ -81,30 +81,30 @@ export async function getNews(category?: string): Promise<string> {
   }
 }
 
-export async function getTopHeadlines(count = 3): Promise<Array<{ title: string; source: string }>> {
+export async function getTopHeadlines(count = 3): Promise<Array<{ title: string; source: string; link: string }>> {
   try {
     const res = await fetch(RSS_FEEDS["top"], {
-      headers: { "User-Agent": "pi-assistant/1.0" },
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; pi-assistant/1.0)" },
     });
     if (!res.ok) return [];
     const xml = await res.text();
     const items = parseRssItems(xml);
-    return items.slice(0, count).map(item => ({ title: item.title, source: item.source }));
+    return items.slice(0, count).map(item => ({ title: item.title, source: item.source, link: item.link }));
   } catch {
     return [];
   }
 }
 
-export async function searchHeadlines(query: string, count = 5): Promise<Array<{ title: string; source: string }>> {
+export async function searchHeadlines(query: string, count = 5): Promise<Array<{ title: string; source: string; link: string }>> {
   try {
     const feedUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`;
     const res = await fetch(feedUrl, {
-      headers: { "User-Agent": "pi-assistant/1.0" },
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; pi-assistant/1.0)" },
     });
     if (!res.ok) return [];
     const xml = await res.text();
     const items = parseRssItems(xml);
-    return items.slice(0, count).map(item => ({ title: item.title, source: item.source }));
+    return items.slice(0, count).map(item => ({ title: item.title, source: item.source, link: item.link }));
   } catch {
     return [];
   }

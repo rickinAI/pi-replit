@@ -204,6 +204,15 @@
     .moodys-tabs { display: flex; }
   }
 
+  .news-subheader { font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-muted); margin-bottom: 0.4rem; margin-top: 0.65rem; }
+  .news-subheader:first-child { margin-top: 0; }
+  .news-item { display: flex; align-items: flex-start; gap: 0.5rem; padding: 0.4rem 0; border-bottom: 1px solid var(--border); }
+  .news-item:last-child { border-bottom: none; }
+  .news-title { font-size: 0.75rem; font-weight: 500; color: var(--text); line-height: 1.4; flex: 1; }
+  .news-title a { color: var(--text); text-decoration: none; }
+  .news-title a:active { color: var(--accent); }
+  .news-source { font-size: 0.55rem; font-weight: 600; color: var(--text-muted); white-space: nowrap; padding-top: 2px; }
+
   .xi-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
   .xi-col-title { font-size: 0.55rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-muted); margin-bottom: 0.5rem; }
   .xi-tweet { padding: 0.45rem 0; border-bottom: 1px solid var(--border); }
@@ -310,6 +319,16 @@
           <div class="cal-panel" id="calPooja"></div>
           <div class="cal-panel" id="calReya"></div>
         </div>
+      </div>
+    </div>
+
+    <div class="section" id="newsSection" style="display:none">
+      <div class="section-header" data-section="news">
+        <div class="section-header-left"><div class="section-title">&#x1F4F0; News</div><span class="section-chevron">&#9662;</span></div>
+        <div class="section-badge" id="newsBadge">0</div>
+      </div>
+      <div class="section-body" id="newsBody">
+        <div class="card" id="newsCard"></div>
       </div>
     </div>
 
@@ -453,6 +472,11 @@ function timeAgo(dateStr) {
   if (hrs < 24) return hrs + 'h';
   var days = Math.floor(hrs / 24);
   return days + 'd';
+}
+
+function safeUrl(url) {
+  if (!url) return '';
+  try { var u = new URL(url); return (u.protocol === 'https:' || u.protocol === 'http:') ? url : ''; } catch(e) { return ''; }
 }
 
 var collapsedSections = {};
@@ -700,6 +724,32 @@ function render(data) {
         document.getElementById(calId).classList.add('active');
       });
     });
+  }
+
+  if (data.headlines && data.headlines.length > 0) {
+    document.getElementById('newsSection').style.display = '';
+    document.getElementById('newsBadge').textContent = data.headlines.length;
+    var newsCard = document.getElementById('newsCard');
+    var globalItems = data.headlines.filter(function(h) { return h.category === 'global'; });
+    var nycItems = data.headlines.filter(function(h) { return h.category === 'nyc'; });
+    var newsHtml = '';
+    function renderNewsItem(h) {
+      var url = safeUrl(h.link);
+      var titleHtml = url ? '<a href="' + esc(url) + '" target="_blank" rel="noopener">' + esc(h.title) + '</a>' : esc(h.title);
+      return '<div class="news-item">' +
+        '<div class="news-title">' + titleHtml + '</div>' +
+        (h.source ? '<div class="news-source">' + esc(h.source) + '</div>' : '') +
+        '</div>';
+    }
+    if (globalItems.length > 0) {
+      newsHtml += '<div class="news-subheader">\uD83C\uDF0D Global</div>';
+      globalItems.forEach(function(h) { newsHtml += renderNewsItem(h); });
+    }
+    if (nycItems.length > 0) {
+      newsHtml += '<div class="news-subheader">\uD83D\uDDFD NYC</div>';
+      nycItems.forEach(function(h) { newsHtml += renderNewsItem(h); });
+    }
+    newsCard.innerHTML = newsHtml;
   }
 
   if (data.markets && data.markets.length > 0) {
