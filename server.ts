@@ -2846,7 +2846,7 @@ app.get("/api/vault/reya-school", async (_req: Request, res: Response) => {
     const day = parseInt(now.toLocaleString("en-US", { timeZone: tz, day: "numeric" }));
     let lunch = "Menu not available";
     try {
-      const mealFile = await kbRead("Family/Reya's Education/Reya - School Meals");
+      const mealFile = await kbRead("Family/Reya's Education/Reya - School Meals.md");
       if (mealFile) {
         const datePattern = new RegExp(`\\|\\s*\\w+\\s+${month}/${day}\\s*\\|([^|]+)\\|([^|]+)\\|([^|]+)\\|`, "i");
         const match = mealFile.match(datePattern);
@@ -2893,7 +2893,7 @@ app.get("/api/vault/moodys-brief", async (_req: Request, res: Response) => {
     const day = now.toLocaleString("en-US", { timeZone: tz, day: "2-digit" });
     const dateStr = `${year}-${month}-${day}`;
     const paths = [
-      `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief`,
+      `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief.md`,
     ];
     const etHour = parseInt(now.toLocaleString("en-US", { timeZone: tz, hour: "numeric", hour12: false }));
     if (etHour < 6) {
@@ -2915,7 +2915,7 @@ app.get("/api/vault/moodys-brief", async (_req: Request, res: Response) => {
       const yDay = yesterday.toLocaleString("en-US", { timeZone: tz, day: "2-digit" });
       const yDateStr = `${yYear}-${yMonth}-${yDay}`;
       try {
-        const content = await kbRead(`Scheduled Reports/Moody's Intelligence/Daily/${yDateStr}-Brief`);
+        const content = await kbRead(`Scheduled Reports/Moody's Intelligence/Daily/${yDateStr}-Brief.md`);
         if (content && content.length > 100) { briefContent = content; briefDate = yDateStr; }
       } catch {}
     }
@@ -2970,14 +2970,14 @@ app.get("/api/vault/real-estate-scan", async (_req: Request, res: Response) => {
     let scanContent: string | null = null;
     let scanDate = dateStr;
     try {
-      const content = await kbRead(`Scheduled Reports/Real Estate/${dateStr}-Property-Scan`);
+      const content = await kbRead(`Scheduled Reports/Real Estate/${dateStr}-Property-Scan.md`);
       if (content) scanContent = content;
     } catch {}
     if (!scanContent) {
       const yesterday = new Date(now.getTime() - 86400000);
       const yDateStr = `${yesterday.toLocaleString("en-US", { timeZone: tz, year: "numeric" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, month: "2-digit" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, day: "2-digit" })}`;
       try {
-        const content = await kbRead(`Scheduled Reports/Real Estate/${yDateStr}-Property-Scan`);
+        const content = await kbRead(`Scheduled Reports/Real Estate/${yDateStr}-Property-Scan.md`);
         if (content) { scanContent = content; scanDate = yDateStr; }
       } catch {}
     }
@@ -2985,15 +2985,13 @@ app.get("/api/vault/real-estate-scan", async (_req: Request, res: Response) => {
       res.json({ available: false });
       return;
     }
-    const totalMatch = scanContent.match(/\*\*(\d+)\*\*\s*total\s*active\s*listings/i);
-    const totalListings = totalMatch ? parseInt(totalMatch[1]) : 0;
-    const favMatch = scanContent.match(/\*\*(\d+)\*\*\s*total\s*favorites/i);
-    const totalFavorites = favMatch ? parseInt(favMatch[1]) : 0;
-    const newFavMatch = scanContent.match(/(\d+)\s*new\s*today/i);
-    const newToday = newFavMatch ? parseInt(newFavMatch[1]) : 0;
+    const scannedMatch = scanContent.match(/\*\*(\d+)\+?\s*listings?\s*scanned\*\*/i);
+    const totalListings = scannedMatch ? parseInt(scannedMatch[1]) : 0;
+    const newMatch = scanContent.match(/\*\*(\d+)\s*new\s*listings?\*\*/i);
+    const newListings = newMatch ? parseInt(newMatch[1]) : 0;
     const tsMatch = scanContent.match(/Generated:\s*(.+)/);
     const scanTime = tsMatch ? tsMatch[1].trim() : null;
-    res.json({ available: true, date: scanDate, totalListings, totalFavorites, newToday, scanTime });
+    res.json({ available: true, date: scanDate, totalListings, newListings, scanTime });
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch real estate scan" });
   }
@@ -3232,7 +3230,7 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
           const day = parseInt(now.toLocaleString("en-US", { timeZone: tz, day: "numeric" }));
           let lunch = "Menu not available";
           try {
-            const mealFile = await kbRead("Family/Reya's Education/Reya - School Meals");
+            const mealFile = await kbRead("Family/Reya's Education/Reya - School Meals.md");
             if (mealFile) {
               const datePattern = new RegExp(`\\|\\s*\\w+\\s+${month}/${day}\\s*\\|([^|]+)\\|([^|]+)\\|([^|]+)\\|`, "i");
               const match = mealFile.match(datePattern);
@@ -3285,14 +3283,14 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
         let briefContent: string | null = null;
         let briefDate = dateStr;
         try {
-          const content = await kbRead(`Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief`);
+          const content = await kbRead(`Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief.md`);
           if (content && content.length > 100) briefContent = content;
         } catch {}
         if (!briefContent) {
           const yesterday = new Date(now.getTime() - 86400000);
           const yDateStr = `${yesterday.toLocaleString("en-US", { timeZone: tz, year: "numeric" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, month: "2-digit" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, day: "2-digit" })}`;
           try {
-            const content = await kbRead(`Scheduled Reports/Moody's Intelligence/Daily/${yDateStr}-Brief`);
+            const content = await kbRead(`Scheduled Reports/Moody's Intelligence/Daily/${yDateStr}-Brief.md`);
             if (content && content.length > 100) { briefContent = content; briefDate = yDateStr; }
           } catch {}
         }
@@ -3343,24 +3341,24 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
         let scanContent: string | null = null;
         let scanDate = dateStr;
         try {
-          const content = await kbRead(`Scheduled Reports/Real Estate/${dateStr}-Property-Scan`);
+          const content = await kbRead(`Scheduled Reports/Real Estate/${dateStr}-Property-Scan.md`);
           if (content) scanContent = content;
         } catch {}
         if (!scanContent) {
           const yesterday = new Date(now.getTime() - 86400000);
           const yDateStr = `${yesterday.toLocaleString("en-US", { timeZone: tz, year: "numeric" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, month: "2-digit" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, day: "2-digit" })}`;
           try {
-            const content = await kbRead(`Scheduled Reports/Real Estate/${yDateStr}-Property-Scan`);
+            const content = await kbRead(`Scheduled Reports/Real Estate/${yDateStr}-Property-Scan.md`);
             if (content) { scanContent = content; scanDate = yDateStr; }
           } catch {}
         }
         if (scanContent) {
-          const totalMatch = scanContent.match(/\*\*(\d+)\*\*\s*total\s*active\s*listings/i);
-          const totalListings = totalMatch ? parseInt(totalMatch[1]) : 0;
-          const newFavMatch = scanContent.match(/(\d+)\s*new\s*today/i);
-          const newToday = newFavMatch ? parseInt(newFavMatch[1]) : 0;
+          const scannedMatch = scanContent.match(/\*\*(\d+)\+?\s*listings?\s*scanned\*\*/i);
+          const totalListings = scannedMatch ? parseInt(scannedMatch[1]) : 0;
+          const newMatch = scanContent.match(/\*\*(\d+)\s*new\s*listings?\*\*/i);
+          const newListings = newMatch ? parseInt(newMatch[1]) : 0;
           const tsMatch = scanContent.match(/Generated:\s*(.+)/);
-          result.realEstate = { available: true, date: scanDate, totalListings, newToday, scanTime: tsMatch ? tsMatch[1].trim() : null };
+          result.realEstate = { available: true, date: scanDate, totalListings, newListings, scanTime: tsMatch ? tsMatch[1].trim() : null };
         }
       } catch {}
     })());
