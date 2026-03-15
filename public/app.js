@@ -50,6 +50,7 @@ const FULL_MODEL_ID = "claude-sonnet-4-6";
 const TOOL_LABELS = {
   web_search: "🔍 SEARCHING THE WEB",
   describe_image: "👁️ ANALYZING IMAGE",
+  render_page: "🌐 RENDERING PAGE",
   notes_create: "📝 WRITING TO VAULT",
   notes_update: "📝 UPDATING VAULT",
   notes_read: "📖 READING VAULT",

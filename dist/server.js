@@ -6939,6 +6939,46 @@ ${description}` }],
     }
   ];
 }
+function buildRenderPageTools() {
+  const lightpandaBin = path4.join(PROJECT_ROOT, ".bin/lightpanda");
+  if (!fs3.existsSync(lightpandaBin)) return [];
+  return [
+    {
+      name: "render_page",
+      label: "Render Page",
+      description: "Render a web page in a headless browser and return the fully rendered content as markdown. Unlike web_fetch which returns raw HTML, this tool executes JavaScript and returns the page as a human would see it \u2014 with all dynamic content loaded, counters populated, and JS-rendered elements visible. Perfect for verifying rickin.live pages, checking the baby dashboard, or reading any JS-heavy page. For rickin.live pages, include auth: ?user=darknode&token=dn@rickin26",
+      parameters: Type.Object({
+        url: Type.String({ description: "The full URL to render (must start with http:// or https://)" }),
+        format: Type.Optional(Type.String({ description: "Output format: 'markdown' (default, clean readable text) or 'html' (full rendered HTML)" }))
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          let url = params.url.trim();
+          if (!url.match(/^https?:\/\//i)) url = "https://" + url;
+          const fmt = params.format === "html" ? "html" : "markdown";
+          const { execFile: execFile2 } = await import("child_process");
+          const result = await new Promise((resolve, reject) => {
+            execFile2(lightpandaBin, ["fetch", "--dump", fmt, "--http_timeout", "15000", url], { timeout: 2e4, maxBuffer: 5 * 1024 * 1024 }, (err, stdout, stderr) => {
+              if (err) reject(new Error(stderr || err.message));
+              else resolve(stdout);
+            });
+          });
+          const truncated = result.length > 8e4;
+          const content = truncated ? result.slice(0, 8e4) + "\n\n[TRUNCATED \u2014 content too long]" : result;
+          return {
+            content: [{ type: "text", text: `**Rendered Page** (${fmt}) \u2014 ${url}
+
+${content}` }],
+            details: { format: fmt, length: result.length, truncated }
+          };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { content: [{ type: "text", text: `Failed to render page: ${msg}` }], details: { error: msg } };
+        }
+      }
+    }
+  ];
+}
 function buildCalendarTools() {
   if (!isConfigured4()) return [];
   return [
@@ -9311,6 +9351,7 @@ var cachedStaticTools = [
   ...buildSearchTools(),
   ...buildWebFetchTools(),
   ...buildImageTools(),
+  ...buildRenderPageTools(),
   ...buildTaskTools(),
   ...buildNewsTools(),
   ...buildTwitterTools(),
