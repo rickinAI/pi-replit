@@ -283,6 +283,40 @@ export async function searchEmails(query: string): Promise<string> {
   return listEmails(query, 10);
 }
 
+export async function searchEmailsStructured(query: string, maxResults = 5): Promise<Array<{ subject: string; from: string; date: string; unread: boolean }>> {
+  try {
+    const client = await getGmailClient();
+    const listRes = await client.users.messages.list({
+      userId: "me",
+      q: query,
+      maxResults: Math.min(maxResults, 10),
+    });
+    const messageRefs = (listRes.data as any).messages || [];
+    if (messageRefs.length === 0) return [];
+    const details = await Promise.all(
+      messageRefs.map(async (ref: any) => {
+        const msg = await client.users.messages.get({
+          userId: "me",
+          id: ref.id,
+          format: "metadata",
+          metadataHeaders: ["From", "Subject", "Date"],
+        });
+        const headers = (msg.data as any).payload?.headers || [];
+        const getH = (name: string) => headers.find((h: any) => h.name === name)?.value || "";
+        return {
+          subject: getH("Subject") || "(no subject)",
+          from: getH("From").replace(/<.*>/, "").trim(),
+          date: getH("Date"),
+          unread: ((msg.data as any).labelIds || []).includes("UNREAD"),
+        };
+      })
+    );
+    return details;
+  } catch {
+    return [];
+  }
+}
+
 export async function getUnreadCount(): Promise<number> {
   try {
     const client = await getGmailClient();

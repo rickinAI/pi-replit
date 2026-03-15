@@ -37,6 +37,7 @@ export async function getWeather(location: string, forecastDays = 3): Promise<st
     const days = Math.max(1, Math.min(forecastDays, 7));
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.lat}&longitude=${geo.lon}`
       + `&current=temperature_2m,apparent_temperature,weathercode,windspeed_10m,winddirection_10m,relative_humidity_2m,uv_index`
+      + `&hourly=precipitation_probability`
       + `&daily=temperature_2m_max,temperature_2m_min,weathercode,precipitation_probability_max`
       + `&temperature_unit=celsius&windspeed_unit=mph&timezone=${encodeURIComponent(geo.timezone)}&forecast_days=${days}`;
 
@@ -57,6 +58,18 @@ export async function getWeather(location: string, forecastDays = 3): Promise<st
     result += `  Humidity: ${c.relative_humidity_2m}%\n`;
     result += `  Wind: ${Math.round(c.windspeed_10m)} mph\n`;
     if (c.uv_index !== undefined) result += `  UV Index: ${c.uv_index}\n`;
+
+    const hourly = data.hourly;
+    if (hourly?.time?.length > 0 && hourly?.precipitation_probability?.length > 0) {
+      result += `\nHourly Precipitation:\n`;
+      for (let i = 0; i < Math.min(24, hourly.time.length); i++) {
+        const h = hourly.time[i];
+        const prob = hourly.precipitation_probability[i];
+        if (prob > 0) {
+          result += `  ${h}: ${prob}%\n`;
+        }
+      }
+    }
 
     const daily = data.daily;
     if (daily?.time?.length > 0) {

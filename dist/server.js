@@ -1105,6 +1105,39 @@ ${truncatedBody}`;
 async function searchEmails(query) {
   return listEmails(query, 10);
 }
+async function searchEmailsStructured(query, maxResults = 5) {
+  try {
+    const client = await getGmailClient();
+    const listRes = await client.users.messages.list({
+      userId: "me",
+      q: query,
+      maxResults: Math.min(maxResults, 10)
+    });
+    const messageRefs = listRes.data.messages || [];
+    if (messageRefs.length === 0) return [];
+    const details = await Promise.all(
+      messageRefs.map(async (ref) => {
+        const msg = await client.users.messages.get({
+          userId: "me",
+          id: ref.id,
+          format: "metadata",
+          metadataHeaders: ["From", "Subject", "Date"]
+        });
+        const headers2 = msg.data.payload?.headers || [];
+        const getH = (name) => headers2.find((h) => h.name === name)?.value || "";
+        return {
+          subject: getH("Subject") || "(no subject)",
+          from: getH("From").replace(/<.*>/, "").trim(),
+          date: getH("Date"),
+          unread: (msg.data.labelIds || []).includes("UNREAD")
+        };
+      })
+    );
+    return details;
+  } catch {
+    return [];
+  }
+}
 async function getUnreadCount() {
   try {
     const client = await getGmailClient();
@@ -1969,7 +2002,7 @@ async function getWeather(location, forecastDays = 3) {
     const geo = await geocode(location);
     if (!geo) return `Could not find location "${location}". Try a city name like "New York" or "London".`;
     const days = Math.max(1, Math.min(forecastDays, 7));
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.lat}&longitude=${geo.lon}&current=temperature_2m,apparent_temperature,weathercode,windspeed_10m,winddirection_10m,relative_humidity_2m,uv_index&daily=temperature_2m_max,temperature_2m_min,weathercode,precipitation_probability_max&temperature_unit=celsius&windspeed_unit=mph&timezone=${encodeURIComponent(geo.timezone)}&forecast_days=${days}`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.lat}&longitude=${geo.lon}&current=temperature_2m,apparent_temperature,weathercode,windspeed_10m,winddirection_10m,relative_humidity_2m,uv_index&hourly=precipitation_probability&daily=temperature_2m_max,temperature_2m_min,weathercode,precipitation_probability_max&temperature_unit=celsius&windspeed_unit=mph&timezone=${encodeURIComponent(geo.timezone)}&forecast_days=${days}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Weather API error ${res.status}`);
     const data = await res.json();
@@ -1991,6 +2024,20 @@ async function getWeather(location, forecastDays = 3) {
 `;
     if (c.uv_index !== void 0) result += `  UV Index: ${c.uv_index}
 `;
+    const hourly = data.hourly;
+    if (hourly?.time?.length > 0 && hourly?.precipitation_probability?.length > 0) {
+      result += `
+Hourly Precipitation:
+`;
+      for (let i = 0; i < Math.min(24, hourly.time.length); i++) {
+        const h = hourly.time[i];
+        const prob = hourly.precipitation_probability[i];
+        if (prob > 0) {
+          result += `  ${h}: ${prob}%
+`;
+        }
+      }
+    }
     const daily = data.daily;
     if (daily?.time?.length > 0) {
       result += `
@@ -2568,6 +2615,20 @@ ${lines.join("\n\n")}`;
 async function getTopHeadlines(count = 3) {
   try {
     const res = await fetch(RSS_FEEDS["top"], {
+      headers: { "User-Agent": "pi-assistant/1.0" }
+    });
+    if (!res.ok) return [];
+    const xml = await res.text();
+    const items = parseRssItems(xml);
+    return items.slice(0, count).map((item) => ({ title: item.title, source: item.source }));
+  } catch {
+    return [];
+  }
+}
+async function searchHeadlines(query, count = 5) {
+  try {
+    const feedUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`;
+    const res = await fetch(feedUrl, {
       headers: { "User-Agent": "pi-assistant/1.0" }
     });
     if (!res.ok) return [];
@@ -9255,6 +9316,182 @@ async function fetchQuoteStructured(symbol, type) {
     return null;
   }
 }
+app.get("/api/vault/reya-school", async (_req, res) => {
+  try {
+    const tz = "America/New_York";
+    const now = /* @__PURE__ */ new Date();
+    const dayOfWeek = parseInt(now.toLocaleString("en-US", { timeZone: tz, weekday: "short" }).charAt(0) === "S" ? "0" : "1");
+    const dayName = now.toLocaleString("en-US", { timeZone: tz, weekday: "long" });
+    const isWeekend = ["Saturday", "Sunday"].includes(dayName);
+    if (isWeekend) {
+      res.json({ schoolInSession: false, lunch: null, pickupCountdown: null, alert: null });
+      return;
+    }
+    const month = parseInt(now.toLocaleString("en-US", { timeZone: tz, month: "numeric" }));
+    const day = parseInt(now.toLocaleString("en-US", { timeZone: tz, day: "numeric" }));
+    let lunch = "Menu not available";
+    try {
+      const mealFile = await readNote2("Family/Reya's Education/Reya - School Meals");
+      if (mealFile) {
+        const datePattern = new RegExp(`\\|\\s*\\w+\\s+${month}/${day}\\s*\\|([^|]+)\\|([^|]+)\\|([^|]+)\\|`, "i");
+        const match = mealFile.match(datePattern);
+        if (match) {
+          const mainDish = match[1].replace(/\*\*/g, "").trim();
+          const vegStatus = match[2].trim();
+          const sides = match[3].trim();
+          const isVeg = vegStatus.includes("\u2705");
+          lunch = isVeg ? `\u2705 ${mainDish}` : `\u274C ${mainDish} \u2014 Sides: ${sides}`;
+        }
+      }
+    } catch {
+    }
+    const etNow = new Date(now.toLocaleString("en-US", { timeZone: tz }));
+    const pickupTime = new Date(etNow);
+    pickupTime.setHours(16, 30, 0, 0);
+    let pickupCountdown = null;
+    if (etNow < pickupTime) {
+      const diffMs = pickupTime.getTime() - etNow.getTime();
+      const h = Math.floor(diffMs / 36e5);
+      const m = Math.floor(diffMs % 36e5 / 6e4);
+      pickupCountdown = h > 0 ? `in ${h}h ${m}m` : `in ${m}m`;
+    } else {
+      pickupCountdown = "\u2705 Picked up";
+    }
+    let alert = null;
+    try {
+      if (isConnected()) {
+        const alerts = await searchEmailsStructured("from:kristen OR from:cicio is:unread newer_than:2d", 1);
+        if (alerts.length > 0) alert = alerts[0].subject;
+      }
+    } catch {
+    }
+    res.json({ schoolInSession: true, lunch, pickupCountdown, alert });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch Reya school data" });
+  }
+});
+app.get("/api/vault/moodys-brief", async (_req, res) => {
+  try {
+    const tz = "America/New_York";
+    const now = /* @__PURE__ */ new Date();
+    const year = now.toLocaleString("en-US", { timeZone: tz, year: "numeric" });
+    const month = now.toLocaleString("en-US", { timeZone: tz, month: "2-digit" });
+    const day = now.toLocaleString("en-US", { timeZone: tz, day: "2-digit" });
+    const dateStr = `${year}-${month}-${day}`;
+    const paths = [
+      `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief`
+    ];
+    const etHour = parseInt(now.toLocaleString("en-US", { timeZone: tz, hour: "numeric", hour12: false }));
+    if (etHour < 6) {
+      res.json({ available: false, reason: "pending", message: "Daily brief generates at 6:00 AM" });
+      return;
+    }
+    let briefContent = null;
+    let briefDate = dateStr;
+    for (const p of paths) {
+      try {
+        const content = await readNote2(p);
+        if (content && content.length > 100) {
+          briefContent = content;
+          break;
+        }
+      } catch {
+      }
+    }
+    if (!briefContent) {
+      const yesterday = new Date(now.getTime() - 864e5);
+      const yYear = yesterday.toLocaleString("en-US", { timeZone: tz, year: "numeric" });
+      const yMonth = yesterday.toLocaleString("en-US", { timeZone: tz, month: "2-digit" });
+      const yDay = yesterday.toLocaleString("en-US", { timeZone: tz, day: "2-digit" });
+      const yDateStr = `${yYear}-${yMonth}-${yDay}`;
+      try {
+        const content = await readNote2(`Scheduled Reports/Moody's Intelligence/Daily/${yDateStr}-Brief`);
+        if (content && content.length > 100) {
+          briefContent = content;
+          briefDate = yDateStr;
+        }
+      } catch {
+      }
+    }
+    if (!briefContent) {
+      res.json({ available: false, reason: "missing", message: "Brief unavailable \u2014 check pipeline" });
+      return;
+    }
+    const categories = { corporate: [], banking: [], competitors: [], aiTrends: [], analysts: [] };
+    const categoryMap = [
+      { pattern: /##\s*🏢\s*Moody'?s Corporate/i, key: "corporate" },
+      { pattern: /##\s*🏦\s*Banking/i, key: "banking" },
+      { pattern: /##\s*🔍\s*Competitor/i, key: "competitors" },
+      { pattern: /##\s*🤖\s*Enterprise AI/i, key: "aiTrends" },
+      { pattern: /##\s*📊\s*Industry Analyst/i, key: "analysts" }
+    ];
+    let foundSections = 0;
+    for (const { pattern, key } of categoryMap) {
+      const idx = briefContent.search(pattern);
+      if (idx === -1) continue;
+      foundSections++;
+      const sectionStart = idx;
+      const nextSection = briefContent.slice(sectionStart + 5).search(/\n## /);
+      const sectionEnd = nextSection === -1 ? briefContent.length : sectionStart + 5 + nextSection;
+      const section = briefContent.slice(sectionStart, sectionEnd);
+      const bullets = section.match(/^- .+$/gm) || [];
+      categories[key] = bullets.slice(0, 3).map((b) => {
+        let text = b.replace(/^- /, "").replace(/🔴|🟡|🟢/g, "").trim();
+        text = text.replace(/\*\*/g, "").replace(/\(?\[.*?\]\(.*?\)\)?/g, "").trim();
+        if (text.length > 150) text = text.slice(0, 147) + "...";
+        return text;
+      });
+    }
+    if (foundSections < 3) {
+      res.json({ available: false, reason: "unstructured", message: "Brief format not recognized" });
+      return;
+    }
+    const tsMatch = briefContent.match(/Generated:\s*(.+)/);
+    res.json({ available: true, date: briefDate, categories, timestamp: tsMatch ? tsMatch[1].trim() : null });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch Moody's brief" });
+  }
+});
+app.get("/api/vault/real-estate-scan", async (_req, res) => {
+  try {
+    const tz = "America/New_York";
+    const now = /* @__PURE__ */ new Date();
+    const year = now.toLocaleString("en-US", { timeZone: tz, year: "numeric" });
+    const month = now.toLocaleString("en-US", { timeZone: tz, month: "2-digit" });
+    const day = now.toLocaleString("en-US", { timeZone: tz, day: "2-digit" });
+    const dateStr = `${year}-${month}-${day}`;
+    let scanContent = null;
+    let scanDate = dateStr;
+    try {
+      const content = await readNote2(`Scheduled Reports/Real Estate/${dateStr}-Property-Scan`);
+      if (content) scanContent = content;
+    } catch {
+    }
+    if (!scanContent) {
+      const yesterday = new Date(now.getTime() - 864e5);
+      const yDateStr = `${yesterday.toLocaleString("en-US", { timeZone: tz, year: "numeric" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, month: "2-digit" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, day: "2-digit" })}`;
+      try {
+        const content = await readNote2(`Scheduled Reports/Real Estate/${yDateStr}-Property-Scan`);
+        if (content) {
+          scanContent = content;
+          scanDate = yDateStr;
+        }
+      } catch {
+      }
+    }
+    if (!scanContent) {
+      res.json({ available: false });
+      return;
+    }
+    const listingsMatch = scanContent.match(/(\d+)\s*new\s*listing/i);
+    const newListings = listingsMatch ? parseInt(listingsMatch[1]) : 0;
+    const tsMatch = scanContent.match(/Generated:\s*(.+)/);
+    const scanTime = tsMatch ? tsMatch[1].trim() : null;
+    res.json({ available: true, date: scanDate, newListings, scanTime });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch real estate scan" });
+  }
+});
 app.get("/api/daily-brief/data", async (_req, res) => {
   try {
     if (dailyBriefCache && Date.now() - dailyBriefCache.ts < DAILY_BRIEF_TTL) {
@@ -9270,11 +9507,20 @@ app.get("/api/daily-brief/data", async (_req, res) => {
       greeting: "",
       date: "",
       weather: null,
+      commuteAlert: null,
       markets: [],
       tasks: [],
       calendars: { rickin: [], pooja: [], reya: [], other: [] },
       headlines: [],
+      headlinesBtc: [],
+      headlinesMacro: [],
+      headlinesTech: [],
       xSignals: [],
+      baby: null,
+      reya: null,
+      moodys: null,
+      realEstate: null,
+      focusToday: null,
       jobs: null
     };
     try {
@@ -9321,6 +9567,21 @@ app.get("/api/daily-brief/data", async (_req, res) => {
               const lowC = parseInt(m[3]), highC = parseInt(m[4]);
               return { date: m[1], condition: m[2].trim(), lowC, highC, lowF: Math.round(lowC * 9 / 5 + 32), highF: Math.round(highC * 9 / 5 + 32), rainPct: parseInt(m[5]) };
             }).filter(Boolean);
+          }
+          const hourlyPrecip = raw.match(/Hourly Precipitation:\n([\s\S]*?)(?:\n\d+-Day|\n$|$)/);
+          if (hourlyPrecip) {
+            const lines = hourlyPrecip[1].match(/\d{4}-\d{2}-\d{2}T(\d{2}):\d{2}:\s*(\d+)%/g) || [];
+            for (const line of lines) {
+              const m = line.match(/T(\d{2}):\d{2}:\s*(\d+)%/);
+              if (m) {
+                const hour = parseInt(m[1]);
+                const pct = parseInt(m[2]);
+                if (hour >= 7 && hour <= 9 && pct > 40) {
+                  result.commuteAlert = `\u2602\uFE0F ${pct}% chance of rain at school drop (${hour}:00 AM)`;
+                  break;
+                }
+              }
+            }
           }
           result.weather = w;
         }
@@ -9376,8 +9637,26 @@ app.get("/api/daily-brief/data", async (_req, res) => {
     }
     promises.push((async () => {
       try {
-        const top = await getTopHeadlines(5);
+        const top = await getTopHeadlines(7);
         result.headlines = top;
+      } catch {
+      }
+    })());
+    promises.push((async () => {
+      try {
+        result.headlinesBtc = await searchHeadlines("bitcoin OR crypto OR cryptocurrency", 5);
+      } catch {
+      }
+    })());
+    promises.push((async () => {
+      try {
+        result.headlinesMacro = await searchHeadlines("Federal Reserve OR inflation OR geopolitics OR economy", 5);
+      } catch {
+      }
+    })());
+    promises.push((async () => {
+      try {
+        result.headlinesTech = await searchHeadlines("artificial intelligence OR LLM OR AI startup OR GPT", 5);
       } catch {
       }
     })());
@@ -9402,6 +9681,206 @@ app.get("/api/daily-brief/data", async (_req, res) => {
           }
           result.xSignals = tweets;
         }
+      } catch {
+      }
+    })());
+    promises.push((async () => {
+      try {
+        const babyRes = await fetch(`http://localhost:${process.env.PORT || 5e3}/api/baby-dashboard/data?user=darknode&token=dn@rickin26`);
+        if (babyRes.ok) {
+          const babyData = await babyRes.json();
+          const dueDate = /* @__PURE__ */ new Date("2026-07-07");
+          const daysLeft = Math.ceil((dueDate.getTime() - now.getTime()) / 864e5);
+          const weeksPregnant = 40 - Math.ceil(daysLeft / 7);
+          let nextAppt = null;
+          if (babyData.appointments) {
+            const today = now.toISOString().split("T")[0];
+            for (const a of babyData.appointments) {
+              if (a.date && a.date >= today) {
+                nextAppt = a;
+                break;
+              }
+            }
+          }
+          result.baby = { weeksPregnant, daysLeft, nextAppt };
+        } else {
+          const dueDate = /* @__PURE__ */ new Date("2026-07-07");
+          const daysLeft = Math.ceil((dueDate.getTime() - now.getTime()) / 864e5);
+          const weeksPregnant = 40 - Math.ceil(daysLeft / 7);
+          result.baby = { weeksPregnant, daysLeft, nextAppt: null };
+        }
+      } catch {
+        const dueDate = /* @__PURE__ */ new Date("2026-07-07");
+        const daysLeft = Math.ceil((dueDate.getTime() - now.getTime()) / 864e5);
+        const weeksPregnant = 40 - Math.ceil(daysLeft / 7);
+        result.baby = { weeksPregnant, daysLeft, nextAppt: null };
+      }
+    })());
+    promises.push((async () => {
+      try {
+        const dayName = now.toLocaleString("en-US", { timeZone: tz, weekday: "long" });
+        const isWeekend = ["Saturday", "Sunday"].includes(dayName);
+        if (!isWeekend) {
+          const month = parseInt(now.toLocaleString("en-US", { timeZone: tz, month: "numeric" }));
+          const day = parseInt(now.toLocaleString("en-US", { timeZone: tz, day: "numeric" }));
+          let lunch = "Menu not available";
+          try {
+            const mealFile = await readNote2("Family/Reya's Education/Reya - School Meals");
+            if (mealFile) {
+              const datePattern = new RegExp(`\\|\\s*\\w+\\s+${month}/${day}\\s*\\|([^|]+)\\|([^|]+)\\|([^|]+)\\|`, "i");
+              const match = mealFile.match(datePattern);
+              if (match) {
+                const mainDish = match[1].replace(/\*\*/g, "").trim();
+                const vegStatus = match[2].trim();
+                const sides = match[3].trim();
+                const isVeg = vegStatus.includes("\u2705");
+                lunch = isVeg ? `\u2705 ${mainDish}` : `\u274C ${mainDish} \u2014 Sides: ${sides}`;
+              }
+            }
+          } catch {
+          }
+          const etNow = new Date(now.toLocaleString("en-US", { timeZone: tz }));
+          const pickupTime = new Date(etNow);
+          pickupTime.setHours(16, 30, 0, 0);
+          let pickupCountdown;
+          if (etNow < pickupTime) {
+            const diffMs = pickupTime.getTime() - etNow.getTime();
+            const h = Math.floor(diffMs / 36e5);
+            const m = Math.floor(diffMs % 36e5 / 6e4);
+            pickupCountdown = h > 0 ? `in ${h}h ${m}m` : `in ${m}m`;
+          } else {
+            pickupCountdown = "\u2705 Picked up";
+          }
+          let schoolAlert = null;
+          try {
+            if (isConnected()) {
+              const a = await searchEmailsStructured("from:kristen OR from:cicio is:unread newer_than:2d", 1);
+              if (a.length > 0) schoolAlert = a[0].subject;
+            }
+          } catch {
+          }
+          result.reya = { schoolInSession: true, lunch, pickupCountdown, alert: schoolAlert };
+        } else {
+          result.reya = { schoolInSession: false };
+        }
+      } catch {
+      }
+    })());
+    promises.push((async () => {
+      try {
+        const year = now.toLocaleString("en-US", { timeZone: tz, year: "numeric" });
+        const month = now.toLocaleString("en-US", { timeZone: tz, month: "2-digit" });
+        const day = now.toLocaleString("en-US", { timeZone: tz, day: "2-digit" });
+        const dateStr = `${year}-${month}-${day}`;
+        const etHour = parseInt(now.toLocaleString("en-US", { timeZone: tz, hour: "numeric", hour12: false }));
+        if (etHour < 6) {
+          result.moodys = { available: false, reason: "pending", message: "Daily brief generates at 6:00 AM" };
+          return;
+        }
+        let briefContent = null;
+        let briefDate = dateStr;
+        try {
+          const content = await readNote2(`Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief`);
+          if (content && content.length > 100) briefContent = content;
+        } catch {
+        }
+        if (!briefContent) {
+          const yesterday = new Date(now.getTime() - 864e5);
+          const yDateStr = `${yesterday.toLocaleString("en-US", { timeZone: tz, year: "numeric" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, month: "2-digit" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, day: "2-digit" })}`;
+          try {
+            const content = await readNote2(`Scheduled Reports/Moody's Intelligence/Daily/${yDateStr}-Brief`);
+            if (content && content.length > 100) {
+              briefContent = content;
+              briefDate = yDateStr;
+            }
+          } catch {
+          }
+        }
+        if (!briefContent) {
+          result.moodys = { available: false, reason: "missing", message: "Brief unavailable \u2014 check pipeline" };
+          return;
+        }
+        const categories = { corporate: [], banking: [], competitors: [], aiTrends: [], analysts: [] };
+        const categoryMap = [
+          { pattern: /##\s*🏢\s*Moody'?s Corporate/i, key: "corporate" },
+          { pattern: /##\s*🏦\s*Banking/i, key: "banking" },
+          { pattern: /##\s*🔍\s*Competitor/i, key: "competitors" },
+          { pattern: /##\s*🤖\s*Enterprise AI/i, key: "aiTrends" },
+          { pattern: /##\s*📊\s*Industry Analyst/i, key: "analysts" }
+        ];
+        let foundSections = 0;
+        for (const { pattern, key } of categoryMap) {
+          const idx = briefContent.search(pattern);
+          if (idx === -1) continue;
+          foundSections++;
+          const sectionStart = idx;
+          const nextSection = briefContent.slice(sectionStart + 5).search(/\n## /);
+          const sectionEnd = nextSection === -1 ? briefContent.length : sectionStart + 5 + nextSection;
+          const section = briefContent.slice(sectionStart, sectionEnd);
+          const bullets = section.match(/^- .+$/gm) || [];
+          categories[key] = bullets.slice(0, 3).map((b) => {
+            let text = b.replace(/^- /, "").replace(/🔴|🟡|🟢/g, "").trim();
+            text = text.replace(/\*\*/g, "").replace(/\(?\[.*?\]\(.*?\)\)?/g, "").trim();
+            if (text.length > 150) text = text.slice(0, 147) + "...";
+            return text;
+          });
+        }
+        if (foundSections < 3) {
+          result.moodys = { available: false, reason: "unstructured", message: "Brief format not recognized" };
+          return;
+        }
+        const tsMatch = briefContent.match(/Generated:\s*(.+)/);
+        result.moodys = { available: true, date: briefDate, categories, timestamp: tsMatch ? tsMatch[1].trim() : null };
+      } catch {
+      }
+    })());
+    promises.push((async () => {
+      try {
+        const year = now.toLocaleString("en-US", { timeZone: tz, year: "numeric" });
+        const month = now.toLocaleString("en-US", { timeZone: tz, month: "2-digit" });
+        const day = now.toLocaleString("en-US", { timeZone: tz, day: "2-digit" });
+        const dateStr = `${year}-${month}-${day}`;
+        let scanContent = null;
+        let scanDate = dateStr;
+        try {
+          const content = await readNote2(`Scheduled Reports/Real Estate/${dateStr}-Property-Scan`);
+          if (content) scanContent = content;
+        } catch {
+        }
+        if (!scanContent) {
+          const yesterday = new Date(now.getTime() - 864e5);
+          const yDateStr = `${yesterday.toLocaleString("en-US", { timeZone: tz, year: "numeric" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, month: "2-digit" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, day: "2-digit" })}`;
+          try {
+            const content = await readNote2(`Scheduled Reports/Real Estate/${yDateStr}-Property-Scan`);
+            if (content) {
+              scanContent = content;
+              scanDate = yDateStr;
+            }
+          } catch {
+          }
+        }
+        if (scanContent) {
+          const listingsMatch = scanContent.match(/(\d+)\s*new\s*listing/i);
+          const tsMatch = scanContent.match(/Generated:\s*(.+)/);
+          result.realEstate = { available: true, date: scanDate, newListings: listingsMatch ? parseInt(listingsMatch[1]) : 0, scanTime: tsMatch ? tsMatch[1].trim() : null };
+        }
+      } catch {
+      }
+    })());
+    promises.push((async () => {
+      try {
+        const active = await getActiveTasks();
+        const today = now.toISOString().split("T")[0];
+        const focus = active.filter((t) => t.priority === "high" || t.dueDate && t.dueDate <= today).slice(0, 3);
+        const focusTasks = focus.length > 0 ? focus : active.slice(0, 3);
+        let actionEmails = [];
+        try {
+          if (isConnected()) {
+            actionEmails = await searchEmailsStructured("label:Action-Required is:unread", 3);
+          }
+        } catch {
+        }
+        result.focusToday = { tasks: focusTasks, actionEmails, actionCount: actionEmails.filter((e) => e.unread).length };
       } catch {
       }
     })());

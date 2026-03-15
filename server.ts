@@ -2832,6 +2832,170 @@ async function fetchQuoteStructured(symbol: string, type: "stock" | "crypto"): P
   } catch { return null; }
 }
 
+app.get("/api/vault/reya-school", async (_req: Request, res: Response) => {
+  try {
+    const tz = "America/New_York";
+    const now = new Date();
+    const dayOfWeek = parseInt(now.toLocaleString("en-US", { timeZone: tz, weekday: "short" }).charAt(0) === "S" ? "0" : "1");
+    const dayName = now.toLocaleString("en-US", { timeZone: tz, weekday: "long" });
+    const isWeekend = ["Saturday", "Sunday"].includes(dayName);
+    if (isWeekend) {
+      res.json({ schoolInSession: false, lunch: null, pickupCountdown: null, alert: null });
+      return;
+    }
+    const month = parseInt(now.toLocaleString("en-US", { timeZone: tz, month: "numeric" }));
+    const day = parseInt(now.toLocaleString("en-US", { timeZone: tz, day: "numeric" }));
+    let lunch = "Menu not available";
+    try {
+      const mealFile = await vaultLocal.readNote("Family/Reya's Education/Reya - School Meals");
+      if (mealFile) {
+        const datePattern = new RegExp(`\\|\\s*\\w+\\s+${month}/${day}\\s*\\|([^|]+)\\|([^|]+)\\|([^|]+)\\|`, "i");
+        const match = mealFile.match(datePattern);
+        if (match) {
+          const mainDish = match[1].replace(/\*\*/g, "").trim();
+          const vegStatus = match[2].trim();
+          const sides = match[3].trim();
+          const isVeg = vegStatus.includes("✅");
+          lunch = isVeg ? `✅ ${mainDish}` : `❌ ${mainDish} — Sides: ${sides}`;
+        }
+      }
+    } catch {}
+    const etNow = new Date(now.toLocaleString("en-US", { timeZone: tz }));
+    const pickupTime = new Date(etNow);
+    pickupTime.setHours(16, 30, 0, 0);
+    let pickupCountdown: string | null = null;
+    if (etNow < pickupTime) {
+      const diffMs = pickupTime.getTime() - etNow.getTime();
+      const h = Math.floor(diffMs / 3600000);
+      const m = Math.floor((diffMs % 3600000) / 60000);
+      pickupCountdown = h > 0 ? `in ${h}h ${m}m` : `in ${m}m`;
+    } else {
+      pickupCountdown = "✅ Picked up";
+    }
+    let alert: string | null = null;
+    try {
+      if (gmail.isConnected()) {
+        const alerts = await gmail.searchEmailsStructured("from:kristen OR from:cicio is:unread newer_than:2d", 1);
+        if (alerts.length > 0) alert = alerts[0].subject;
+      }
+    } catch {}
+    res.json({ schoolInSession: true, lunch, pickupCountdown, alert });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch Reya school data" });
+  }
+});
+
+app.get("/api/vault/moodys-brief", async (_req: Request, res: Response) => {
+  try {
+    const tz = "America/New_York";
+    const now = new Date();
+    const year = now.toLocaleString("en-US", { timeZone: tz, year: "numeric" });
+    const month = now.toLocaleString("en-US", { timeZone: tz, month: "2-digit" });
+    const day = now.toLocaleString("en-US", { timeZone: tz, day: "2-digit" });
+    const dateStr = `${year}-${month}-${day}`;
+    const paths = [
+      `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief`,
+    ];
+    const etHour = parseInt(now.toLocaleString("en-US", { timeZone: tz, hour: "numeric", hour12: false }));
+    if (etHour < 6) {
+      res.json({ available: false, reason: "pending", message: "Daily brief generates at 6:00 AM" });
+      return;
+    }
+    let briefContent: string | null = null;
+    let briefDate = dateStr;
+    for (const p of paths) {
+      try {
+        const content = await vaultLocal.readNote(p);
+        if (content && content.length > 100) { briefContent = content; break; }
+      } catch {}
+    }
+    if (!briefContent) {
+      const yesterday = new Date(now.getTime() - 86400000);
+      const yYear = yesterday.toLocaleString("en-US", { timeZone: tz, year: "numeric" });
+      const yMonth = yesterday.toLocaleString("en-US", { timeZone: tz, month: "2-digit" });
+      const yDay = yesterday.toLocaleString("en-US", { timeZone: tz, day: "2-digit" });
+      const yDateStr = `${yYear}-${yMonth}-${yDay}`;
+      try {
+        const content = await vaultLocal.readNote(`Scheduled Reports/Moody's Intelligence/Daily/${yDateStr}-Brief`);
+        if (content && content.length > 100) { briefContent = content; briefDate = yDateStr; }
+      } catch {}
+    }
+    if (!briefContent) {
+      res.json({ available: false, reason: "missing", message: "Brief unavailable — check pipeline" });
+      return;
+    }
+    const categories: Record<string, string[]> = { corporate: [], banking: [], competitors: [], aiTrends: [], analysts: [] };
+    const categoryMap: Array<{ pattern: RegExp; key: string }> = [
+      { pattern: /##\s*🏢\s*Moody'?s Corporate/i, key: "corporate" },
+      { pattern: /##\s*🏦\s*Banking/i, key: "banking" },
+      { pattern: /##\s*🔍\s*Competitor/i, key: "competitors" },
+      { pattern: /##\s*🤖\s*Enterprise AI/i, key: "aiTrends" },
+      { pattern: /##\s*📊\s*Industry Analyst/i, key: "analysts" },
+    ];
+    let foundSections = 0;
+    for (const { pattern, key } of categoryMap) {
+      const idx = briefContent.search(pattern);
+      if (idx === -1) continue;
+      foundSections++;
+      const sectionStart = idx;
+      const nextSection = briefContent.slice(sectionStart + 5).search(/\n## /);
+      const sectionEnd = nextSection === -1 ? briefContent.length : sectionStart + 5 + nextSection;
+      const section = briefContent.slice(sectionStart, sectionEnd);
+      const bullets = section.match(/^- .+$/gm) || [];
+      categories[key] = bullets.slice(0, 3).map(b => {
+        let text = b.replace(/^- /, "").replace(/🔴|🟡|🟢/g, "").trim();
+        text = text.replace(/\*\*/g, "").replace(/\(?\[.*?\]\(.*?\)\)?/g, "").trim();
+        if (text.length > 150) text = text.slice(0, 147) + "...";
+        return text;
+      });
+    }
+    if (foundSections < 3) {
+      res.json({ available: false, reason: "unstructured", message: "Brief format not recognized" });
+      return;
+    }
+    const tsMatch = briefContent.match(/Generated:\s*(.+)/);
+    res.json({ available: true, date: briefDate, categories, timestamp: tsMatch ? tsMatch[1].trim() : null });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch Moody's brief" });
+  }
+});
+
+app.get("/api/vault/real-estate-scan", async (_req: Request, res: Response) => {
+  try {
+    const tz = "America/New_York";
+    const now = new Date();
+    const year = now.toLocaleString("en-US", { timeZone: tz, year: "numeric" });
+    const month = now.toLocaleString("en-US", { timeZone: tz, month: "2-digit" });
+    const day = now.toLocaleString("en-US", { timeZone: tz, day: "2-digit" });
+    const dateStr = `${year}-${month}-${day}`;
+    let scanContent: string | null = null;
+    let scanDate = dateStr;
+    try {
+      const content = await vaultLocal.readNote(`Scheduled Reports/Real Estate/${dateStr}-Property-Scan`);
+      if (content) scanContent = content;
+    } catch {}
+    if (!scanContent) {
+      const yesterday = new Date(now.getTime() - 86400000);
+      const yDateStr = `${yesterday.toLocaleString("en-US", { timeZone: tz, year: "numeric" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, month: "2-digit" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, day: "2-digit" })}`;
+      try {
+        const content = await vaultLocal.readNote(`Scheduled Reports/Real Estate/${yDateStr}-Property-Scan`);
+        if (content) { scanContent = content; scanDate = yDateStr; }
+      } catch {}
+    }
+    if (!scanContent) {
+      res.json({ available: false });
+      return;
+    }
+    const listingsMatch = scanContent.match(/(\d+)\s*new\s*listing/i);
+    const newListings = listingsMatch ? parseInt(listingsMatch[1]) : 0;
+    const tsMatch = scanContent.match(/Generated:\s*(.+)/);
+    const scanTime = tsMatch ? tsMatch[1].trim() : null;
+    res.json({ available: true, date: scanDate, newListings, scanTime });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch real estate scan" });
+  }
+});
+
 app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
   try {
     if (dailyBriefCache && Date.now() - dailyBriefCache.ts < DAILY_BRIEF_TTL) {
@@ -2848,11 +3012,20 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
       greeting: "",
       date: "",
       weather: null,
+      commuteAlert: null,
       markets: [],
       tasks: [],
       calendars: { rickin: [], pooja: [], reya: [], other: [] },
       headlines: [],
+      headlinesBtc: [],
+      headlinesMacro: [],
+      headlinesTech: [],
       xSignals: [],
+      baby: null,
+      reya: null,
+      moodys: null,
+      realEstate: null,
+      focusToday: null,
       jobs: null,
     };
 
@@ -2898,6 +3071,21 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
               const lowC = parseInt(m[3]), highC = parseInt(m[4]);
               return { date: m[1], condition: m[2].trim(), lowC, highC, lowF: Math.round(lowC * 9/5 + 32), highF: Math.round(highC * 9/5 + 32), rainPct: parseInt(m[5]) };
             }).filter(Boolean);
+          }
+          const hourlyPrecip = raw.match(/Hourly Precipitation:\n([\s\S]*?)(?:\n\d+-Day|\n$|$)/);
+          if (hourlyPrecip) {
+            const lines = hourlyPrecip[1].match(/\d{4}-\d{2}-\d{2}T(\d{2}):\d{2}:\s*(\d+)%/g) || [];
+            for (const line of lines) {
+              const m = line.match(/T(\d{2}):\d{2}:\s*(\d+)%/);
+              if (m) {
+                const hour = parseInt(m[1]);
+                const pct = parseInt(m[2]);
+                if (hour >= 7 && hour <= 9 && pct > 40) {
+                  result.commuteAlert = `☂️ ${pct}% chance of rain at school drop (${hour}:00 AM)`;
+                  break;
+                }
+              }
+            }
           }
           result.weather = w;
         }
@@ -2954,9 +3142,19 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
 
     promises.push((async () => {
       try {
-        const top = await news.getTopHeadlines(5);
+        const top = await news.getTopHeadlines(7);
         result.headlines = top;
       } catch {}
+    })());
+
+    promises.push((async () => {
+      try { result.headlinesBtc = await news.searchHeadlines("bitcoin OR crypto OR cryptocurrency", 5); } catch {}
+    })());
+    promises.push((async () => {
+      try { result.headlinesMacro = await news.searchHeadlines("Federal Reserve OR inflation OR geopolitics OR economy", 5); } catch {}
+    })());
+    promises.push((async () => {
+      try { result.headlinesTech = await news.searchHeadlines("artificial intelligence OR LLM OR AI startup OR GPT", 5); } catch {}
     })());
 
     promises.push((async () => {
@@ -2980,6 +3178,191 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
           }
           result.xSignals = tweets;
         }
+      } catch {}
+    })());
+
+    promises.push((async () => {
+      try {
+        const babyRes = await fetch(`http://localhost:${process.env.PORT || 5000}/api/baby-dashboard/data?user=darknode&token=dn@rickin26`);
+        if (babyRes.ok) {
+          const babyData = await babyRes.json() as any;
+          const dueDate = new Date("2026-07-07");
+          const daysLeft = Math.ceil((dueDate.getTime() - now.getTime()) / 86400000);
+          const weeksPregnant = 40 - Math.ceil(daysLeft / 7);
+          let nextAppt: any = null;
+          if (babyData.appointments) {
+            const today = now.toISOString().split("T")[0];
+            for (const a of babyData.appointments) {
+              if (a.date && a.date >= today) { nextAppt = a; break; }
+            }
+          }
+          result.baby = { weeksPregnant, daysLeft, nextAppt };
+        } else {
+          const dueDate = new Date("2026-07-07");
+          const daysLeft = Math.ceil((dueDate.getTime() - now.getTime()) / 86400000);
+          const weeksPregnant = 40 - Math.ceil(daysLeft / 7);
+          result.baby = { weeksPregnant, daysLeft, nextAppt: null };
+        }
+      } catch {
+        const dueDate = new Date("2026-07-07");
+        const daysLeft = Math.ceil((dueDate.getTime() - now.getTime()) / 86400000);
+        const weeksPregnant = 40 - Math.ceil(daysLeft / 7);
+        result.baby = { weeksPregnant, daysLeft, nextAppt: null };
+      }
+    })());
+
+    promises.push((async () => {
+      try {
+        const dayName = now.toLocaleString("en-US", { timeZone: tz, weekday: "long" });
+        const isWeekend = ["Saturday", "Sunday"].includes(dayName);
+        if (!isWeekend) {
+          const month = parseInt(now.toLocaleString("en-US", { timeZone: tz, month: "numeric" }));
+          const day = parseInt(now.toLocaleString("en-US", { timeZone: tz, day: "numeric" }));
+          let lunch = "Menu not available";
+          try {
+            const mealFile = await vaultLocal.readNote("Family/Reya's Education/Reya - School Meals");
+            if (mealFile) {
+              const datePattern = new RegExp(`\\|\\s*\\w+\\s+${month}/${day}\\s*\\|([^|]+)\\|([^|]+)\\|([^|]+)\\|`, "i");
+              const match = mealFile.match(datePattern);
+              if (match) {
+                const mainDish = match[1].replace(/\*\*/g, "").trim();
+                const vegStatus = match[2].trim();
+                const sides = match[3].trim();
+                const isVeg = vegStatus.includes("✅");
+                lunch = isVeg ? `✅ ${mainDish}` : `❌ ${mainDish} — Sides: ${sides}`;
+              }
+            }
+          } catch {}
+          const etNow = new Date(now.toLocaleString("en-US", { timeZone: tz }));
+          const pickupTime = new Date(etNow);
+          pickupTime.setHours(16, 30, 0, 0);
+          let pickupCountdown: string;
+          if (etNow < pickupTime) {
+            const diffMs = pickupTime.getTime() - etNow.getTime();
+            const h = Math.floor(diffMs / 3600000);
+            const m = Math.floor((diffMs % 3600000) / 60000);
+            pickupCountdown = h > 0 ? `in ${h}h ${m}m` : `in ${m}m`;
+          } else {
+            pickupCountdown = "✅ Picked up";
+          }
+          let schoolAlert: string | null = null;
+          try {
+            if (gmail.isConnected()) {
+              const a = await gmail.searchEmailsStructured("from:kristen OR from:cicio is:unread newer_than:2d", 1);
+              if (a.length > 0) schoolAlert = a[0].subject;
+            }
+          } catch {}
+          result.reya = { schoolInSession: true, lunch, pickupCountdown, alert: schoolAlert };
+        } else {
+          result.reya = { schoolInSession: false };
+        }
+      } catch {}
+    })());
+
+    promises.push((async () => {
+      try {
+        const year = now.toLocaleString("en-US", { timeZone: tz, year: "numeric" });
+        const month = now.toLocaleString("en-US", { timeZone: tz, month: "2-digit" });
+        const day = now.toLocaleString("en-US", { timeZone: tz, day: "2-digit" });
+        const dateStr = `${year}-${month}-${day}`;
+        const etHour = parseInt(now.toLocaleString("en-US", { timeZone: tz, hour: "numeric", hour12: false }));
+        if (etHour < 6) {
+          result.moodys = { available: false, reason: "pending", message: "Daily brief generates at 6:00 AM" };
+          return;
+        }
+        let briefContent: string | null = null;
+        let briefDate = dateStr;
+        try {
+          const content = await vaultLocal.readNote(`Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief`);
+          if (content && content.length > 100) briefContent = content;
+        } catch {}
+        if (!briefContent) {
+          const yesterday = new Date(now.getTime() - 86400000);
+          const yDateStr = `${yesterday.toLocaleString("en-US", { timeZone: tz, year: "numeric" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, month: "2-digit" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, day: "2-digit" })}`;
+          try {
+            const content = await vaultLocal.readNote(`Scheduled Reports/Moody's Intelligence/Daily/${yDateStr}-Brief`);
+            if (content && content.length > 100) { briefContent = content; briefDate = yDateStr; }
+          } catch {}
+        }
+        if (!briefContent) {
+          result.moodys = { available: false, reason: "missing", message: "Brief unavailable — check pipeline" };
+          return;
+        }
+        const categories: Record<string, string[]> = { corporate: [], banking: [], competitors: [], aiTrends: [], analysts: [] };
+        const categoryMap: Array<{ pattern: RegExp; key: string }> = [
+          { pattern: /##\s*🏢\s*Moody'?s Corporate/i, key: "corporate" },
+          { pattern: /##\s*🏦\s*Banking/i, key: "banking" },
+          { pattern: /##\s*🔍\s*Competitor/i, key: "competitors" },
+          { pattern: /##\s*🤖\s*Enterprise AI/i, key: "aiTrends" },
+          { pattern: /##\s*📊\s*Industry Analyst/i, key: "analysts" },
+        ];
+        let foundSections = 0;
+        for (const { pattern, key } of categoryMap) {
+          const idx = briefContent.search(pattern);
+          if (idx === -1) continue;
+          foundSections++;
+          const sectionStart = idx;
+          const nextSection = briefContent.slice(sectionStart + 5).search(/\n## /);
+          const sectionEnd = nextSection === -1 ? briefContent.length : sectionStart + 5 + nextSection;
+          const section = briefContent.slice(sectionStart, sectionEnd);
+          const bullets = section.match(/^- .+$/gm) || [];
+          categories[key] = bullets.slice(0, 3).map(b => {
+            let text = b.replace(/^- /, "").replace(/🔴|🟡|🟢/g, "").trim();
+            text = text.replace(/\*\*/g, "").replace(/\(?\[.*?\]\(.*?\)\)?/g, "").trim();
+            if (text.length > 150) text = text.slice(0, 147) + "...";
+            return text;
+          });
+        }
+        if (foundSections < 3) {
+          result.moodys = { available: false, reason: "unstructured", message: "Brief format not recognized" };
+          return;
+        }
+        const tsMatch = briefContent.match(/Generated:\s*(.+)/);
+        result.moodys = { available: true, date: briefDate, categories, timestamp: tsMatch ? tsMatch[1].trim() : null };
+      } catch {}
+    })());
+
+    promises.push((async () => {
+      try {
+        const year = now.toLocaleString("en-US", { timeZone: tz, year: "numeric" });
+        const month = now.toLocaleString("en-US", { timeZone: tz, month: "2-digit" });
+        const day = now.toLocaleString("en-US", { timeZone: tz, day: "2-digit" });
+        const dateStr = `${year}-${month}-${day}`;
+        let scanContent: string | null = null;
+        let scanDate = dateStr;
+        try {
+          const content = await vaultLocal.readNote(`Scheduled Reports/Real Estate/${dateStr}-Property-Scan`);
+          if (content) scanContent = content;
+        } catch {}
+        if (!scanContent) {
+          const yesterday = new Date(now.getTime() - 86400000);
+          const yDateStr = `${yesterday.toLocaleString("en-US", { timeZone: tz, year: "numeric" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, month: "2-digit" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, day: "2-digit" })}`;
+          try {
+            const content = await vaultLocal.readNote(`Scheduled Reports/Real Estate/${yDateStr}-Property-Scan`);
+            if (content) { scanContent = content; scanDate = yDateStr; }
+          } catch {}
+        }
+        if (scanContent) {
+          const listingsMatch = scanContent.match(/(\d+)\s*new\s*listing/i);
+          const tsMatch = scanContent.match(/Generated:\s*(.+)/);
+          result.realEstate = { available: true, date: scanDate, newListings: listingsMatch ? parseInt(listingsMatch[1]) : 0, scanTime: tsMatch ? tsMatch[1].trim() : null };
+        }
+      } catch {}
+    })());
+
+    promises.push((async () => {
+      try {
+        const active = await tasks.getActiveTasks();
+        const today = now.toISOString().split("T")[0];
+        const focus = active.filter((t: any) => t.priority === "high" || (t.dueDate && t.dueDate <= today)).slice(0, 3);
+        const focusTasks = focus.length > 0 ? focus : active.slice(0, 3);
+        let actionEmails: any[] = [];
+        try {
+          if (gmail.isConnected()) {
+            actionEmails = await gmail.searchEmailsStructured("label:Action-Required is:unread", 3);
+          }
+        } catch {}
+        result.focusToday = { tasks: focusTasks, actionEmails, actionCount: actionEmails.filter((e: any) => e.unread).length };
       } catch {}
     })());
 
