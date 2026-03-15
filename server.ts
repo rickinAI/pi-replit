@@ -3179,24 +3179,31 @@ async function fetchXIntelData(): Promise<Record<string, { visionaries: any[]; h
     }));
   }
 
+  const filterStatus: Record<string, boolean> = {};
   const filterPromises: Promise<void>[] = [];
   for (const [section, data] of Object.entries(xIntelResult)) {
+    filterStatus[section] = false;
     if (data.visionaries.length > 0) {
       filterPromises.push(
-        filterTweetsWithAI(`${section}/visionaries`, data.visionaries).then(filtered => { data.visionaries = filtered; })
+        filterTweetsWithAI(`${section}/visionaries`, data.visionaries).then(filtered => {
+          if (filtered.some((t: any) => t.score !== undefined)) filterStatus[section] = true;
+          data.visionaries = filtered;
+        })
       );
     }
     if (data.headlines.length > 0) {
       filterPromises.push(
-        filterTweetsWithAI(`${section}/headlines`, data.headlines).then(filtered => { data.headlines = filtered; })
+        filterTweetsWithAI(`${section}/headlines`, data.headlines).then(filtered => {
+          if (filtered.some((t: any) => t.score !== undefined)) filterStatus[section] = true;
+          data.headlines = filtered;
+        })
       );
     }
   }
   await Promise.all(filterPromises);
 
-  for (const data of Object.values(xIntelResult)) {
-    const allTweets = [...data.visionaries, ...data.headlines];
-    (data as any).filtered = allTweets.some((t: any) => t.insight !== undefined);
+  for (const [section, data] of Object.entries(xIntelResult)) {
+    (data as any).filtered = filterStatus[section];
   }
 
   return xIntelResult;

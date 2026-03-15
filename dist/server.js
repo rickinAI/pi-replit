@@ -9731,11 +9731,14 @@ async function fetchXIntelData() {
       }
     }));
   }
+  const filterStatus = {};
   const filterPromises = [];
   for (const [section, data] of Object.entries(xIntelResult)) {
+    filterStatus[section] = false;
     if (data.visionaries.length > 0) {
       filterPromises.push(
         filterTweetsWithAI(`${section}/visionaries`, data.visionaries).then((filtered) => {
+          if (filtered.some((t) => t.score !== void 0)) filterStatus[section] = true;
           data.visionaries = filtered;
         })
       );
@@ -9743,15 +9746,15 @@ async function fetchXIntelData() {
     if (data.headlines.length > 0) {
       filterPromises.push(
         filterTweetsWithAI(`${section}/headlines`, data.headlines).then((filtered) => {
+          if (filtered.some((t) => t.score !== void 0)) filterStatus[section] = true;
           data.headlines = filtered;
         })
       );
     }
   }
   await Promise.all(filterPromises);
-  for (const data of Object.values(xIntelResult)) {
-    const allTweets = [...data.visionaries, ...data.headlines];
-    data.filtered = allTweets.some((t) => t.insight !== void 0);
+  for (const [section, data] of Object.entries(xIntelResult)) {
+    data.filtered = filterStatus[section];
   }
   return xIntelResult;
 }
