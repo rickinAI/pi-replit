@@ -2375,6 +2375,8 @@ function renderCustomJobForm() {
     <div class="job-add-custom-form">
       <div class="job-form-row"><label>Name</label><input type="text" class="job-form-input" id="custom-job-name" placeholder="My custom job"></div>
       <div class="job-form-row"><label>Agent</label><select class="job-form-select" id="custom-job-agent"></select></div>
+      <div class="job-form-row"><label>Frequency</label><select class="job-form-select" id="custom-job-freq"><option value="daily">Daily</option><option value="weekly">Weekly</option></select></div>
+      <div class="job-form-row" id="custom-job-days-row" style="display:none"><label>Days</label><div class="job-day-picker" id="custom-job-days"></div></div>
       <div class="job-form-row"><label>Time</label><select class="job-form-select" id="custom-job-hour"></select><span class="job-card-time-sep">:</span><select class="job-form-select" id="custom-job-min"></select></div>
       <div class="job-form-row"><label>Prompt</label><textarea class="job-form-textarea" id="custom-job-prompt" rows="4" placeholder="What should the agent do?"></textarea></div>
       <div class="job-form-row job-form-actions">
@@ -2392,6 +2394,22 @@ function renderCustomJobForm() {
       agentSel.appendChild(opt);
     });
   }).catch(() => {});
+  const freqSel = wrap.querySelector("#custom-job-freq");
+  const daysRow = wrap.querySelector("#custom-job-days-row");
+  const daysPicker = wrap.querySelector("#custom-job-days");
+  const dayLabels = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  dayLabels.forEach((label, i) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "job-day-btn";
+    btn.textContent = label;
+    btn.dataset.day = i;
+    btn.addEventListener("click", () => btn.classList.toggle("active"));
+    daysPicker.appendChild(btn);
+  });
+  freqSel.addEventListener("change", () => {
+    daysRow.style.display = freqSel.value === "weekly" ? "" : "none";
+  });
   const hourSel = wrap.querySelector("#custom-job-hour");
   for (let h = 0; h < 24; h++) {
     const opt = document.createElement("option");
@@ -2416,12 +2434,19 @@ function renderCustomJobForm() {
     const prompt = wrap.querySelector("#custom-job-prompt").value.trim();
     const hour = parseInt(wrap.querySelector("#custom-job-hour").value);
     const minute = parseInt(wrap.querySelector("#custom-job-min").value);
+    const freq = wrap.querySelector("#custom-job-freq").value;
     if (!name || !agentId || !prompt) return;
+    const schedule = { type: freq, hour, minute };
+    if (freq === "weekly") {
+      const selected = [...daysPicker.querySelectorAll(".job-day-btn.active")].map(b => parseInt(b.dataset.day));
+      if (selected.length === 0) { alert("Pick at least one day"); return; }
+      schedule.daysOfWeek = selected;
+    }
     try {
       const res = await fetch("/api/scheduled-jobs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, agentId, prompt, schedule: { type: "daily", hour, minute }, enabled: false }),
+        body: JSON.stringify({ name, agentId, prompt, schedule, enabled: false }),
       });
       if (res.ok) {
         wrap.innerHTML = "";

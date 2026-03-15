@@ -3254,6 +3254,53 @@ body.light-theme .suggestion-chip:hover {
   color: var(--green);
 }
 
+.job-day-picker {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.job-day-btn {
+  padding: 4px 8px;
+  font-family: var(--font);
+  font-size: 10px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--bg);
+  color: var(--green-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.job-day-btn:hover {
+  border-color: var(--green-dim);
+  color: var(--green);
+}
+
+.job-day-btn.active {
+  background: rgba(0, 255, 0, 0.15);
+  border-color: var(--green-dim);
+  color: var(--green);
+}
+
+body.light-theme .job-day-btn {
+  background: var(--bg);
+  border-color: var(--border);
+  color: var(--dim);
+}
+
+body.light-theme .job-day-btn:hover {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+body.light-theme .job-day-btn.active {
+  background: rgba(46, 125, 50, 0.12);
+  border-color: var(--green);
+  color: var(--green);
+}
+
 .job-form-submit:hover {
   background: rgba(0, 255, 0, 0.15);
   border-color: var(--green);
