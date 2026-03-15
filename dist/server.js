@@ -9649,7 +9649,7 @@ async function filterTweetsWithAI(sectionName, tweets) {
   if (!tweets || tweets.length === 0 || !ANTHROPIC_KEY) return tweets;
   try {
     const { default: Anthropic5 } = await import("@anthropic-ai/sdk");
-    const client = new Anthropic5({ apiKey: ANTHROPIC_KEY });
+    const client = new Anthropic5({ apiKey: ANTHROPIC_KEY, timeout: 5e3 });
     const tweetList = tweets.map((t, i) => `[${i}] @${t.handle}: ${(t.text || "").slice(0, 280)}`).join("\n");
     const response = await client.messages.create({
       model: "claude-haiku-4-5-20251001",
@@ -9673,7 +9673,7 @@ ${tweetList}` }],
         filtered.push({ ...tweets[s.index], score: s.score, insight: s.insight || "" });
       }
     }
-    return filtered.length > 0 ? filtered : tweets.slice(0, 3);
+    return filtered;
   } catch (err) {
     console.warn(`[x-intel] AI filter failed for ${sectionName}:`, err.message);
     return tweets;
@@ -9761,10 +9761,6 @@ app.get("/api/x-intelligence/data", async (_req, res) => {
       res.json(xIntelCache.data);
       return;
     }
-    if (!forceRefresh && dailyBriefCache && Date.now() - dailyBriefCache.ts < DAILY_BRIEF_TTL && dailyBriefCache.data.xIntel) {
-      res.json(dailyBriefCache.data.xIntel);
-      return;
-    }
     const data = await fetchXIntelData();
     xIntelCache = { data, ts: Date.now() };
     res.json(data);
@@ -9775,11 +9771,6 @@ app.get("/api/x-intelligence/data", async (_req, res) => {
 });
 app.get("/api/daily-brief/data", async (_req, res) => {
   try {
-    let pickRandom2 = function(arr, n) {
-      const shuffled = [...arr].sort(() => Math.random() - 0.5);
-      return shuffled.slice(0, n);
-    };
-    var pickRandom = pickRandom2;
     const forceRefresh = _req.query.force === "1";
     if (!forceRefresh && dailyBriefCache && Date.now() - dailyBriefCache.ts < DAILY_BRIEF_TTL) {
       res.json(dailyBriefCache.data);
@@ -9926,56 +9917,15 @@ app.get("/api/daily-brief/data", async (_req, res) => {
         }
       })());
     }
-    const xIntelSections = {
-      breaking: {
-        visionaries: ["DeItaone", "unusual_whales", "sentdefender", "pmarca", "IntelCrab", "spectatorindex", "zeynep", "BillAckman", "ElbridgeColby", "adam_tooze"],
-        headlines: ["Reuters", "AP", "BBCBreaking", "business", "CNN", "CNBC", "AJEnglish", "axios", "politico", "FT"]
-      },
-      global: {
-        visionaries: ["ianbremmer", "michaelxpettis", "RnaudBertrand", "Jkylebass", "FareedZakaria", "RichardHaass", "PeterZeihan", "anneapplebaum", "nouriel", "BrankoMilan"],
-        headlines: ["BBCWorld", "nytimes", "TheEconomist", "ForeignPolicy", "ForeignAffairs", "guardian", "CFR_org", "AJEnglish", "FRANCE24", "DWNews"]
-      },
-      macro: {
-        visionaries: ["LynAldenContact", "NickTimiraos", "LukeGromen", "josephwang", "RaoulGMI", "biancoresearch", "elerianm", "naval", "KobeissiLetter", "balajis"],
-        headlines: ["FT", "WSJ", "business", "TheEconomist", "IMFNews", "federalreserve", "BISbank", "CNBC", "axios", "markets"]
-      },
-      techAi: {
-        visionaries: ["karpathy", "sama", "DarioAmodei", "emollick", "AndrewYNg", "AravSrinivas", "ylecun", "DrJimFan", "gdb", "alexandr_wang"],
-        headlines: ["Wired", "MITTechReview", "TechCrunch", "verge", "ArsTechnica", "VentureBeat", "IEEE_Spectrum", "NewScientist", "NatureNews", "axios"]
-      },
-      bitcoin: {
-        visionaries: ["saylor", "LynAldenContact", "APompliano", "PrestonPysh", "nic__carter", "dergigi", "pete_rizzo_", "WClementeIII", "bitfinexed", "SaifedeanAmmous"],
-        headlines: ["CoinDesk", "Cointelegraph", "theblockCrypto", "BitcoinMagazine", "DecryptMedia", "Blockworks_", "TheDefiant", "DLnews_", "WuBlockchain", "cryptobriefing"]
-      }
-    };
     promises.push((async () => {
       try {
-        const xIntelResult = {};
-        const sections = Object.entries(xIntelSections);
-        for (const [section] of sections) {
-          xIntelResult[section] = { visionaries: [], headlines: [] };
+        if (xIntelCache && Date.now() - xIntelCache.ts < X_INTEL_TTL) {
+          result.xIntel = xIntelCache.data;
+        } else {
+          const xData = await fetchXIntelData();
+          xIntelCache = { data: xData, ts: Date.now() };
+          result.xIntel = xData;
         }
-        const allFetches = [];
-        for (const [section, handles] of sections) {
-          const pickedVis = pickRandom2(handles.visionaries, 5);
-          const pickedHead = pickRandom2(handles.headlines, 5);
-          for (const h of pickedVis) allFetches.push({ section, type: "visionaries", handle: h });
-          for (const h of pickedHead) allFetches.push({ section, type: "headlines", handle: h });
-        }
-        const BATCH = 6;
-        for (let i = 0; i < allFetches.length; i += BATCH) {
-          const batch = allFetches.slice(i, i + BATCH);
-          await Promise.all(batch.map(async (f) => {
-            try {
-              const tweets = await getUserTimelineStructured(f.handle, 2);
-              if (tweets.length > 0) {
-                xIntelResult[f.section][f.type].push(...tweets);
-              }
-            } catch {
-            }
-          }));
-        }
-        result.xIntel = xIntelResult;
       } catch {
       }
     })());
