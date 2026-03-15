@@ -9593,8 +9593,8 @@ app.get("/api/daily-brief/data", async (_req, res) => {
                 const timeMinutes = hour * 60 + minute;
                 if (timeMinutes >= 450 && timeMinutes <= 540 && pct > 40) {
                   const cond = (w.condition || "").toLowerCase();
-                  const isRainSnow = cond.includes("rain") || cond.includes("snow") || cond.includes("drizzle") || cond.includes("shower") || cond.includes("sleet") || pct > 40;
-                  if (isRainSnow) {
+                  const isRainSnow = cond.includes("rain") || cond.includes("snow") || cond.includes("drizzle") || cond.includes("shower") || cond.includes("sleet") || cond.includes("storm") || cond.includes("thunder");
+                  if (isRainSnow || pct >= 60) {
                     const label = cond.includes("snow") || cond.includes("sleet") ? "snow" : "rain";
                     const timeLabel = hour > 12 ? `${hour - 12}:${m[2]} PM` : `${hour}:${m[2]} AM`;
                     result.commuteAlert = `\u2602\uFE0F ${pct}% chance of ${label} at school drop-off (~${timeLabel})`;
