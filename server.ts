@@ -3195,7 +3195,8 @@ async function fetchXIntelData(): Promise<Record<string, { visionaries: any[]; h
   await Promise.all(filterPromises);
 
   for (const data of Object.values(xIntelResult)) {
-    (data as any).filtered = true;
+    const allTweets = [...data.visionaries, ...data.headlines];
+    (data as any).filtered = allTweets.some((t: any) => t.insight !== undefined);
   }
 
   return xIntelResult;

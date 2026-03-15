@@ -9750,7 +9750,8 @@ async function fetchXIntelData() {
   }
   await Promise.all(filterPromises);
   for (const data of Object.values(xIntelResult)) {
-    data.filtered = true;
+    const allTweets = [...data.visionaries, ...data.headlines];
+    data.filtered = allTweets.some((t) => t.insight !== void 0);
   }
   return xIntelResult;
 }

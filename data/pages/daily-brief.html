@@ -743,13 +743,12 @@ function render(data) {
       if (sec && (sec.visionaries.length > 0 || sec.headlines.length > 0)) {
         document.getElementById(s.id).style.display = '';
         renderXSection(s.cols, sec);
-        var allTweets = (sec.visionaries || []).concat(sec.headlines || []);
-        if (allTweets.some(function(t) { return t.insight; })) {
+        if (sec.filtered) {
           var badge = document.getElementById(s.id).querySelector('.section-badge');
-          if (badge && !badge.nextElementSibling?.classList?.contains('xi-ai-badge')) {
+          if (badge && !(badge.nextElementSibling && badge.nextElementSibling.classList && badge.nextElementSibling.classList.contains('xi-ai-badge'))) {
             var aiBadge = document.createElement('span');
             aiBadge.className = 'xi-ai-badge';
-            aiBadge.textContent = 'AI';
+            aiBadge.textContent = 'AI-filtered';
             badge.parentNode.insertBefore(aiBadge, badge.nextSibling);
           }
         }
