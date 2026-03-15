@@ -3074,15 +3074,23 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
           }
           const hourlyPrecip = raw.match(/Hourly Precipitation:\n([\s\S]*?)(?:\n\d+-Day|\n$|$)/);
           if (hourlyPrecip) {
-            const lines = hourlyPrecip[1].match(/\d{4}-\d{2}-\d{2}T(\d{2}):\d{2}:\s*(\d+)%/g) || [];
+            const lines = hourlyPrecip[1].match(/\d{4}-\d{2}-\d{2}T(\d{2}):(\d{2}):\s*(\d+)%/g) || [];
             for (const line of lines) {
-              const m = line.match(/T(\d{2}):\d{2}:\s*(\d+)%/);
+              const m = line.match(/T(\d{2}):(\d{2}):\s*(\d+)%/);
               if (m) {
                 const hour = parseInt(m[1]);
-                const pct = parseInt(m[2]);
-                if (hour >= 7 && hour <= 9 && pct > 40) {
-                  result.commuteAlert = `☂️ ${pct}% chance of rain at school drop (${hour}:00 AM)`;
-                  break;
+                const minute = parseInt(m[2]);
+                const pct = parseInt(m[3]);
+                const timeMinutes = hour * 60 + minute;
+                if (timeMinutes >= 450 && timeMinutes <= 540 && pct > 40) {
+                  const cond = (w.condition || "").toLowerCase();
+                  const isRainSnow = cond.includes("rain") || cond.includes("snow") || cond.includes("drizzle") || cond.includes("shower") || cond.includes("sleet") || pct > 40;
+                  if (isRainSnow) {
+                    const label = cond.includes("snow") || cond.includes("sleet") ? "snow" : "rain";
+                    const timeLabel = hour > 12 ? `${hour - 12}:${m[2]} PM` : `${hour}:${m[2]} AM`;
+                    result.commuteAlert = `☂️ ${pct}% chance of ${label} at school drop-off (~${timeLabel})`;
+                    break;
+                  }
                 }
               }
             }
