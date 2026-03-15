@@ -9642,6 +9642,81 @@ app.get("/api/vault/real-estate-scan", async (_req, res) => {
     res.status(500).json({ error: "Failed to fetch real estate scan" });
   }
 });
+var xIntelCache = null;
+var X_INTEL_TTL = 2 * 60 * 1e3;
+async function fetchXIntelData() {
+  const xIntelSections = {
+    breaking: {
+      visionaries: ["DeItaone", "unusual_whales", "sentdefender", "pmarca", "IntelCrab", "spectatorindex", "zeynep", "BillAckman", "ElbridgeColby", "adam_tooze"],
+      headlines: ["Reuters", "AP", "BBCBreaking", "business", "CNN", "CNBC", "AJEnglish", "axios", "politico", "FT"]
+    },
+    global: {
+      visionaries: ["ianbremmer", "michaelxpettis", "RnaudBertrand", "Jkylebass", "FareedZakaria", "RichardHaass", "PeterZeihan", "anneapplebaum", "nouriel", "BrankoMilan"],
+      headlines: ["BBCWorld", "nytimes", "TheEconomist", "ForeignPolicy", "ForeignAffairs", "guardian", "CFR_org", "AJEnglish", "FRANCE24", "DWNews"]
+    },
+    macro: {
+      visionaries: ["LynAldenContact", "NickTimiraos", "LukeGromen", "josephwang", "RaoulGMI", "biancoresearch", "elerianm", "naval", "KobeissiLetter", "balajis"],
+      headlines: ["FT", "WSJ", "business", "TheEconomist", "IMFNews", "federalreserve", "BISbank", "CNBC", "axios", "markets"]
+    },
+    techAi: {
+      visionaries: ["karpathy", "sama", "DarioAmodei", "emollick", "AndrewYNg", "AravSrinivas", "ylecun", "DrJimFan", "gdb", "alexandr_wang"],
+      headlines: ["Wired", "MITTechReview", "TechCrunch", "verge", "ArsTechnica", "VentureBeat", "IEEE_Spectrum", "NewScientist", "NatureNews", "axios"]
+    },
+    bitcoin: {
+      visionaries: ["saylor", "LynAldenContact", "APompliano", "PrestonPysh", "nic__carter", "dergigi", "pete_rizzo_", "WClementeIII", "bitfinexed", "SaifedeanAmmous"],
+      headlines: ["CoinDesk", "Cointelegraph", "theblockCrypto", "BitcoinMagazine", "DecryptMedia", "Blockworks_", "TheDefiant", "DLnews_", "WuBlockchain", "cryptobriefing"]
+    }
+  };
+  function pickRandom(arr, n) {
+    const shuffled = [...arr].sort(() => Math.random() - 0.5);
+    return shuffled.slice(0, n);
+  }
+  const xIntelResult = {};
+  const sections = Object.entries(xIntelSections);
+  for (const [section] of sections) {
+    xIntelResult[section] = { visionaries: [], headlines: [] };
+  }
+  const allFetches = [];
+  for (const [section, handles] of sections) {
+    const pickedVis = pickRandom(handles.visionaries, 5);
+    const pickedHead = pickRandom(handles.headlines, 5);
+    for (const h of pickedVis) allFetches.push({ section, type: "visionaries", handle: h });
+    for (const h of pickedHead) allFetches.push({ section, type: "headlines", handle: h });
+  }
+  const BATCH = 6;
+  for (let i = 0; i < allFetches.length; i += BATCH) {
+    const batch = allFetches.slice(i, i + BATCH);
+    await Promise.all(batch.map(async (f) => {
+      try {
+        const tweets = await getUserTimelineStructured(f.handle, 2);
+        if (tweets.length > 0) {
+          xIntelResult[f.section][f.type].push(...tweets);
+        }
+      } catch {
+      }
+    }));
+  }
+  return xIntelResult;
+}
+app.get("/api/x-intelligence/data", async (_req, res) => {
+  try {
+    const forceRefresh = _req.query.force === "1";
+    if (!forceRefresh && xIntelCache && Date.now() - xIntelCache.ts < X_INTEL_TTL) {
+      res.json(xIntelCache.data);
+      return;
+    }
+    if (!forceRefresh && dailyBriefCache && Date.now() - dailyBriefCache.ts < DAILY_BRIEF_TTL && dailyBriefCache.data.xIntel) {
+      res.json(dailyBriefCache.data.xIntel);
+      return;
+    }
+    const data = await fetchXIntelData();
+    xIntelCache = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    console.error("[x-intelligence] Error:", err);
+    res.status(500).json({ error: "Failed to fetch X intelligence data" });
+  }
+});
 app.get("/api/daily-brief/data", async (_req, res) => {
   try {
     let pickRandom2 = function(arr, n) {
@@ -10535,7 +10610,7 @@ app.get("/pages/:slug", async (req, res) => {
 });
 app.post("/api/pages/:slug/share", async (req, res) => {
   const slug = req.params.slug.toLowerCase().replace(/[^a-z0-9_-]/g, "");
-  if (!["daily-brief", "baby-dashboard"].includes(slug)) {
+  if (!["daily-brief", "baby-dashboard", "x-intelligence"].includes(slug)) {
     res.status(400).json({ error: "Sharing not supported for this page" });
     return;
   }
@@ -10655,6 +10730,26 @@ render(SNAPSHOT_DATA);`
         "// snapshot mode - no live fetching"
       );
       html = html.replace(/\(async function loadUser\(\)[\s\S]*?\}\)\(\);/, "// snapshot mode");
+    } else if (slug === "x-intelligence") {
+      let xData = xIntelCache?.data || dailyBriefCache?.data?.xIntel;
+      if (!xData) {
+        try {
+          xData = await fetchXIntelData();
+          xIntelCache = { data: xData, ts: Date.now() };
+        } catch {
+        }
+      }
+      if (!xData) {
+        res.status(500).json({ error: "Could not fetch X intelligence data" });
+        return;
+      }
+      const dataJson = JSON.stringify(xData);
+      html = html.replace(
+        /fetchData\(\);\s*setInterval\(fetchData,\s*\d+\);/,
+        `var SNAPSHOT_DATA = ${dataJson};
+render(SNAPSHOT_DATA);`
+      );
+      html = html.replace(/<button[^>]*onclick="fetchData\(true\)"[^>]*>Refresh<\/button>/g, "");
     }
     html = html.replace(/<div class="share-btn-wrap">.*?<\/div>/gs, "");
     html = html.replace(/<div class="share-overlay"[^]*?<!-- \/share-overlay -->/g, "");
@@ -10668,7 +10763,7 @@ render(SNAPSHOT_DATA);`
     const tmpFile = `/tmp/snapshot-${slug}-${Date.now()}.html`;
     fs3.writeFileSync(tmpFile, html);
     const publishScript = path4.join(PROJECT_ROOT, "scripts", "herenow-publish.sh");
-    const titleStr = slug === "daily-brief" ? `Daily Brief \u2014 ${titleDate}` : `Baby Dashboard \u2014 ${titleDate}`;
+    const titleStr = slug === "daily-brief" ? `Daily Brief \u2014 ${titleDate}` : slug === "x-intelligence" ? `X Intelligence \u2014 ${titleDate}` : `Baby Dashboard \u2014 ${titleDate}`;
     const output = execSync(`bash "${publishScript}" "${tmpFile}" --title "${titleStr}" --client "darknode"`, {
       encoding: "utf-8",
       timeout: 3e4

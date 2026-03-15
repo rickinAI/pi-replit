@@ -64,6 +64,14 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - API: `GET /api/daily-brief/data` aggregates all data. 2-min server cache; `?force=1` bypasses cache for manual refresh. `familyCards` and `xIntel` added to response
   - Client polls every 5 min. Manual refresh button (with cache bypass) in footer
   - **Share Snapshot**: Share button in footer generates a self-contained HTML snapshot via `POST /api/pages/daily-brief/share`. Injects current data inline (no API calls needed), strips share/refresh buttons, publishes to `here.now` (24h expiry). Returns shareable URL shown in modal with Copy Link + Open buttons
+- **X Intelligence Page** (`data/pages/x-intelligence.html`) — Standalone X/Twitter feed at `/pages/x-intelligence`:
+  - Two-tab view: **"X Followers"** (visionaries/analysts) and **"Mainstream"** (institutional news outlets)
+  - Prominent segmented control tab bar — active tab filled with accent blue, inactive clearly visible
+  - 5 collapsible sections per tab: Breaking 🔥, Global 🌍, Macro 📊, Tech/AI 🤖, Bitcoin ₿
+  - Each tweet card shows @handle, text, likes, retweets, time ago
+  - API: `GET /api/x-intelligence/data` — lightweight endpoint that only fetches xIntel data (uses `fetchXIntelData()` helper). 2-min cache, falls back to daily brief cache. `?force=1` bypasses cache
+  - Collapse state persisted in localStorage (`xintel_collapsed`)
+  - **Share Snapshot**: Works with tabs — tab switching is pure client-side, so shared links allow full tab interaction. Data baked inline
 - **Baby Dashboard** (`data/pages/baby-dashboard.html`) — Pregnancy tracker at `/pages/baby-dashboard`:
   - Due date July 7, 2026; OB: Dr. Boester; Google Sheet ID: `1fhtMkDSTUlRCFqY4hQiSdZg7cOe4FYNkmOIIHWo4KSU`
   - 5 Sheet tabs: Appointments (OB schedule), To-Do (21 tasks), Shopping List (37 items), Hospital Bag (50 items), Names (with meanings + fav status)
