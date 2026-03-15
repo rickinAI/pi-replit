@@ -2639,20 +2639,6 @@ async function getTopHeadlines(count = 3) {
     return [];
   }
 }
-async function searchHeadlines(query, count = 5) {
-  try {
-    const feedUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`;
-    const res = await fetch(feedUrl, {
-      headers: { "User-Agent": "pi-assistant/1.0" }
-    });
-    if (!res.ok) return [];
-    const xml = await res.text();
-    const items = parseRssItems(xml);
-    return items.slice(0, count).map((item) => ({ title: item.title, source: item.source }));
-  } catch {
-    return [];
-  }
-}
 async function searchNews(query) {
   try {
     const feedUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`;
@@ -9697,31 +9683,34 @@ app.get("/api/daily-brief/data", async (_req, res) => {
         }
       })());
     }
-    promises.push((async () => {
-      try {
-        const top = await getTopHeadlines(7);
-        result.headlines = top;
-      } catch {
-      }
-    })());
-    promises.push((async () => {
-      try {
-        result.headlinesBtc = await searchHeadlines("world OR global OR international OR geopolitics OR conflict", 5);
-      } catch {
-      }
-    })());
-    promises.push((async () => {
-      try {
-        result.headlinesMacro = await searchHeadlines("Federal Reserve OR inflation OR geopolitics OR economy", 5);
-      } catch {
-      }
-    })());
-    promises.push((async () => {
-      try {
-        result.headlinesTech = await searchHeadlines("artificial intelligence OR LLM OR AI startup OR GPT", 5);
-      } catch {
-      }
-    })());
+    const xHeadlineQueries = [
+      { key: "headlines", query: "breaking news OR just announced OR developing story" },
+      { key: "headlinesBtc", query: "world news OR geopolitics OR international conflict OR diplomacy" },
+      { key: "headlinesMacro", query: "Federal Reserve OR inflation OR GDP OR interest rates OR economy" },
+      { key: "headlinesTech", query: "artificial intelligence OR AI startup OR LLM OR GPT OR Anthropic OR OpenAI" }
+    ];
+    for (const { key, query } of xHeadlineQueries) {
+      promises.push((async () => {
+        try {
+          const raw = await searchTweets(query, 7, "Top");
+          if (!raw.startsWith("Error") && !raw.includes("not configured")) {
+            const items = [];
+            const blocks = raw.split(/\n\d+\.\s+@/);
+            for (let i = 1; i < blocks.length && items.length < 5; i++) {
+              const b = blocks[i];
+              const handleMatch = b.match(/^(\w+)/);
+              const textMatch = b.match(/\n\s+(.+?)(?:\n\s+\d|$)/s);
+              if (handleMatch && textMatch) {
+                const text = textMatch[1].trim().slice(0, 200);
+                items.push({ title: text, source: "@" + handleMatch[1] });
+              }
+            }
+            result[key] = items;
+          }
+        } catch {
+        }
+      })());
+    }
     promises.push((async () => {
       try {
         const raw = await searchTweets("AI OR artificial intelligence OR AGI OR OpenAI OR Anthropic OR GPT", 5, "Top");

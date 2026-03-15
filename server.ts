@@ -3189,22 +3189,33 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
       })());
     }
 
-    promises.push((async () => {
-      try {
-        const top = await news.getTopHeadlines(7);
-        result.headlines = top;
-      } catch {}
-    })());
-
-    promises.push((async () => {
-      try { result.headlinesBtc = await news.searchHeadlines("world OR global OR international OR geopolitics OR conflict", 5); } catch {}
-    })());
-    promises.push((async () => {
-      try { result.headlinesMacro = await news.searchHeadlines("Federal Reserve OR inflation OR geopolitics OR economy", 5); } catch {}
-    })());
-    promises.push((async () => {
-      try { result.headlinesTech = await news.searchHeadlines("artificial intelligence OR LLM OR AI startup OR GPT", 5); } catch {}
-    })());
+    const xHeadlineQueries: Array<{ key: string; query: string }> = [
+      { key: "headlines", query: "breaking news OR just announced OR developing story" },
+      { key: "headlinesBtc", query: "world news OR geopolitics OR international conflict OR diplomacy" },
+      { key: "headlinesMacro", query: "Federal Reserve OR inflation OR GDP OR interest rates OR economy" },
+      { key: "headlinesTech", query: "artificial intelligence OR AI startup OR LLM OR GPT OR Anthropic OR OpenAI" },
+    ];
+    for (const { key, query } of xHeadlineQueries) {
+      promises.push((async () => {
+        try {
+          const raw = await twitter.searchTweets(query, 7, "Top");
+          if (!raw.startsWith("Error") && !raw.includes("not configured")) {
+            const items: any[] = [];
+            const blocks = raw.split(/\n\d+\.\s+@/);
+            for (let i = 1; i < blocks.length && items.length < 5; i++) {
+              const b = blocks[i];
+              const handleMatch = b.match(/^(\w+)/);
+              const textMatch = b.match(/\n\s+(.+?)(?:\n\s+\d|$)/s);
+              if (handleMatch && textMatch) {
+                const text = textMatch[1].trim().slice(0, 200);
+                items.push({ title: text, source: "@" + handleMatch[1] });
+              }
+            }
+            (result as any)[key] = items;
+          }
+        } catch {}
+      })());
+    }
 
     promises.push((async () => {
       try {
