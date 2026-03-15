@@ -9289,10 +9289,19 @@ async function generateWelcomeMessage(context) {
     const client = new Anthropic5({ apiKey: ANTHROPIC_KEY });
     const weatherPart = context.tempC !== null && context.condition ? `Current weather in NYC: ${context.tempC}\xB0C, ${context.condition}.` : "";
     const babyPart = context.babyWeeks !== null ? `His wife is ${context.babyWeeks} weeks pregnant with a baby boy.` : "";
-    const prompt = `Generate a short, warm, friendly greeting for Rickin who is checking his daily brief dashboard. Time: ${context.greeting.toLowerCase()} on ${context.dayOfWeek}. ${weatherPart} He has ${context.taskCount} tasks and ${context.eventCount} calendar events today. ${babyPart} Keep it to 1-2 sentences. Be conversational and natural \u2014 mention the weather casually if available. Don't use emojis. Don't say "I" or reference yourself. Just the greeting text.`;
+    const prompt = `Generate a friendly morning briefing for Rickin who is checking his daily dashboard. Time: ${context.greeting.toLowerCase()} on ${context.dayOfWeek}. ${weatherPart} He has ${context.taskCount} tasks and ${context.eventCount} calendar events today. ${babyPart}
+
+Format as a short greeting line followed by bullet points summarizing what's ahead. Use this exact format:
+[greeting line]
+\u2022 [weather note]
+\u2022 [tasks/calendar summary]
+\u2022 [baby milestone or encouragement]
+\u2022 [motivational or day-specific note]
+
+Keep each bullet concise (under 15 words). Don't use emojis. Don't say "I" or reference yourself. 4-5 bullets max.`;
     const response = await client.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 100,
+      max_tokens: 200,
       messages: [{ role: "user", content: prompt }]
     });
     const text = response.content[0].text?.trim() || "";
