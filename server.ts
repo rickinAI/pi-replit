@@ -2836,7 +2836,6 @@ app.get("/api/vault/reya-school", async (_req: Request, res: Response) => {
   try {
     const tz = "America/New_York";
     const now = new Date();
-    const dayOfWeek = parseInt(now.toLocaleString("en-US", { timeZone: tz, weekday: "short" }).charAt(0) === "S" ? "0" : "1");
     const dayName = now.toLocaleString("en-US", { timeZone: tz, weekday: "long" });
     const isWeekend = ["Saturday", "Sunday"].includes(dayName);
     if (isWeekend) {
@@ -2847,7 +2846,7 @@ app.get("/api/vault/reya-school", async (_req: Request, res: Response) => {
     const day = parseInt(now.toLocaleString("en-US", { timeZone: tz, day: "numeric" }));
     let lunch = "Menu not available";
     try {
-      const mealFile = await vaultLocal.readNote("Family/Reya's Education/Reya - School Meals");
+      const mealFile = await kbRead("Family/Reya's Education/Reya - School Meals");
       if (mealFile) {
         const datePattern = new RegExp(`\\|\\s*\\w+\\s+${month}/${day}\\s*\\|([^|]+)\\|([^|]+)\\|([^|]+)\\|`, "i");
         const match = mealFile.match(datePattern);
@@ -2905,7 +2904,7 @@ app.get("/api/vault/moodys-brief", async (_req: Request, res: Response) => {
     let briefDate = dateStr;
     for (const p of paths) {
       try {
-        const content = await vaultLocal.readNote(p);
+        const content = await kbRead(p);
         if (content && content.length > 100) { briefContent = content; break; }
       } catch {}
     }
@@ -2916,7 +2915,7 @@ app.get("/api/vault/moodys-brief", async (_req: Request, res: Response) => {
       const yDay = yesterday.toLocaleString("en-US", { timeZone: tz, day: "2-digit" });
       const yDateStr = `${yYear}-${yMonth}-${yDay}`;
       try {
-        const content = await vaultLocal.readNote(`Scheduled Reports/Moody's Intelligence/Daily/${yDateStr}-Brief`);
+        const content = await kbRead(`Scheduled Reports/Moody's Intelligence/Daily/${yDateStr}-Brief`);
         if (content && content.length > 100) { briefContent = content; briefDate = yDateStr; }
       } catch {}
     }
@@ -2971,14 +2970,14 @@ app.get("/api/vault/real-estate-scan", async (_req: Request, res: Response) => {
     let scanContent: string | null = null;
     let scanDate = dateStr;
     try {
-      const content = await vaultLocal.readNote(`Scheduled Reports/Real Estate/${dateStr}-Property-Scan`);
+      const content = await kbRead(`Scheduled Reports/Real Estate/${dateStr}-Property-Scan`);
       if (content) scanContent = content;
     } catch {}
     if (!scanContent) {
       const yesterday = new Date(now.getTime() - 86400000);
       const yDateStr = `${yesterday.toLocaleString("en-US", { timeZone: tz, year: "numeric" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, month: "2-digit" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, day: "2-digit" })}`;
       try {
-        const content = await vaultLocal.readNote(`Scheduled Reports/Real Estate/${yDateStr}-Property-Scan`);
+        const content = await kbRead(`Scheduled Reports/Real Estate/${yDateStr}-Property-Scan`);
         if (content) { scanContent = content; scanDate = yDateStr; }
       } catch {}
     }
@@ -3232,7 +3231,7 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
           const day = parseInt(now.toLocaleString("en-US", { timeZone: tz, day: "numeric" }));
           let lunch = "Menu not available";
           try {
-            const mealFile = await vaultLocal.readNote("Family/Reya's Education/Reya - School Meals");
+            const mealFile = await kbRead("Family/Reya's Education/Reya - School Meals");
             if (mealFile) {
               const datePattern = new RegExp(`\\|\\s*\\w+\\s+${month}/${day}\\s*\\|([^|]+)\\|([^|]+)\\|([^|]+)\\|`, "i");
               const match = mealFile.match(datePattern);
@@ -3285,14 +3284,14 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
         let briefContent: string | null = null;
         let briefDate = dateStr;
         try {
-          const content = await vaultLocal.readNote(`Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief`);
+          const content = await kbRead(`Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief`);
           if (content && content.length > 100) briefContent = content;
         } catch {}
         if (!briefContent) {
           const yesterday = new Date(now.getTime() - 86400000);
           const yDateStr = `${yesterday.toLocaleString("en-US", { timeZone: tz, year: "numeric" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, month: "2-digit" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, day: "2-digit" })}`;
           try {
-            const content = await vaultLocal.readNote(`Scheduled Reports/Moody's Intelligence/Daily/${yDateStr}-Brief`);
+            const content = await kbRead(`Scheduled Reports/Moody's Intelligence/Daily/${yDateStr}-Brief`);
             if (content && content.length > 100) { briefContent = content; briefDate = yDateStr; }
           } catch {}
         }
@@ -3343,14 +3342,14 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
         let scanContent: string | null = null;
         let scanDate = dateStr;
         try {
-          const content = await vaultLocal.readNote(`Scheduled Reports/Real Estate/${dateStr}-Property-Scan`);
+          const content = await kbRead(`Scheduled Reports/Real Estate/${dateStr}-Property-Scan`);
           if (content) scanContent = content;
         } catch {}
         if (!scanContent) {
           const yesterday = new Date(now.getTime() - 86400000);
           const yDateStr = `${yesterday.toLocaleString("en-US", { timeZone: tz, year: "numeric" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, month: "2-digit" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, day: "2-digit" })}`;
           try {
-            const content = await vaultLocal.readNote(`Scheduled Reports/Real Estate/${yDateStr}-Property-Scan`);
+            const content = await kbRead(`Scheduled Reports/Real Estate/${yDateStr}-Property-Scan`);
             if (content) { scanContent = content; scanDate = yDateStr; }
           } catch {}
         }
