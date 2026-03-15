@@ -29,15 +29,16 @@ async function geocode(location: string): Promise<{ name: string; lat: number; l
   return { name: r.name, lat: r.latitude, lon: r.longitude, country: r.country || "", timezone: r.timezone || "auto" };
 }
 
-export async function getWeather(location: string): Promise<string> {
+export async function getWeather(location: string, forecastDays = 3): Promise<string> {
   try {
     const geo = await geocode(location);
     if (!geo) return `Could not find location "${location}". Try a city name like "New York" or "London".`;
 
+    const days = Math.max(1, Math.min(forecastDays, 7));
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.lat}&longitude=${geo.lon}`
       + `&current=temperature_2m,apparent_temperature,weathercode,windspeed_10m,winddirection_10m,relative_humidity_2m,uv_index`
       + `&daily=temperature_2m_max,temperature_2m_min,weathercode,precipitation_probability_max`
-      + `&temperature_unit=celsius&windspeed_unit=mph&timezone=${encodeURIComponent(geo.timezone)}&forecast_days=3`;
+      + `&temperature_unit=celsius&windspeed_unit=mph&timezone=${encodeURIComponent(geo.timezone)}&forecast_days=${days}`;
 
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Weather API error ${res.status}`);
@@ -59,7 +60,7 @@ export async function getWeather(location: string): Promise<string> {
 
     const daily = data.daily;
     if (daily?.time?.length > 0) {
-      result += `\n3-Day Forecast:\n`;
+      result += `\n${days}-Day Forecast:\n`;
       for (let i = 0; i < daily.time.length; i++) {
         const date = daily.time[i];
         const hi = Math.round(daily.temperature_2m_max[i]);

@@ -2850,8 +2850,9 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
       weather: null,
       markets: [],
       tasks: [],
-      events: [],
+      calendars: { rickin: [], pooja: [], reya: [], other: [] },
       headlines: [],
+      xSignals: [],
       jobs: null,
     };
 
@@ -2866,10 +2867,10 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
 
     promises.push((async () => {
       try {
-        const raw = await weather.getWeather(loc);
-        const tempMatch = raw.match(/Temperature:\s*([\d.-]+)°C\s*\((\d+)°F\)/);
+        const raw = await weather.getWeather(loc, 5);
+        const tempMatch = raw.match(/Temperature:\s*([\d.-]+)°C\s*\((-?\d+)°F\)/);
         const condMatch = raw.match(/Condition:\s*(.+)/);
-        const feelsMatch = raw.match(/Feels like:\s*([\d.-]+)°C\s*\((\d+)°F\)/);
+        const feelsMatch = raw.match(/Feels like:\s*([\d.-]+)°C\s*\((-?\d+)°F\)/);
         const humMatch = raw.match(/Humidity:\s*(\d+)%/);
         const windMatch = raw.match(/Wind:\s*(.+)/);
         if (tempMatch && condMatch) {
@@ -2935,8 +2936,16 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
           const nowShifted = new Date(now.getTime() + tzOffsetMs);
           const eodTomorrowInTz = new Date(Date.UTC(nowShifted.getUTCFullYear(), nowShifted.getUTCMonth(), nowShifted.getUTCDate() + 1, 23, 59, 59, 999));
           const endOfTomorrowUTC = new Date(eodTomorrowInTz.getTime() - tzOffsetMs);
-          const events = await calendar.listEventsStructured({ maxResults: 8, timeMax: endOfTomorrowUTC.toISOString() });
-          result.events = events;
+          const events = await calendar.listEventsStructured({ maxResults: 15, timeMax: endOfTomorrowUTC.toISOString() });
+          const cals: any = { rickin: [], pooja: [], reya: [], other: [] };
+          for (const ev of events) {
+            const calName = (ev.calendar || "").toLowerCase();
+            if (calName.includes("rickin") || calName.includes("primary") || calName === "" || calName.includes("rickin.patel")) cals.rickin.push(ev);
+            else if (calName.includes("pooja")) cals.pooja.push(ev);
+            else if (calName.includes("reya")) cals.reya.push(ev);
+            else cals.other.push(ev);
+          }
+          result.calendars = cals;
         } catch {}
       })());
     }
@@ -2945,6 +2954,30 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
       try {
         const top = await news.getTopHeadlines(5);
         result.headlines = top;
+      } catch {}
+    })());
+
+    promises.push((async () => {
+      try {
+        const raw = await twitter.searchTweets("AI OR artificial intelligence OR AGI OR OpenAI OR Anthropic OR GPT", 5, "Top");
+        if (!raw.startsWith("Error") && !raw.includes("not configured")) {
+          const tweets: any[] = [];
+          const blocks = raw.split(/\n\d+\.\s+@/);
+          for (let i = 1; i < blocks.length && tweets.length < 5; i++) {
+            const b = blocks[i];
+            const handleMatch = b.match(/^(\w+)/);
+            const textMatch = b.match(/\n\s+(.+?)(?:\n\s+\d|$)/s);
+            const statsMatch = b.match(/([\d,]+)\s*likes/);
+            if (handleMatch && textMatch) {
+              tweets.push({
+                handle: handleMatch[1],
+                text: textMatch[1].trim().slice(0, 200),
+                likes: statsMatch ? statsMatch[1] : "0",
+              });
+            }
+          }
+          result.xSignals = tweets;
+        }
       } catch {}
     })());
 

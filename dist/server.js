@@ -1964,11 +1964,12 @@ async function geocode(location) {
   if (!r) return null;
   return { name: r.name, lat: r.latitude, lon: r.longitude, country: r.country || "", timezone: r.timezone || "auto" };
 }
-async function getWeather(location) {
+async function getWeather(location, forecastDays = 3) {
   try {
     const geo = await geocode(location);
     if (!geo) return `Could not find location "${location}". Try a city name like "New York" or "London".`;
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.lat}&longitude=${geo.lon}&current=temperature_2m,apparent_temperature,weathercode,windspeed_10m,winddirection_10m,relative_humidity_2m,uv_index&daily=temperature_2m_max,temperature_2m_min,weathercode,precipitation_probability_max&temperature_unit=celsius&windspeed_unit=mph&timezone=${encodeURIComponent(geo.timezone)}&forecast_days=3`;
+    const days = Math.max(1, Math.min(forecastDays, 7));
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.lat}&longitude=${geo.lon}&current=temperature_2m,apparent_temperature,weathercode,windspeed_10m,winddirection_10m,relative_humidity_2m,uv_index&daily=temperature_2m_max,temperature_2m_min,weathercode,precipitation_probability_max&temperature_unit=celsius&windspeed_unit=mph&timezone=${encodeURIComponent(geo.timezone)}&forecast_days=${days}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Weather API error ${res.status}`);
     const data = await res.json();
@@ -1993,7 +1994,7 @@ async function getWeather(location) {
     const daily = data.daily;
     if (daily?.time?.length > 0) {
       result += `
-3-Day Forecast:
+${days}-Day Forecast:
 `;
       for (let i = 0; i < daily.time.length; i++) {
         const date = daily.time[i];
@@ -9271,8 +9272,9 @@ app.get("/api/daily-brief/data", async (_req, res) => {
       weather: null,
       markets: [],
       tasks: [],
-      events: [],
+      calendars: { rickin: [], pooja: [], reya: [], other: [] },
       headlines: [],
+      xSignals: [],
       jobs: null
     };
     try {
@@ -9285,10 +9287,10 @@ app.get("/api/daily-brief/data", async (_req, res) => {
     const promises = [];
     promises.push((async () => {
       try {
-        const raw = await getWeather(loc);
-        const tempMatch = raw.match(/Temperature:\s*([\d.-]+)°C\s*\((\d+)°F\)/);
+        const raw = await getWeather(loc, 5);
+        const tempMatch = raw.match(/Temperature:\s*([\d.-]+)°C\s*\((-?\d+)°F\)/);
         const condMatch = raw.match(/Condition:\s*(.+)/);
-        const feelsMatch = raw.match(/Feels like:\s*([\d.-]+)°C\s*\((\d+)°F\)/);
+        const feelsMatch = raw.match(/Feels like:\s*([\d.-]+)°C\s*\((-?\d+)°F\)/);
         const humMatch = raw.match(/Humidity:\s*(\d+)%/);
         const windMatch = raw.match(/Wind:\s*(.+)/);
         if (tempMatch && condMatch) {
@@ -9356,8 +9358,16 @@ app.get("/api/daily-brief/data", async (_req, res) => {
           const nowShifted = new Date(now.getTime() + tzOffsetMs);
           const eodTomorrowInTz = new Date(Date.UTC(nowShifted.getUTCFullYear(), nowShifted.getUTCMonth(), nowShifted.getUTCDate() + 1, 23, 59, 59, 999));
           const endOfTomorrowUTC = new Date(eodTomorrowInTz.getTime() - tzOffsetMs);
-          const events = await listEventsStructured({ maxResults: 8, timeMax: endOfTomorrowUTC.toISOString() });
-          result.events = events;
+          const events = await listEventsStructured({ maxResults: 15, timeMax: endOfTomorrowUTC.toISOString() });
+          const cals = { rickin: [], pooja: [], reya: [], other: [] };
+          for (const ev of events) {
+            const calName = (ev.calendar || "").toLowerCase();
+            if (calName.includes("rickin") || calName.includes("primary") || calName === "" || calName.includes("rickin.patel")) cals.rickin.push(ev);
+            else if (calName.includes("pooja")) cals.pooja.push(ev);
+            else if (calName.includes("reya")) cals.reya.push(ev);
+            else cals.other.push(ev);
+          }
+          result.calendars = cals;
         } catch {
         }
       })());
@@ -9366,6 +9376,30 @@ app.get("/api/daily-brief/data", async (_req, res) => {
       try {
         const top = await getTopHeadlines(5);
         result.headlines = top;
+      } catch {
+      }
+    })());
+    promises.push((async () => {
+      try {
+        const raw = await searchTweets("AI OR artificial intelligence OR AGI OR OpenAI OR Anthropic OR GPT", 5, "Top");
+        if (!raw.startsWith("Error") && !raw.includes("not configured")) {
+          const tweets = [];
+          const blocks = raw.split(/\n\d+\.\s+@/);
+          for (let i = 1; i < blocks.length && tweets.length < 5; i++) {
+            const b = blocks[i];
+            const handleMatch = b.match(/^(\w+)/);
+            const textMatch = b.match(/\n\s+(.+?)(?:\n\s+\d|$)/s);
+            const statsMatch = b.match(/([\d,]+)\s*likes/);
+            if (handleMatch && textMatch) {
+              tweets.push({
+                handle: handleMatch[1],
+                text: textMatch[1].trim().slice(0, 200),
+                likes: statsMatch ? statsMatch[1] : "0"
+              });
+            }
+          }
+          result.xSignals = tweets;
+        }
       } catch {
       }
     })());
