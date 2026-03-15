@@ -9330,8 +9330,10 @@ app.get("/api/daily-brief/data", async (_req, res) => {
     const watchlistSymbols = [
       { symbol: "BTCUSD", type: "crypto", display: "BTC", emoji: "\u20BF" },
       { symbol: "MSTR", type: "stock", display: "MSTR", emoji: "\u{1F4CA}" },
+      { symbol: "^GSPC", type: "stock", display: "SPX", emoji: "\u{1F4C8}" },
       { symbol: "GC=F", type: "stock", display: "GOLD", emoji: "\u{1F947}" },
-      { symbol: "SI=F", type: "stock", display: "SILVER", emoji: "\u{1F948}" }
+      { symbol: "SI=F", type: "stock", display: "SILVER", emoji: "\u{1F948}" },
+      { symbol: "CL=F", type: "stock", display: "OIL", emoji: "\u{1F6E2}\uFE0F" }
     ];
     promises.push((async () => {
       const quotePromises = watchlistSymbols.map(async (w) => {
