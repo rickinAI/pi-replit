@@ -44,6 +44,7 @@ import { runSubAgent } from "./src/agents/orchestrator.js";
 import { extractAndFileInsights } from "./src/memory-extractor.js";
 import * as obsidianSkills from "./src/obsidian-skills.js";
 import { cleanHtmlToMarkdown, looksLikeHtml } from "./src/defuddle.js";
+import * as vaultGraph from "./src/vault-graph.js";
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
@@ -66,6 +67,7 @@ const VAULT_DIR = path.join(PROJECT_ROOT, "data", "vault");
 
 fs.mkdirSync(AGENT_DIR, { recursive: true });
 vaultLocal.init(VAULT_DIR);
+vaultGraph.init(VAULT_DIR);
 agentLoader.init(path.join(PROJECT_ROOT, "data"));
 obsidianSkills.loadAllSkills().catch(err => console.warn("[startup] Failed to preload Obsidian skills:", err));
 
@@ -187,6 +189,17 @@ function buildKnowledgeBaseTools(): ToolDefinition[] {
             if (cleaned.length > 0) {
               console.log(`[vault] defuddle: cleaned HTML (${content.length} → ${cleaned.length} chars)`);
               content = cleaned;
+            }
+          }
+          if (useLocalVault) {
+            try {
+              const linkResult = await vaultGraph.addBidirectionalLinks(params.path, content);
+              if (linkResult.linkedTo.length > 0) {
+                content = linkResult.content;
+                console.log(`[vault-graph] auto-linked ${params.path} to ${linkResult.linkedTo.length} related notes`);
+              }
+            } catch (linkErr: any) {
+              console.warn(`[vault-graph] bidirectional linking failed (non-fatal): ${linkErr.message}`);
             }
           }
           const result = await kbCreate(params.path, content);
@@ -328,6 +341,32 @@ function buildKnowledgeBaseTools(): ToolDefinition[] {
           return { content: [{ type: "text" as const, text: result }], details: {} };
         } catch (err: any) {
           console.error(`[vault] notes_file_info FAILED: ${params.path} — ${err.message}`);
+          throw err;
+        }
+      },
+    },
+    {
+      name: "notes_graph_context",
+      label: "Notes Graph Context",
+      description: "Follow [[wikilinks]] in a note to gather related context. Reads the starting note, extracts all wikilinks, and recursively follows them (breadth-first) up to the specified depth. Returns the combined content of all linked notes. Use this when investigating a vault topic to automatically pull in connected knowledge.",
+      parameters: Type.Object({
+        path: Type.String({ description: "Starting note path (e.g. 'Projects/Research.md')" }),
+        depth: Type.Optional(Type.Number({ description: "Max link-following depth (default 2, max 3)" })),
+        token_budget: Type.Optional(Type.Number({ description: "Max estimated tokens to return (default 30000)" })),
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const depth = Math.min(Math.max((params as any).depth ?? 2, 1), 3);
+          const budget = Math.min(Math.max((params as any).token_budget ?? 30000, 1000), 60000);
+          const result = await vaultGraph.graphContext(params.path, depth, budget);
+          const output = result.notes.map(n =>
+            `--- ${n.path} (depth ${n.depth}) ---\n${n.content}`
+          ).join("\n\n");
+          const summary = `Graph traversal from "${params.path}": ${result.notes.length} notes, ~${result.totalTokens} tokens${result.truncated ? " (truncated by budget)" : ""}`;
+          console.log(`[vault] notes_graph_context OK: ${summary}`);
+          return { content: [{ type: "text" as const, text: `${summary}\n\n${output}` }], details: {} };
+        } catch (err: any) {
+          console.error(`[vault] notes_graph_context FAILED: ${params.path} — ${err.message}`);
           throw err;
         }
       },
