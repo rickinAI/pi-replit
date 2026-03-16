@@ -441,6 +441,48 @@ async function showLanding() {
   convos.sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt));
   lastKnownConversations = convos;
 
+  if (landingAgentStatus) {
+    const queueSection = document.createElement("div");
+    queueSection.className = "landing-queue-section";
+    queueSection.id = "landing-queue";
+    const running = landingAgentStatus.job && landingAgentStatus.job.running;
+    const activeSessions = landingAgentStatus.sessions || [];
+    const completions = landingAgentStatus.recentCompletions || [];
+    const queueItems = [];
+    if (running) {
+      queueItems.push({ name: landingAgentStatus.job.jobName || "Background job", status: "running", time: "" });
+    }
+    activeSessions.forEach(s => {
+      const toolLabel = s.tool ? getReadableToolName(s.tool) || s.tool : "";
+      queueItems.push({ name: s.conversationTitle || "Session agent", status: "running", time: toolLabel ? `⚙ ${toolLabel}` : "" });
+    });
+    completions.forEach(c => {
+      const ago = Date.now() - c.timestamp;
+      let timeStr = "";
+      if (ago < 60000) timeStr = "just now";
+      else if (ago < 3600000) timeStr = Math.floor(ago / 60000) + "m ago";
+      else if (ago < 86400000) timeStr = Math.floor(ago / 3600000) + "h ago";
+      queueItems.push({ name: c.agent + ": " + (c.task || "").slice(0, 40), status: c.savedTo ? "done" : "done", time: timeStr });
+    });
+    if (queueItems.length > 0) {
+      const activeCount = queueItems.filter(q => q.status === "running").length;
+      queueSection.innerHTML = `<div class="landing-queue-header">
+        <span class="landing-queue-label">Agent Activity</span>
+        <span class="landing-queue-count">${activeCount > 0 ? activeCount + " running" : "idle"}</span>
+      </div>`;
+      queueItems.slice(0, 6).forEach(item => {
+        const dotClass = item.status === "running" ? "q-running" : item.status === "error" ? "q-error" : "q-done";
+        const el = document.createElement("div");
+        el.className = "landing-queue-item";
+        el.innerHTML = `<div class="landing-queue-dot ${dotClass}"></div>
+          <div class="landing-queue-name">${escapeHtml(item.name)}</div>
+          <div class="landing-queue-time">${escapeHtml(item.time)}</div>`;
+        queueSection.appendChild(el);
+      });
+      landing.appendChild(queueSection);
+    }
+  }
+
   if (glanceData) {
     const cycles = buildLandingTickerCycles(glanceData);
     if (cycles.length > 0) {
@@ -677,48 +719,6 @@ async function showLanding() {
 
   taskSection.appendChild(completedWrap);
   landing.appendChild(taskSection);
-
-  if (landingAgentStatus) {
-    const queueSection = document.createElement("div");
-    queueSection.className = "landing-queue-section";
-    queueSection.id = "landing-queue";
-    const running = landingAgentStatus.job && landingAgentStatus.job.running;
-    const activeSessions = landingAgentStatus.sessions || [];
-    const completions = landingAgentStatus.recentCompletions || [];
-    const queueItems = [];
-    if (running) {
-      queueItems.push({ name: landingAgentStatus.job.jobName || "Background job", status: "running", time: "" });
-    }
-    activeSessions.forEach(s => {
-      const toolLabel = s.tool ? getReadableToolName(s.tool) || s.tool : "";
-      queueItems.push({ name: s.conversationTitle || "Session agent", status: "running", time: toolLabel ? `⚙ ${toolLabel}` : "" });
-    });
-    completions.forEach(c => {
-      const ago = Date.now() - c.timestamp;
-      let timeStr = "";
-      if (ago < 60000) timeStr = "just now";
-      else if (ago < 3600000) timeStr = Math.floor(ago / 60000) + "m ago";
-      else if (ago < 86400000) timeStr = Math.floor(ago / 3600000) + "h ago";
-      queueItems.push({ name: c.agent + ": " + (c.task || "").slice(0, 40), status: c.savedTo ? "done" : "done", time: timeStr });
-    });
-    if (queueItems.length > 0) {
-      const activeCount = queueItems.filter(q => q.status === "running").length;
-      queueSection.innerHTML = `<div class="landing-queue-header">
-        <span class="landing-queue-label">Agent Activity</span>
-        <span class="landing-queue-count">${activeCount > 0 ? activeCount + " running" : "idle"}</span>
-      </div>`;
-      queueItems.slice(0, 6).forEach(item => {
-        const dotClass = item.status === "running" ? "q-running" : item.status === "error" ? "q-error" : "q-done";
-        const el = document.createElement("div");
-        el.className = "landing-queue-item";
-        el.innerHTML = `<div class="landing-queue-dot ${dotClass}"></div>
-          <div class="landing-queue-name">${escapeHtml(item.name)}</div>
-          <div class="landing-queue-time">${escapeHtml(item.time)}</div>`;
-        queueSection.appendChild(el);
-      });
-      landing.appendChild(queueSection);
-    }
-  }
 
   const newBtn = document.createElement("button");
   newBtn.className = "landing-new-btn";
