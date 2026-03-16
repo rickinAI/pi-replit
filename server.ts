@@ -4944,6 +4944,84 @@ app.get("/api/cost-summary", async (_req: Request, res: Response) => {
   }
 });
 
+app.get("/api/v1/models", (_req: Request, res: Response) => {
+  res.json({
+    object: "list",
+    data: [
+      { id: "claude-sonnet-4-6", object: "model", created: 1700000000, owned_by: "anthropic" },
+      { id: "claude-haiku-4-5-20251001", object: "model", created: 1700000000, owned_by: "anthropic" },
+      { id: "claude-opus-4-6", object: "model", created: 1700000000, owned_by: "anthropic" },
+    ],
+  });
+});
+
+app.post("/api/v1/chat/completions", async (req: Request, res: Response) => {
+  try {
+    if (!ANTHROPIC_KEY) {
+      res.status(500).json({ error: { message: "Anthropic API key not configured", type: "server_error" } });
+      return;
+    }
+    const { model, messages, max_tokens, temperature, stream } = req.body as {
+      model?: string; messages?: Array<{ role: string; content: string }>; max_tokens?: number; temperature?: number; stream?: boolean;
+    };
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      res.status(400).json({ error: { message: "messages array is required", type: "invalid_request_error" } });
+      return;
+    }
+
+    const modelId = model || "claude-sonnet-4-6";
+    const validModels = ["claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-6"];
+    const anthropicModel = validModels.includes(modelId) ? modelId : "claude-sonnet-4-6";
+
+    let systemPrompt = "";
+    const anthropicMessages: Array<{ role: "user" | "assistant"; content: string }> = [];
+    for (const msg of messages) {
+      if (msg.role === "system") {
+        systemPrompt += (systemPrompt ? "\n\n" : "") + msg.content;
+      } else if (msg.role === "user" || msg.role === "assistant") {
+        anthropicMessages.push({ role: msg.role, content: msg.content });
+      }
+    }
+    if (anthropicMessages.length === 0) {
+      anthropicMessages.push({ role: "user", content: "Hello" });
+    }
+
+    const Anthropic = (await import("@anthropic-ai/sdk")).default;
+    const client = new Anthropic({ apiKey: ANTHROPIC_KEY });
+    const response = await client.messages.create({
+      model: anthropicModel,
+      max_tokens: max_tokens || 4096,
+      ...(temperature !== undefined ? { temperature } : {}),
+      ...(systemPrompt ? { system: systemPrompt } : {}),
+      messages: anthropicMessages,
+    });
+
+    const textContent = response.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
+    const completionId = `chatcmpl-${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
+
+    res.json({
+      id: completionId,
+      object: "chat.completion",
+      created: Math.floor(Date.now() / 1000),
+      model: anthropicModel,
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: textContent },
+        finish_reason: response.stop_reason === "end_turn" ? "stop" : response.stop_reason === "max_tokens" ? "length" : "stop",
+      }],
+      usage: {
+        prompt_tokens: response.usage?.input_tokens || 0,
+        completion_tokens: response.usage?.output_tokens || 0,
+        total_tokens: (response.usage?.input_tokens || 0) + (response.usage?.output_tokens || 0),
+      },
+    });
+  } catch (err: any) {
+    console.error("[openai-proxy] Error:", err.message || err);
+    const status = err.status || 500;
+    res.status(status).json({ error: { message: err.message || "Internal server error", type: "server_error" } });
+  }
+});
+
 app.get("/api/scheduled-jobs/history", async (_req: Request, res: Response) => {
   try {
     const limit = Math.max(1, Math.min(parseInt((_req.query as any).limit) || 20, 100));
