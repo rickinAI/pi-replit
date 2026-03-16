@@ -10,8 +10,8 @@ import express from "express";
 import cors from "cors";
 import { createServer } from "http";
 import { fileURLToPath } from "url";
-import path6 from "path";
-import fs5 from "fs";
+import path5 from "path";
+import fs4 from "fs";
 import { execSync, spawn } from "child_process";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
@@ -862,11 +862,11 @@ async function init4() {
   const existing = await getPool().query(`SELECT tokens FROM oauth_tokens WHERE service = 'google'`);
   if (existing.rows.length === 0) {
     try {
-      const fs6 = await import("fs");
-      const path7 = await import("path");
-      const legacyPath = path7.default.join(process.cwd(), "data", "gmail-tokens.json");
-      if (fs6.default.existsSync(legacyPath)) {
-        const tokens = JSON.parse(fs6.default.readFileSync(legacyPath, "utf-8"));
+      const fs5 = await import("fs");
+      const path6 = await import("path");
+      const legacyPath = path6.default.join(process.cwd(), "data", "gmail-tokens.json");
+      if (fs5.default.existsSync(legacyPath)) {
+        const tokens = JSON.parse(fs5.default.readFileSync(legacyPath, "utf-8"));
         await getPool().query(
           `INSERT INTO oauth_tokens (service, tokens, updated_at) VALUES ('google', $1, $2)`,
           [JSON.stringify(tokens), Date.now()]
@@ -2409,11 +2409,11 @@ async function init5() {
   const existing = await getPool().query(`SELECT count(*) FROM tasks`);
   if (parseInt(existing.rows[0].count) === 0) {
     try {
-      const fs6 = await import("fs");
+      const fs5 = await import("fs");
       const pathMod = await import("path");
       const legacyPath = pathMod.default.join(process.cwd(), "data", "tasks.json");
-      if (fs6.default.existsSync(legacyPath)) {
-        const legacyTasks = JSON.parse(fs6.default.readFileSync(legacyPath, "utf-8"));
+      if (fs5.default.existsSync(legacyPath)) {
+        const legacyTasks = JSON.parse(fs5.default.readFileSync(legacyPath, "utf-8"));
         for (const t of legacyTasks) {
           await getPool().query(
             `INSERT INTO tasks (id, title, description, due_date, priority, completed, created_at, completed_at, tags)
@@ -4307,11 +4307,11 @@ async function init6() {
   const existing = await getPool().query(`SELECT value FROM app_config WHERE key = 'alerts'`);
   if (existing.rows.length === 0) {
     try {
-      const fs6 = await import("fs");
-      const path7 = await import("path");
-      const legacyPath = path7.default.join(process.cwd(), "data", "alerts-config.json");
-      if (fs6.default.existsSync(legacyPath)) {
-        const raw = JSON.parse(fs6.default.readFileSync(legacyPath, "utf-8"));
+      const fs5 = await import("fs");
+      const path6 = await import("path");
+      const legacyPath = path6.default.join(process.cwd(), "data", "alerts-config.json");
+      if (fs5.default.existsSync(legacyPath)) {
+        const raw = JSON.parse(fs5.default.readFileSync(legacyPath, "utf-8"));
         const migrated = { ...DEFAULT_CONFIG, ...raw, briefs: { ...DEFAULT_CONFIG.briefs, ...raw.briefs }, alerts: { ...DEFAULT_CONFIG.alerts, ...raw.alerts } };
         await getPool().query(
           `INSERT INTO app_config (key, value, updated_at) VALUES ('alerts', $1, $2)`,
@@ -6367,13 +6367,13 @@ async function triggerJob(jobId) {
     const savePath = getJobSavePath(job.id, todayKey, safeName);
     if (job.id === "moodys-daily-intel") {
       try {
-        const fs6 = await import("fs");
-        const path7 = await import("path");
-        const briefDir = path7.join(process.cwd(), "data/vault/Scheduled Reports/Moody's Intelligence/Daily");
-        if (fs6.existsSync(briefDir)) {
-          const files = fs6.readdirSync(briefDir).filter((f) => f.endsWith("-Brief.md") && f > `${todayKey}-Brief.md`).sort().reverse();
+        const fs5 = await import("fs");
+        const path6 = await import("path");
+        const briefDir = path6.join(process.cwd(), "data/vault/Scheduled Reports/Moody's Intelligence/Daily");
+        if (fs5.existsSync(briefDir)) {
+          const files = fs5.readdirSync(briefDir).filter((f) => f.endsWith("-Brief.md") && f > `${todayKey}-Brief.md`).sort().reverse();
           for (const fname of files) {
-            const content = fs6.readFileSync(path7.join(briefDir, fname), "utf-8");
+            const content = fs5.readFileSync(path6.join(briefDir, fname), "utf-8");
             if (content.length > 1e3 && content.includes("## \u{1F3E2}")) {
               result = content;
               console.log(`[scheduled-jobs] Moody's brief: using agent-saved file ${fname} (${result.length} chars)`);
@@ -7054,12 +7054,9 @@ function looksLikeHtml(content) {
 }
 
 // src/vault-graph.ts
-import fs4 from "fs/promises";
-import fsSync2 from "fs";
-import path5 from "path";
-var vaultPath2 = "";
-function init9(basePath) {
-  vaultPath2 = basePath;
+var ops = null;
+function init9(vaultOps) {
+  ops = vaultOps;
 }
 function extractWikilinks(markdown) {
   const links = [];
@@ -7100,12 +7097,18 @@ function extractWikilinks(markdown) {
           i = end + 2;
           continue;
         }
-        const linkTarget = raw.includes("|") ? raw.split("|")[0].trim() : raw;
+        let linkTarget = raw.includes("|") ? raw.split("|")[0].trim() : raw;
+        linkTarget = linkTarget.replace(/\\/g, "/");
+        if (linkTarget.includes("..")) {
+          i = end + 2;
+          continue;
+        }
         if (linkTarget.length > 0) {
-          const normalized = linkTarget.replace(/\\/g, "/");
-          if (!seen.has(normalized.toLowerCase())) {
-            seen.add(normalized.toLowerCase());
-            links.push(normalized);
+          if (!linkTarget.endsWith(".md")) linkTarget += ".md";
+          const key = linkTarget.toLowerCase();
+          if (!seen.has(key)) {
+            seen.add(key);
+            links.push(linkTarget);
           }
         }
         i = end + 2;
@@ -7117,55 +7120,38 @@ function extractWikilinks(markdown) {
   }
   return links;
 }
-function resolveWikilinkPath(link) {
-  if (!vaultPath2) return null;
-  if (link.endsWith(".md")) {
-    const resolved = path5.resolve(vaultPath2, link);
-    if (fsSync2.existsSync(resolved)) return link;
-  } else {
-    const withExt = link + ".md";
-    const resolved = path5.resolve(vaultPath2, withExt);
-    if (fsSync2.existsSync(resolved)) return withExt;
+function estimateTokens(text) {
+  return Math.ceil(text.length / 4);
+}
+async function resolveVaultPath(link) {
+  if (!ops) return null;
+  try {
+    await ops.read(link);
+    return link;
+  } catch {
+  }
+  const withoutExt = link.replace(/\.md$/, "");
+  try {
+    await ops.read(withoutExt);
+    return withoutExt;
+  } catch {
   }
   try {
-    const files = walkAllMd(vaultPath2, "");
-    const target = (link.endsWith(".md") ? link : link + ".md").toLowerCase();
-    const baseName = path5.basename(target);
+    const allData = await ops.listRecursive("/");
+    const parsed = JSON.parse(allData);
+    const files = parsed.files || [];
+    const baseName = link.split("/").pop()?.toLowerCase() || "";
     for (const f of files) {
-      if (f.toLowerCase() === target) return f;
-    }
-    for (const f of files) {
-      if (path5.basename(f).toLowerCase() === baseName) return f;
+      if (f.endsWith("/")) continue;
+      const fBase = f.split("/").pop()?.toLowerCase() || "";
+      if (fBase === baseName) return f;
     }
   } catch {
   }
   return null;
 }
-function walkAllMd(dir, relBase) {
-  const results = [];
-  let entries;
-  try {
-    entries = fsSync2.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return results;
-  }
-  for (const entry of entries) {
-    if (entry.name.startsWith(".")) continue;
-    const fullPath = path5.join(dir, entry.name);
-    const rel = relBase ? path5.join(relBase, entry.name) : entry.name;
-    if (entry.isDirectory()) {
-      results.push(...walkAllMd(fullPath, rel));
-    } else if (entry.name.endsWith(".md")) {
-      results.push(rel);
-    }
-  }
-  return results;
-}
-function estimateTokens(text) {
-  return Math.ceil(text.length / 4);
-}
 async function graphContext(startPath, maxDepth = 2, tokenBudget = 3e4) {
-  if (!vaultPath2) throw new Error("Vault not configured");
+  if (!ops) throw new Error("Vault graph not initialized");
   const visited = /* @__PURE__ */ new Set();
   const result = [];
   let totalTokens = 0;
@@ -7176,11 +7162,9 @@ async function graphContext(startPath, maxDepth = 2, tokenBudget = 3e4) {
     const normalizedPath = item.notePath.toLowerCase();
     if (visited.has(normalizedPath)) continue;
     visited.add(normalizedPath);
-    const resolved = resolveWikilinkPath(item.notePath) || item.notePath;
-    const fullPath = path5.resolve(vaultPath2, resolved);
     let content;
     try {
-      content = await fs4.readFile(fullPath, "utf-8");
+      content = await ops.read(item.notePath);
     } catch {
       continue;
     }
@@ -7190,19 +7174,24 @@ async function graphContext(startPath, maxDepth = 2, tokenBudget = 3e4) {
       const remaining = tokenBudget - totalTokens;
       if (remaining > 200) {
         const charLimit = remaining * 4;
-        result.push({ path: resolved, depth: item.depth, content: content.slice(0, charLimit) + "\n\n[...truncated due to token budget]" });
+        result.push({ path: item.notePath, depth: item.depth, content: content.slice(0, charLimit) + "\n\n[...truncated due to token budget]" });
         totalTokens += remaining;
       }
       break;
     }
     totalTokens += tokens;
-    result.push({ path: resolved, depth: item.depth, content });
+    result.push({ path: item.notePath, depth: item.depth, content });
     if (item.depth < maxDepth) {
       const links = extractWikilinks(content);
       for (const link of links) {
         const linkNorm = link.toLowerCase();
-        if (!visited.has(linkNorm) && !visited.has(linkNorm + ".md") && !visited.has(linkNorm.replace(/\.md$/, ""))) {
-          queue.push({ notePath: link, depth: item.depth + 1 });
+        if (!visited.has(linkNorm)) {
+          const resolved = await resolveVaultPath(link);
+          if (resolved) {
+            if (!visited.has(resolved.toLowerCase())) {
+              queue.push({ notePath: resolved, depth: item.depth + 1 });
+            }
+          }
         }
       }
     }
@@ -7210,23 +7199,28 @@ async function graphContext(startPath, maxDepth = 2, tokenBudget = 3e4) {
   return { notes: result, totalTokens, truncated };
 }
 async function findRelatedNotes(newNotePath, content, maxResults = 5) {
-  if (!vaultPath2) return [];
-  const newBaseName = path5.basename(newNotePath, ".md").toLowerCase();
+  if (!ops) return [];
+  const newBaseName = newNotePath.split("/").pop()?.replace(/\.md$/, "").toLowerCase() || "";
   const keywords = extractKeywords(newBaseName, content);
   if (keywords.length === 0) return [];
-  const allFiles = walkAllMd(vaultPath2, "");
+  let allFiles;
+  try {
+    const data = await ops.listRecursive("/");
+    const parsed = JSON.parse(data);
+    allFiles = (parsed.files || []).filter((f) => !f.endsWith("/") && f.endsWith(".md"));
+  } catch {
+    return [];
+  }
   const newNorm = newNotePath.toLowerCase().replace(/^\/+/, "");
   const scored = [];
   for (const filePath of allFiles) {
     if (filePath.toLowerCase() === newNorm) continue;
-    const fileBaseName = path5.basename(filePath, ".md").toLowerCase();
+    const fileBaseName = filePath.split("/").pop()?.replace(/\.md$/, "").toLowerCase() || "";
     let score = 0;
     for (const kw of keywords) {
-      if (fileBaseName.includes(kw)) {
-        score += 3;
-      }
+      if (fileBaseName.includes(kw)) score += 3;
     }
-    const folderParts = path5.dirname(filePath).toLowerCase().split(/[/\\]/);
+    const folderParts = filePath.toLowerCase().split("/").slice(0, -1);
     for (const kw of keywords) {
       for (const part of folderParts) {
         if (part.includes(kw)) {
@@ -7337,14 +7331,14 @@ function extractKeywords(baseName, content) {
   }
   return Array.from(words).slice(0, 8);
 }
-async function addBidirectionalLinks(newNotePath, content) {
-  if (!vaultPath2) return { linkedTo: [], content };
-  const related = await findRelatedNotes(newNotePath, content);
-  if (related.length === 0) return { linkedTo: [], content };
-  const newBaseName = path5.basename(newNotePath, ".md");
+async function addBidirectionalLinks(newNotePath, newNoteContent) {
+  if (!ops) return { linkedTo: [] };
+  const related = await findRelatedNotes(newNotePath, newNoteContent);
+  if (related.length === 0) return { linkedTo: [] };
+  const newBaseName = newNotePath.split("/").pop()?.replace(/\.md$/, "") || newNotePath;
   const newLink = `[[${newNotePath.replace(/\.md$/, "")}|${newBaseName}]]`;
   const relatedLinks = related.map((rp) => {
-    const rBaseName = path5.basename(rp, ".md");
+    const rBaseName = rp.split("/").pop()?.replace(/\.md$/, "") || rp;
     return `[[${rp.replace(/\.md$/, "")}|${rBaseName}]]`;
   });
   const relatedSection = `
@@ -7353,36 +7347,36 @@ async function addBidirectionalLinks(newNotePath, content) {
 ## Related Notes
 ${relatedLinks.map((l) => `- ${l}`).join("\n")}
 `;
-  const updatedContent = content + relatedSection;
+  try {
+    await ops.append(newNotePath, relatedSection);
+    console.log(`[vault-graph] appended Related Notes section to ${newNotePath}`);
+  } catch (err) {
+    console.warn(`[vault-graph] failed to append related links to ${newNotePath}: ${err.message}`);
+  }
   const backlinkLine = `
 - ${newLink}
 `;
   for (const rp of related) {
-    const fullPath = path5.resolve(vaultPath2, rp);
     try {
-      const existingContent = await fs4.readFile(fullPath, "utf-8");
+      const existingContent = await ops.read(rp);
       if (existingContent.includes(`[[${newNotePath.replace(/\.md$/, "")}`) || existingContent.includes(`[[${newBaseName}]]`)) {
         continue;
       }
       const backlinkHeading = "## Backlinks";
       if (existingContent.includes(backlinkHeading)) {
-        const updated = existingContent.replace(
-          backlinkHeading,
-          backlinkHeading + backlinkLine
-        );
-        await fs4.writeFile(fullPath, updated, "utf-8");
+        await ops.append(rp, backlinkLine);
       } else {
-        await fs4.appendFile(fullPath, `
+        await ops.append(rp, `
 
 ---
-${backlinkHeading}${backlinkLine}`, "utf-8");
+${backlinkHeading}${backlinkLine}`);
       }
       console.log(`[vault-graph] backlink added: ${rp} \u2190 ${newBaseName}`);
     } catch (err) {
       console.warn(`[vault-graph] failed to add backlink to ${rp}: ${err.message}`);
     }
   }
-  return { linkedTo: related, content: updatedContent };
+  return { linkedTo: related };
 }
 
 // server.ts
@@ -7398,15 +7392,14 @@ var USERS = {
 };
 var SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path6.dirname(__filename);
-var PROJECT_ROOT = __filename.includes("/dist/") ? path6.resolve(__dirname, "..") : __dirname;
-var PUBLIC_DIR = path6.join(PROJECT_ROOT, "public");
-var AGENT_DIR = path6.join(PROJECT_ROOT, ".pi/agent");
-var VAULT_DIR = path6.join(PROJECT_ROOT, "data", "vault");
-fs5.mkdirSync(AGENT_DIR, { recursive: true });
+var __dirname = path5.dirname(__filename);
+var PROJECT_ROOT = __filename.includes("/dist/") ? path5.resolve(__dirname, "..") : __dirname;
+var PUBLIC_DIR = path5.join(PROJECT_ROOT, "public");
+var AGENT_DIR = path5.join(PROJECT_ROOT, ".pi/agent");
+var VAULT_DIR = path5.join(PROJECT_ROOT, "data", "vault");
+fs4.mkdirSync(AGENT_DIR, { recursive: true });
 init(VAULT_DIR);
-init9(VAULT_DIR);
-init8(path6.join(PROJECT_ROOT, "data"));
+init8(path5.join(PROJECT_ROOT, "data"));
 loadAllSkills().catch((err) => console.warn("[startup] Failed to preload Obsidian skills:", err));
 var useLocalVault = isConfigured2();
 setInterval(() => {
@@ -7433,7 +7426,7 @@ if (useLocalVault) {
 }
 if (!APP_PASSWORD) console.warn("APP_PASSWORD is not set \u2014 auth disabled.");
 console.log(`[boot] PORT=${PORT} PUBLIC_DIR=${PUBLIC_DIR} AGENT_DIR=${AGENT_DIR}`);
-console.log(`[boot] public/ exists: ${fs5.existsSync(PUBLIC_DIR)}`);
+console.log(`[boot] public/ exists: ${fs4.existsSync(PUBLIC_DIR)}`);
 function kbList(p) {
   return useLocalVault ? listNotes2(p) : listNotes(p);
 }
@@ -7464,6 +7457,12 @@ function kbListRecursive(p) {
 function kbFileInfo(p) {
   return useLocalVault ? fileInfo2(p) : fileInfo(p);
 }
+init9({
+  read: kbRead,
+  list: kbList,
+  listRecursive: kbListRecursive,
+  append: kbAppend
+});
 function buildKnowledgeBaseTools() {
   if (!useLocalVault && !isConfigured()) return [];
   return [
@@ -7522,19 +7521,16 @@ function buildKnowledgeBaseTools() {
               content = cleaned;
             }
           }
-          if (useLocalVault) {
-            try {
-              const linkResult = await addBidirectionalLinks(params.path, content);
-              if (linkResult.linkedTo.length > 0) {
-                content = linkResult.content;
-                console.log(`[vault-graph] auto-linked ${params.path} to ${linkResult.linkedTo.length} related notes`);
-              }
-            } catch (linkErr) {
-              console.warn(`[vault-graph] bidirectional linking failed (non-fatal): ${linkErr.message}`);
-            }
-          }
           const result = await kbCreate(params.path, content);
           console.log(`[vault] notes_create OK: ${params.path} (${content.length} chars)`);
+          try {
+            const linkResult = await addBidirectionalLinks(params.path, content);
+            if (linkResult.linkedTo.length > 0) {
+              console.log(`[vault-graph] auto-linked ${params.path} to ${linkResult.linkedTo.length} related notes`);
+            }
+          } catch (linkErr) {
+            console.warn(`[vault-graph] bidirectional linking failed (non-fatal): ${linkErr.message}`);
+          }
           return { content: [{ type: "text", text: result }], details: {} };
         } catch (err) {
           console.error(`[vault] notes_create FAILED: ${params.path} \u2014 ${err.message}`);
@@ -8033,8 +8029,8 @@ ${description}` }],
   ];
 }
 function buildRenderPageTools() {
-  const lightpandaBin = path6.join(PROJECT_ROOT, ".bin/lightpanda");
-  if (!fs5.existsSync(lightpandaBin)) return [];
+  const lightpandaBin = path5.join(PROJECT_ROOT, ".bin/lightpanda");
+  if (!fs4.existsSync(lightpandaBin)) return [];
   return [
     {
       name: "render_page",
@@ -9438,7 +9434,7 @@ ${snippetText}`;
   ];
 }
 function buildWebPublishTools() {
-  const PUBLISH_SCRIPT = path6.join(PROJECT_ROOT, "scripts", "herenow-publish.sh");
+  const PUBLISH_SCRIPT = path5.join(PROJECT_ROOT, "scripts", "herenow-publish.sh");
   return [
     {
       name: "web_publish",
@@ -9456,11 +9452,11 @@ function buildWebPublishTools() {
       }),
       async execute(_toolCallId, params) {
         try {
-          let targetPath = path6.resolve(params.path);
-          if (!fs5.existsSync(targetPath)) {
-            const vaultPath3 = path6.join(VAULT_DIR, params.path);
-            if (fs5.existsSync(vaultPath3)) {
-              targetPath = vaultPath3;
+          let targetPath = path5.resolve(params.path);
+          if (!fs4.existsSync(targetPath)) {
+            const vaultPath2 = path5.join(VAULT_DIR, params.path);
+            if (fs4.existsSync(vaultPath2)) {
+              targetPath = vaultPath2;
             } else {
               return {
                 content: [{ type: "text", text: `Error: Path "${params.path}" does not exist (checked project root and vault).` }],
@@ -9468,8 +9464,8 @@ function buildWebPublishTools() {
               };
             }
           }
-          const realTarget = fs5.realpathSync(targetPath);
-          const projectReal = fs5.realpathSync(PROJECT_ROOT);
+          const realTarget = fs4.realpathSync(targetPath);
+          const projectReal = fs4.realpathSync(PROJECT_ROOT);
           if (!realTarget.startsWith(projectReal + "/") && realTarget !== projectReal) {
             return {
               content: [{ type: "text", text: `Error: Can only publish files within the project directory.` }],
@@ -9477,7 +9473,7 @@ function buildWebPublishTools() {
             };
           }
           const blocked = [".env", "auth.json", "credentials", ".herenow"];
-          const relPath = path6.relative(projectReal, realTarget);
+          const relPath = path5.relative(projectReal, realTarget);
           if (blocked.some((b) => relPath.split("/").includes(b) || relPath === b)) {
             return {
               content: [{ type: "text", text: `Error: Cannot publish sensitive files.` }],
@@ -9549,11 +9545,11 @@ ${stderr || stdout || err.message}`
           if (!slug) {
             return { content: [{ type: "text", text: "Error: Invalid slug \u2014 must contain at least one alphanumeric character." }], details: {} };
           }
-          const pagesDir = path6.join(PROJECT_ROOT, "data", "pages");
-          if (!fs5.existsSync(pagesDir)) fs5.mkdirSync(pagesDir, { recursive: true });
-          const filePath = path6.join(pagesDir, `${slug}.html`);
-          const existed = fs5.existsSync(filePath);
-          fs5.writeFileSync(filePath, params.html, "utf-8");
+          const pagesDir = path5.join(PROJECT_ROOT, "data", "pages");
+          if (!fs4.existsSync(pagesDir)) fs4.mkdirSync(pagesDir, { recursive: true });
+          const filePath = path5.join(pagesDir, `${slug}.html`);
+          const existed = fs4.existsSync(filePath);
+          fs4.writeFileSync(filePath, params.html, "utf-8");
           const domain = process.env.REPLIT_DEPLOYMENT_URL || process.env.REPLIT_DEV_DOMAIN || "rickin.live";
           const protocol = domain.includes("localhost") ? "http" : "https";
           const pageUrl = `${protocol}://${domain}/pages/${slug}`;
@@ -9583,11 +9579,11 @@ This page is password-protected behind your login. Visit rickin.live/pages to se
       parameters: Type.Object({}),
       async execute() {
         try {
-          const pagesDir = path6.join(PROJECT_ROOT, "data", "pages");
-          if (!fs5.existsSync(pagesDir)) {
+          const pagesDir = path5.join(PROJECT_ROOT, "data", "pages");
+          if (!fs4.existsSync(pagesDir)) {
             return { content: [{ type: "text", text: "No pages saved yet." }], details: {} };
           }
-          const files = fs5.readdirSync(pagesDir).filter((f) => f.endsWith(".html")).sort();
+          const files = fs4.readdirSync(pagesDir).filter((f) => f.endsWith(".html")).sort();
           if (files.length === 0) {
             return { content: [{ type: "text", text: "No pages saved yet." }], details: {} };
           }
@@ -9595,7 +9591,7 @@ This page is password-protected behind your login. Visit rickin.live/pages to se
           const protocol = domain.includes("localhost") ? "http" : "https";
           const list2 = files.map((f) => {
             const slug = f.replace(/\.html$/, "");
-            const stat = fs5.statSync(path6.join(pagesDir, f));
+            const stat = fs4.statSync(path5.join(pagesDir, f));
             const sizeKB = Math.round(stat.size / 1024);
             const date = stat.mtime.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
             return `- ${slug} (${sizeKB}KB, ${date}) \u2014 ${protocol}://${domain}/pages/${slug}`;
@@ -9626,11 +9622,11 @@ All pages: ${protocol}://${domain}/pages` }],
           if (!slug) {
             return { content: [{ type: "text", text: "Error: Invalid slug." }], details: {} };
           }
-          const filePath = path6.join(PROJECT_ROOT, "data", "pages", `${slug}.html`);
-          if (!fs5.existsSync(filePath)) {
+          const filePath = path5.join(PROJECT_ROOT, "data", "pages", `${slug}.html`);
+          if (!fs4.existsSync(filePath)) {
             return { content: [{ type: "text", text: `Page "${slug}" not found.` }], details: {} };
           }
-          fs5.unlinkSync(filePath);
+          fs4.unlinkSync(filePath);
           return { content: [{ type: "text", text: `\u2705 Page "${slug}" deleted.` }], details: {} };
         } catch (err) {
           return { content: [{ type: "text", text: `Failed to delete page: ${err.message}` }], details: {} };
@@ -9955,17 +9951,17 @@ setInterval(async () => {
     }
   }
 }, 5 * 60 * 1e3);
-var TUNNEL_URL_FILE = path6.join(PROJECT_ROOT, "data", "tunnel-url.txt");
+var TUNNEL_URL_FILE = path5.join(PROJECT_ROOT, "data", "tunnel-url.txt");
 function loadPersistedTunnelUrl() {
   try {
-    return fs5.readFileSync(TUNNEL_URL_FILE, "utf-8").trim() || null;
+    return fs4.readFileSync(TUNNEL_URL_FILE, "utf-8").trim() || null;
   } catch {
     return null;
   }
 }
 function persistTunnelUrl(url) {
   try {
-    fs5.writeFileSync(TUNNEL_URL_FILE, url, "utf-8");
+    fs4.writeFileSync(TUNNEL_URL_FILE, url, "utf-8");
   } catch {
   }
 }
@@ -10111,18 +10107,18 @@ app.get("/api/logout", (_req, res) => {
   res.redirect("/login.html");
 });
 app.use(express.static(PUBLIC_DIR));
-var PAGES_DIR = path6.join(PROJECT_ROOT, "data", "pages");
-if (!fs5.existsSync(PAGES_DIR)) fs5.mkdirSync(PAGES_DIR, { recursive: true });
+var PAGES_DIR = path5.join(PROJECT_ROOT, "data", "pages");
+if (!fs4.existsSync(PAGES_DIR)) fs4.mkdirSync(PAGES_DIR, { recursive: true });
 app.get("/pages", (_req, res) => {
   try {
-    const files = fs5.readdirSync(PAGES_DIR).filter((f) => f.endsWith(".html")).sort();
+    const files = fs4.readdirSync(PAGES_DIR).filter((f) => f.endsWith(".html")).sort();
     if (files.length === 0) {
       res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pages \u2014 RICKIN</title><style>body{font-family:-apple-system,system-ui,sans-serif;background:#0a0a0a;color:#e0e0e0;padding:2rem;max-width:600px;margin:0 auto}h1{font-size:1.4rem;color:#fff}p{color:#888}</style></head><body><h1>Pages</h1><p>No pages published yet.</p></body></html>`);
       return;
     }
     const items = files.map((f) => {
       const slug = f.replace(/\.html$/, "");
-      const stat = fs5.statSync(path6.join(PAGES_DIR, f));
+      const stat = fs4.statSync(path5.join(PAGES_DIR, f));
       const date = stat.mtime.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
       return `<a href="/pages/${slug}">${slug}</a><span class="date">${date}</span>`;
     }).join("");
@@ -11344,15 +11340,15 @@ app.get("/pages/:slug", async (req, res) => {
     res.status(400).send("Invalid page slug.");
     return;
   }
-  const filePath = path6.join(PAGES_DIR, `${slug}.html`);
-  if (!fs5.existsSync(filePath)) {
+  const filePath = path5.join(PAGES_DIR, `${slug}.html`);
+  if (!fs4.existsSync(filePath)) {
     res.status(404).send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Not Found</title><style>body{font-family:-apple-system,sans-serif;background:#0a0a0a;color:#e0e0e0;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}h1{font-size:1.2rem;color:#888}</style></head><body><h1>Page not found.</h1></body></html>`);
     return;
   }
   const isTokenAuth = !!(req.query.user && req.query.token) || !!req.headers.authorization?.startsWith("Bearer ");
   if (slug === "baby-dashboard" && isTokenAuth && isConnected()) {
     try {
-      let html = fs5.readFileSync(filePath, "utf-8");
+      let html = fs4.readFileSync(filePath, "utf-8");
       let data = babyDashboardCache?.data;
       if (!data || Date.now() - (babyDashboardCache?.timestamp || 0) > BABY_CACHE_TTL) {
         let parseRows2 = function(raw) {
@@ -11476,12 +11472,12 @@ app.post("/api/pages/:slug/share", async (req, res) => {
     return;
   }
   try {
-    const filePath = path6.join(PAGES_DIR, `${slug}.html`);
-    if (!fs5.existsSync(filePath)) {
+    const filePath = path5.join(PAGES_DIR, `${slug}.html`);
+    if (!fs4.existsSync(filePath)) {
       res.status(404).json({ error: "Page not found" });
       return;
     }
-    let html = fs5.readFileSync(filePath, "utf-8");
+    let html = fs4.readFileSync(filePath, "utf-8");
     const now = /* @__PURE__ */ new Date();
     const cfg = getConfig();
     const tz = cfg.timezone || "America/New_York";
@@ -11622,15 +11618,15 @@ render(SNAPSHOT_DATA);`
     html = html.replace(/<\/body>/, `${snapshotFooter}
 </body>`);
     const tmpFile = `/tmp/snapshot-${slug}-${Date.now()}.html`;
-    fs5.writeFileSync(tmpFile, html);
-    const publishScript = path6.join(PROJECT_ROOT, "scripts", "herenow-publish.sh");
+    fs4.writeFileSync(tmpFile, html);
+    const publishScript = path5.join(PROJECT_ROOT, "scripts", "herenow-publish.sh");
     const titleStr = slug === "daily-brief" ? `Daily Brief \u2014 ${titleDate}` : slug === "x-intelligence" ? `X Intelligence \u2014 ${titleDate}` : `Baby Dashboard \u2014 ${titleDate}`;
     const output = execSync(`bash "${publishScript}" "${tmpFile}" --title "${titleStr}" --client "darknode"`, {
       encoding: "utf-8",
       timeout: 3e4
     });
     try {
-      fs5.unlinkSync(tmpFile);
+      fs4.unlinkSync(tmpFile);
     } catch {
     }
     const lines = output.trim().split("\n");
@@ -11712,9 +11708,9 @@ app.post("/api/session", async (req, res) => {
   try {
     const { resumeConversationId } = req.body || {};
     const sessionId = `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const authStorage = AuthStorage.create(path6.join(AGENT_DIR, "auth.json"));
+    const authStorage = AuthStorage.create(path5.join(AGENT_DIR, "auth.json"));
     authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
-    const modelRegistry = new ModelRegistry(authStorage, path6.join(AGENT_DIR, "models.json"));
+    const modelRegistry = new ModelRegistry(authStorage, path5.join(AGENT_DIR, "models.json"));
     const fullModel = modelRegistry.find("anthropic", FULL_MODEL_ID);
     if (!fullModel) throw new Error(`Model ${FULL_MODEL_ID} not found in registry`);
     const coreTools = [
@@ -11959,9 +11955,9 @@ app.post("/api/session/:id/prompt", async (req, res) => {
   }
   if (chosenModelId !== entry.activeModelName) {
     try {
-      const authStorage = AuthStorage.create(path6.join(AGENT_DIR, "auth.json"));
+      const authStorage = AuthStorage.create(path5.join(AGENT_DIR, "auth.json"));
       authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
-      const modelRegistry = new ModelRegistry(authStorage, path6.join(AGENT_DIR, "models.json"));
+      const modelRegistry = new ModelRegistry(authStorage, path5.join(AGENT_DIR, "models.json"));
       const newModel = modelRegistry.find("anthropic", chosenModelId);
       if (newModel) {
         await entry.session.setModel(newModel);
@@ -12308,12 +12304,12 @@ app.post("/api/scheduled-jobs", (req, res) => {
 });
 app.get("/api/kb/read", async (req, res) => {
   try {
-    const path7 = req.query.path;
-    if (!path7) {
+    const path6 = req.query.path;
+    if (!path6) {
       res.status(400).json({ error: "path required" });
       return;
     }
-    const content = await kbRead(path7);
+    const content = await kbRead(path6);
     res.json({ content });
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to read" });
@@ -12592,7 +12588,7 @@ app.get("/api/kb-status", (_req, res) => {
 });
 var obSyncProcess = null;
 function startObSync() {
-  const vaultPath3 = path6.join(process.cwd(), "data", "vault");
+  const vaultPath2 = path5.join(process.cwd(), "data", "vault");
   const logPath = "/tmp/obsidian-sync.log";
   if (obSyncProcess) {
     try {
@@ -12605,8 +12601,8 @@ function startObSync() {
     execSync("pgrep -f 'ob sync' 2>/dev/null && pkill -f 'ob sync'", { encoding: "utf-8" });
   } catch {
   }
-  const logFd = fs5.openSync(logPath, "a");
-  const child = spawn("ob", ["sync", "--continuous", "--path", vaultPath3], {
+  const logFd = fs4.openSync(logPath, "a");
+  const child = spawn("ob", ["sync", "--continuous", "--path", vaultPath2], {
     stdio: ["ignore", logFd, logFd],
     detached: false
   });
@@ -12628,7 +12624,7 @@ function getSyncStatus() {
   const logPath = "/tmp/obsidian-sync.log";
   const lastChecked = (/* @__PURE__ */ new Date()).toISOString();
   try {
-    const content = fs5.readFileSync(logPath, "utf-8");
+    const content = fs4.readFileSync(logPath, "utf-8");
     const lines = content.trim().split("\n").filter((l) => l.trim());
     if (lines.length === 0) return { running: false, status: "not_running", lastLine: "", lastChecked };
     const lastLine = lines[lines.length - 1].trim();
@@ -12683,12 +12679,12 @@ app.get("/api/agents", (_req, res) => {
   res.json({ agents: agents2 });
 });
 async function buildVaultTree(dir) {
-  const entries = await fs5.promises.readdir(dir, { withFileTypes: true });
+  const entries = await fs4.promises.readdir(dir, { withFileTypes: true });
   const result = [];
   for (const entry of entries) {
     if (entry.name.startsWith(".")) continue;
     if (entry.isDirectory()) {
-      const children = await buildVaultTree(path6.join(dir, entry.name));
+      const children = await buildVaultTree(path5.join(dir, entry.name));
       result.push({ name: entry.name, type: "folder", children });
     } else {
       result.push({ name: entry.name, type: "file" });
@@ -12887,14 +12883,14 @@ async function startServer(maxRetries = 5) {
               return result;
             },
             broadcastToAll,
-            async (path7, content) => {
+            async (path6, content) => {
               try {
-                await kbCreate(path7, content);
+                await kbCreate(path6, content);
               } catch (err) {
-                console.error(`[scheduled-jobs] Vault save failed for ${path7}:`, err);
+                console.error(`[scheduled-jobs] Vault save failed for ${path6}:`, err);
               }
             },
-            async (path7) => kbList(path7),
+            async (path6) => kbList(path6),
             async (from, to) => kbMove(from, to),
             () => getPool()
           );

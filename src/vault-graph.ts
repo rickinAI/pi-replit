@@ -1,11 +1,14 @@
-import fs from "fs/promises";
-import fsSync from "fs";
-import path from "path";
+export interface VaultOps {
+  read: (path: string) => Promise<string>;
+  list: (path: string) => Promise<string>;
+  listRecursive: (path: string) => Promise<string>;
+  append: (path: string, content: string) => Promise<string>;
+}
 
-let vaultPath = "";
+let ops: VaultOps | null = null;
 
-export function init(basePath: string) {
-  vaultPath = basePath;
+export function init(vaultOps: VaultOps) {
+  ops = vaultOps;
 }
 
 export function extractWikilinks(markdown: string): string[] {
@@ -44,12 +47,17 @@ export function extractWikilinks(markdown: string): string[] {
         const raw = line.substring(start, end).trim();
         if (raw.length === 0) { i = end + 2; continue; }
 
-        const linkTarget = raw.includes("|") ? raw.split("|")[0].trim() : raw;
+        let linkTarget = raw.includes("|") ? raw.split("|")[0].trim() : raw;
+        linkTarget = linkTarget.replace(/\\/g, "/");
+
+        if (linkTarget.includes("..")) { i = end + 2; continue; }
+
         if (linkTarget.length > 0) {
-          const normalized = linkTarget.replace(/\\/g, "/");
-          if (!seen.has(normalized.toLowerCase())) {
-            seen.add(normalized.toLowerCase());
-            links.push(normalized);
+          if (!linkTarget.endsWith(".md")) linkTarget += ".md";
+          const key = linkTarget.toLowerCase();
+          if (!seen.has(key)) {
+            seen.add(key);
+            links.push(linkTarget);
           }
         }
         i = end + 2;
@@ -64,57 +72,38 @@ export function extractWikilinks(markdown: string): string[] {
   return links;
 }
 
-function resolveWikilinkPath(link: string): string | null {
-  if (!vaultPath) return null;
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
 
-  if (link.endsWith(".md")) {
-    const resolved = path.resolve(vaultPath, link);
-    if (fsSync.existsSync(resolved)) return link;
-  } else {
-    const withExt = link + ".md";
-    const resolved = path.resolve(vaultPath, withExt);
-    if (fsSync.existsSync(resolved)) return withExt;
-  }
+async function resolveVaultPath(link: string): Promise<string | null> {
+  if (!ops) return null;
 
   try {
-    const files = walkAllMd(vaultPath, "");
-    const target = (link.endsWith(".md") ? link : link + ".md").toLowerCase();
-    const baseName = path.basename(target);
+    await ops.read(link);
+    return link;
+  } catch {}
+
+  const withoutExt = link.replace(/\.md$/, "");
+  try {
+    await ops.read(withoutExt);
+    return withoutExt;
+  } catch {}
+
+  try {
+    const allData = await ops.listRecursive("/");
+    const parsed = JSON.parse(allData);
+    const files: string[] = parsed.files || [];
+    const baseName = link.split("/").pop()?.toLowerCase() || "";
 
     for (const f of files) {
-      if (f.toLowerCase() === target) return f;
-    }
-    for (const f of files) {
-      if (path.basename(f).toLowerCase() === baseName) return f;
+      if (f.endsWith("/")) continue;
+      const fBase = f.split("/").pop()?.toLowerCase() || "";
+      if (fBase === baseName) return f;
     }
   } catch {}
 
   return null;
-}
-
-function walkAllMd(dir: string, relBase: string): string[] {
-  const results: string[] = [];
-  let entries;
-  try {
-    entries = fsSync.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return results;
-  }
-  for (const entry of entries) {
-    if (entry.name.startsWith(".")) continue;
-    const fullPath = path.join(dir, entry.name);
-    const rel = relBase ? path.join(relBase, entry.name) : entry.name;
-    if (entry.isDirectory()) {
-      results.push(...walkAllMd(fullPath, rel));
-    } else if (entry.name.endsWith(".md")) {
-      results.push(rel);
-    }
-  }
-  return results;
-}
-
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
 }
 
 export async function graphContext(
@@ -122,7 +111,7 @@ export async function graphContext(
   maxDepth: number = 2,
   tokenBudget: number = 30000
 ): Promise<{ notes: Array<{ path: string; depth: number; content: string }>; totalTokens: number; truncated: boolean }> {
-  if (!vaultPath) throw new Error("Vault not configured");
+  if (!ops) throw new Error("Vault graph not initialized");
 
   const visited = new Set<string>();
   const result: Array<{ path: string; depth: number; content: string }> = [];
@@ -138,12 +127,9 @@ export async function graphContext(
     if (visited.has(normalizedPath)) continue;
     visited.add(normalizedPath);
 
-    const resolved = resolveWikilinkPath(item.notePath) || item.notePath;
-    const fullPath = path.resolve(vaultPath, resolved);
-
     let content: string;
     try {
-      content = await fs.readFile(fullPath, "utf-8");
+      content = await ops.read(item.notePath);
     } catch {
       continue;
     }
@@ -154,21 +140,26 @@ export async function graphContext(
       const remaining = tokenBudget - totalTokens;
       if (remaining > 200) {
         const charLimit = remaining * 4;
-        result.push({ path: resolved, depth: item.depth, content: content.slice(0, charLimit) + "\n\n[...truncated due to token budget]" });
+        result.push({ path: item.notePath, depth: item.depth, content: content.slice(0, charLimit) + "\n\n[...truncated due to token budget]" });
         totalTokens += remaining;
       }
       break;
     }
 
     totalTokens += tokens;
-    result.push({ path: resolved, depth: item.depth, content });
+    result.push({ path: item.notePath, depth: item.depth, content });
 
     if (item.depth < maxDepth) {
       const links = extractWikilinks(content);
       for (const link of links) {
         const linkNorm = link.toLowerCase();
-        if (!visited.has(linkNorm) && !visited.has(linkNorm + ".md") && !visited.has(linkNorm.replace(/\.md$/, ""))) {
-          queue.push({ notePath: link, depth: item.depth + 1 });
+        if (!visited.has(linkNorm)) {
+          const resolved = await resolveVaultPath(link);
+          if (resolved) {
+            if (!visited.has(resolved.toLowerCase())) {
+              queue.push({ notePath: resolved, depth: item.depth + 1 });
+            }
+          }
         }
       }
     }
@@ -182,37 +173,39 @@ export async function findRelatedNotes(
   content: string,
   maxResults: number = 5
 ): Promise<string[]> {
-  if (!vaultPath) return [];
+  if (!ops) return [];
 
-  const newBaseName = path.basename(newNotePath, ".md").toLowerCase();
+  const newBaseName = newNotePath.split("/").pop()?.replace(/\.md$/, "").toLowerCase() || "";
   const keywords = extractKeywords(newBaseName, content);
 
   if (keywords.length === 0) return [];
 
-  const allFiles = walkAllMd(vaultPath, "");
-  const newNorm = newNotePath.toLowerCase().replace(/^\/+/, "");
+  let allFiles: string[];
+  try {
+    const data = await ops.listRecursive("/");
+    const parsed = JSON.parse(data);
+    allFiles = (parsed.files || []).filter((f: string) => !f.endsWith("/") && f.endsWith(".md"));
+  } catch {
+    return [];
+  }
 
+  const newNorm = newNotePath.toLowerCase().replace(/^\/+/, "");
   const scored: Array<{ filePath: string; score: number }> = [];
 
   for (const filePath of allFiles) {
     if (filePath.toLowerCase() === newNorm) continue;
 
-    const fileBaseName = path.basename(filePath, ".md").toLowerCase();
+    const fileBaseName = filePath.split("/").pop()?.replace(/\.md$/, "").toLowerCase() || "";
     let score = 0;
 
     for (const kw of keywords) {
-      if (fileBaseName.includes(kw)) {
-        score += 3;
-      }
+      if (fileBaseName.includes(kw)) score += 3;
     }
 
-    const folderParts = path.dirname(filePath).toLowerCase().split(/[/\\]/);
+    const folderParts = filePath.toLowerCase().split("/").slice(0, -1);
     for (const kw of keywords) {
       for (const part of folderParts) {
-        if (part.includes(kw)) {
-          score += 1;
-          break;
-        }
+        if (part.includes(kw)) { score += 1; break; }
       }
     }
 
@@ -264,30 +257,35 @@ function extractKeywords(baseName: string, content: string): string[] {
 
 export async function addBidirectionalLinks(
   newNotePath: string,
-  content: string
-): Promise<{ linkedTo: string[]; content: string }> {
-  if (!vaultPath) return { linkedTo: [], content };
+  newNoteContent: string
+): Promise<{ linkedTo: string[] }> {
+  if (!ops) return { linkedTo: [] };
 
-  const related = await findRelatedNotes(newNotePath, content);
-  if (related.length === 0) return { linkedTo: [], content };
+  const related = await findRelatedNotes(newNotePath, newNoteContent);
+  if (related.length === 0) return { linkedTo: [] };
 
-  const newBaseName = path.basename(newNotePath, ".md");
+  const newBaseName = newNotePath.split("/").pop()?.replace(/\.md$/, "") || newNotePath;
   const newLink = `[[${newNotePath.replace(/\.md$/, "")}|${newBaseName}]]`;
 
   const relatedLinks = related.map(rp => {
-    const rBaseName = path.basename(rp, ".md");
+    const rBaseName = rp.split("/").pop()?.replace(/\.md$/, "") || rp;
     return `[[${rp.replace(/\.md$/, "")}|${rBaseName}]]`;
   });
 
   const relatedSection = `\n\n---\n## Related Notes\n${relatedLinks.map(l => `- ${l}`).join("\n")}\n`;
-  const updatedContent = content + relatedSection;
+
+  try {
+    await ops.append(newNotePath, relatedSection);
+    console.log(`[vault-graph] appended Related Notes section to ${newNotePath}`);
+  } catch (err: any) {
+    console.warn(`[vault-graph] failed to append related links to ${newNotePath}: ${err.message}`);
+  }
 
   const backlinkLine = `\n- ${newLink}\n`;
 
   for (const rp of related) {
-    const fullPath = path.resolve(vaultPath, rp);
     try {
-      const existingContent = await fs.readFile(fullPath, "utf-8");
+      const existingContent = await ops.read(rp);
 
       if (existingContent.includes(`[[${newNotePath.replace(/\.md$/, "")}`) ||
           existingContent.includes(`[[${newBaseName}]]`)) {
@@ -296,13 +294,9 @@ export async function addBidirectionalLinks(
 
       const backlinkHeading = "## Backlinks";
       if (existingContent.includes(backlinkHeading)) {
-        const updated = existingContent.replace(
-          backlinkHeading,
-          backlinkHeading + backlinkLine
-        );
-        await fs.writeFile(fullPath, updated, "utf-8");
+        await ops.append(rp, backlinkLine);
       } else {
-        await fs.appendFile(fullPath, `\n\n---\n${backlinkHeading}${backlinkLine}`, "utf-8");
+        await ops.append(rp, `\n\n---\n${backlinkHeading}${backlinkLine}`);
       }
       console.log(`[vault-graph] backlink added: ${rp} ← ${newBaseName}`);
     } catch (err: any) {
@@ -310,5 +304,5 @@ export async function addBidirectionalLinks(
     }
   }
 
-  return { linkedTo: related, content: updatedContent };
+  return { linkedTo: related };
 }
