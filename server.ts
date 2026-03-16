@@ -5424,7 +5424,7 @@ async function startServer(maxRetries = 5) {
                 apiKey: ANTHROPIC_KEY,
                 onProgress,
               });
-              return { response: result.response, timedOut: result.timedOut };
+              return result;
             },
             broadcastToAll,
             async (path, content) => {

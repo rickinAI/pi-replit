@@ -27,7 +27,7 @@ interface ScheduledJobsConfig {
   timezone: string;
 }
 
-type RunAgentFn = (agentId: string, task: string, onProgress?: (info: { toolName: string; iteration: number }) => void) => Promise<{ response: string; timedOut: boolean }>;
+type RunAgentFn = (agentId: string, task: string, onProgress?: (info: { toolName: string; iteration: number }) => void) => Promise<{ response: string; timedOut: boolean; agentId?: string; agentName?: string; modelUsed?: string; tokensUsed?: { input: number; output: number } }>;
 type BroadcastFn = (event: any) => void;
 type KbCreateFn = (path: string, content: string) => Promise<any>;
 type KbListFn = (path: string) => Promise<string>;
@@ -751,7 +751,7 @@ Process everything autonomously. Be thorough but efficient.`,
     name: "Inbox Monitor (@darknode)",
     agentId: "orchestrator",
     prompt: "",
-    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 30 },
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 180 },
     enabled: true,
   },
 ];
@@ -772,13 +772,13 @@ let kbListFn: KbListFn | null = null;
 let kbMoveFn: KbMoveFn | null = null;
 let dbPoolFn: (() => any) | null = null;
 
-async function writeJobHistory(jobId: string, jobName: string, status: string, summary: string | null, savedTo: string | null, durationMs: number | null): Promise<void> {
+async function writeJobHistory(jobId: string, jobName: string, status: string, summary: string | null, savedTo: string | null, durationMs: number | null, agentId?: string | null, modelUsed?: string | null, tokensInput?: number | null, tokensOutput?: number | null): Promise<void> {
   if (!dbPoolFn) return;
   try {
     const pool = dbPoolFn();
     await pool.query(
-      `INSERT INTO job_history (job_id, job_name, status, summary, saved_to, duration_ms) VALUES ($1, $2, $3, $4, $5, $6)`,
-      [jobId, jobName, status, summary?.slice(0, 1000) || null, savedTo, durationMs]
+      `INSERT INTO job_history (job_id, job_name, status, summary, saved_to, duration_ms, agent_id, model_used, tokens_input, tokens_output) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [jobId, jobName, status, summary?.slice(0, 1000) || null, savedTo, durationMs, agentId || null, modelUsed || null, tokensInput || null, tokensOutput || null]
     );
     await pool.query(
       `DELETE FROM job_history WHERE id IN (
@@ -795,7 +795,7 @@ export async function getJobHistory(limit = 20): Promise<any[]> {
   try {
     const pool = dbPoolFn();
     const result = await pool.query(
-      `SELECT job_id, job_name, status, summary, saved_to, duration_ms, created_at FROM job_history ORDER BY created_at DESC LIMIT $1`,
+      `SELECT job_id, job_name, status, summary, saved_to, duration_ms, created_at, agent_id, model_used, tokens_input, tokens_output FROM job_history ORDER BY created_at DESC LIMIT $1`,
       [limit]
     );
     return result.rows;
@@ -1496,7 +1496,7 @@ async function checkJobs(): Promise<void> {
         }
 
         console.log(`[scheduled-jobs] Job completed${isPartial ? " (partial)" : ""}: ${job.name}`);
-        await writeJobHistory(job.id, job.name, job.lastStatus || "success", result.slice(0, 500), vaultSaved ? savePath : null, Date.now() - jobStartMs);
+        await writeJobHistory(job.id, job.name, job.lastStatus || "success", result.slice(0, 500), vaultSaved ? savePath : null, Date.now() - jobStartMs, agentResult.agentId, agentResult.modelUsed, agentResult.tokensUsed?.input, agentResult.tokensUsed?.output);
 
         if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit" || job.id === "weekly-inbox-deep-clean" || job.id === "baby-dashboard-weekly-update") && kbListFn && kbMoveFn) {
           await archiveOldReports();
@@ -1661,7 +1661,7 @@ export async function triggerJob(jobId: string): Promise<string> {
       await archiveOldReports();
     }
 
-    await writeJobHistory(job.id, job.name, job.lastStatus || "success", result.slice(0, 500), vaultSaved ? savePath : null, Date.now() - triggerStartMs);
+    await writeJobHistory(job.id, job.name, job.lastStatus || "success", result.slice(0, 500), vaultSaved ? savePath : null, Date.now() - triggerStartMs, agentResult.agentId, agentResult.modelUsed, agentResult.tokensUsed?.input, agentResult.tokensUsed?.output);
 
     if (broadcastFn) {
       broadcastFn({

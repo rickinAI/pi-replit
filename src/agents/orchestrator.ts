@@ -16,6 +16,7 @@ export interface SubAgentResult {
   toolsUsed: string[];
   durationMs: number;
   tokensUsed: { input: number; output: number };
+  modelUsed: string;
   timedOut: boolean;
   error?: string;
 }
@@ -85,7 +86,7 @@ export async function runSubAgent(opts: {
   const toolsUsed: string[] = [];
 
   const client = new Anthropic({ apiKey: opts.apiKey });
-  const modelId = agent.model === "default" ? (opts.model || "claude-opus-4-6") : agent.model;
+  const modelId = agent.model === "default" ? (opts.model || "claude-sonnet-4-6") : agent.model;
 
   let userContent = opts.task;
   if (opts.context) userContent = `Context:\n${opts.context}\n\nTask:\n${opts.task}`;
@@ -111,6 +112,7 @@ export async function runSubAgent(opts: {
     toolsUsed,
     durationMs: Date.now() - startTime,
     tokensUsed: { input: totalInput, output: totalOutput },
+    modelUsed: modelId,
     timedOut: hardTimedOut,
     ...(extra || {}),
   });

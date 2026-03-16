@@ -497,10 +497,18 @@ async function init2() {
       summary TEXT,
       saved_to TEXT,
       duration_ms INTEGER,
+      agent_id TEXT,
+      model_used TEXT,
+      tokens_input INTEGER,
+      tokens_output INTEGER,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_job_history_created ON job_history(created_at DESC)`);
+  await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS agent_id TEXT`);
+  await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS model_used TEXT`);
+  await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS tokens_input INTEGER`);
+  await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS tokens_output INTEGER`);
   console.log("[db] PostgreSQL initialized (shared pool, 5 tables)");
   return pool;
 }
@@ -5499,7 +5507,7 @@ Process everything autonomously. Be thorough but efficient.`,
     name: "Inbox Monitor (@darknode)",
     agentId: "orchestrator",
     prompt: "",
-    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 30 },
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 180 },
     enabled: true
   }
 ];
@@ -5517,13 +5525,13 @@ var kbCreateFn = null;
 var kbListFn = null;
 var kbMoveFn = null;
 var dbPoolFn = null;
-async function writeJobHistory(jobId, jobName, status, summary, savedTo, durationMs) {
+async function writeJobHistory(jobId, jobName, status, summary, savedTo, durationMs, agentId, modelUsed, tokensInput, tokensOutput) {
   if (!dbPoolFn) return;
   try {
     const pool2 = dbPoolFn();
     await pool2.query(
-      `INSERT INTO job_history (job_id, job_name, status, summary, saved_to, duration_ms) VALUES ($1, $2, $3, $4, $5, $6)`,
-      [jobId, jobName, status, summary?.slice(0, 1e3) || null, savedTo, durationMs]
+      `INSERT INTO job_history (job_id, job_name, status, summary, saved_to, duration_ms, agent_id, model_used, tokens_input, tokens_output) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [jobId, jobName, status, summary?.slice(0, 1e3) || null, savedTo, durationMs, agentId || null, modelUsed || null, tokensInput || null, tokensOutput || null]
     );
     await pool2.query(
       `DELETE FROM job_history WHERE id IN (
@@ -5540,7 +5548,7 @@ async function getJobHistory(limit = 20) {
   try {
     const pool2 = dbPoolFn();
     const result = await pool2.query(
-      `SELECT job_id, job_name, status, summary, saved_to, duration_ms, created_at FROM job_history ORDER BY created_at DESC LIMIT $1`,
+      `SELECT job_id, job_name, status, summary, saved_to, duration_ms, created_at, agent_id, model_used, tokens_input, tokens_output FROM job_history ORDER BY created_at DESC LIMIT $1`,
       [limit]
     );
     return result.rows;
@@ -6193,7 +6201,7 @@ ${result}`);
           }
         }
         console.log(`[scheduled-jobs] Job completed${isPartial ? " (partial)" : ""}: ${job.name}`);
-        await writeJobHistory(job.id, job.name, job.lastStatus || "success", result.slice(0, 500), vaultSaved ? savePath : null, Date.now() - jobStartMs);
+        await writeJobHistory(job.id, job.name, job.lastStatus || "success", result.slice(0, 500), vaultSaved ? savePath : null, Date.now() - jobStartMs, agentResult.agentId, agentResult.modelUsed, agentResult.tokensUsed?.input, agentResult.tokensUsed?.output);
         if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit" || job.id === "weekly-inbox-deep-clean" || job.id === "baby-dashboard-weekly-update") && kbListFn && kbMoveFn) {
           await archiveOldReports();
         }
@@ -6342,7 +6350,7 @@ ${result}`);
     if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit" || job.id === "weekly-inbox-deep-clean" || job.id === "baby-dashboard-weekly-update") && kbListFn && kbMoveFn) {
       await archiveOldReports();
     }
-    await writeJobHistory(job.id, job.name, job.lastStatus || "success", result.slice(0, 500), vaultSaved ? savePath : null, Date.now() - triggerStartMs);
+    await writeJobHistory(job.id, job.name, job.lastStatus || "success", result.slice(0, 500), vaultSaved ? savePath : null, Date.now() - triggerStartMs, agentResult.agentId, agentResult.modelUsed, agentResult.tokensUsed?.input, agentResult.tokensUsed?.output);
     if (broadcastFn2) {
       broadcastFn2({
         type: "job_complete",
@@ -6516,7 +6524,7 @@ async function runSubAgent(opts) {
   const anthropicTools = convertToolsToAnthropicFormat(filteredTools);
   const toolsUsed = [];
   const client = new Anthropic3({ apiKey: opts.apiKey });
-  const modelId = agent.model === "default" ? opts.model || "claude-opus-4-6" : agent.model;
+  const modelId = agent.model === "default" ? opts.model || "claude-sonnet-4-6" : agent.model;
   let userContent = opts.task;
   if (opts.context) userContent = `Context:
 ${opts.context}
@@ -6541,6 +6549,7 @@ ${opts.task}`;
     toolsUsed,
     durationMs: Date.now() - startTime,
     tokensUsed: { input: totalInput, output: totalOutput },
+    modelUsed: modelId,
     timedOut: hardTimedOut,
     ...extra || {}
   });
@@ -12142,7 +12151,7 @@ async function startServer(maxRetries = 5) {
                 apiKey: ANTHROPIC_KEY,
                 onProgress
               });
-              return { response: result.response, timedOut: result.timedOut };
+              return result;
             },
             broadcastToAll,
             async (path5, content) => {

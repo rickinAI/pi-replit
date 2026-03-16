@@ -2275,12 +2275,16 @@ function createJobsPanel() {
       <span class="jobs-live-text">All agents idle</span>
     </div>
     <div class="jobs-panel-tabs">
-      <button class="jobs-tab active" data-tab="history">History</button>
+      <button class="jobs-tab active" data-tab="dashboard">Dashboard</button>
+      <button class="jobs-tab" data-tab="history">History</button>
       <button class="jobs-tab" data-tab="schedule">Schedule</button>
       <button class="jobs-tab" data-tab="custom">+ Custom</button>
     </div>
     <div class="jobs-panel-body">
-      <div class="jobs-tab-content active" id="jobs-tab-history">
+      <div class="jobs-tab-content active" id="jobs-tab-dashboard">
+        <div id="jobs-dashboard" class="jobs-dashboard"></div>
+      </div>
+      <div class="jobs-tab-content" id="jobs-tab-history">
         <div id="jobs-history-list" class="jobs-history-list"></div>
       </div>
       <div class="jobs-tab-content" id="jobs-tab-schedule">
@@ -2341,14 +2345,18 @@ function toggleJobsPanel() {
   }
 }
 
+let jobsHistoryData = [];
+
 async function loadJobsPanelData() {
   try {
     const [jobsRes, historyRes, statusRes] = await Promise.all([
       fetch("/api/scheduled-jobs").then(r => r.ok ? r.json() : []),
-      fetch("/api/scheduled-jobs/history?limit=20").then(r => r.ok ? r.json() : []),
+      fetch("/api/scheduled-jobs/history?limit=50").then(r => r.ok ? r.json() : []),
       fetch("/api/agents/status").then(r => r.ok ? r.json() : null),
     ]);
     scheduledJobsData = jobsRes;
+    jobsHistoryData = historyRes;
+    renderJobsDashboard(historyRes, jobsRes);
     renderJobsHistory(historyRes);
     renderJobsSchedule();
     if (statusRes && statusRes.job && statusRes.job.running) {
@@ -2380,6 +2388,117 @@ function updateJobsBanner(state, jobName, toolName) {
   }
 }
 
+function getModelLabel(model) {
+  if (!model) return null;
+  if (model.includes("haiku")) return { label: "Haiku", cls: "model-haiku" };
+  if (model.includes("sonnet")) return { label: "Sonnet", cls: "model-sonnet" };
+  if (model.includes("opus")) return { label: "Opus", cls: "model-opus" };
+  return { label: model.split("-").pop(), cls: "model-default" };
+}
+
+function estimateCost(model, tokensIn, tokensOut) {
+  if (!model || !tokensIn) return 0;
+  const rates = {
+    haiku: { input: 1, output: 5 },
+    sonnet: { input: 3, output: 15 },
+    opus: { input: 15, output: 75 },
+  };
+  let tier = "sonnet";
+  if (model.includes("haiku")) tier = "haiku";
+  else if (model.includes("opus")) tier = "opus";
+  const r = rates[tier];
+  return ((tokensIn / 1_000_000) * r.input) + (((tokensOut || 0) / 1_000_000) * r.output);
+}
+
+function renderJobsDashboard(history, jobs) {
+  const container = jobsPanel?.querySelector("#jobs-dashboard");
+  if (!container) return;
+
+  const totalRuns = history.length;
+  const successRuns = history.filter(h => h.status === "success").length;
+  const errorRuns = history.filter(h => h.status === "error").length;
+  const partialRuns = history.filter(h => h.status === "partial").length;
+  const healthPct = totalRuns > 0 ? Math.round((successRuns / totalRuns) * 100) : 0;
+
+  let totalCost = 0;
+  let totalTokensIn = 0;
+  let totalTokensOut = 0;
+  let todayCost = 0;
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 10);
+
+  const agentStats = {};
+  history.forEach(h => {
+    const cost = estimateCost(h.model_used, h.tokens_input, h.tokens_output);
+    totalCost += cost;
+    totalTokensIn += (h.tokens_input || 0);
+    totalTokensOut += (h.tokens_output || 0);
+    const runDate = (h.created_at || "").slice(0, 10);
+    if (runDate === todayStr) todayCost += cost;
+    const agent = h.agent_id || h.job_id || "unknown";
+    if (!agentStats[agent]) agentStats[agent] = { name: h.job_name, runs: 0, errors: 0, cost: 0, tokensIn: 0, tokensOut: 0, lastModel: null, lastRun: null };
+    agentStats[agent].runs++;
+    if (h.status === "error") agentStats[agent].errors++;
+    agentStats[agent].cost += cost;
+    agentStats[agent].tokensIn += (h.tokens_input || 0);
+    agentStats[agent].tokensOut += (h.tokens_output || 0);
+    if (h.model_used) agentStats[agent].lastModel = h.model_used;
+    if (!agentStats[agent].lastRun) agentStats[agent].lastRun = h.created_at;
+  });
+
+  const healthColor = healthPct >= 80 ? "var(--green)" : healthPct >= 50 ? "#f5a623" : "#ff4444";
+  const healthArc = (healthPct / 100) * 251.2;
+
+  let agentRows = Object.entries(agentStats)
+    .sort((a, b) => b[1].cost - a[1].cost)
+    .map(([id, s]) => {
+      const m = getModelLabel(s.lastModel);
+      const modelBadge = m ? `<span class="dash-model-badge ${m.cls}">${m.label}</span>` : "";
+      const errBadge = s.errors > 0 ? `<span class="dash-err-badge">${s.errors} err</span>` : "";
+      return `
+        <div class="dash-agent-row">
+          <div class="dash-agent-info">
+            <span class="dash-agent-name">${escapeHtml(s.name)}</span>
+            <span class="dash-agent-meta">${s.runs} runs ${modelBadge} ${errBadge}</span>
+          </div>
+          <div class="dash-agent-cost">$${s.cost.toFixed(3)}</div>
+        </div>
+      `;
+    }).join("");
+
+  container.innerHTML = `
+    <div class="dash-stats-grid">
+      <div class="dash-stat-card dash-health-card">
+        <div class="dash-health-ring">
+          <svg viewBox="0 0 88 88">
+            <circle cx="44" cy="44" r="40" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="5"/>
+            <circle cx="44" cy="44" r="40" fill="none" stroke="${healthColor}" stroke-width="5" stroke-linecap="round" stroke-dasharray="${healthArc} 251.2" transform="rotate(-90 44 44)" style="transition:stroke-dasharray 0.6s ease"/>
+          </svg>
+          <div class="dash-health-pct">${healthPct}%</div>
+        </div>
+        <div class="dash-stat-label">Health</div>
+      </div>
+      <div class="dash-stat-card">
+        <div class="dash-stat-value">${totalRuns}</div>
+        <div class="dash-stat-label">Total Runs</div>
+        <div class="dash-stat-sub">${successRuns}\u2705 ${errorRuns}\uD83D\uDD34 ${partialRuns}\uD83D\uDFE1</div>
+      </div>
+      <div class="dash-stat-card">
+        <div class="dash-stat-value dash-cost-value">$${totalCost.toFixed(2)}</div>
+        <div class="dash-stat-label">Est. Cost</div>
+        <div class="dash-stat-sub">$${todayCost.toFixed(2)} today</div>
+      </div>
+      <div class="dash-stat-card">
+        <div class="dash-stat-value">${totalTokensIn > 1000000 ? (totalTokensIn / 1000000).toFixed(1) + 'M' : totalTokensIn > 1000 ? Math.round(totalTokensIn / 1000) + 'K' : totalTokensIn}</div>
+        <div class="dash-stat-label">Tokens In</div>
+        <div class="dash-stat-sub">${totalTokensOut > 1000000 ? (totalTokensOut / 1000000).toFixed(1) + 'M' : totalTokensOut > 1000 ? Math.round(totalTokensOut / 1000) + 'K' : totalTokensOut} out</div>
+      </div>
+    </div>
+    <div class="dash-section-title">Cost by Agent</div>
+    <div class="dash-agent-list">${agentRows || '<div class="jobs-empty">No agent data yet</div>'}</div>
+  `;
+}
+
 function renderJobsHistory(history) {
   const container = jobsPanel?.querySelector("#jobs-history-list");
   if (!container) return;
@@ -2394,14 +2513,21 @@ function renderJobsHistory(history) {
     const dotClass = entry.status === "error" ? "dot-error" : entry.status === "partial" ? "dot-partial" : "dot-success";
     const ago = formatTimeAgo(entry.created_at);
     const summary = entry.summary ? (entry.summary.length > 120 ? entry.summary.slice(0, 117) + "..." : entry.summary) : "No summary";
+    const m = getModelLabel(entry.model_used);
+    const modelBadge = m ? `<span class="dash-model-badge ${m.cls}">${m.label}</span>` : "";
+    const cost = estimateCost(entry.model_used, entry.tokens_input, entry.tokens_output);
+    const costStr = cost > 0 ? `$${cost.toFixed(3)}` : "";
+    const tokenStr = entry.tokens_input ? `${Math.round((entry.tokens_input + (entry.tokens_output || 0)) / 1000)}K tok` : "";
     item.innerHTML = `
       <div class="jobs-history-row">
         <span class="jobs-history-dot ${dotClass}"></span>
         <div class="jobs-history-info">
           <span class="jobs-history-name">${escapeHtml(entry.job_name)}</span>
-          <span class="jobs-history-time">${ago}${entry.duration_ms ? ' \u00B7 ' + Math.round(entry.duration_ms / 1000) + 's' : ''}</span>
+          <span class="jobs-history-time">${ago}${entry.duration_ms ? ' \u00B7 ' + Math.round(entry.duration_ms / 1000) + 's' : ''} ${modelBadge}</span>
         </div>
+        ${costStr ? `<span class="jobs-history-cost">${costStr}</span>` : ''}
       </div>
+      ${tokenStr ? `<div class="jobs-history-tokens">${tokenStr}</div>` : ''}
       <div class="jobs-history-summary">${escapeHtml(summary)}</div>
       ${entry.saved_to ? `<button class="jobs-history-report-btn" data-path="${escapeHtml(entry.saved_to)}">View Report</button>` : ''}
     `;

@@ -60,10 +60,18 @@ export async function init(): Promise<pg.Pool> {
       summary TEXT,
       saved_to TEXT,
       duration_ms INTEGER,
+      agent_id TEXT,
+      model_used TEXT,
+      tokens_input INTEGER,
+      tokens_output INTEGER,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_job_history_created ON job_history(created_at DESC)`);
+  await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS agent_id TEXT`);
+  await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS model_used TEXT`);
+  await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS tokens_input INTEGER`);
+  await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS tokens_output INTEGER`);
 
   console.log("[db] PostgreSQL initialized (shared pool, 5 tables)");
   return pool;
