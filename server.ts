@@ -42,6 +42,8 @@ import * as scheduledJobs from "./src/scheduled-jobs.js";
 import * as agentLoader from "./src/agents/loader.js";
 import { runSubAgent } from "./src/agents/orchestrator.js";
 import { extractAndFileInsights } from "./src/memory-extractor.js";
+import * as obsidianSkills from "./src/obsidian-skills.js";
+import { cleanHtmlToMarkdown, looksLikeHtml } from "./src/defuddle.js";
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
@@ -65,6 +67,7 @@ const VAULT_DIR = path.join(PROJECT_ROOT, "data", "vault");
 fs.mkdirSync(AGENT_DIR, { recursive: true });
 vaultLocal.init(VAULT_DIR);
 agentLoader.init(path.join(PROJECT_ROOT, "data"));
+obsidianSkills.loadAllSkills().catch(err => console.warn("[startup] Failed to preload Obsidian skills:", err));
 
 let useLocalVault = vaultLocal.isConfigured();
 
@@ -178,8 +181,16 @@ function buildKnowledgeBaseTools(): ToolDefinition[] {
       }),
       async execute(_toolCallId, params) {
         try {
-          const result = await kbCreate(params.path, params.content);
-          console.log(`[vault] notes_create OK: ${params.path} (${params.content.length} chars)`);
+          let content = params.content;
+          if (looksLikeHtml(content)) {
+            const cleaned = cleanHtmlToMarkdown(content);
+            if (cleaned.length > 0) {
+              console.log(`[vault] defuddle: cleaned HTML (${content.length} → ${cleaned.length} chars)`);
+              content = cleaned;
+            }
+          }
+          const result = await kbCreate(params.path, content);
+          console.log(`[vault] notes_create OK: ${params.path} (${content.length} chars)`);
           return { content: [{ type: "text" as const, text: result }], details: {} };
         } catch (err: any) {
           console.error(`[vault] notes_create FAILED: ${params.path} — ${err.message}`);
@@ -2310,7 +2321,7 @@ function buildAgentTools(allToolsFn: () => ToolDefinition[], sessionId: string):
       description:
         "Delegate a complex task to a specialist agent. The agent will work independently using its own tools and return a comprehensive result. Use this for multi-step research, project planning, deep analysis, email drafting, or vault organization.",
       parameters: Type.Object({
-        agent: Type.String({ description: "The specialist agent ID. Available agents: 'deep-researcher' (web research), 'project-planner' (project plans), 'email-drafter' (compose emails), 'analyst' (markets/stocks), 'moodys' (Moody's/ValidMind/work projects — use for ANY work-related task), 'real-estate' (property search), 'nutritionist' (meal planning), 'family-planner' (financial/legal planning), 'knowledge-organizer' (vault management)" }),
+        agent: Type.String({ description: "The specialist agent ID. Available agents: 'deep-researcher' (web research), 'project-planner' (project plans), 'email-drafter' (compose emails), 'analyst' (markets/stocks), 'moodys' (Moody's/ValidMind/work projects — use for ANY work-related task), 'real-estate' (property search), 'nutritionist' (meal planning), 'family-planner' (financial/legal planning), 'knowledge-organizer' (vault management), 'mindmap-generator' (create mind maps from vault topics — use when user says 'map out', 'visualize', 'mind map', or 'mindmap')" }),
         task: Type.String({ description: "Clear description of what the agent should do" }),
         context: Type.Optional(Type.String({ description: "Additional context the agent needs (e.g. previous conversation details, specific requirements)" })),
       }),

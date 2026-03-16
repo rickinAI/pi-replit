@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getAgent } from "./loader.js";
 import type { AgentConfig } from "./loader.js";
+import { getVaultSkillsContext, hasVaultTools } from "../obsidian-skills.js";
 
 interface ToolImpl {
   name: string;
@@ -88,6 +89,19 @@ export async function runSubAgent(opts: {
   const client = new Anthropic({ apiKey: opts.apiKey });
   const modelId = agent.model === "default" ? (opts.model || "claude-sonnet-4-6") : agent.model;
 
+  let systemPrompt = agent.systemPrompt;
+  if (hasVaultTools(agent.tools)) {
+    try {
+      const vaultSkills = await getVaultSkillsContext();
+      if (vaultSkills) {
+        systemPrompt += vaultSkills;
+        console.log(`[agent:${agent.id}] injected Obsidian vault skills into system prompt`);
+      }
+    } catch (err: any) {
+      console.warn(`[agent:${agent.id}] failed to load vault skills: ${err.message}`);
+    }
+  }
+
   let userContent = opts.task;
   if (opts.context) userContent = `Context:\n${opts.context}\n\nTask:\n${opts.task}`;
 
@@ -140,7 +154,7 @@ export async function runSubAgent(opts: {
       const requestParams: any = {
         model: modelId,
         max_tokens: 16384,
-        system: agent.systemPrompt,
+        system: systemPrompt,
         tools: anthropicTools,
         messages,
       };
@@ -160,7 +174,7 @@ export async function runSubAgent(opts: {
             apiResponse = await client.messages.create({
               model: modelId,
               max_tokens: 16384,
-              system: agent.systemPrompt,
+              system: systemPrompt,
               tools: anthropicTools,
               messages,
             });
@@ -187,7 +201,7 @@ export async function runSubAgent(opts: {
           const retryParams: any = {
             model: modelId,
             max_tokens: 16384,
-            system: agent.systemPrompt,
+            system: systemPrompt,
             tools: anthropicTools,
             messages,
           };
@@ -282,7 +296,7 @@ export async function runSubAgent(opts: {
       const summaryParams: any = {
         model: modelId,
         max_tokens: 4096,
-        system: agent.systemPrompt,
+        system: systemPrompt,
         messages,
       };
       if (containerId) summaryParams.container_id = containerId;

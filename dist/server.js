@@ -10,8 +10,8 @@ import express from "express";
 import cors from "cors";
 import { createServer } from "http";
 import { fileURLToPath } from "url";
-import path4 from "path";
-import fs3 from "fs";
+import path5 from "path";
+import fs4 from "fs";
 import { execSync, spawn } from "child_process";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
@@ -862,11 +862,11 @@ async function init4() {
   const existing = await getPool().query(`SELECT tokens FROM oauth_tokens WHERE service = 'google'`);
   if (existing.rows.length === 0) {
     try {
-      const fs4 = await import("fs");
-      const path5 = await import("path");
-      const legacyPath = path5.default.join(process.cwd(), "data", "gmail-tokens.json");
-      if (fs4.default.existsSync(legacyPath)) {
-        const tokens = JSON.parse(fs4.default.readFileSync(legacyPath, "utf-8"));
+      const fs5 = await import("fs");
+      const path6 = await import("path");
+      const legacyPath = path6.default.join(process.cwd(), "data", "gmail-tokens.json");
+      if (fs5.default.existsSync(legacyPath)) {
+        const tokens = JSON.parse(fs5.default.readFileSync(legacyPath, "utf-8"));
         await getPool().query(
           `INSERT INTO oauth_tokens (service, tokens, updated_at) VALUES ('google', $1, $2)`,
           [JSON.stringify(tokens), Date.now()]
@@ -2409,11 +2409,11 @@ async function init5() {
   const existing = await getPool().query(`SELECT count(*) FROM tasks`);
   if (parseInt(existing.rows[0].count) === 0) {
     try {
-      const fs4 = await import("fs");
+      const fs5 = await import("fs");
       const pathMod = await import("path");
       const legacyPath = pathMod.default.join(process.cwd(), "data", "tasks.json");
-      if (fs4.default.existsSync(legacyPath)) {
-        const legacyTasks = JSON.parse(fs4.default.readFileSync(legacyPath, "utf-8"));
+      if (fs5.default.existsSync(legacyPath)) {
+        const legacyTasks = JSON.parse(fs5.default.readFileSync(legacyPath, "utf-8"));
         for (const t of legacyTasks) {
           await getPool().query(
             `INSERT INTO tasks (id, title, description, due_date, priority, completed, created_at, completed_at, tags)
@@ -4307,11 +4307,11 @@ async function init6() {
   const existing = await getPool().query(`SELECT value FROM app_config WHERE key = 'alerts'`);
   if (existing.rows.length === 0) {
     try {
-      const fs4 = await import("fs");
-      const path5 = await import("path");
-      const legacyPath = path5.default.join(process.cwd(), "data", "alerts-config.json");
-      if (fs4.default.existsSync(legacyPath)) {
-        const raw = JSON.parse(fs4.default.readFileSync(legacyPath, "utf-8"));
+      const fs5 = await import("fs");
+      const path6 = await import("path");
+      const legacyPath = path6.default.join(process.cwd(), "data", "alerts-config.json");
+      if (fs5.default.existsSync(legacyPath)) {
+        const raw = JSON.parse(fs5.default.readFileSync(legacyPath, "utf-8"));
         const migrated = { ...DEFAULT_CONFIG, ...raw, briefs: { ...DEFAULT_CONFIG.briefs, ...raw.briefs }, alerts: { ...DEFAULT_CONFIG.alerts, ...raw.alerts } };
         await getPool().query(
           `INSERT INTO app_config (key, value, updated_at) VALUES ('alerts', $1, $2)`,
@@ -6367,13 +6367,13 @@ async function triggerJob(jobId) {
     const savePath = getJobSavePath(job.id, todayKey, safeName);
     if (job.id === "moodys-daily-intel") {
       try {
-        const fs4 = await import("fs");
-        const path5 = await import("path");
-        const briefDir = path5.join(process.cwd(), "data/vault/Scheduled Reports/Moody's Intelligence/Daily");
-        if (fs4.existsSync(briefDir)) {
-          const files = fs4.readdirSync(briefDir).filter((f) => f.endsWith("-Brief.md") && f > `${todayKey}-Brief.md`).sort().reverse();
+        const fs5 = await import("fs");
+        const path6 = await import("path");
+        const briefDir = path6.join(process.cwd(), "data/vault/Scheduled Reports/Moody's Intelligence/Daily");
+        if (fs5.existsSync(briefDir)) {
+          const files = fs5.readdirSync(briefDir).filter((f) => f.endsWith("-Brief.md") && f > `${todayKey}-Brief.md`).sort().reverse();
           for (const fname of files) {
-            const content = fs4.readFileSync(path5.join(briefDir, fname), "utf-8");
+            const content = fs5.readFileSync(path6.join(briefDir, fname), "utf-8");
             if (content.length > 1e3 && content.includes("## \u{1F3E2}")) {
               result = content;
               console.log(`[scheduled-jobs] Moody's brief: using agent-saved file ${fname} (${result.length} chars)`);
@@ -6527,6 +6527,107 @@ function getAgent(id) {
 
 // src/agents/orchestrator.ts
 import Anthropic3 from "@anthropic-ai/sdk";
+
+// src/obsidian-skills.ts
+import fs3 from "fs";
+import path4 from "path";
+var SKILLS_DIR = path4.join(process.cwd(), "data", "skills");
+var CACHE_TTL = 24 * 60 * 60 * 1e3;
+var GITHUB_BASE = "https://raw.githubusercontent.com/kepano/obsidian-skills/main/skills";
+var SKILL_FILES = {
+  "obsidian-markdown": `${GITHUB_BASE}/obsidian-markdown/SKILL.md`,
+  "json-canvas": `${GITHUB_BASE}/json-canvas/SKILL.md`,
+  "obsidian-bases": `${GITHUB_BASE}/obsidian-bases/SKILL.md`,
+  "defuddle": `${GITHUB_BASE}/defuddle/SKILL.md`
+};
+var memoryCache = /* @__PURE__ */ new Map();
+function ensureDir() {
+  if (!fs3.existsSync(SKILLS_DIR)) {
+    fs3.mkdirSync(SKILLS_DIR, { recursive: true });
+  }
+}
+function getCachePath(name) {
+  return path4.join(SKILLS_DIR, `${name}.md`);
+}
+function readDiskCache(name) {
+  const p = getCachePath(name);
+  const metaPath = p + ".meta";
+  try {
+    if (!fs3.existsSync(p) || !fs3.existsSync(metaPath)) return null;
+    const content = fs3.readFileSync(p, "utf-8");
+    const meta = JSON.parse(fs3.readFileSync(metaPath, "utf-8"));
+    return { content, fetchedAt: meta.fetchedAt || 0 };
+  } catch {
+    return null;
+  }
+}
+function writeDiskCache(name, content) {
+  ensureDir();
+  fs3.writeFileSync(getCachePath(name), content, "utf-8");
+  fs3.writeFileSync(getCachePath(name) + ".meta", JSON.stringify({ fetchedAt: Date.now() }), "utf-8");
+}
+async function fetchSkill(name) {
+  const cached = memoryCache.get(name);
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL) {
+    return cached.content;
+  }
+  const disk = readDiskCache(name);
+  if (disk && Date.now() - disk.fetchedAt < CACHE_TTL) {
+    memoryCache.set(name, disk);
+    return disk.content;
+  }
+  const url = SKILL_FILES[name];
+  if (!url) return "";
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1e4);
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const content = await res.text();
+    memoryCache.set(name, { content, fetchedAt: Date.now() });
+    writeDiskCache(name, content);
+    console.log(`[obsidian-skills] Fetched ${name} (${content.length} bytes)`);
+    return content;
+  } catch (err) {
+    console.warn(`[obsidian-skills] Failed to fetch ${name}: ${err.message}`);
+    if (disk) {
+      memoryCache.set(name, disk);
+      return disk.content;
+    }
+    return "";
+  }
+}
+async function loadAllSkills() {
+  const names = Object.keys(SKILL_FILES);
+  await Promise.allSettled(names.map((n) => fetchSkill(n)));
+  const loaded = names.filter((n) => memoryCache.has(n) && memoryCache.get(n).content.length > 0);
+  console.log(`[obsidian-skills] Loaded ${loaded.length}/${names.length} skills: ${loaded.join(", ")}`);
+}
+async function getVaultSkillsContext() {
+  const parts = [];
+  for (const name of Object.keys(SKILL_FILES)) {
+    const content = await fetchSkill(name);
+    if (content) {
+      parts.push(`### ${name}
+${content}`);
+    }
+  }
+  if (parts.length === 0) return "";
+  return `
+
+---
+## Obsidian Vault Formatting Guide
+When writing to the vault, follow these Obsidian-flavored markdown conventions:
+
+${parts.join("\n\n")}`;
+}
+function hasVaultTools(toolNames) {
+  const vaultTools = ["notes_create", "notes_read", "notes_list", "notes_append", "notes_search", "notes_move", "notes_delete", "notes_rename_folder", "notes_list_recursive", "notes_file_info"];
+  return toolNames.some((t) => vaultTools.includes(t));
+}
+
+// src/agents/orchestrator.ts
 var MAX_TOOL_ITERATIONS = 15;
 function convertToolsToAnthropicFormat(tools) {
   return tools.map((t) => ({
@@ -6578,6 +6679,18 @@ async function runSubAgent(opts) {
   const toolsUsed = [];
   const client = new Anthropic3({ apiKey: opts.apiKey });
   const modelId = agent.model === "default" ? opts.model || "claude-sonnet-4-6" : agent.model;
+  let systemPrompt = agent.systemPrompt;
+  if (hasVaultTools(agent.tools)) {
+    try {
+      const vaultSkills = await getVaultSkillsContext();
+      if (vaultSkills) {
+        systemPrompt += vaultSkills;
+        console.log(`[agent:${agent.id}] injected Obsidian vault skills into system prompt`);
+      }
+    } catch (err) {
+      console.warn(`[agent:${agent.id}] failed to load vault skills: ${err.message}`);
+    }
+  }
   let userContent = opts.task;
   if (opts.context) userContent = `Context:
 ${opts.context}
@@ -6626,7 +6739,7 @@ ${opts.task}`;
       const requestParams = {
         model: modelId,
         max_tokens: 16384,
-        system: agent.systemPrompt,
+        system: systemPrompt,
         tools: anthropicTools,
         messages
       };
@@ -6645,7 +6758,7 @@ ${opts.task}`;
             apiResponse = await client.messages.create({
               model: modelId,
               max_tokens: 16384,
-              system: agent.systemPrompt,
+              system: systemPrompt,
               tools: anthropicTools,
               messages
             });
@@ -6671,7 +6784,7 @@ ${opts.task}`;
           const retryParams = {
             model: modelId,
             max_tokens: 16384,
-            system: agent.systemPrompt,
+            system: systemPrompt,
             tools: anthropicTools,
             messages
           };
@@ -6754,7 +6867,7 @@ ${opts.task}`;
       const summaryParams = {
         model: modelId,
         max_tokens: 4096,
-        system: agent.systemPrompt,
+        system: systemPrompt,
         messages
       };
       if (containerId) summaryParams.container_id = containerId;
@@ -6832,6 +6945,114 @@ Rules:
   }
 }
 
+// src/defuddle.ts
+var STRIP_TAGS = /* @__PURE__ */ new Set([
+  "script",
+  "style",
+  "noscript",
+  "iframe",
+  "object",
+  "embed",
+  "svg",
+  "canvas",
+  "template",
+  "form",
+  "input",
+  "button",
+  "select",
+  "textarea",
+  "fieldset",
+  "nav",
+  "footer",
+  "header",
+  "aside"
+]);
+var BLOCK_TAGS = /* @__PURE__ */ new Set([
+  "p",
+  "div",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "li",
+  "blockquote",
+  "pre",
+  "table",
+  "tr",
+  "td",
+  "th",
+  "article",
+  "section",
+  "main",
+  "figure",
+  "figcaption"
+]);
+var AD_PATTERNS = [
+  /class="[^"]*\b(ad[s_-]|banner|sponsor|promo|sidebar|popup|modal|cookie|gdpr|newsletter|signup|subscribe)\b[^"]*"/gi,
+  /id="[^"]*\b(ad[s_-]|banner|sponsor|sidebar|popup|modal|cookie|gdpr)\b[^"]*"/gi,
+  /aria-label="[^"]*\b(advertisement|sponsored|cookie|banner)\b[^"]*"/gi
+];
+function cleanHtmlToMarkdown(html) {
+  if (!html || typeof html !== "string") return "";
+  let cleaned = html;
+  cleaned = cleaned.replace(/<!--[\s\S]*?-->/g, "");
+  for (const tag of STRIP_TAGS) {
+    const re = new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?<\\/${tag}>`, "gi");
+    cleaned = cleaned.replace(re, "");
+    const selfClose = new RegExp(`<${tag}\\b[^>]*\\/?>`, "gi");
+    cleaned = cleaned.replace(selfClose, "");
+  }
+  for (const pattern of AD_PATTERNS) {
+    cleaned = cleaned.replace(new RegExp(`<[a-z]+\\s+[^>]*${pattern.source}[^>]*>[\\s\\S]*?<\\/[a-z]+>`, "gi"), "");
+  }
+  cleaned = cleaned.replace(/<img\b[^>]*\bsrc="([^"]+)"[^>]*\balt="([^"]*)"[^>]*\/?>/gi, "![$2]($1)");
+  cleaned = cleaned.replace(/<img\b[^>]*\balt="([^"]*)"[^>]*\bsrc="([^"]+)"[^>]*\/?>/gi, "![$1]($2)");
+  cleaned = cleaned.replace(/<img\b[^>]*\bsrc="([^"]+)"[^>]*\/?>/gi, "![]($1)");
+  cleaned = cleaned.replace(/<a\b[^>]*\bhref="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, "[$2]($1)");
+  cleaned = cleaned.replace(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi, (_, level, text) => {
+    return "\n" + "#".repeat(parseInt(level)) + " " + stripTags(text).trim() + "\n";
+  });
+  cleaned = cleaned.replace(/<(strong|b)\b[^>]*>([\s\S]*?)<\/\1>/gi, "**$2**");
+  cleaned = cleaned.replace(/<(em|i)\b[^>]*>([\s\S]*?)<\/\1>/gi, "*$2*");
+  cleaned = cleaned.replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, "`$1`");
+  cleaned = cleaned.replace(/<pre\b[^>]*>([\s\S]*?)<\/pre>/gi, "\n```\n$1\n```\n");
+  cleaned = cleaned.replace(/<li\b[^>]*>([\s\S]*?)<\/li>/gi, "- " + "$1".trim());
+  cleaned = cleaned.replace(/<blockquote\b[^>]*>([\s\S]*?)<\/blockquote>/gi, (_, text) => {
+    return stripTags(text).split("\n").map((l) => "> " + l).join("\n");
+  });
+  cleaned = cleaned.replace(/<br\s*\/?>/gi, "\n");
+  cleaned = cleaned.replace(/<hr\s*\/?>/gi, "\n---\n");
+  for (const tag of BLOCK_TAGS) {
+    cleaned = cleaned.replace(new RegExp(`<\\/?${tag}\\b[^>]*>`, "gi"), "\n");
+  }
+  cleaned = cleaned.replace(/<[^>]+>/g, "");
+  cleaned = cleaned.replace(/&amp;/g, "&");
+  cleaned = cleaned.replace(/&lt;/g, "<");
+  cleaned = cleaned.replace(/&gt;/g, ">");
+  cleaned = cleaned.replace(/&quot;/g, '"');
+  cleaned = cleaned.replace(/&#039;/g, "'");
+  cleaned = cleaned.replace(/&nbsp;/g, " ");
+  cleaned = cleaned.replace(/&#\d+;/g, "");
+  cleaned = cleaned.replace(/&\w+;/g, "");
+  cleaned = cleaned.replace(/\n{3,}/g, "\n\n");
+  cleaned = cleaned.replace(/[ \t]+$/gm, "");
+  cleaned = cleaned.replace(/^[ \t]+$/gm, "");
+  cleaned = cleaned.trim();
+  return cleaned;
+}
+function stripTags(html) {
+  return html.replace(/<[^>]+>/g, "").trim();
+}
+function looksLikeHtml(content) {
+  if (!content) return false;
+  const trimmed = content.trim();
+  if (trimmed.startsWith("<!DOCTYPE") || trimmed.startsWith("<html") || trimmed.startsWith("<HTML")) return true;
+  const tagCount = (trimmed.match(/<[a-zA-Z][^>]*>/g) || []).length;
+  return tagCount > 5 && tagCount / trimmed.length > 1e-3;
+}
+
 // server.ts
 var PORT = parseInt(process.env.PORT || "3000", 10);
 var ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
@@ -6845,14 +7066,15 @@ var USERS = {
 };
 var SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path4.dirname(__filename);
-var PROJECT_ROOT = __filename.includes("/dist/") ? path4.resolve(__dirname, "..") : __dirname;
-var PUBLIC_DIR = path4.join(PROJECT_ROOT, "public");
-var AGENT_DIR = path4.join(PROJECT_ROOT, ".pi/agent");
-var VAULT_DIR = path4.join(PROJECT_ROOT, "data", "vault");
-fs3.mkdirSync(AGENT_DIR, { recursive: true });
+var __dirname = path5.dirname(__filename);
+var PROJECT_ROOT = __filename.includes("/dist/") ? path5.resolve(__dirname, "..") : __dirname;
+var PUBLIC_DIR = path5.join(PROJECT_ROOT, "public");
+var AGENT_DIR = path5.join(PROJECT_ROOT, ".pi/agent");
+var VAULT_DIR = path5.join(PROJECT_ROOT, "data", "vault");
+fs4.mkdirSync(AGENT_DIR, { recursive: true });
 init(VAULT_DIR);
-init8(path4.join(PROJECT_ROOT, "data"));
+init8(path5.join(PROJECT_ROOT, "data"));
+loadAllSkills().catch((err) => console.warn("[startup] Failed to preload Obsidian skills:", err));
 var useLocalVault = isConfigured2();
 setInterval(() => {
   const localAvailable = isConfigured2();
@@ -6878,7 +7100,7 @@ if (useLocalVault) {
 }
 if (!APP_PASSWORD) console.warn("APP_PASSWORD is not set \u2014 auth disabled.");
 console.log(`[boot] PORT=${PORT} PUBLIC_DIR=${PUBLIC_DIR} AGENT_DIR=${AGENT_DIR}`);
-console.log(`[boot] public/ exists: ${fs3.existsSync(PUBLIC_DIR)}`);
+console.log(`[boot] public/ exists: ${fs4.existsSync(PUBLIC_DIR)}`);
 function kbList(p) {
   return useLocalVault ? listNotes2(p) : listNotes(p);
 }
@@ -6959,8 +7181,16 @@ function buildKnowledgeBaseTools() {
       }),
       async execute(_toolCallId, params) {
         try {
-          const result = await kbCreate(params.path, params.content);
-          console.log(`[vault] notes_create OK: ${params.path} (${params.content.length} chars)`);
+          let content = params.content;
+          if (looksLikeHtml(content)) {
+            const cleaned = cleanHtmlToMarkdown(content);
+            if (cleaned.length > 0) {
+              console.log(`[vault] defuddle: cleaned HTML (${content.length} \u2192 ${cleaned.length} chars)`);
+              content = cleaned;
+            }
+          }
+          const result = await kbCreate(params.path, content);
+          console.log(`[vault] notes_create OK: ${params.path} (${content.length} chars)`);
           return { content: [{ type: "text", text: result }], details: {} };
         } catch (err) {
           console.error(`[vault] notes_create FAILED: ${params.path} \u2014 ${err.message}`);
@@ -7430,8 +7660,8 @@ ${description}` }],
   ];
 }
 function buildRenderPageTools() {
-  const lightpandaBin = path4.join(PROJECT_ROOT, ".bin/lightpanda");
-  if (!fs3.existsSync(lightpandaBin)) return [];
+  const lightpandaBin = path5.join(PROJECT_ROOT, ".bin/lightpanda");
+  if (!fs4.existsSync(lightpandaBin)) return [];
   return [
     {
       name: "render_page",
@@ -8835,7 +9065,7 @@ ${snippetText}`;
   ];
 }
 function buildWebPublishTools() {
-  const PUBLISH_SCRIPT = path4.join(PROJECT_ROOT, "scripts", "herenow-publish.sh");
+  const PUBLISH_SCRIPT = path5.join(PROJECT_ROOT, "scripts", "herenow-publish.sh");
   return [
     {
       name: "web_publish",
@@ -8853,10 +9083,10 @@ function buildWebPublishTools() {
       }),
       async execute(_toolCallId, params) {
         try {
-          let targetPath = path4.resolve(params.path);
-          if (!fs3.existsSync(targetPath)) {
-            const vaultPath2 = path4.join(VAULT_DIR, params.path);
-            if (fs3.existsSync(vaultPath2)) {
+          let targetPath = path5.resolve(params.path);
+          if (!fs4.existsSync(targetPath)) {
+            const vaultPath2 = path5.join(VAULT_DIR, params.path);
+            if (fs4.existsSync(vaultPath2)) {
               targetPath = vaultPath2;
             } else {
               return {
@@ -8865,8 +9095,8 @@ function buildWebPublishTools() {
               };
             }
           }
-          const realTarget = fs3.realpathSync(targetPath);
-          const projectReal = fs3.realpathSync(PROJECT_ROOT);
+          const realTarget = fs4.realpathSync(targetPath);
+          const projectReal = fs4.realpathSync(PROJECT_ROOT);
           if (!realTarget.startsWith(projectReal + "/") && realTarget !== projectReal) {
             return {
               content: [{ type: "text", text: `Error: Can only publish files within the project directory.` }],
@@ -8874,7 +9104,7 @@ function buildWebPublishTools() {
             };
           }
           const blocked = [".env", "auth.json", "credentials", ".herenow"];
-          const relPath = path4.relative(projectReal, realTarget);
+          const relPath = path5.relative(projectReal, realTarget);
           if (blocked.some((b) => relPath.split("/").includes(b) || relPath === b)) {
             return {
               content: [{ type: "text", text: `Error: Cannot publish sensitive files.` }],
@@ -8946,11 +9176,11 @@ ${stderr || stdout || err.message}`
           if (!slug) {
             return { content: [{ type: "text", text: "Error: Invalid slug \u2014 must contain at least one alphanumeric character." }], details: {} };
           }
-          const pagesDir = path4.join(PROJECT_ROOT, "data", "pages");
-          if (!fs3.existsSync(pagesDir)) fs3.mkdirSync(pagesDir, { recursive: true });
-          const filePath = path4.join(pagesDir, `${slug}.html`);
-          const existed = fs3.existsSync(filePath);
-          fs3.writeFileSync(filePath, params.html, "utf-8");
+          const pagesDir = path5.join(PROJECT_ROOT, "data", "pages");
+          if (!fs4.existsSync(pagesDir)) fs4.mkdirSync(pagesDir, { recursive: true });
+          const filePath = path5.join(pagesDir, `${slug}.html`);
+          const existed = fs4.existsSync(filePath);
+          fs4.writeFileSync(filePath, params.html, "utf-8");
           const domain = process.env.REPLIT_DEPLOYMENT_URL || process.env.REPLIT_DEV_DOMAIN || "rickin.live";
           const protocol = domain.includes("localhost") ? "http" : "https";
           const pageUrl = `${protocol}://${domain}/pages/${slug}`;
@@ -8980,11 +9210,11 @@ This page is password-protected behind your login. Visit rickin.live/pages to se
       parameters: Type.Object({}),
       async execute() {
         try {
-          const pagesDir = path4.join(PROJECT_ROOT, "data", "pages");
-          if (!fs3.existsSync(pagesDir)) {
+          const pagesDir = path5.join(PROJECT_ROOT, "data", "pages");
+          if (!fs4.existsSync(pagesDir)) {
             return { content: [{ type: "text", text: "No pages saved yet." }], details: {} };
           }
-          const files = fs3.readdirSync(pagesDir).filter((f) => f.endsWith(".html")).sort();
+          const files = fs4.readdirSync(pagesDir).filter((f) => f.endsWith(".html")).sort();
           if (files.length === 0) {
             return { content: [{ type: "text", text: "No pages saved yet." }], details: {} };
           }
@@ -8992,7 +9222,7 @@ This page is password-protected behind your login. Visit rickin.live/pages to se
           const protocol = domain.includes("localhost") ? "http" : "https";
           const list2 = files.map((f) => {
             const slug = f.replace(/\.html$/, "");
-            const stat = fs3.statSync(path4.join(pagesDir, f));
+            const stat = fs4.statSync(path5.join(pagesDir, f));
             const sizeKB = Math.round(stat.size / 1024);
             const date = stat.mtime.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
             return `- ${slug} (${sizeKB}KB, ${date}) \u2014 ${protocol}://${domain}/pages/${slug}`;
@@ -9023,11 +9253,11 @@ All pages: ${protocol}://${domain}/pages` }],
           if (!slug) {
             return { content: [{ type: "text", text: "Error: Invalid slug." }], details: {} };
           }
-          const filePath = path4.join(PROJECT_ROOT, "data", "pages", `${slug}.html`);
-          if (!fs3.existsSync(filePath)) {
+          const filePath = path5.join(PROJECT_ROOT, "data", "pages", `${slug}.html`);
+          if (!fs4.existsSync(filePath)) {
             return { content: [{ type: "text", text: `Page "${slug}" not found.` }], details: {} };
           }
-          fs3.unlinkSync(filePath);
+          fs4.unlinkSync(filePath);
           return { content: [{ type: "text", text: `\u2705 Page "${slug}" deleted.` }], details: {} };
         } catch (err) {
           return { content: [{ type: "text", text: `Failed to delete page: ${err.message}` }], details: {} };
@@ -9043,7 +9273,7 @@ function buildAgentTools(allToolsFn, sessionId) {
       label: "Delegate to Agent",
       description: "Delegate a complex task to a specialist agent. The agent will work independently using its own tools and return a comprehensive result. Use this for multi-step research, project planning, deep analysis, email drafting, or vault organization.",
       parameters: Type.Object({
-        agent: Type.String({ description: "The specialist agent ID. Available agents: 'deep-researcher' (web research), 'project-planner' (project plans), 'email-drafter' (compose emails), 'analyst' (markets/stocks), 'moodys' (Moody's/ValidMind/work projects \u2014 use for ANY work-related task), 'real-estate' (property search), 'nutritionist' (meal planning), 'family-planner' (financial/legal planning), 'knowledge-organizer' (vault management)" }),
+        agent: Type.String({ description: "The specialist agent ID. Available agents: 'deep-researcher' (web research), 'project-planner' (project plans), 'email-drafter' (compose emails), 'analyst' (markets/stocks), 'moodys' (Moody's/ValidMind/work projects \u2014 use for ANY work-related task), 'real-estate' (property search), 'nutritionist' (meal planning), 'family-planner' (financial/legal planning), 'knowledge-organizer' (vault management), 'mindmap-generator' (create mind maps from vault topics \u2014 use when user says 'map out', 'visualize', 'mind map', or 'mindmap')" }),
         task: Type.String({ description: "Clear description of what the agent should do" }),
         context: Type.Optional(Type.String({ description: "Additional context the agent needs (e.g. previous conversation details, specific requirements)" }))
       }),
@@ -9352,17 +9582,17 @@ setInterval(async () => {
     }
   }
 }, 5 * 60 * 1e3);
-var TUNNEL_URL_FILE = path4.join(PROJECT_ROOT, "data", "tunnel-url.txt");
+var TUNNEL_URL_FILE = path5.join(PROJECT_ROOT, "data", "tunnel-url.txt");
 function loadPersistedTunnelUrl() {
   try {
-    return fs3.readFileSync(TUNNEL_URL_FILE, "utf-8").trim() || null;
+    return fs4.readFileSync(TUNNEL_URL_FILE, "utf-8").trim() || null;
   } catch {
     return null;
   }
 }
 function persistTunnelUrl(url) {
   try {
-    fs3.writeFileSync(TUNNEL_URL_FILE, url, "utf-8");
+    fs4.writeFileSync(TUNNEL_URL_FILE, url, "utf-8");
   } catch {
   }
 }
@@ -9508,18 +9738,18 @@ app.get("/api/logout", (_req, res) => {
   res.redirect("/login.html");
 });
 app.use(express.static(PUBLIC_DIR));
-var PAGES_DIR = path4.join(PROJECT_ROOT, "data", "pages");
-if (!fs3.existsSync(PAGES_DIR)) fs3.mkdirSync(PAGES_DIR, { recursive: true });
+var PAGES_DIR = path5.join(PROJECT_ROOT, "data", "pages");
+if (!fs4.existsSync(PAGES_DIR)) fs4.mkdirSync(PAGES_DIR, { recursive: true });
 app.get("/pages", (_req, res) => {
   try {
-    const files = fs3.readdirSync(PAGES_DIR).filter((f) => f.endsWith(".html")).sort();
+    const files = fs4.readdirSync(PAGES_DIR).filter((f) => f.endsWith(".html")).sort();
     if (files.length === 0) {
       res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pages \u2014 RICKIN</title><style>body{font-family:-apple-system,system-ui,sans-serif;background:#0a0a0a;color:#e0e0e0;padding:2rem;max-width:600px;margin:0 auto}h1{font-size:1.4rem;color:#fff}p{color:#888}</style></head><body><h1>Pages</h1><p>No pages published yet.</p></body></html>`);
       return;
     }
     const items = files.map((f) => {
       const slug = f.replace(/\.html$/, "");
-      const stat = fs3.statSync(path4.join(PAGES_DIR, f));
+      const stat = fs4.statSync(path5.join(PAGES_DIR, f));
       const date = stat.mtime.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
       return `<a href="/pages/${slug}">${slug}</a><span class="date">${date}</span>`;
     }).join("");
@@ -10741,15 +10971,15 @@ app.get("/pages/:slug", async (req, res) => {
     res.status(400).send("Invalid page slug.");
     return;
   }
-  const filePath = path4.join(PAGES_DIR, `${slug}.html`);
-  if (!fs3.existsSync(filePath)) {
+  const filePath = path5.join(PAGES_DIR, `${slug}.html`);
+  if (!fs4.existsSync(filePath)) {
     res.status(404).send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Not Found</title><style>body{font-family:-apple-system,sans-serif;background:#0a0a0a;color:#e0e0e0;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}h1{font-size:1.2rem;color:#888}</style></head><body><h1>Page not found.</h1></body></html>`);
     return;
   }
   const isTokenAuth = !!(req.query.user && req.query.token) || !!req.headers.authorization?.startsWith("Bearer ");
   if (slug === "baby-dashboard" && isTokenAuth && isConnected()) {
     try {
-      let html = fs3.readFileSync(filePath, "utf-8");
+      let html = fs4.readFileSync(filePath, "utf-8");
       let data = babyDashboardCache?.data;
       if (!data || Date.now() - (babyDashboardCache?.timestamp || 0) > BABY_CACHE_TTL) {
         let parseRows2 = function(raw) {
@@ -10873,12 +11103,12 @@ app.post("/api/pages/:slug/share", async (req, res) => {
     return;
   }
   try {
-    const filePath = path4.join(PAGES_DIR, `${slug}.html`);
-    if (!fs3.existsSync(filePath)) {
+    const filePath = path5.join(PAGES_DIR, `${slug}.html`);
+    if (!fs4.existsSync(filePath)) {
       res.status(404).json({ error: "Page not found" });
       return;
     }
-    let html = fs3.readFileSync(filePath, "utf-8");
+    let html = fs4.readFileSync(filePath, "utf-8");
     const now = /* @__PURE__ */ new Date();
     const cfg = getConfig();
     const tz = cfg.timezone || "America/New_York";
@@ -11019,15 +11249,15 @@ render(SNAPSHOT_DATA);`
     html = html.replace(/<\/body>/, `${snapshotFooter}
 </body>`);
     const tmpFile = `/tmp/snapshot-${slug}-${Date.now()}.html`;
-    fs3.writeFileSync(tmpFile, html);
-    const publishScript = path4.join(PROJECT_ROOT, "scripts", "herenow-publish.sh");
+    fs4.writeFileSync(tmpFile, html);
+    const publishScript = path5.join(PROJECT_ROOT, "scripts", "herenow-publish.sh");
     const titleStr = slug === "daily-brief" ? `Daily Brief \u2014 ${titleDate}` : slug === "x-intelligence" ? `X Intelligence \u2014 ${titleDate}` : `Baby Dashboard \u2014 ${titleDate}`;
     const output = execSync(`bash "${publishScript}" "${tmpFile}" --title "${titleStr}" --client "darknode"`, {
       encoding: "utf-8",
       timeout: 3e4
     });
     try {
-      fs3.unlinkSync(tmpFile);
+      fs4.unlinkSync(tmpFile);
     } catch {
     }
     const lines = output.trim().split("\n");
@@ -11109,9 +11339,9 @@ app.post("/api/session", async (req, res) => {
   try {
     const { resumeConversationId } = req.body || {};
     const sessionId = `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const authStorage = AuthStorage.create(path4.join(AGENT_DIR, "auth.json"));
+    const authStorage = AuthStorage.create(path5.join(AGENT_DIR, "auth.json"));
     authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
-    const modelRegistry = new ModelRegistry(authStorage, path4.join(AGENT_DIR, "models.json"));
+    const modelRegistry = new ModelRegistry(authStorage, path5.join(AGENT_DIR, "models.json"));
     const fullModel = modelRegistry.find("anthropic", FULL_MODEL_ID);
     if (!fullModel) throw new Error(`Model ${FULL_MODEL_ID} not found in registry`);
     const coreTools = [
@@ -11356,9 +11586,9 @@ app.post("/api/session/:id/prompt", async (req, res) => {
   }
   if (chosenModelId !== entry.activeModelName) {
     try {
-      const authStorage = AuthStorage.create(path4.join(AGENT_DIR, "auth.json"));
+      const authStorage = AuthStorage.create(path5.join(AGENT_DIR, "auth.json"));
       authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
-      const modelRegistry = new ModelRegistry(authStorage, path4.join(AGENT_DIR, "models.json"));
+      const modelRegistry = new ModelRegistry(authStorage, path5.join(AGENT_DIR, "models.json"));
       const newModel = modelRegistry.find("anthropic", chosenModelId);
       if (newModel) {
         await entry.session.setModel(newModel);
@@ -11705,12 +11935,12 @@ app.post("/api/scheduled-jobs", (req, res) => {
 });
 app.get("/api/kb/read", async (req, res) => {
   try {
-    const path5 = req.query.path;
-    if (!path5) {
+    const path6 = req.query.path;
+    if (!path6) {
       res.status(400).json({ error: "path required" });
       return;
     }
-    const content = await kbRead(path5);
+    const content = await kbRead(path6);
     res.json({ content });
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to read" });
@@ -11920,7 +12150,7 @@ app.get("/api/kb-status", (_req, res) => {
 });
 var obSyncProcess = null;
 function startObSync() {
-  const vaultPath2 = path4.join(process.cwd(), "data", "vault");
+  const vaultPath2 = path5.join(process.cwd(), "data", "vault");
   const logPath = "/tmp/obsidian-sync.log";
   if (obSyncProcess) {
     try {
@@ -11933,7 +12163,7 @@ function startObSync() {
     execSync("pgrep -f 'ob sync' 2>/dev/null && pkill -f 'ob sync'", { encoding: "utf-8" });
   } catch {
   }
-  const logFd = fs3.openSync(logPath, "a");
+  const logFd = fs4.openSync(logPath, "a");
   const child = spawn("ob", ["sync", "--continuous", "--path", vaultPath2], {
     stdio: ["ignore", logFd, logFd],
     detached: false
@@ -11956,7 +12186,7 @@ function getSyncStatus() {
   const logPath = "/tmp/obsidian-sync.log";
   const lastChecked = (/* @__PURE__ */ new Date()).toISOString();
   try {
-    const content = fs3.readFileSync(logPath, "utf-8");
+    const content = fs4.readFileSync(logPath, "utf-8");
     const lines = content.trim().split("\n").filter((l) => l.trim());
     if (lines.length === 0) return { running: false, status: "not_running", lastLine: "", lastChecked };
     const lastLine = lines[lines.length - 1].trim();
@@ -12011,12 +12241,12 @@ app.get("/api/agents", (_req, res) => {
   res.json({ agents: agents2 });
 });
 async function buildVaultTree(dir) {
-  const entries = await fs3.promises.readdir(dir, { withFileTypes: true });
+  const entries = await fs4.promises.readdir(dir, { withFileTypes: true });
   const result = [];
   for (const entry of entries) {
     if (entry.name.startsWith(".")) continue;
     if (entry.isDirectory()) {
-      const children = await buildVaultTree(path4.join(dir, entry.name));
+      const children = await buildVaultTree(path5.join(dir, entry.name));
       result.push({ name: entry.name, type: "folder", children });
     } else {
       result.push({ name: entry.name, type: "file" });
@@ -12215,14 +12445,14 @@ async function startServer(maxRetries = 5) {
               return result;
             },
             broadcastToAll,
-            async (path5, content) => {
+            async (path6, content) => {
               try {
-                await kbCreate(path5, content);
+                await kbCreate(path6, content);
               } catch (err) {
-                console.error(`[scheduled-jobs] Vault save failed for ${path5}:`, err);
+                console.error(`[scheduled-jobs] Vault save failed for ${path6}:`, err);
               }
             },
-            async (path5) => kbList(path5),
+            async (path6) => kbList(path6),
             async (from, to) => kbMove(from, to),
             () => getPool()
           );
