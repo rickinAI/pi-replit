@@ -805,6 +805,68 @@ export async function getJobHistory(limit = 20): Promise<any[]> {
   }
 }
 
+export async function getCostSummary(): Promise<any> {
+  if (!dbPoolFn) return { daily: 0, weekly: 0, monthly: 0, tokensIn: 0, tokensOut: 0, agents: [] };
+  try {
+    const pool = dbPoolFn();
+    const now = new Date();
+    const todayStr = now.toISOString().slice(0, 10);
+    const weekAgo = new Date(now.getTime() - 7 * 86400000).toISOString();
+    const monthAgo = new Date(now.getTime() - 30 * 86400000).toISOString();
+
+    const result = await pool.query(
+      `SELECT job_id, job_name, agent_id, model_used, tokens_input, tokens_output, status, created_at FROM job_history WHERE created_at > $1 ORDER BY created_at DESC`,
+      [monthAgo]
+    );
+    const rows = result.rows;
+
+    const rates: Record<string, { input: number; output: number }> = {
+      haiku: { input: 1, output: 5 },
+      sonnet: { input: 3, output: 15 },
+      opus: { input: 15, output: 75 },
+    };
+
+    function calcCost(model: string | null, tokIn: number | null, tokOut: number | null): number {
+      if (!model || !tokIn) return 0;
+      let tier = "sonnet";
+      if (model.includes("haiku")) tier = "haiku";
+      else if (model.includes("opus")) tier = "opus";
+      const r = rates[tier];
+      return ((tokIn / 1_000_000) * r.input) + (((tokOut || 0) / 1_000_000) * r.output);
+    }
+
+    let daily = 0, weekly = 0, monthly = 0, tokensIn = 0, tokensOut = 0;
+    const agentMap: Record<string, { name: string; cost: number; runs: number; errors: number; model: string | null; tokensIn: number; tokensOut: number }> = {};
+
+    for (const r of rows) {
+      const cost = calcCost(r.model_used, r.tokens_input, r.tokens_output);
+      monthly += cost;
+      tokensIn += (r.tokens_input || 0);
+      tokensOut += (r.tokens_output || 0);
+      const created = new Date(r.created_at);
+      if (created >= new Date(weekAgo)) weekly += cost;
+      if (r.created_at?.slice?.(0, 10) === todayStr || created.toISOString().slice(0, 10) === todayStr) daily += cost;
+      const key = r.agent_id || r.job_id;
+      if (!agentMap[key]) agentMap[key] = { name: r.job_name, cost: 0, runs: 0, errors: 0, model: null, tokensIn: 0, tokensOut: 0 };
+      agentMap[key].cost += cost;
+      agentMap[key].runs++;
+      if (r.status === "error") agentMap[key].errors++;
+      if (r.model_used) agentMap[key].model = r.model_used;
+      agentMap[key].tokensIn += (r.tokens_input || 0);
+      agentMap[key].tokensOut += (r.tokens_output || 0);
+    }
+
+    const agents = Object.entries(agentMap)
+      .map(([id, s]) => ({ id, ...s }))
+      .sort((a, b) => b.cost - a.cost);
+
+    return { daily, weekly, monthly, tokensIn, tokensOut, agents, totalRuns: rows.length };
+  } catch (err) {
+    console.warn(`[scheduled-jobs] Failed to get cost summary:`, err);
+    return { daily: 0, weekly: 0, monthly: 0, tokensIn: 0, tokensOut: 0, agents: [], totalRuns: 0 };
+  }
+}
+
 async function archiveOldReports(): Promise<void> {
   if (!kbListFn || !kbMoveFn) return;
   const cutoff = new Date();

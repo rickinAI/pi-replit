@@ -4924,6 +4924,15 @@ app.delete("/api/scheduled-jobs/:id", (req: Request, res: Response) => {
   }
 });
 
+app.get("/api/cost-summary", async (_req: Request, res: Response) => {
+  try {
+    const summary = await scheduledJobs.getCostSummary();
+    res.json(summary);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 app.get("/api/scheduled-jobs/history", async (_req: Request, res: Response) => {
   try {
     const limit = Math.max(1, Math.min(parseInt((_req.query as any).limit) || 20, 100));

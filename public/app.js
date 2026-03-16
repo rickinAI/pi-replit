@@ -382,6 +382,11 @@ async function showLanding() {
   landing.innerHTML = `<div class="landing-header">
     <h2>[MISSION CONTROL]</h2>
     <div class="landing-header-actions">
+      <button class="landing-header-btn" id="landing-cost-btn" title="Cost">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+        </svg>
+      </button>
       <button class="landing-header-btn" id="landing-jobs-btn" title="Agents">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="11" width="18" height="10" rx="2"/><line x1="12" y1="2" x2="12" y2="6"/><circle cx="12" cy="6" r="2"/><circle cx="9" cy="16" r="1"/><circle cx="15" cy="16" r="1"/>
@@ -407,6 +412,9 @@ async function showLanding() {
   const now = new Date();
   dateEl.textContent = now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
 
+  landing.querySelector("#landing-cost-btn").addEventListener("click", () => {
+    openCostOverlay();
+  });
   landing.querySelector("#landing-jobs-btn").addEventListener("click", () => {
     toggleJobsPanel();
   });
@@ -2410,6 +2418,48 @@ function estimateCost(model, tokensIn, tokensOut) {
   return ((tokensIn / 1_000_000) * r.input) + (((tokensOut || 0) / 1_000_000) * r.output);
 }
 
+function buildMiniRing(count, total, color, glowColor, label) {
+  const circumference = 2 * Math.PI * 22;
+  const pct = total > 0 ? count / total : 0;
+  const arc = pct * circumference;
+  return `
+    <div class="mini-ring-wrap">
+      <div class="mini-ring-svg">
+        <svg viewBox="0 0 56 56">
+          <circle cx="28" cy="28" r="22" fill="none" stroke="var(--ring-track)" stroke-width="4"/>
+          <circle cx="28" cy="28" r="22" fill="none" stroke="${color}" stroke-width="4" stroke-linecap="round" stroke-dasharray="0 ${circumference}" data-target="${arc} ${circumference}" transform="rotate(-90 28 28)" class="mini-ring-arc" style="filter:drop-shadow(0 0 4px ${glowColor});transition:stroke-dasharray 0.8s ease"/>
+        </svg>
+        <div class="mini-ring-count">${count}</div>
+      </div>
+      <div class="mini-ring-label">${label}</div>
+    </div>
+  `;
+}
+
+function animateMiniRings() {
+  setTimeout(() => {
+    document.querySelectorAll(".mini-ring-arc").forEach(el => {
+      const target = el.getAttribute("data-target");
+      if (target) el.setAttribute("stroke-dasharray", target);
+    });
+  }, 50);
+}
+
+function getJobFrequencyLabel(job) {
+  const s = job.schedule;
+  if (s.type === "interval") return `Every ${s.intervalMinutes >= 60 ? (s.intervalMinutes / 60) + 'h' : s.intervalMinutes + 'm'}`;
+  const h = s.hour || 0;
+  const m = s.minute || 0;
+  const ap = h < 12 ? "AM" : "PM";
+  const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  const timeStr = `${h12}:${String(m).padStart(2, "0")} ${ap}`;
+  if (s.daysOfWeek) {
+    const days = s.daysOfWeek.map(d => ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d]).join("/");
+    return `${days} ${timeStr}`;
+  }
+  return `Daily ${timeStr}`;
+}
+
 function renderJobsDashboard(history, jobs) {
   const container = jobsPanel?.querySelector("#jobs-dashboard");
   if (!container) return;
@@ -2418,85 +2468,134 @@ function renderJobsDashboard(history, jobs) {
   const successRuns = history.filter(h => h.status === "success").length;
   const errorRuns = history.filter(h => h.status === "error").length;
   const partialRuns = history.filter(h => h.status === "partial").length;
-  const healthPct = totalRuns > 0 ? Math.round((successRuns / totalRuns) * 100) : 0;
 
-  let totalCost = 0;
-  let totalTokensIn = 0;
-  let totalTokensOut = 0;
-  let todayCost = 0;
-  const now = new Date();
-  const todayStr = now.toISOString().slice(0, 10);
+  const weightedScore = totalRuns > 0 ? Math.round(((successRuns * 100) + (partialRuns * 50)) / totalRuns) : 0;
 
-  const agentStats = {};
-  history.forEach(h => {
-    const cost = estimateCost(h.model_used, h.tokens_input, h.tokens_output);
-    totalCost += cost;
-    totalTokensIn += (h.tokens_input || 0);
-    totalTokensOut += (h.tokens_output || 0);
-    const runDate = (h.created_at || "").slice(0, 10);
-    if (runDate === todayStr) todayCost += cost;
-    const agent = h.agent_id || h.job_id || "unknown";
-    if (!agentStats[agent]) agentStats[agent] = { name: h.job_name, runs: 0, errors: 0, cost: 0, tokensIn: 0, tokensOut: 0, lastModel: null, lastRun: null };
-    agentStats[agent].runs++;
-    if (h.status === "error") agentStats[agent].errors++;
-    agentStats[agent].cost += cost;
-    agentStats[agent].tokensIn += (h.tokens_input || 0);
-    agentStats[agent].tokensOut += (h.tokens_output || 0);
-    if (h.model_used) agentStats[agent].lastModel = h.model_used;
-    if (!agentStats[agent].lastRun) agentStats[agent].lastRun = h.created_at;
-  });
+  const activeJobs = jobs.filter(j => j.enabled).length;
+  const idleJobs = jobs.filter(j => !j.enabled).length;
+  const pendingJobs = jobs.filter(j => j.enabled && !j.lastRun).length;
 
-  const healthColor = healthPct >= 80 ? "var(--green)" : healthPct >= 50 ? "#f5a623" : "#ff4444";
-  const healthArc = (healthPct / 100) * 251.2;
+  const jobListHtml = jobs.filter(j => j.enabled).map(job => {
+    const freq = getJobFrequencyLabel(job);
+    const statusColor = job.lastStatus === "error" ? "var(--ring-error)" : job.lastStatus === "partial" ? "var(--ring-partial)" : job.lastStatus === "success" ? "var(--ring-success)" : "var(--ring-track)";
+    const ago = job.lastRun ? formatTimeAgo(job.lastRun) : "never";
+    const desc = job.prompt ? (job.prompt.length > 60 ? job.prompt.slice(0, 57) + "..." : job.prompt) : job.agentId;
+    return `
+      <div class="dash-job-item" style="border-left-color:${statusColor}">
+        <div class="dash-job-header">
+          <span class="dash-job-name">${escapeHtml(job.name)}</span>
+          <span class="dash-job-freq">${freq}</span>
+        </div>
+        <div class="dash-job-meta">
+          <span class="dash-job-status-dot" style="background:${statusColor}"></span>
+          <span class="dash-job-ago">${ago}</span>
+          <span class="dash-job-agent">${escapeHtml(job.agentId)}</span>
+        </div>
+      </div>
+    `;
+  }).join("");
 
-  let agentRows = Object.entries(agentStats)
-    .sort((a, b) => b[1].cost - a[1].cost)
-    .map(([id, s]) => {
-      const m = getModelLabel(s.lastModel);
-      const modelBadge = m ? `<span class="dash-model-badge ${m.cls}">${m.label}</span>` : "";
-      const errBadge = s.errors > 0 ? `<span class="dash-err-badge">${s.errors} err</span>` : "";
+  container.innerHTML = `
+    <div class="dash-health-section">
+      <div class="dash-mini-rings">
+        ${buildMiniRing(successRuns, totalRuns, "var(--ring-success)", "var(--ring-success-glow)", "Success")}
+        ${buildMiniRing(partialRuns, totalRuns, "var(--ring-partial)", "var(--ring-partial-glow)", "Partial")}
+        ${buildMiniRing(errorRuns, totalRuns, "var(--ring-error)", "var(--ring-error-glow)", "Error")}
+      </div>
+      <div class="dash-health-score">Health: ${weightedScore}%</div>
+    </div>
+    <div class="dash-counts-row">
+      <div class="dash-count-pill"><span class="dash-count-num">${activeJobs}</span> Active</div>
+      <div class="dash-count-pill"><span class="dash-count-num">${pendingJobs}</span> Pending</div>
+      <div class="dash-count-pill"><span class="dash-count-num">${idleJobs}</span> Idle</div>
+    </div>
+    <div class="dash-section-title">Scheduled Jobs</div>
+    <div class="dash-job-list">${jobListHtml || '<div class="jobs-empty">No active jobs</div>'}</div>
+  `;
+
+  animateMiniRings();
+}
+
+async function openCostOverlay() {
+  let overlay = document.getElementById("cost-overlay");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "cost-overlay";
+    overlay.className = "cost-overlay";
+    overlay.innerHTML = `
+      <div class="cost-modal">
+        <div class="cost-header">
+          <button class="cost-back-btn">\u2190 Back</button>
+          <span class="cost-title">COST TRACKER</span>
+          <button class="cost-close-btn">\u2715</button>
+        </div>
+        <div class="cost-body" id="cost-body">
+          <div class="cost-loading">Loading...</div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const closeFn = () => overlay.classList.add("hidden");
+    overlay.querySelector(".cost-close-btn").addEventListener("click", closeFn);
+    overlay.querySelector(".cost-back-btn").addEventListener("click", closeFn);
+  }
+  overlay.classList.remove("hidden");
+
+  const body = overlay.querySelector("#cost-body");
+  body.innerHTML = '<div class="cost-loading">Loading...</div>';
+
+  try {
+    const data = await fetch("/api/cost-summary").then(r => r.ok ? r.json() : null);
+    if (!data) { body.innerHTML = '<div class="cost-loading">Failed to load</div>'; return; }
+
+    const fmtTok = (n) => n > 1_000_000 ? (n / 1_000_000).toFixed(1) + "M" : n > 1000 ? Math.round(n / 1000) + "K" : String(n);
+
+    const agentRows = (data.agents || []).map(a => {
+      const m = getModelLabel(a.model);
+      const badge = m ? `<span class="dash-model-badge ${m.cls}">${m.label}</span>` : "";
+      const errBadge = a.errors > 0 ? `<span class="dash-err-badge">${a.errors} err</span>` : "";
       return `
         <div class="dash-agent-row">
           <div class="dash-agent-info">
-            <span class="dash-agent-name">${escapeHtml(s.name)}</span>
-            <span class="dash-agent-meta">${s.runs} runs ${modelBadge} ${errBadge}</span>
+            <span class="dash-agent-name">${escapeHtml(a.name)}</span>
+            <span class="dash-agent-meta">${a.runs} runs ${badge} ${errBadge}</span>
           </div>
-          <div class="dash-agent-cost">$${s.cost.toFixed(3)}</div>
+          <div class="dash-agent-cost">$${a.cost.toFixed(3)}</div>
         </div>
       `;
     }).join("");
 
-  container.innerHTML = `
-    <div class="dash-stats-grid">
-      <div class="dash-stat-card dash-health-card">
-        <div class="dash-health-ring">
-          <svg viewBox="0 0 88 88">
-            <circle cx="44" cy="44" r="40" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="5"/>
-            <circle cx="44" cy="44" r="40" fill="none" stroke="${healthColor}" stroke-width="5" stroke-linecap="round" stroke-dasharray="${healthArc} 251.2" transform="rotate(-90 44 44)" style="transition:stroke-dasharray 0.6s ease"/>
-          </svg>
-          <div class="dash-health-pct">${healthPct}%</div>
+    body.innerHTML = `
+      <div class="cost-tiles-grid cost-3col">
+        <div class="cost-tile">
+          <div class="cost-tile-value cost-amber">$${data.daily.toFixed(2)}</div>
+          <div class="cost-tile-label">Today</div>
         </div>
-        <div class="dash-stat-label">Health</div>
+        <div class="cost-tile">
+          <div class="cost-tile-value cost-amber">$${data.weekly.toFixed(2)}</div>
+          <div class="cost-tile-label">This Week</div>
+        </div>
+        <div class="cost-tile">
+          <div class="cost-tile-value cost-amber">$${data.monthly.toFixed(2)}</div>
+          <div class="cost-tile-label">This Month</div>
+        </div>
       </div>
-      <div class="dash-stat-card">
-        <div class="dash-stat-value">${totalRuns}</div>
-        <div class="dash-stat-label">Total Runs</div>
-        <div class="dash-stat-sub">${successRuns}\u2705 ${errorRuns}\uD83D\uDD34 ${partialRuns}\uD83D\uDFE1</div>
+      <div class="cost-tiles-grid cost-2col">
+        <div class="cost-tile">
+          <div class="cost-tile-value cost-blue">${fmtTok(data.tokensIn)}</div>
+          <div class="cost-tile-label">Tokens In</div>
+        </div>
+        <div class="cost-tile">
+          <div class="cost-tile-value cost-blue">${fmtTok(data.tokensOut)}</div>
+          <div class="cost-tile-label">Tokens Out</div>
+        </div>
       </div>
-      <div class="dash-stat-card">
-        <div class="dash-stat-value dash-cost-value">$${totalCost.toFixed(2)}</div>
-        <div class="dash-stat-label">Est. Cost</div>
-        <div class="dash-stat-sub">$${todayCost.toFixed(2)} today</div>
-      </div>
-      <div class="dash-stat-card">
-        <div class="dash-stat-value">${totalTokensIn > 1000000 ? (totalTokensIn / 1000000).toFixed(1) + 'M' : totalTokensIn > 1000 ? Math.round(totalTokensIn / 1000) + 'K' : totalTokensIn}</div>
-        <div class="dash-stat-label">Tokens In</div>
-        <div class="dash-stat-sub">${totalTokensOut > 1000000 ? (totalTokensOut / 1000000).toFixed(1) + 'M' : totalTokensOut > 1000 ? Math.round(totalTokensOut / 1000) + 'K' : totalTokensOut} out</div>
-      </div>
-    </div>
-    <div class="dash-section-title">Cost by Agent</div>
-    <div class="dash-agent-list">${agentRows || '<div class="jobs-empty">No agent data yet</div>'}</div>
-  `;
+      <div class="dash-section-title" style="margin-top:16px">Cost by Agent</div>
+      <div class="dash-agent-list">${agentRows || '<div class="jobs-empty">No cost data yet</div>'}</div>
+    `;
+  } catch (err) {
+    body.innerHTML = '<div class="cost-loading">Failed to load cost data</div>';
+  }
 }
 
 function renderJobsHistory(history) {
