@@ -2954,6 +2954,21 @@ body.light-theme .landing-new-btn {
   text-shadow: none;
 }
 
+body.light-theme .vault-inbox-input {
+  background: rgba(90, 138, 122, 0.06);
+  color: #2d2a26;
+  border-color: var(--border);
+}
+
+body.light-theme .vault-inbox-input::placeholder {
+  color: #a8a098;
+}
+
+body.light-theme .vault-inbox-input:focus {
+  border-color: var(--green-muted);
+  background: rgba(90, 138, 122, 0.1);
+}
+
 body.light-theme .landing-tasks-count {
   background: rgba(90, 138, 122, 0.12);
 }
