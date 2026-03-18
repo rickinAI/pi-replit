@@ -1812,7 +1812,7 @@ async function listEvents(options) {
     console.log(`[calendar] Found ${allEvents.length} event(s), returning ${events.length}`);
     if (events.length === 0) return "No upcoming events found.";
     const lines = events.map((event, i) => {
-      const start = event.start?.dateTime ? new Date(event.start.dateTime).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : event.start?.date || "TBD";
+      const start = event.start?.dateTime ? new Date(event.start.dateTime).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : event.start?.date ? (/* @__PURE__ */ new Date(event.start.date + "T12:00:00")).toLocaleString("en-US", { timeZone: "UTC", weekday: "short", month: "short", day: "numeric" }) + " (all day)" : "TBD";
       const end = event.end?.dateTime ? new Date(event.end.dateTime).toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" }) : "";
       const location = event.location ? `
    Location: ${event.location}` : "";
@@ -1870,7 +1870,7 @@ async function listEventsStructured(options) {
       return aT.localeCompare(bT);
     });
     return allEvents.slice(0, maxResults).map(({ event, calName }) => {
-      const start = event.start?.dateTime ? new Date(event.start.dateTime).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : event.start?.date || "TBD";
+      const start = event.start?.dateTime ? new Date(event.start.dateTime).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : event.start?.date ? (/* @__PURE__ */ new Date(event.start.date + "T12:00:00")).toLocaleString("en-US", { timeZone: "UTC", weekday: "short", month: "short", day: "numeric" }) + " (all day)" : "TBD";
       const end = event.end?.dateTime ? new Date(event.end.dateTime).toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" }) : "";
       return {
         title: event.summary || "(No title)",

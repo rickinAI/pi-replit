@@ -126,7 +126,9 @@ export async function listEvents(options?: { maxResults?: number; timeMin?: stri
     const lines = events.map((event: any, i: number) => {
       const start = event.start?.dateTime
         ? new Date(event.start.dateTime).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
-        : event.start?.date || "TBD";
+        : event.start?.date
+          ? new Date(event.start.date + "T12:00:00").toLocaleString("en-US", { timeZone: "UTC", weekday: "short", month: "short", day: "numeric" }) + " (all day)"
+          : "TBD";
       const end = event.end?.dateTime
         ? new Date(event.end.dateTime).toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" })
         : "";
@@ -189,7 +191,9 @@ export async function listEventsStructured(options?: { maxResults?: number; time
     return allEvents.slice(0, maxResults).map(({ event, calName }) => {
       const start = event.start?.dateTime
         ? new Date(event.start.dateTime).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
-        : event.start?.date || "TBD";
+        : event.start?.date
+          ? new Date(event.start.date + "T12:00:00").toLocaleString("en-US", { timeZone: "UTC", weekday: "short", month: "short", day: "numeric" }) + " (all day)"
+          : "TBD";
       const end = event.end?.dateTime
         ? new Date(event.end.dateTime).toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" })
         : "";

@@ -485,8 +485,6 @@ async function showLanding() {
     <div class="vault-inbox-status" id="vault-inbox-status"></div>
     ${historyHtml}
   `;
-  landing.appendChild(dropBox);
-
   const vaultInput = dropBox.querySelector("#vault-inbox-url");
   const vaultBtn = dropBox.querySelector("#vault-inbox-btn");
   const vaultStatus = dropBox.querySelector("#vault-inbox-status");
@@ -814,6 +812,7 @@ async function showLanding() {
     });
   });
   landing.appendChild(newBtn);
+  landing.appendChild(dropBox);
 
   function getDateGroup(ts) {
     const now = new Date();
