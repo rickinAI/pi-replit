@@ -509,7 +509,20 @@ async function init2() {
   await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS model_used TEXT`);
   await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS tokens_input INTEGER`);
   await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS tokens_output INTEGER`);
-  console.log("[db] PostgreSQL initialized (shared pool, 5 tables)");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS agent_activity (
+      id SERIAL PRIMARY KEY,
+      agent TEXT NOT NULL,
+      task TEXT,
+      conversation_id TEXT,
+      conversation_title TEXT,
+      duration_ms INTEGER,
+      saved_to TEXT,
+      created_at BIGINT NOT NULL
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_agent_activity_created ON agent_activity(created_at DESC)`);
+  console.log("[db] PostgreSQL initialized (shared pool, 6 tables)");
   return pool;
 }
 function getPool() {
@@ -9673,16 +9686,16 @@ ${result.response}`);
             }
           }
           const sessionEntry2 = sessions.get(sessionId);
-          agentCompletionLog.push({
-            timestamp: Date.now(),
-            agent: params.agent,
-            task: params.task.slice(0, 200),
-            conversationId: sessionEntry2?.conversation?.id,
-            conversationTitle: sessionEntry2?.conversation?.title,
-            duration: result.durationMs,
-            savedTo
-          });
-          if (agentCompletionLog.length > 20) agentCompletionLog.splice(0, agentCompletionLog.length - 20);
+          try {
+            const pool2 = getPool();
+            await pool2.query(
+              `INSERT INTO agent_activity (agent, task, conversation_id, conversation_title, duration_ms, saved_to, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+              [params.agent, params.task.slice(0, 200), sessionEntry2?.conversation?.id || null, sessionEntry2?.conversation?.title || null, result.durationMs || null, savedTo || null, Date.now()]
+            );
+            await pool2.query(`DELETE FROM agent_activity WHERE id NOT IN (SELECT id FROM agent_activity ORDER BY created_at DESC LIMIT 50)`);
+          } catch (e) {
+            console.warn("[agent_activity] DB insert failed:", e.message);
+          }
           const details = { agent: result.agentId, toolsUsed: result.toolsUsed, durationMs: result.durationMs };
           if (result.error) details.error = result.error;
           if (result.timedOut) details.timedOut = true;
@@ -9721,7 +9734,6 @@ ${list2}` }],
   ];
 }
 var sessions = /* @__PURE__ */ new Map();
-var agentCompletionLog = [];
 var FAST_MODEL_ID = "claude-haiku-4-5-20251001";
 var FULL_MODEL_ID = "claude-sonnet-4-6";
 var MAX_MODEL_ID = "claude-opus-4-6";
@@ -12208,7 +12220,7 @@ app.get("/api/tasks/completed", async (_req, res) => {
     res.status(500).json({ error: String(err) });
   }
 });
-app.get("/api/agents/status", (_req, res) => {
+app.get("/api/agents/status", async (_req, res) => {
   const runningJob = getRunningJob();
   const activeSessions = [];
   for (const [id, entry] of sessions.entries()) {
@@ -12222,7 +12234,22 @@ app.get("/api/agents/status", (_req, res) => {
       });
     }
   }
-  const recentCompletions = agentCompletionLog.slice(-5).reverse();
+  let recentCompletions = [];
+  try {
+    const pool2 = getPool();
+    const result = await pool2.query(`SELECT agent, task, conversation_id, conversation_title, duration_ms, saved_to, created_at FROM agent_activity ORDER BY created_at DESC LIMIT 5`);
+    recentCompletions = result.rows.map((r) => ({
+      timestamp: Number(r.created_at),
+      agent: r.agent,
+      task: r.task,
+      conversationId: r.conversation_id,
+      conversationTitle: r.conversation_title,
+      duration: r.duration_ms,
+      savedTo: r.saved_to
+    }));
+  } catch (e) {
+    console.warn("[agent_activity] DB query failed:", e.message);
+  }
   res.json({
     job: runningJob,
     sessions: activeSessions,

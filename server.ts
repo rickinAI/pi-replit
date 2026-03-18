@@ -2388,16 +2388,14 @@ function buildAgentTools(allToolsFn: () => ToolDefinition[], sessionId: string):
             } catch { savedTo = undefined; }
           }
           const sessionEntry2 = sessions.get(sessionId);
-          agentCompletionLog.push({
-            timestamp: Date.now(),
-            agent: params.agent,
-            task: params.task.slice(0, 200),
-            conversationId: sessionEntry2?.conversation?.id,
-            conversationTitle: sessionEntry2?.conversation?.title,
-            duration: result.durationMs,
-            savedTo,
-          });
-          if (agentCompletionLog.length > 20) agentCompletionLog.splice(0, agentCompletionLog.length - 20);
+          try {
+            const pool = db.getPool();
+            await pool.query(
+              `INSERT INTO agent_activity (agent, task, conversation_id, conversation_title, duration_ms, saved_to, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+              [params.agent, params.task.slice(0, 200), sessionEntry2?.conversation?.id || null, sessionEntry2?.conversation?.title || null, result.durationMs || null, savedTo || null, Date.now()]
+            );
+            await pool.query(`DELETE FROM agent_activity WHERE id NOT IN (SELECT id FROM agent_activity ORDER BY created_at DESC LIMIT 50)`);
+          } catch (e: any) { console.warn("[agent_activity] DB insert failed:", e.message); }
           const details: any = { agent: result.agentId, toolsUsed: result.toolsUsed, durationMs: result.durationMs };
           if (result.error) details.error = result.error;
           if (result.timedOut) details.timedOut = true;
@@ -2465,7 +2463,6 @@ interface SessionEntry {
   startupContext?: string;
 }
 const sessions = new Map<string, SessionEntry>();
-const agentCompletionLog: Array<{ timestamp: number; agent: string; task: string; conversationId?: string; conversationTitle?: string; duration?: number; savedTo?: string }> = [];
 
 const FAST_MODEL_ID = "claude-haiku-4-5-20251001";
 const FULL_MODEL_ID = "claude-sonnet-4-6";
@@ -4882,7 +4879,7 @@ app.get("/api/tasks/completed", async (_req: Request, res: Response) => {
   }
 });
 
-app.get("/api/agents/status", (_req: Request, res: Response) => {
+app.get("/api/agents/status", async (_req: Request, res: Response) => {
   const runningJob = scheduledJobs.getRunningJob();
   const activeSessions: { id: string; running: boolean; tool?: string; conversationId?: string; conversationTitle?: string }[] = [];
   for (const [id, entry] of sessions.entries()) {
@@ -4896,7 +4893,20 @@ app.get("/api/agents/status", (_req: Request, res: Response) => {
       });
     }
   }
-  const recentCompletions = agentCompletionLog.slice(-5).reverse();
+  let recentCompletions: any[] = [];
+  try {
+    const pool = db.getPool();
+    const result = await pool.query(`SELECT agent, task, conversation_id, conversation_title, duration_ms, saved_to, created_at FROM agent_activity ORDER BY created_at DESC LIMIT 5`);
+    recentCompletions = result.rows.map(r => ({
+      timestamp: Number(r.created_at),
+      agent: r.agent,
+      task: r.task,
+      conversationId: r.conversation_id,
+      conversationTitle: r.conversation_title,
+      duration: r.duration_ms,
+      savedTo: r.saved_to,
+    }));
+  } catch (e: any) { console.warn("[agent_activity] DB query failed:", e.message); }
   res.json({
     job: runningJob,
     sessions: activeSessions,
