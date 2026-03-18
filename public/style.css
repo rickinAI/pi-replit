@@ -1321,7 +1321,7 @@ body.light-theme #mic-btn.recording {
   background: var(--bg);
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: calc(12px + var(--safe-top)) 16px 20px;
+  padding: 0 16px 20px;
   padding-bottom: calc(20px + var(--safe-bottom));
   display: flex;
   flex-direction: column;
@@ -1331,8 +1331,12 @@ body.light-theme #mic-btn.recording {
 
 .landing-header {
   text-align: left;
-  padding: 4px 0;
-  position: relative;
+  padding: calc(12px + var(--safe-top)) 16px 8px;
+  margin: 0 -16px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg);
 }
 
 .landing-header h2 {
@@ -1350,8 +1354,8 @@ body.light-theme #mic-btn.recording {
 
 .landing-header-actions {
   position: absolute;
-  top: 4px;
-  right: 0;
+  top: calc(12px + var(--safe-top));
+  right: 16px;
   display: flex;
   gap: 6px;
 }
