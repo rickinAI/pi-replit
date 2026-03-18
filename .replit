@@ -66,3 +66,7 @@ outputType = "webview"
 task = "shell.exec"
 args = "PORT=5000 npm run build && fuser -k 5000/tcp 2>/dev/null; sleep 1; PORT=5000 npm start"
 waitForPort = 5000
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 60000
