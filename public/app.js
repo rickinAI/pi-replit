@@ -442,44 +442,19 @@ async function showLanding() {
   lastKnownConversations = convos;
 
   if (landingAgentStatus) {
-    const queueSection = document.createElement("div");
-    queueSection.className = "landing-queue-section";
-    queueSection.id = "landing-queue";
-    const running = landingAgentStatus.job && landingAgentStatus.job.running;
+    const isJobRunning = landingAgentStatus.job && landingAgentStatus.job.running;
     const activeSessions = landingAgentStatus.sessions || [];
-    const completions = landingAgentStatus.recentCompletions || [];
-    const queueItems = [];
-    if (running) {
-      queueItems.push({ name: landingAgentStatus.job.jobName || "Background job", status: "running", time: "" });
-    }
-    activeSessions.forEach(s => {
-      const toolLabel = s.tool ? getReadableToolName(s.tool) || s.tool : "";
-      queueItems.push({ name: s.conversationTitle || "Session agent", status: "running", time: toolLabel ? `⚙ ${toolLabel}` : "" });
-    });
-    completions.forEach(c => {
-      const ago = Date.now() - c.timestamp;
-      let timeStr = "";
-      if (ago < 60000) timeStr = "just now";
-      else if (ago < 3600000) timeStr = Math.floor(ago / 60000) + "m ago";
-      else if (ago < 86400000) timeStr = Math.floor(ago / 3600000) + "h ago";
-      queueItems.push({ name: c.agent + ": " + (c.task || "").slice(0, 40), status: c.savedTo ? "done" : "done", time: timeStr });
-    });
-    if (queueItems.length > 0) {
-      const activeCount = queueItems.filter(q => q.status === "running").length;
-      queueSection.innerHTML = `<div class="landing-queue-header">
-        <span class="landing-queue-label">Agent Activity</span>
-        <span class="landing-queue-count">${activeCount > 0 ? activeCount + " running" : "idle"}</span>
-      </div>`;
-      queueItems.slice(0, 6).forEach(item => {
-        const dotClass = item.status === "running" ? "q-running" : item.status === "error" ? "q-error" : "q-done";
-        const el = document.createElement("div");
-        el.className = "landing-queue-item";
-        el.innerHTML = `<div class="landing-queue-dot ${dotClass}"></div>
-          <div class="landing-queue-name">${escapeHtml(item.name)}</div>
-          <div class="landing-queue-time">${escapeHtml(item.time)}</div>`;
-        queueSection.appendChild(el);
-      });
-      landing.appendChild(queueSection);
+    if (isJobRunning || activeSessions.length > 0) {
+      const runIndicator = document.createElement("div");
+      runIndicator.className = "landing-running-indicator";
+      const runName = isJobRunning
+        ? (landingAgentStatus.job.jobName || "Background job")
+        : (activeSessions[0].conversationTitle || "Agent");
+      const toolLabel = !isJobRunning && activeSessions[0]?.tool ? (getReadableToolName(activeSessions[0].tool) || activeSessions[0].tool) : "";
+      runIndicator.innerHTML = `<div class="landing-running-dot"></div>
+        <span class="landing-running-name">${escapeHtml(runName)}</span>
+        ${toolLabel ? `<span class="landing-running-tool">${escapeHtml(toolLabel)}</span>` : ""}`;
+      landing.appendChild(runIndicator);
     }
   }
 
@@ -2364,7 +2339,7 @@ async function loadJobsPanelData() {
     ]);
     scheduledJobsData = jobsRes;
     jobsHistoryData = historyRes;
-    renderJobsDashboard(historyRes, jobsRes);
+    renderJobsDashboard(historyRes, jobsRes, statusRes);
     renderJobsHistory(historyRes);
     renderJobsSchedule();
     if (statusRes && statusRes.job && statusRes.job.running) {
@@ -2460,7 +2435,7 @@ function getJobFrequencyLabel(job) {
   return `Daily ${timeStr}`;
 }
 
-function renderJobsDashboard(history, jobs) {
+function renderJobsDashboard(history, jobs, statusRes) {
   const container = jobsPanel?.querySelector("#jobs-dashboard");
   if (!container) return;
 
@@ -2474,6 +2449,39 @@ function renderJobsDashboard(history, jobs) {
   const activeJobs = jobs.filter(j => j.enabled).length;
   const idleJobs = jobs.filter(j => !j.enabled).length;
   const pendingJobs = jobs.filter(j => j.enabled && !j.lastRun).length;
+
+  let activityHtml = "";
+  if (statusRes) {
+    const activityItems = [];
+    if (statusRes.job && statusRes.job.running) {
+      activityItems.push({ name: statusRes.job.jobName || "Background job", status: "running", time: "" });
+    }
+    (statusRes.sessions || []).forEach(s => {
+      const toolLabel = s.tool ? getReadableToolName(s.tool) || s.tool : "";
+      activityItems.push({ name: s.conversationTitle || "Session agent", status: "running", time: toolLabel ? `⚙ ${toolLabel}` : "" });
+    });
+    (statusRes.recentCompletions || []).forEach(c => {
+      const ago = Date.now() - c.timestamp;
+      let timeStr = "";
+      if (ago < 60000) timeStr = "just now";
+      else if (ago < 3600000) timeStr = Math.floor(ago / 60000) + "m ago";
+      else if (ago < 86400000) timeStr = Math.floor(ago / 3600000) + "h ago";
+      else timeStr = Math.floor(ago / 86400000) + "d ago";
+      activityItems.push({ name: c.agent + ": " + (c.task || "").slice(0, 60), status: "done", time: timeStr });
+    });
+    if (activityItems.length > 0) {
+      const rows = activityItems.slice(0, 8).map(item => {
+        const dotClass = item.status === "running" ? "q-running" : "q-done";
+        return `<div class="dash-activity-item">
+          <div class="landing-queue-dot ${dotClass}"></div>
+          <div class="dash-activity-name">${escapeHtml(item.name)}</div>
+          <div class="dash-activity-time">${escapeHtml(item.time)}</div>
+        </div>`;
+      }).join("");
+      activityHtml = `<div class="dash-section-title">Agent Activity</div>
+        <div class="dash-activity-list">${rows}</div>`;
+    }
+  }
 
   const jobListHtml = jobs.filter(j => j.enabled).map(job => {
     const freq = getJobFrequencyLabel(job);
@@ -2509,6 +2517,7 @@ function renderJobsDashboard(history, jobs) {
       <div class="dash-count-pill"><span class="dash-count-num">${pendingJobs}</span> Pending</div>
       <div class="dash-count-pill"><span class="dash-count-num">${idleJobs}</span> Idle</div>
     </div>
+    ${activityHtml}
     <div class="dash-section-title">Scheduled Jobs</div>
     <div class="dash-job-list">${jobListHtml || '<div class="jobs-empty">No active jobs</div>'}</div>
   `;

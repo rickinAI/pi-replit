@@ -2087,6 +2087,61 @@ body.light-theme #mic-btn.recording {
   text-align: center;
   padding: 8px 0;
 }
+.landing-running-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 8px 12px;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.05);
+}
+.landing-running-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f59e0b;
+  flex-shrink: 0;
+  animation: statusPulseAmber 1.5s ease-in-out infinite;
+}
+.landing-running-name {
+  font-size: 11px;
+  color: var(--green);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.landing-running-tool {
+  font-size: 9px;
+  color: var(--green-muted);
+  flex-shrink: 0;
+}
+.dash-activity-list {
+  margin-bottom: 12px;
+}
+.dash-activity-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.dash-activity-item:last-child { border-bottom: none; }
+.dash-activity-name {
+  font-size: 11px;
+  color: var(--green);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dash-activity-time {
+  font-size: 9px;
+  color: var(--green-muted);
+  flex-shrink: 0;
+}
 
 .landing-card-delete:active {
   color: var(--red);
