@@ -2087,6 +2087,146 @@ body.light-theme #mic-btn.recording {
   text-align: center;
   padding: 8px 0;
 }
+.vault-inbox {
+  margin-top: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(0, 255, 0, 0.02);
+}
+.vault-inbox-header {
+  margin-bottom: 8px;
+}
+.vault-inbox-label {
+  font-size: 10px;
+  color: var(--green-muted);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.vault-inbox-input-wrap {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.vault-inbox-input {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: var(--font);
+  font-size: 12px;
+  color: var(--green);
+  outline: none;
+}
+.vault-inbox-input::placeholder {
+  color: var(--green-dim);
+  font-size: 11px;
+}
+.vault-inbox-input:focus {
+  border-color: var(--green-muted);
+}
+.vault-inbox-submit {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(0, 255, 0, 0.05);
+  color: var(--green);
+  font-size: 16px;
+  font-family: var(--font);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.vault-inbox-submit:active {
+  background: rgba(0, 255, 0, 0.15);
+}
+.vault-inbox-submit:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.vault-inbox-status {
+  font-size: 11px;
+  padding: 0;
+  min-height: 0;
+  transition: all 0.2s;
+}
+.vault-inbox-status:empty {
+  display: none;
+}
+.vault-inbox-status.processing {
+  color: var(--amber);
+  padding: 8px 0 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.vault-inbox-status.success {
+  color: var(--green);
+  padding: 8px 0 4px;
+}
+.vault-inbox-status.error {
+  color: var(--red, #ef4444);
+  padding: 8px 0 4px;
+}
+.vault-inbox-status.duplicate {
+  color: var(--amber);
+  padding: 8px 0 4px;
+}
+.vault-inbox-check {
+  color: var(--green);
+  font-weight: bold;
+}
+.vault-inbox-path {
+  color: var(--green-dim);
+  font-size: 10px;
+}
+.vault-inbox-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--amber);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.vault-inbox-history {
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+.vault-inbox-history-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  font-size: 10px;
+}
+.vault-inbox-history-icon {
+  color: var(--green-dim);
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+}
+.vault-inbox-history-title {
+  color: var(--green-muted);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vault-inbox-history-time {
+  color: var(--green-dim);
+  flex-shrink: 0;
+  font-size: 9px;
+}
 .landing-running-indicator {
   display: flex;
   align-items: center;

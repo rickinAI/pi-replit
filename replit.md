@@ -17,7 +17,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - EADDRINUSE auto-recovery: pre-emptive port kill, probes port availability before listen, waits up to 15s with retries
   - Periodic knowledge base health check (every 15s) with connection status logging
   - Express error-handling middleware for clean JSON error responses
-- **src/db.ts** — Shared PostgreSQL connection pool (single `pg.Pool`, max 10 connections). Creates all 4 tables on init (`conversations`, `tasks`, `app_config`, `oauth_tokens`). All other modules import `getPool()` from here
+- **src/db.ts** — Shared PostgreSQL connection pool (single `pg.Pool`, max 10 connections). Creates 7 tables on init (`conversations`, `tasks`, `app_config`, `oauth_tokens`, `job_history`, `agent_activity`, `vault_inbox`). All other modules import `getPool()` from here
 - **src/obsidian.ts** — Client for the knowledge base REST API (10s timeout, 2 retries on transient failures, health ping)
 - **src/gmail.ts** — Full Gmail integration via custom Google OAuth (15 tools: list, read, search, get_attachment with PDF extraction, thread, send, reply with threading headers, draft, archive, label, mark_read, trash, gmail_list_labels, gmail_create_label, gmail_delete_label). Tokens stored in PostgreSQL (oauth_tokens table). OAuth scopes: gmail.modify, calendar, drive, spreadsheets, documents, presentations, youtube.readonly. Also exports `getAccessToken()` for gws CLI and YouTube API
 - **src/calendar.ts** — Google Calendar integration (shares OAuth tokens with Gmail via PostgreSQL). Queries all selected calendars (not just primary). `listEventsStructured()` returns events with calendar source names for family calendar awareness (Rickin, Pooja, Reya). `listCalendars()` exposes available calendars. `createEvent()` accepts optional `calendarName` for fuzzy-matching target calendar (e.g. "Reya" matches "Reya's Schedule")
@@ -50,6 +50,18 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - `addBidirectionalLinks(newPath, content)` — post-creation hook: finds related notes, appends `## Related Notes` section with wikilinks to new note, appends `## Backlinks` entries in each related note
   - `notes_graph_context` tool registered in `buildKnowledgeBaseTools()` — available to deep-researcher, analyst, knowledge-organizer, mindmap-generator agents
   - Bidirectional linking runs automatically on every `notes_create` call (local vault only, non-fatal on error)
+- **Vault Inbox (Link Drop Box)** — Paste any URL on Mission Control and the system auto-extracts, categorizes, and files it to the vault:
+  - `POST /api/vault-inbox` — accepts `{ url, tag?, source? }`, returns immediately with `{ status: "processing", id }`. Agent processes async
+  - `GET /api/vault-inbox/history` — last 10 filed items from `vault_inbox` DB table
+  - `GET /api/vault-inbox/:id` — poll individual item status (processing/filed/error)
+  - Link type auto-detection: YouTube (`youtube_video`), X/Twitter (`x_read_tweet`), GitHub/article (`web_fetch`)
+  - Delegates to `knowledge-organizer` agent (Haiku) with structured prompt for extraction + auto-catalog filing
+  - Vault folder routing by content topic (Moody's, health, AI, real estate, finance, etc.)
+  - Structured notes with frontmatter (source, type, author, date_filed, tags), summary, key takeaways, wikilinks
+  - Duplicate URL detection (checks DB before processing)
+  - Activity logged to `Resources/Vault-Inbox-Log.md` and `agent_activity` table
+  - Landing page UI: input field + submit button, processing spinner, confirmation card, history of last 5 filed items
+  - Supports `source` field for future iOS Shortcut / email / MCP integration
 - **Moody's Intelligence Pipeline** — Three scheduled jobs using the moodys agent:
   - Pass 1: Daily Intelligence Brief at 6:00 AM ET — 5 categories: Corporate News, Banking Segment, Competitor Watch (12 competitors), Enterprise AI Trends, Analyst Coverage (Celent, Chartis, Forrester, Gartner, IDC). Dual-source: searches both web AND X for each category. Includes 🐦 X/Twitter Signals section. Saves to `Scheduled Reports/Moody's Intelligence/Daily/YYYY-MM-DD-Brief.md`. Research only — does NOT update profiles.
   - Pass 2: Profile Updates at 6:15 AM ET — reads today's brief, appends date-stamped findings to competitor/analyst profiles in `Projects/Moody's/Competitive Intelligence/`

@@ -425,15 +425,18 @@ async function showLanding() {
   let convos = [];
   let glanceData = null;
   let landingAgentStatus = null;
+  let inboxHistory = [];
   try {
-    const [convRes, glanceRes, agentRes] = await Promise.all([
+    const [convRes, glanceRes, agentRes, inboxRes] = await Promise.all([
       fetch("/api/conversations").then(r => r.ok ? r.json() : []).catch(() => []),
       fetch("/api/glance").then(r => r.ok ? r.json() : null).catch(() => null),
       fetch("/api/agents/status").then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch("/api/vault-inbox/history").then(r => r.ok ? r.json() : []).catch(() => []),
     ]);
     convos = convRes;
     glanceData = glanceRes;
     landingAgentStatus = agentRes;
+    inboxHistory = inboxRes;
   } catch (err) { console.warn("Landing data fetch failed:", err); }
 
   if (thisInvocation !== landingInvocationId) return;
@@ -457,6 +460,105 @@ async function showLanding() {
       landing.appendChild(runIndicator);
     }
   }
+
+  const dropBox = document.createElement("div");
+  dropBox.className = "vault-inbox";
+  const historyItems = (inboxHistory || []).filter(h => h.status === "filed").slice(0, 5);
+  const historyHtml = historyItems.length > 0 ? `<div class="vault-inbox-history" id="vault-inbox-history">
+    ${historyItems.map(h => {
+      const ago = formatTimeAgo(new Date(h.createdAt).toISOString());
+      return `<div class="vault-inbox-history-item">
+        <span class="vault-inbox-history-icon">${h.filePath?.includes("YouTube") || h.url?.includes("youtu") ? "▶" : h.url?.includes("x.com") || h.url?.includes("twitter") ? "𝕏" : h.url?.includes("github") ? "⌘" : "◉"}</span>
+        <span class="vault-inbox-history-title">${escapeHtml((h.title || h.url || "").slice(0, 50))}</span>
+        <span class="vault-inbox-history-time">${ago}</span>
+      </div>`;
+    }).join("")}
+  </div>` : "";
+  dropBox.innerHTML = `
+    <div class="vault-inbox-header">
+      <span class="vault-inbox-label">VAULT INBOX</span>
+    </div>
+    <div class="vault-inbox-input-wrap">
+      <input type="url" class="vault-inbox-input" id="vault-inbox-url" placeholder="Paste a YouTube, article, or tweet URL..." autocomplete="off" autocorrect="off" />
+      <button class="vault-inbox-submit" id="vault-inbox-btn">→</button>
+    </div>
+    <div class="vault-inbox-status" id="vault-inbox-status"></div>
+    ${historyHtml}
+  `;
+  landing.appendChild(dropBox);
+
+  const vaultInput = dropBox.querySelector("#vault-inbox-url");
+  const vaultBtn = dropBox.querySelector("#vault-inbox-btn");
+  const vaultStatus = dropBox.querySelector("#vault-inbox-status");
+
+  async function submitVaultInbox() {
+    const url = vaultInput.value.trim();
+    if (!url) return;
+    vaultBtn.disabled = true;
+    vaultInput.disabled = true;
+    vaultStatus.className = "vault-inbox-status processing";
+    vaultStatus.innerHTML = '<div class="vault-inbox-spinner"></div> Processing...';
+    try {
+      const res = await fetch("/api/vault-inbox", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, source: "drop-box" }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        vaultStatus.className = "vault-inbox-status error";
+        vaultStatus.textContent = data.error;
+      } else if (data.status === "duplicate") {
+        vaultStatus.className = "vault-inbox-status duplicate";
+        vaultStatus.innerHTML = `Already in vault → <span class="vault-inbox-path">${escapeHtml(data.filePath || "")}</span>`;
+      } else if (data.status === "processing") {
+        vaultStatus.className = "vault-inbox-status processing";
+        vaultStatus.innerHTML = '<div class="vault-inbox-spinner"></div> Agent extracting & filing...';
+        pollVaultInboxResult(data.id);
+      }
+    } catch (err) {
+      vaultStatus.className = "vault-inbox-status error";
+      vaultStatus.textContent = "Failed to submit";
+    }
+    vaultBtn.disabled = false;
+    vaultInput.disabled = false;
+  }
+
+  async function pollVaultInboxResult(id) {
+    for (let i = 0; i < 60; i++) {
+      await new Promise(r => setTimeout(r, 3000));
+      try {
+        const res = await fetch(`/api/vault-inbox/${id}`);
+        const data = await res.json();
+        if (data.status === "filed") {
+          vaultStatus.className = "vault-inbox-status success";
+          vaultStatus.innerHTML = `<span class="vault-inbox-check">✓</span> ${escapeHtml(data.title || "Filed")} → <span class="vault-inbox-path">${escapeHtml(data.filePath || "")}</span>`;
+          vaultInput.value = "";
+          const historyEl = document.getElementById("vault-inbox-history");
+          if (historyEl) {
+            const newItem = document.createElement("div");
+            newItem.className = "vault-inbox-history-item";
+            newItem.innerHTML = `<span class="vault-inbox-history-icon">◉</span>
+              <span class="vault-inbox-history-title">${escapeHtml((data.title || "").slice(0, 50))}</span>
+              <span class="vault-inbox-history-time">just now</span>`;
+            historyEl.prepend(newItem);
+          }
+          return;
+        } else if (data.status === "error") {
+          vaultStatus.className = "vault-inbox-status error";
+          vaultStatus.textContent = data.error || "Processing failed";
+          return;
+        }
+      } catch {}
+    }
+    vaultStatus.className = "vault-inbox-status error";
+    vaultStatus.textContent = "Timed out — check vault manually";
+  }
+
+  vaultBtn.addEventListener("click", submitVaultInbox);
+  vaultInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") submitVaultInbox();
+  });
 
   if (glanceData) {
     const cycles = buildLandingTickerCycles(glanceData);

@@ -87,7 +87,24 @@ export async function init(): Promise<pg.Pool> {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_agent_activity_created ON agent_activity(created_at DESC)`);
 
-  console.log("[db] PostgreSQL initialized (shared pool, 6 tables)");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS vault_inbox (
+      id SERIAL PRIMARY KEY,
+      url TEXT NOT NULL,
+      title TEXT,
+      file_path TEXT,
+      tags JSONB DEFAULT '[]'::jsonb,
+      summary TEXT,
+      source TEXT DEFAULT 'drop-box',
+      status TEXT NOT NULL DEFAULT 'processing',
+      error TEXT,
+      created_at BIGINT NOT NULL
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_vault_inbox_created ON vault_inbox(created_at DESC)`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_vault_inbox_url ON vault_inbox(url)`);
+
+  console.log("[db] PostgreSQL initialized (shared pool, 7 tables)");
   return pool;
 }
 

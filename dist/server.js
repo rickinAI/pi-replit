@@ -522,7 +522,23 @@ async function init2() {
     )
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_agent_activity_created ON agent_activity(created_at DESC)`);
-  console.log("[db] PostgreSQL initialized (shared pool, 6 tables)");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS vault_inbox (
+      id SERIAL PRIMARY KEY,
+      url TEXT NOT NULL,
+      title TEXT,
+      file_path TEXT,
+      tags JSONB DEFAULT '[]'::jsonb,
+      summary TEXT,
+      source TEXT DEFAULT 'drop-box',
+      status TEXT NOT NULL DEFAULT 'processing',
+      error TEXT,
+      created_at BIGINT NOT NULL
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_vault_inbox_created ON vault_inbox(created_at DESC)`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_vault_inbox_url ON vault_inbox(url)`);
+  console.log("[db] PostgreSQL initialized (shared pool, 7 tables)");
   return pool;
 }
 function getPool() {
@@ -12256,6 +12272,192 @@ app.get("/api/agents/status", async (_req, res) => {
     anyActive: runningJob.running || activeSessions.length > 0,
     recentCompletions
   });
+});
+app.post("/api/vault-inbox", async (req, res) => {
+  const { url, tag, source } = req.body;
+  if (!url || typeof url !== "string") {
+    res.status(400).json({ error: "URL is required" });
+    return;
+  }
+  try {
+    new URL(url);
+  } catch {
+    res.status(400).json({ error: "Invalid URL" });
+    return;
+  }
+  const pool2 = getPool();
+  try {
+    const existing = await pool2.query(`SELECT id, title, file_path, tags, status, created_at FROM vault_inbox WHERE url = $1`, [url]);
+    if (existing.rows.length > 0 && existing.rows[0].status === "filed") {
+      const row = existing.rows[0];
+      res.json({
+        status: "duplicate",
+        title: row.title,
+        filePath: row.file_path,
+        tags: row.tags || [],
+        filedAt: Number(row.created_at)
+      });
+      return;
+    }
+  } catch {
+  }
+  const now = Date.now();
+  let inboxId;
+  try {
+    const ins = await pool2.query(
+      `INSERT INTO vault_inbox (url, source, status, created_at) VALUES ($1, $2, 'processing', $3) ON CONFLICT (url) DO UPDATE SET status = 'processing', created_at = $3 RETURNING id`,
+      [url, source || "drop-box", now]
+    );
+    inboxId = ins.rows[0].id;
+  } catch (e) {
+    res.status(500).json({ error: "Database error" });
+    return;
+  }
+  res.json({ status: "processing", id: inboxId });
+  let linkType = "article";
+  if (/youtube\.com\/watch|youtu\.be\//i.test(url)) linkType = "youtube";
+  else if (/twitter\.com|x\.com/i.test(url)) linkType = "tweet";
+  else if (/github\.com/i.test(url)) linkType = "github";
+  const tagHint = tag ? `
+IMPORTANT: The user tagged this as "${tag}" \u2014 use this to determine the vault folder.` : "";
+  const taskPrompt = `Extract and file content from this URL into the knowledge base vault.
+
+URL: ${url}
+Link type: ${linkType}
+${tagHint}
+
+Instructions:
+1. Use the appropriate tool to extract content:
+   - YouTube: use youtube_video to get title, channel, description
+   - Tweet: use x_read_tweet to get tweet content
+   - Article/GitHub: use web_fetch to get the page content
+2. Determine the best vault folder based on content topic:
+   - Moody's / competitor / banking / work \u2192 Projects/Moody's/Competitive Intelligence/
+   - Consciousness / spirituality / health \u2192 Health/
+   - Real estate / housing \u2192 Real Estate/
+   - AI / tech / agentic systems \u2192 Resources/AI Education/
+   - Finance / markets / investing \u2192 Finances/
+   - Career / professional \u2192 Career Development/
+   - General reference \u2192 Resources/
+3. Create a structured note using notes_create with this format:
+   - Frontmatter: source, type (${linkType}), author/speaker, date_filed (today), tags
+   - Title heading
+   - Summary (2-3 sentences)
+   - Key Takeaways (3-5 bullets)
+   - Frameworks/Models (if applicable, use [[wikilinks]])
+   - Related Vault Nodes (if applicable, use [[wikilinks]])
+   - Footer: "Filed via: Vault Inbox"
+4. Filename: use format "{YYYY-MM-DD} - {Cleaned Title}.md" in the chosen folder
+
+IMPORTANT: After filing, respond with EXACTLY this format on the FIRST LINE of your response:
+FILED|{title}|{full/vault/path.md}|{comma,separated,tags}
+
+Then add a brief summary below.`;
+  try {
+    const agentTools = [
+      ...buildKnowledgeBaseTools(),
+      ...cachedStaticTools
+    ];
+    const result = await runSubAgent({
+      agentId: "knowledge-organizer",
+      task: taskPrompt,
+      allTools: agentTools,
+      apiKey: ANTHROPIC_KEY
+    });
+    let title = "";
+    let filePath = "";
+    let tags = [];
+    let summary = result.response;
+    const firstLine = result.response.split("\n")[0];
+    if (firstLine.startsWith("FILED|")) {
+      const parts = firstLine.split("|");
+      title = parts[1] || "";
+      filePath = parts[2] || "";
+      tags = (parts[3] || "").split(",").map((t) => t.trim()).filter(Boolean);
+      summary = result.response.split("\n").slice(1).join("\n").trim();
+    }
+    await pool2.query(
+      `UPDATE vault_inbox SET title = $1, file_path = $2, tags = $3, summary = $4, status = 'filed' WHERE id = $5`,
+      [title || "Untitled", filePath, JSON.stringify(tags), summary.slice(0, 500), inboxId]
+    );
+    try {
+      const date = (/* @__PURE__ */ new Date()).toISOString().slice(0, 16).replace("T", " ");
+      const logLine = `- ${date} | ${linkType} | ${title || url} | \u2192 ${filePath}
+`;
+      const logPath = "Resources/Vault-Inbox-Log.md";
+      try {
+        await kbAppend(logPath, logLine);
+      } catch {
+        await kbCreate(logPath, `# Vault Inbox Log
+
+${logLine}`);
+      }
+    } catch {
+    }
+    try {
+      await pool2.query(
+        `INSERT INTO agent_activity (agent, task, saved_to, created_at) VALUES ($1, $2, $3, $4)`,
+        ["knowledge-organizer", `Vault Inbox: ${title || url}`.slice(0, 200), filePath || null, Date.now()]
+      );
+    } catch {
+    }
+  } catch (err) {
+    console.error("[vault-inbox] Processing failed:", err.message);
+    await pool2.query(
+      `UPDATE vault_inbox SET status = 'error', error = $1 WHERE id = $2`,
+      [err.message?.slice(0, 500) || "Unknown error", inboxId]
+    );
+  }
+});
+app.get("/api/vault-inbox/history", async (_req, res) => {
+  try {
+    const pool2 = getPool();
+    const result = await pool2.query(
+      `SELECT id, url, title, file_path, tags, summary, source, status, error, created_at FROM vault_inbox ORDER BY created_at DESC LIMIT 10`
+    );
+    res.json(result.rows.map((r) => ({
+      id: r.id,
+      url: r.url,
+      title: r.title,
+      filePath: r.file_path,
+      tags: r.tags || [],
+      summary: r.summary,
+      source: r.source,
+      status: r.status,
+      error: r.error,
+      createdAt: Number(r.created_at)
+    })));
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load history" });
+  }
+});
+app.get("/api/vault-inbox/:id", async (req, res) => {
+  try {
+    const pool2 = getPool();
+    const result = await pool2.query(
+      `SELECT id, url, title, file_path, tags, summary, source, status, error, created_at FROM vault_inbox WHERE id = $1`,
+      [req.params.id]
+    );
+    if (result.rows.length === 0) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const r = result.rows[0];
+    res.json({
+      id: r.id,
+      url: r.url,
+      title: r.title,
+      filePath: r.file_path,
+      tags: r.tags || [],
+      summary: r.summary,
+      source: r.source,
+      status: r.status,
+      error: r.error,
+      createdAt: Number(r.created_at)
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load item" });
+  }
 });
 app.get("/api/scheduled-jobs", (_req, res) => {
   res.json(getJobs());
