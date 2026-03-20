@@ -6,7 +6,7 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
 
 - **server.ts** — Express server wrapping the pi coding agent SDK
   - Creates agent sessions with Anthropic API
-  - Registers custom tools (110 total): knowledge base (10), email (15: list, read, search, get_attachment, thread, send, reply, draft, archive, label, mark_read, trash, gmail_list_labels, gmail_create_label, gmail_delete_label), calendar (3: list events, create event with calendar targeting, list available calendars), weather, web search, web fetch (reads full page content from URLs), render_page (Lightpanda headless browser for JS pages), describe_image (Claude vision), tasks (5), news (2), Google Drive (6), Google Sheets (13), Google Docs (12), Google Slides (12), YouTube (4), Zillow (3), Redfin (3), X/Twitter (4), maps (2: directions, search places), web pages (4: web_publish, web_save, web_list_pages, web_delete_page), interview, conversation_search
+  - Registers custom tools (112 total): knowledge base (10), email (15: list, read, search, get_attachment, thread, send, reply, draft, archive, label, mark_read, trash, gmail_list_labels, gmail_create_label, gmail_delete_label), calendar (3: list events, create event with calendar targeting, list available calendars), weather, web search, web fetch (reads full page content from URLs), render_page (Browserbase cloud browser with anti-bot protection for JS-heavy/paywalled pages, falls back to Lightpanda if no API key), browse_page (interactive Browserbase sessions: click, type, scroll, extract — for cookie walls, pagination, login forms), describe_image (Claude vision), tasks (5), news (2), Google Drive (6), Google Sheets (13), Google Docs (12), Google Slides (12), YouTube (4), Zillow (3), Redfin (3), X/Twitter (4), maps (2: directions, search places), web pages (4: web_publish, web_save, web_list_pages, web_delete_page), interview, conversation_search
   - Multi-agent system with 10 specialist agents defined in `data/agents.json` (hot-reloaded on file change)
   - Dual-source research default: all research-oriented agents search both web AND X (Twitter) for maximum coverage. X tools added to deep-researcher, analyst, real-estate, and moodys agents
   - Streams agent events via SSE (Server-Sent Events)
@@ -54,8 +54,8 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - `POST /api/vault-inbox` — accepts `{ url, tag?, source? }`, returns immediately with `{ status: "processing", id }`. Agent processes async
   - `GET /api/vault-inbox/history` — last 10 filed items from `vault_inbox` DB table
   - `GET /api/vault-inbox/:id` — poll individual item status (processing/filed/error)
-  - Link type auto-detection: YouTube (`youtube_video`), X/Twitter (`x_read_tweet`), GitHub/article (`web_fetch`)
-  - Delegates to `knowledge-organizer` agent (Haiku) with structured prompt for extraction + auto-catalog filing
+  - Link type auto-detection: YouTube (`youtube_video`), X/Twitter (`x_read_tweet`), GitHub/article (`web_fetch` → `render_page` fallback for blocked/JS-heavy pages)
+  - Delegates to `knowledge-organizer` agent (Haiku) with structured prompt for extraction + auto-catalog filing. Agent has access to render_page (Browserbase cloud browser) and browse_page for interactive extraction
   - Vault folder routing by content topic (Moody's, health, AI, real estate, finance, etc.)
   - Structured notes with frontmatter (source, type, author, date_filed, tags), summary, key takeaways, wikilinks
   - Duplicate URL detection (checks DB before processing)

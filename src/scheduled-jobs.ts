@@ -112,7 +112,7 @@ Save the report to "Scheduled Reports/Market Summary.md" (overwrite previous).`,
 
 RESEARCH METHOD — For EVERY category below:
 1. Run web_search with the specified queries to find articles
-2. Use web_fetch on the top 2-3 result URLs to read actual article content for richer summaries
+2. Use web_fetch on the top 2-3 result URLs to read actual article content for richer summaries. If web_fetch returns empty/thin content (just nav text or errors), retry with render_page which uses a cloud browser with anti-bot protection
 3. Run x_search with the specified queries for real-time signals
 4. Write 3-5 bullet items per category (not just 1)
 
@@ -183,7 +183,7 @@ OUTPUT FORMAT — Do NOT use notes_create. Instead, output the full brief as you
 
 IMPORTANT:
 - Each category MUST have at least 3 bullets. If web_search returns few results, broaden the query or try alternate terms.
-- Use web_fetch to read article content — summaries from search snippets alone are too thin.
+- Use web_fetch to read article content — summaries from search snippets alone are too thin. If web_fetch returns empty or blocked content, use render_page (cloud browser) instead.
 - Tag each item: 🔴 High (directly impacts Moody's Banking), 🟡 Medium (industry trend), 🟢 Low (background).
 - Do NOT produce a summary table — write full bullet content under each ## section header.
 - Do NOT use notes_create or notes_append — just output the brief directly. The system saves it for you.

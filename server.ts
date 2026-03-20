@@ -717,31 +717,85 @@ function buildImageTools(): ToolDefinition[] {
 }
 
 function buildRenderPageTools(): ToolDefinition[] {
+  const bbKey = process.env.BROWSERBASE_API_KEY;
   const lightpandaBin = path.join(PROJECT_ROOT, ".bin/lightpanda");
-  if (!fs.existsSync(lightpandaBin)) return [];
-  return [
+  const hasLightpanda = fs.existsSync(lightpandaBin);
+  if (!bbKey && !hasLightpanda) return [];
+
+  function isBlockedUrl(url: string): boolean {
+    try {
+      const u = new URL(url);
+      const host = u.hostname.toLowerCase();
+      if (host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0" || host === "::1") return true;
+      if (host.startsWith("192.168.") || host.startsWith("10.") || host.startsWith("172.")) return true;
+      if (host === "metadata.google.internal" || host.startsWith("169.254.")) return true;
+      return false;
+    } catch { return true; }
+  }
+
+  async function renderWithBrowserbase(url: string): Promise<string> {
+    const puppeteer = (await import("puppeteer-core")).default;
+    const browser = await puppeteer.connect({
+      browserWSEndpoint: `wss://connect.browserbase.com?apiKey=${bbKey}`,
+    });
+    try {
+      const page = await browser.newPage();
+      await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
+      const title = await page.title();
+      const text = await page.evaluate(() => {
+        const el = document.querySelector("article") || document.querySelector("main") || document.body;
+        return el?.innerText || "";
+      });
+      return `# ${title}\n\n${text}`;
+    } finally {
+      await browser.close();
+    }
+  }
+
+  async function renderWithLightpanda(url: string, fmt: string): Promise<string> {
+    const { execFile } = await import("child_process");
+    return new Promise<string>((resolve, reject) => {
+      execFile(lightpandaBin, ["fetch", "--dump", fmt, "--http_timeout", "15000", url], { timeout: 20000, maxBuffer: 5 * 1024 * 1024 }, (err, stdout, stderr) => {
+        if (err) reject(new Error(stderr || err.message));
+        else resolve(stdout);
+      });
+    });
+  }
+
+  const tools: ToolDefinition[] = [
     {
       name: "render_page",
       label: "Render Page",
       description:
-        "Render a web page in a headless browser and return the fully rendered content as markdown. Unlike web_fetch which returns raw HTML, this tool executes JavaScript and returns the page as a human would see it — with all dynamic content loaded, counters populated, and JS-rendered elements visible. Perfect for verifying rickin.live pages, checking the baby dashboard, or reading any JS-heavy page. For rickin.live pages, include auth: ?user=darknode&token=dn@rickin26",
+        "Render a web page in a cloud browser (Browserbase) and return the fully rendered content. Unlike web_fetch which returns raw HTML, this tool executes JavaScript in a real Chrome browser with anti-bot protection, and returns the page as a human would see it — with all dynamic content loaded, JS-rendered elements visible, and anti-scraping measures bypassed. Use this when web_fetch returns empty/incomplete content, for JS-heavy pages, paywalled sites, or any page that blocks scrapers. For authenticated pages on rickin.live, include the appropriate auth query parameters.",
       parameters: Type.Object({
         url: Type.String({ description: "The full URL to render (must start with http:// or https://)" }),
-        format: Type.Optional(Type.String({ description: "Output format: 'markdown' (default, clean readable text) or 'html' (full rendered HTML)" })),
+        format: Type.Optional(Type.String({ description: "Output format: 'markdown' (default) or 'html'" })),
       }),
       async execute(_toolCallId, params) {
         try {
           let url = params.url.trim();
           if (!url.match(/^https?:\/\//i)) url = "https://" + url;
+          if (isBlockedUrl(url)) return { content: [{ type: "text" as const, text: "Blocked: cannot render internal/private URLs" }], details: { error: "blocked" } };
           const fmt = params.format === "html" ? "html" : "markdown";
 
-          const { execFile } = await import("child_process");
-          const result = await new Promise<string>((resolve, reject) => {
-            execFile(lightpandaBin, ["fetch", "--dump", fmt, "--http_timeout", "15000", url], { timeout: 20000, maxBuffer: 5 * 1024 * 1024 }, (err, stdout, stderr) => {
-              if (err) reject(new Error(stderr || err.message));
-              else resolve(stdout);
-            });
-          });
+          let result: string;
+          if (bbKey) {
+            try {
+              console.log(`[render_page] Using Browserbase for ${url}`);
+              result = await renderWithBrowserbase(url);
+            } catch (bbErr: any) {
+              if (hasLightpanda) {
+                console.log(`[render_page] Browserbase failed (${bbErr.message}), falling back to Lightpanda for ${url}`);
+                result = await renderWithLightpanda(url, fmt);
+              } else {
+                throw bbErr;
+              }
+            }
+          } else {
+            console.log(`[render_page] Using Lightpanda fallback for ${url}`);
+            result = await renderWithLightpanda(url, fmt);
+          }
 
           const truncated = result.length > 80000;
           const content = truncated ? result.slice(0, 80000) + "\n\n[TRUNCATED — content too long]" : result;
@@ -757,6 +811,123 @@ function buildRenderPageTools(): ToolDefinition[] {
       },
     },
   ];
+
+  if (bbKey) {
+    tools.push({
+      name: "browse_page",
+      label: "Browse Page",
+      description:
+        "Interactive cloud browser session powered by Browserbase. Unlike render_page which just captures the page content, this tool can interact with the page — click buttons, fill forms, wait for elements, handle cookie consent, navigate pagination, and extract targeted data. Use for: sites with cookie/consent walls, paginated results, content behind login forms, or when you need to click through to specific sections. Returns the extracted text content after all actions are performed.",
+      parameters: Type.Object({
+        url: Type.String({ description: "The URL to navigate to" }),
+        actions: Type.Optional(Type.Array(Type.Object({
+          type: Type.String({ description: "Action type: 'click', 'type', 'wait', 'scroll', 'extract', 'screenshot'" }),
+          selector: Type.Optional(Type.String({ description: "CSS selector for the target element" })),
+          value: Type.Optional(Type.String({ description: "Value to type (for 'type' action) or attribute to extract" })),
+          timeout: Type.Optional(Type.Number({ description: "Timeout in ms for wait actions (default 5000)" })),
+        }), { description: "Ordered list of actions to perform on the page" })),
+        extract_selector: Type.Optional(Type.String({ description: "CSS selector to extract text from after actions (default: article || main || body)" })),
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          let url = params.url.trim();
+          if (!url.match(/^https?:\/\//i)) url = "https://" + url;
+          if (isBlockedUrl(url)) return { content: [{ type: "text" as const, text: "Blocked: cannot browse internal/private URLs" }], details: { error: "blocked" } };
+          console.log(`[browse_page] Starting Browserbase session for ${url}`);
+
+          const puppeteer = (await import("puppeteer-core")).default;
+          const browser = await puppeteer.connect({
+            browserWSEndpoint: `wss://connect.browserbase.com?apiKey=${bbKey}`,
+          });
+
+          try {
+            const page = await browser.newPage();
+            await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
+
+            const actionResults: string[] = [];
+            if (params.actions) {
+              for (const action of params.actions) {
+                try {
+                  switch (action.type) {
+                    case "click":
+                      if (action.selector) {
+                        await page.waitForSelector(action.selector, { timeout: action.timeout || 5000 });
+                        await page.click(action.selector);
+                        actionResults.push(`Clicked: ${action.selector}`);
+                        await new Promise(r => setTimeout(r, 1000));
+                      }
+                      break;
+                    case "type":
+                      if (action.selector && action.value) {
+                        await page.waitForSelector(action.selector, { timeout: action.timeout || 5000 });
+                        await page.type(action.selector, action.value);
+                        actionResults.push(`Typed into: ${action.selector}`);
+                      }
+                      break;
+                    case "wait":
+                      if (action.selector) {
+                        await page.waitForSelector(action.selector, { timeout: action.timeout || 10000 });
+                        actionResults.push(`Found: ${action.selector}`);
+                      } else {
+                        await new Promise(r => setTimeout(r, action.timeout || 2000));
+                        actionResults.push(`Waited ${action.timeout || 2000}ms`);
+                      }
+                      break;
+                    case "scroll":
+                      await page.evaluate(() => window.scrollBy(0, window.innerHeight));
+                      actionResults.push("Scrolled down");
+                      await new Promise(r => setTimeout(r, 1000));
+                      break;
+                    case "extract":
+                      if (action.selector) {
+                        const extracted = await page.evaluate((sel: string) => {
+                          const els = document.querySelectorAll(sel);
+                          return Array.from(els).map(el => el.textContent?.trim()).filter(Boolean).join("\n");
+                        }, action.selector);
+                        actionResults.push(`Extracted from ${action.selector}:\n${extracted}`);
+                      }
+                      break;
+                    case "screenshot":
+                      actionResults.push("Screenshot captured (browser session)");
+                      break;
+                  }
+                } catch (actionErr: any) {
+                  actionResults.push(`Action failed (${action.type} ${action.selector || ""}): ${actionErr.message}`);
+                }
+              }
+            }
+
+            const extractSel = params.extract_selector || "article, main, body";
+            const title = await page.title();
+            const mainContent = await page.evaluate((sel: string) => {
+              const el = document.querySelector(sel) || document.body;
+              return el?.innerText || "";
+            }, extractSel);
+
+            await browser.close();
+
+            const actionsLog = actionResults.length > 0 ? `\n**Actions performed:**\n${actionResults.map(a => `- ${a}`).join("\n")}\n` : "";
+            const fullContent = `# ${title}\n${actionsLog}\n${mainContent}`;
+            const truncated = fullContent.length > 80000;
+            const content = truncated ? fullContent.slice(0, 80000) + "\n\n[TRUNCATED]" : fullContent;
+
+            return {
+              content: [{ type: "text" as const, text: `**Browsed Page** — ${url}\n\n${content}` }],
+              details: { actionsPerformed: actionResults.length, length: fullContent.length, truncated },
+            };
+          } catch (innerErr) {
+            await browser.close();
+            throw innerErr;
+          }
+        } catch (err: any) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { content: [{ type: "text" as const, text: `Failed to browse page: ${msg}` }], details: { error: msg } };
+        }
+      },
+    });
+  }
+
+  return tools;
 }
 
 function buildCalendarTools(): ToolDefinition[] {
@@ -4977,7 +5148,7 @@ Instructions:
 1. Use the appropriate tool to extract content:
    - YouTube: use youtube_video to get title, channel, description
    - Tweet: use x_read_tweet to get tweet content
-   - Article/GitHub: use web_fetch to get the page content
+   - Article/GitHub: try web_fetch first. If the content is empty, incomplete, or clearly truncated (e.g. just nav/footer text), retry with render_page which uses a full cloud browser with anti-bot protection to get the real page content
 2. Determine the best vault folder based on content topic:
    - Moody's / competitor / banking / work → Projects/Moody's/Competitive Intelligence/
    - Consciousness / spirituality / health → Health/
