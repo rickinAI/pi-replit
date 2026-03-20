@@ -137,120 +137,98 @@ function formatPrice(n: number): string {
   return `$${n.toFixed(8)}`;
 }
 
-export async function getTrending(): Promise<string> {
-  try {
-    const data = await cgFetch("/search/trending");
-    const coins = data.coins?.slice(0, 15) || [];
-    if (coins.length === 0) return "No trending coins found.";
-
-    const lines = ["Trending Coins on CoinGecko:", ""];
-    for (const item of coins) {
-      const c = item.item;
-      const price = c.data?.price ? formatPrice(parseFloat(c.data.price)) : "N/A";
-      const change24h = c.data?.price_change_percentage_24h?.usd;
-      const changeStr = change24h != null ? ` (${change24h >= 0 ? "+" : ""}${change24h.toFixed(1)}% 24h)` : "";
-      const rank = c.market_cap_rank ? ` #${c.market_cap_rank}` : "";
-      lines.push(`${c.name} (${c.symbol.toUpperCase()})${rank} — ${price}${changeStr}`);
-    }
-
-    const categories = data.categories?.slice(0, 5) || [];
-    if (categories.length > 0) {
-      lines.push("", "Trending Categories:");
-      for (const cat of categories) {
-        const mcChange = cat.data?.market_cap_change_percentage_24h;
-        const changeStr = mcChange != null ? ` (${mcChange >= 0 ? "+" : ""}${mcChange.toFixed(1)}% 24h)` : "";
-        lines.push(`  ${cat.name}${changeStr}`);
-      }
-    }
-
-    return lines.join("\n");
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[coingecko] trending error:", msg);
-    return `Unable to fetch trending: ${msg}`;
-  }
+export interface TrendingResult {
+  coins: Array<{ name: string; symbol: string; market_cap_rank: number | null; price_usd: number | null; change_24h_pct: number | null }>;
+  categories: Array<{ name: string; market_cap_change_24h_pct: number | null }>;
 }
 
-export async function getMovers(direction: "gainers" | "losers" = "gainers", limit: number = 20): Promise<string> {
-  try {
-    const order = direction === "gainers" ? "market_cap_desc" : "market_cap_desc";
-    const data = await cgFetch(`/coins/markets?vs_currency=usd&order=${order}&per_page=100&page=1&sparkline=false&price_change_percentage=24h,7d`);
-    if (!Array.isArray(data) || data.length === 0) return "No market data available.";
-
-    const sorted = [...data].sort((a: any, b: any) => {
-      const aChange = a.price_change_percentage_24h ?? 0;
-      const bChange = b.price_change_percentage_24h ?? 0;
-      return direction === "gainers" ? bChange - aChange : aChange - bChange;
-    });
-
-    const top = sorted.slice(0, limit);
-    const label = direction === "gainers" ? "Top Gainers (24h)" : "Top Losers (24h)";
-    const lines = [label, ""];
-
-    for (const coin of top) {
-      const change24h = coin.price_change_percentage_24h;
-      const change7d = coin.price_change_percentage_7d_in_currency;
-      const arrow = (change24h ?? 0) >= 0 ? "▲" : "▼";
-      const sign = (change24h ?? 0) >= 0 ? "+" : "";
-      const c7d = change7d != null ? ` | 7d: ${change7d >= 0 ? "+" : ""}${change7d.toFixed(1)}%` : "";
-      lines.push(`${coin.name} (${coin.symbol.toUpperCase()}) — ${formatPrice(coin.current_price)} ${arrow} ${sign}${(change24h ?? 0).toFixed(1)}%${c7d} | MCap: ${formatNum(coin.market_cap)}`);
-    }
-
-    return lines.join("\n");
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[coingecko] movers error:", msg);
-    return `Unable to fetch movers: ${msg}`;
-  }
+export async function getTrending(): Promise<TrendingResult> {
+  const data = await cgFetch("/search/trending");
+  const rawCoins = data.coins?.slice(0, 15) || [];
+  const coins = rawCoins.map((item: any) => {
+    const c = item.item;
+    return {
+      name: c.name,
+      symbol: c.symbol?.toUpperCase() || "",
+      market_cap_rank: c.market_cap_rank || null,
+      price_usd: c.data?.price ? parseFloat(c.data.price) : null,
+      change_24h_pct: c.data?.price_change_percentage_24h?.usd ?? null,
+    };
+  });
+  const rawCats = data.categories?.slice(0, 5) || [];
+  const categories = rawCats.map((cat: any) => ({
+    name: cat.name,
+    market_cap_change_24h_pct: cat.data?.market_cap_change_percentage_24h ?? null,
+  }));
+  return { coins, categories };
 }
 
-export async function getCategories(limit: number = 20): Promise<string> {
-  try {
-    const data = await cgFetch("/coins/categories?order=market_cap_change_percentage_24h_desc");
-    if (!Array.isArray(data) || data.length === 0) return "No category data available.";
-
-    const top = data.slice(0, limit);
-    const lines = ["Crypto Categories (sorted by 24h market cap change):", ""];
-
-    for (const cat of top) {
-      const change = cat.market_cap_change_percentage_24h;
-      const changeStr = change != null ? `${change >= 0 ? "+" : ""}${change.toFixed(1)}%` : "N/A";
-      const mcap = cat.market_cap ? formatNum(cat.market_cap) : "N/A";
-      const vol = cat.total_volume ? formatNum(cat.total_volume) : "N/A";
-      lines.push(`${cat.name} — 24h: ${changeStr} | MCap: ${mcap} | Vol: ${vol} | ${cat.top_3_coins_id?.length || 0} top coins`);
-    }
-
-    return lines.join("\n");
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[coingecko] categories error:", msg);
-    return `Unable to fetch categories: ${msg}`;
-  }
+export interface MoverEntry {
+  name: string; symbol: string; price_usd: number; change_24h_pct: number | null; change_7d_pct: number | null; market_cap: number;
 }
 
-export async function getMarketOverview(): Promise<string> {
-  try {
-    const data = await cgFetch("/global");
-    const g = data.data;
-    if (!g) return "No global market data available.";
+export async function getMovers(direction: "gainers" | "losers" = "gainers", limit: number = 20): Promise<{ direction: string; coins: MoverEntry[] }> {
+  const data = await cgFetch(`/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=false&price_change_percentage=24h,7d`);
+  if (!Array.isArray(data) || data.length === 0) return { direction, coins: [] };
 
-    const lines = [
-      "Global Crypto Market Overview:",
-      "",
-      `Total Market Cap: ${formatNum(g.total_market_cap?.usd || 0)}`,
-      `24h Volume: ${formatNum(g.total_volume?.usd || 0)}`,
-      `BTC Dominance: ${(g.market_cap_percentage?.btc || 0).toFixed(1)}%`,
-      `ETH Dominance: ${(g.market_cap_percentage?.eth || 0).toFixed(1)}%`,
-      `Active Cryptocurrencies: ${(g.active_cryptocurrencies || 0).toLocaleString()}`,
-      `Market Cap Change 24h: ${(g.market_cap_change_percentage_24h_usd ?? 0) >= 0 ? "+" : ""}${(g.market_cap_change_percentage_24h_usd ?? 0).toFixed(2)}%`,
-    ];
+  const sorted = [...data].sort((a: any, b: any) => {
+    const aChange = a.price_change_percentage_24h ?? 0;
+    const bChange = b.price_change_percentage_24h ?? 0;
+    return direction === "gainers" ? bChange - aChange : aChange - bChange;
+  });
 
-    return lines.join("\n");
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[coingecko] market overview error:", msg);
-    return `Unable to fetch market overview: ${msg}`;
-  }
+  const coins: MoverEntry[] = sorted.slice(0, limit).map((coin: any) => ({
+    name: coin.name,
+    symbol: (coin.symbol || "").toUpperCase(),
+    price_usd: coin.current_price,
+    change_24h_pct: coin.price_change_percentage_24h ?? null,
+    change_7d_pct: coin.price_change_percentage_7d_in_currency ?? null,
+    market_cap: coin.market_cap,
+  }));
+
+  return { direction, coins };
+}
+
+export interface CategoryEntry {
+  name: string; change_24h_pct: number | null; market_cap: number | null; volume_24h: number | null;
+}
+
+export async function getCategories(limit: number = 20): Promise<{ categories: CategoryEntry[] }> {
+  const data = await cgFetch("/coins/categories?order=market_cap_change_percentage_24h_desc");
+  if (!Array.isArray(data) || data.length === 0) return { categories: [] };
+
+  const categories: CategoryEntry[] = data.slice(0, limit).map((cat: any) => ({
+    name: cat.name,
+    change_24h_pct: cat.market_cap_change_percentage_24h ?? null,
+    market_cap: cat.market_cap ?? null,
+    volume_24h: cat.total_volume ?? null,
+  }));
+
+  return { categories };
+}
+
+export interface MarketOverviewResult {
+  total_market_cap_usd: number;
+  total_volume_24h_usd: number;
+  btc_dominance_pct: number;
+  eth_dominance_pct: number;
+  active_cryptocurrencies: number;
+  market_cap_change_24h_pct: number;
+}
+
+export async function getMarketOverview(): Promise<MarketOverviewResult> {
+  const data = await cgFetch("/global");
+  const g = data.data;
+  if (!g) throw new Error("No global market data available");
+
+  return {
+    total_market_cap_usd: g.total_market_cap?.usd || 0,
+    total_volume_24h_usd: g.total_volume?.usd || 0,
+    btc_dominance_pct: g.market_cap_percentage?.btc || 0,
+    eth_dominance_pct: g.market_cap_percentage?.eth || 0,
+    active_cryptocurrencies: g.active_cryptocurrencies || 0,
+    market_cap_change_24h_pct: g.market_cap_change_percentage_24h_usd ?? 0,
+  };
 }
 
 export interface OHLCVCandle {
@@ -330,33 +308,38 @@ export async function getHistoricalOHLCV(coin: string, days: number = 90): Promi
   return candles;
 }
 
-export async function getHistoricalOHLCVFormatted(coin: string, days: number = 90): Promise<string> {
-  try {
-    const candles = await getHistoricalOHLCV(coin, days);
-    if (candles.length === 0) return `No historical data found for "${coin}".`;
+export interface HistoricalSummary {
+  coin_id: string;
+  days: number;
+  candle_count: number;
+  period_start: string;
+  period_end: string;
+  current_price: number;
+  period_high: number;
+  period_low: number;
+  period_return_pct: number;
+}
 
-    const coinId = resolveId(coin);
-    const last = candles[candles.length - 1];
-    const first = candles[0];
-    const totalReturn = ((last.close - first.open) / first.open * 100).toFixed(2);
-    const allHighs = candles.map(c => c.high);
-    const allLows = candles.map(c => c.low);
-    const periodHigh = Math.max(...allHighs);
-    const periodLow = Math.min(...allLows);
+export async function getHistoricalOHLCVFormatted(coin: string, days: number = 90): Promise<HistoricalSummary> {
+  const candles = await getHistoricalOHLCV(coin, days);
+  if (candles.length === 0) throw new Error(`No historical data found for "${coin}"`);
 
-    const lines = [
-      `Historical Data: ${coinId} (${days} days, ${candles.length} hourly candles)`,
-      `Period: ${new Date(first.timestamp).toISOString().slice(0, 10)} to ${new Date(last.timestamp).toISOString().slice(0, 10)}`,
-      `Current: ${formatPrice(last.close)}`,
-      `Period High: ${formatPrice(periodHigh)} | Low: ${formatPrice(periodLow)}`,
-      `Period Return: ${totalReturn}%`,
-      `Candles available for technical analysis: ${candles.length}`,
-    ];
+  const coinId = resolveId(coin);
+  const last = candles[candles.length - 1];
+  const first = candles[0];
+  const periodReturn = (last.close - first.open) / first.open * 100;
+  const periodHigh = Math.max(...candles.map(c => c.high));
+  const periodLow = Math.min(...candles.map(c => c.low));
 
-    return lines.join("\n");
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[coingecko] OHLCV error:", msg);
-    return `Unable to fetch historical data for "${coin}": ${msg}`;
-  }
+  return {
+    coin_id: coinId,
+    days,
+    candle_count: candles.length,
+    period_start: new Date(first.timestamp).toISOString().slice(0, 10),
+    period_end: new Date(last.timestamp).toISOString().slice(0, 10),
+    current_price: last.close,
+    period_high: periodHigh,
+    period_low: periodLow,
+    period_return_pct: parseFloat(periodReturn.toFixed(2)),
+  };
 }

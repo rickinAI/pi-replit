@@ -3421,116 +3421,67 @@ function ensureCacheDir() {
     fs2.mkdirSync(CACHE_DIR, { recursive: true });
   }
 }
-function formatNum2(n) {
-  if (n >= 1e12) return `$${(n / 1e12).toFixed(2)}T`;
-  if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
-  if (n >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
-  return `$${n.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
-}
-function formatPrice2(n) {
-  if (n >= 1) return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  if (n >= 0.01) return `$${n.toFixed(4)}`;
-  return `$${n.toFixed(8)}`;
-}
 async function getTrending() {
-  try {
-    const data = await cgFetch("/search/trending");
-    const coins = data.coins?.slice(0, 15) || [];
-    if (coins.length === 0) return "No trending coins found.";
-    const lines = ["Trending Coins on CoinGecko:", ""];
-    for (const item of coins) {
-      const c = item.item;
-      const price = c.data?.price ? formatPrice2(parseFloat(c.data.price)) : "N/A";
-      const change24h = c.data?.price_change_percentage_24h?.usd;
-      const changeStr = change24h != null ? ` (${change24h >= 0 ? "+" : ""}${change24h.toFixed(1)}% 24h)` : "";
-      const rank = c.market_cap_rank ? ` #${c.market_cap_rank}` : "";
-      lines.push(`${c.name} (${c.symbol.toUpperCase()})${rank} \u2014 ${price}${changeStr}`);
-    }
-    const categories = data.categories?.slice(0, 5) || [];
-    if (categories.length > 0) {
-      lines.push("", "Trending Categories:");
-      for (const cat of categories) {
-        const mcChange = cat.data?.market_cap_change_percentage_24h;
-        const changeStr = mcChange != null ? ` (${mcChange >= 0 ? "+" : ""}${mcChange.toFixed(1)}% 24h)` : "";
-        lines.push(`  ${cat.name}${changeStr}`);
-      }
-    }
-    return lines.join("\n");
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[coingecko] trending error:", msg);
-    return `Unable to fetch trending: ${msg}`;
-  }
+  const data = await cgFetch("/search/trending");
+  const rawCoins = data.coins?.slice(0, 15) || [];
+  const coins = rawCoins.map((item) => {
+    const c = item.item;
+    return {
+      name: c.name,
+      symbol: c.symbol?.toUpperCase() || "",
+      market_cap_rank: c.market_cap_rank || null,
+      price_usd: c.data?.price ? parseFloat(c.data.price) : null,
+      change_24h_pct: c.data?.price_change_percentage_24h?.usd ?? null
+    };
+  });
+  const rawCats = data.categories?.slice(0, 5) || [];
+  const categories = rawCats.map((cat) => ({
+    name: cat.name,
+    market_cap_change_24h_pct: cat.data?.market_cap_change_percentage_24h ?? null
+  }));
+  return { coins, categories };
 }
 async function getMovers(direction = "gainers", limit = 20) {
-  try {
-    const order = direction === "gainers" ? "market_cap_desc" : "market_cap_desc";
-    const data = await cgFetch(`/coins/markets?vs_currency=usd&order=${order}&per_page=100&page=1&sparkline=false&price_change_percentage=24h,7d`);
-    if (!Array.isArray(data) || data.length === 0) return "No market data available.";
-    const sorted = [...data].sort((a, b) => {
-      const aChange = a.price_change_percentage_24h ?? 0;
-      const bChange = b.price_change_percentage_24h ?? 0;
-      return direction === "gainers" ? bChange - aChange : aChange - bChange;
-    });
-    const top = sorted.slice(0, limit);
-    const label = direction === "gainers" ? "Top Gainers (24h)" : "Top Losers (24h)";
-    const lines = [label, ""];
-    for (const coin of top) {
-      const change24h = coin.price_change_percentage_24h;
-      const change7d = coin.price_change_percentage_7d_in_currency;
-      const arrow = (change24h ?? 0) >= 0 ? "\u25B2" : "\u25BC";
-      const sign = (change24h ?? 0) >= 0 ? "+" : "";
-      const c7d = change7d != null ? ` | 7d: ${change7d >= 0 ? "+" : ""}${change7d.toFixed(1)}%` : "";
-      lines.push(`${coin.name} (${coin.symbol.toUpperCase()}) \u2014 ${formatPrice2(coin.current_price)} ${arrow} ${sign}${(change24h ?? 0).toFixed(1)}%${c7d} | MCap: ${formatNum2(coin.market_cap)}`);
-    }
-    return lines.join("\n");
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[coingecko] movers error:", msg);
-    return `Unable to fetch movers: ${msg}`;
-  }
+  const data = await cgFetch(`/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=false&price_change_percentage=24h,7d`);
+  if (!Array.isArray(data) || data.length === 0) return { direction, coins: [] };
+  const sorted = [...data].sort((a, b) => {
+    const aChange = a.price_change_percentage_24h ?? 0;
+    const bChange = b.price_change_percentage_24h ?? 0;
+    return direction === "gainers" ? bChange - aChange : aChange - bChange;
+  });
+  const coins = sorted.slice(0, limit).map((coin) => ({
+    name: coin.name,
+    symbol: (coin.symbol || "").toUpperCase(),
+    price_usd: coin.current_price,
+    change_24h_pct: coin.price_change_percentage_24h ?? null,
+    change_7d_pct: coin.price_change_percentage_7d_in_currency ?? null,
+    market_cap: coin.market_cap
+  }));
+  return { direction, coins };
 }
 async function getCategories(limit = 20) {
-  try {
-    const data = await cgFetch("/coins/categories?order=market_cap_change_percentage_24h_desc");
-    if (!Array.isArray(data) || data.length === 0) return "No category data available.";
-    const top = data.slice(0, limit);
-    const lines = ["Crypto Categories (sorted by 24h market cap change):", ""];
-    for (const cat of top) {
-      const change = cat.market_cap_change_percentage_24h;
-      const changeStr = change != null ? `${change >= 0 ? "+" : ""}${change.toFixed(1)}%` : "N/A";
-      const mcap = cat.market_cap ? formatNum2(cat.market_cap) : "N/A";
-      const vol = cat.total_volume ? formatNum2(cat.total_volume) : "N/A";
-      lines.push(`${cat.name} \u2014 24h: ${changeStr} | MCap: ${mcap} | Vol: ${vol} | ${cat.top_3_coins_id?.length || 0} top coins`);
-    }
-    return lines.join("\n");
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[coingecko] categories error:", msg);
-    return `Unable to fetch categories: ${msg}`;
-  }
+  const data = await cgFetch("/coins/categories?order=market_cap_change_percentage_24h_desc");
+  if (!Array.isArray(data) || data.length === 0) return { categories: [] };
+  const categories = data.slice(0, limit).map((cat) => ({
+    name: cat.name,
+    change_24h_pct: cat.market_cap_change_percentage_24h ?? null,
+    market_cap: cat.market_cap ?? null,
+    volume_24h: cat.total_volume ?? null
+  }));
+  return { categories };
 }
 async function getMarketOverview() {
-  try {
-    const data = await cgFetch("/global");
-    const g = data.data;
-    if (!g) return "No global market data available.";
-    const lines = [
-      "Global Crypto Market Overview:",
-      "",
-      `Total Market Cap: ${formatNum2(g.total_market_cap?.usd || 0)}`,
-      `24h Volume: ${formatNum2(g.total_volume?.usd || 0)}`,
-      `BTC Dominance: ${(g.market_cap_percentage?.btc || 0).toFixed(1)}%`,
-      `ETH Dominance: ${(g.market_cap_percentage?.eth || 0).toFixed(1)}%`,
-      `Active Cryptocurrencies: ${(g.active_cryptocurrencies || 0).toLocaleString()}`,
-      `Market Cap Change 24h: ${(g.market_cap_change_percentage_24h_usd ?? 0) >= 0 ? "+" : ""}${(g.market_cap_change_percentage_24h_usd ?? 0).toFixed(2)}%`
-    ];
-    return lines.join("\n");
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[coingecko] market overview error:", msg);
-    return `Unable to fetch market overview: ${msg}`;
-  }
+  const data = await cgFetch("/global");
+  const g = data.data;
+  if (!g) throw new Error("No global market data available");
+  return {
+    total_market_cap_usd: g.total_market_cap?.usd || 0,
+    total_volume_24h_usd: g.total_volume?.usd || 0,
+    btc_dominance_pct: g.market_cap_percentage?.btc || 0,
+    eth_dominance_pct: g.market_cap_percentage?.eth || 0,
+    active_cryptocurrencies: g.active_cryptocurrencies || 0,
+    market_cap_change_24h_pct: g.market_cap_change_percentage_24h_usd ?? 0
+  };
 }
 async function getHistoricalOHLCV(coin, days = 90) {
   const coinId = resolveId(coin);
@@ -3586,31 +3537,25 @@ async function getHistoricalOHLCV(coin, days = 90) {
   return candles;
 }
 async function getHistoricalOHLCVFormatted(coin, days = 90) {
-  try {
-    const candles = await getHistoricalOHLCV(coin, days);
-    if (candles.length === 0) return `No historical data found for "${coin}".`;
-    const coinId = resolveId(coin);
-    const last = candles[candles.length - 1];
-    const first = candles[0];
-    const totalReturn = ((last.close - first.open) / first.open * 100).toFixed(2);
-    const allHighs = candles.map((c) => c.high);
-    const allLows = candles.map((c) => c.low);
-    const periodHigh = Math.max(...allHighs);
-    const periodLow = Math.min(...allLows);
-    const lines = [
-      `Historical Data: ${coinId} (${days} days, ${candles.length} hourly candles)`,
-      `Period: ${new Date(first.timestamp).toISOString().slice(0, 10)} to ${new Date(last.timestamp).toISOString().slice(0, 10)}`,
-      `Current: ${formatPrice2(last.close)}`,
-      `Period High: ${formatPrice2(periodHigh)} | Low: ${formatPrice2(periodLow)}`,
-      `Period Return: ${totalReturn}%`,
-      `Candles available for technical analysis: ${candles.length}`
-    ];
-    return lines.join("\n");
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[coingecko] OHLCV error:", msg);
-    return `Unable to fetch historical data for "${coin}": ${msg}`;
-  }
+  const candles = await getHistoricalOHLCV(coin, days);
+  if (candles.length === 0) throw new Error(`No historical data found for "${coin}"`);
+  const coinId = resolveId(coin);
+  const last = candles[candles.length - 1];
+  const first = candles[0];
+  const periodReturn = (last.close - first.open) / first.open * 100;
+  const periodHigh = Math.max(...candles.map((c) => c.high));
+  const periodLow = Math.min(...candles.map((c) => c.low));
+  return {
+    coin_id: coinId,
+    days,
+    candle_count: candles.length,
+    period_start: new Date(first.timestamp).toISOString().slice(0, 10),
+    period_end: new Date(last.timestamp).toISOString().slice(0, 10),
+    current_price: last.close,
+    period_high: periodHigh,
+    period_low: periodLow,
+    period_return_pct: parseFloat(periodReturn.toFixed(2))
+  };
 }
 
 // src/technical-signals.ts
@@ -3932,8 +3877,22 @@ function analyzeAsset(candles, config3) {
       reason: "Fewer than 2 active signals with data"
     };
   }
-  const totalScore = activeSignals.reduce((sum, s) => sum + s.score, 0);
-  const technicalScore = totalScore / activeSignals.length;
+  const SIGNAL_WEIGHTS = {
+    ema_crossover: 0.4,
+    rsi: 0.25,
+    momentum: 0.2,
+    macd: 0.1,
+    bb_width: 0.03,
+    volatility_regime: 0.02
+  };
+  let weightedSum = 0;
+  let totalWeight = 0;
+  for (const sig of activeSignals) {
+    const w = SIGNAL_WEIGHTS[sig.name] ?? 0.1;
+    weightedSum += sig.score * w;
+    totalWeight += w;
+  }
+  const technicalScore = totalWeight > 0 ? weightedSum / totalWeight : 0;
   return {
     technical_score: parseFloat(technicalScore.toFixed(3)),
     regime,
@@ -3945,25 +3904,6 @@ function analyzeAsset(candles, config3) {
     active_signal_count: activeSignals.length,
     data_quality: "sufficient"
   };
-}
-function formatAnalysis(result, assetName) {
-  const lines = [
-    `Technical Analysis: ${assetName}`,
-    `Score: ${result.technical_score.toFixed(3)} | Regime: ${result.regime} | Data: ${result.data_quality}`,
-    `Price: $${result.current_price.toFixed(result.current_price >= 1 ? 2 : 8)}`,
-    `ATR: ${result.atr_value.toFixed(6)} | Stop (${result.atr_stop_multiplier}x ATR): $${result.atr_stop_price.toFixed(result.atr_stop_price >= 1 ? 2 : 8)}`,
-    "",
-    "Signals:"
-  ];
-  for (const s of result.signals) {
-    const status = s.enabled ? `${s.score.toFixed(3)}` : "OFF";
-    lines.push(`  [${status}] ${s.name}: ${s.detail}`);
-  }
-  if (result.reason) {
-    lines.push("", `Note: ${result.reason}`);
-  }
-  lines.push("", "\u26A0\uFE0F All parameters are UNVALIDATED starting points from Nunchi research. Not yet proven on spot small-cap tokens.");
-  return lines.join("\n");
 }
 
 // src/maps.ts
@@ -9188,65 +9128,85 @@ function buildCoinGeckoTools() {
     {
       name: "crypto_trending",
       label: "Crypto Trending",
-      description: "Get trending cryptocurrencies and categories on CoinGecko. Shows top 15 trending coins with price and 24h change, plus top trending categories.",
+      description: "Get trending cryptocurrencies and categories on CoinGecko. Returns structured JSON with coins (name, symbol, rank, price, 24h change) and trending categories.",
       parameters: Type.Object({}),
       async execute() {
-        const result = await getTrending();
-        return { content: [{ type: "text", text: result }], details: {} };
+        try {
+          const result = await getTrending();
+          return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
       }
     },
     {
       name: "crypto_movers",
       label: "Crypto Movers",
-      description: "Get top crypto gainers or losers by 24h price change. Returns price, 24h/7d change, and market cap for each.",
+      description: "Get top crypto gainers or losers by 24h price change. Returns structured JSON with direction and coins array (name, symbol, price, 24h/7d change, market cap).",
       parameters: Type.Object({
         direction: Type.Optional(Type.Union([Type.Literal("gainers"), Type.Literal("losers")], { description: "Show top gainers or losers. Default: gainers", default: "gainers" })),
         limit: Type.Optional(Type.Number({ description: "Number of results (max 50). Default: 20", default: 20 }))
       }),
       async execute(_toolCallId, params) {
-        const result = await getMovers(params.direction || "gainers", Math.min(params.limit || 20, 50));
-        return { content: [{ type: "text", text: result }], details: {} };
+        try {
+          const result = await getMovers(params.direction || "gainers", Math.min(params.limit || 20, 50));
+          return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
       }
     },
     {
       name: "crypto_categories",
       label: "Crypto Categories",
-      description: "Get crypto market categories sorted by 24h market cap change. Shows category name, 24h change, market cap, and volume. Useful for sector analysis (DeFi, AI, L1, memes, etc.).",
+      description: "Get crypto market categories sorted by 24h market cap change. Returns structured JSON with categories array (name, 24h change, market cap, volume). Useful for sector analysis.",
       parameters: Type.Object({
         limit: Type.Optional(Type.Number({ description: "Number of categories (max 50). Default: 20", default: 20 }))
       }),
       async execute(_toolCallId, params) {
-        const result = await getCategories(Math.min(params.limit || 20, 50));
-        return { content: [{ type: "text", text: result }], details: {} };
+        try {
+          const result = await getCategories(Math.min(params.limit || 20, 50));
+          return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
       }
     },
     {
       name: "crypto_market_overview",
       label: "Crypto Market Overview",
-      description: "Get global crypto market overview: total market cap, 24h volume, BTC/ETH dominance, number of active cryptocurrencies, and 24h market cap change.",
+      description: "Get global crypto market overview. Returns structured JSON: total market cap, 24h volume, BTC/ETH dominance, active cryptocurrencies, and 24h market cap change.",
       parameters: Type.Object({}),
       async execute() {
-        const result = await getMarketOverview();
-        return { content: [{ type: "text", text: result }], details: {} };
+        try {
+          const result = await getMarketOverview();
+          return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
       }
     },
     {
       name: "crypto_historical",
       label: "Crypto Historical Data",
-      description: "Get historical price data summary for a cryptocurrency (hourly candles). Shows period high/low, return, and candle count. Data is cached locally and refreshes max once per hour.",
+      description: "Get historical price data summary for a cryptocurrency. Returns structured JSON: coin_id, days, candle_count, period dates, current price, high/low, return %. Data cached hourly.",
       parameters: Type.Object({
         coin: Type.String({ description: "Cryptocurrency name or ticker (e.g. 'bitcoin', 'BTC', 'ethereum')" }),
         days: Type.Optional(Type.Number({ description: "Number of days of history (max 90). Default: 90", default: 90 }))
       }),
       async execute(_toolCallId, params) {
-        const result = await getHistoricalOHLCVFormatted(params.coin, Math.min(params.days || 90, 90));
-        return { content: [{ type: "text", text: result }], details: {} };
+        try {
+          const result = await getHistoricalOHLCVFormatted(params.coin, Math.min(params.days || 90, 90));
+          return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
       }
     },
     {
       name: "technical_analysis",
       label: "Technical Analysis",
-      description: "Run technical analysis on a cryptocurrency. Returns composite technical_score (0.0-1.0), market regime (TRENDING/RANGING/VOLATILE), ATR-based stop loss price, and per-signal breakdown (EMA crossover, RSI, momentum). Uses cached hourly OHLCV data. Parameters are UNVALIDATED starting points \u2014 not yet proven on small-cap tokens.",
+      description: "Run technical analysis on a cryptocurrency. Returns structured JSON: technical_score (0.0-1.0), regime (TRENDING/RANGING/VOLATILE), ATR stop loss, per-signal breakdown, data quality. Uses cached hourly OHLCV. Parameters are UNVALIDATED starting points.",
       parameters: Type.Object({
         coin: Type.String({ description: "Cryptocurrency name or ticker (e.g. 'bitcoin', 'BTC', 'BNKR', 'VIRTUAL')" }),
         days: Type.Optional(Type.Number({ description: "Days of data to analyze (max 90). Default: 90", default: 90 }))
@@ -9255,14 +9215,12 @@ function buildCoinGeckoTools() {
         try {
           const candles = await getHistoricalOHLCV(params.coin, Math.min(params.days || 90, 90));
           if (candles.length === 0) {
-            return { content: [{ type: "text", text: `No historical data available for "${params.coin}". Cannot run technical analysis.` }], details: {} };
+            return { content: [{ type: "text", text: JSON.stringify({ error: `No historical data available for "${params.coin}"` }) }], details: {} };
           }
           const result = analyzeAsset(candles);
-          const formatted = formatAnalysis(result, params.coin);
-          return { content: [{ type: "text", text: formatted }], details: {} };
+          return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return { content: [{ type: "text", text: `Technical analysis failed for "${params.coin}": ${msg}` }], details: {} };
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
         }
       }
     }

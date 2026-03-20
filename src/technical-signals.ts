@@ -428,8 +428,23 @@ export function analyzeAsset(candles: OHLCVCandle[], config?: Partial<SignalConf
     };
   }
 
-  const totalScore = activeSignals.reduce((sum, s) => sum + s.score, 0);
-  const technicalScore = totalScore / activeSignals.length;
+  const SIGNAL_WEIGHTS: Record<string, number> = {
+    ema_crossover: 0.40,
+    rsi: 0.25,
+    momentum: 0.20,
+    macd: 0.10,
+    bb_width: 0.03,
+    volatility_regime: 0.02,
+  };
+
+  let weightedSum = 0;
+  let totalWeight = 0;
+  for (const sig of activeSignals) {
+    const w = SIGNAL_WEIGHTS[sig.name] ?? 0.1;
+    weightedSum += sig.score * w;
+    totalWeight += w;
+  }
+  const technicalScore = totalWeight > 0 ? weightedSum / totalWeight : 0;
 
   return {
     technical_score: parseFloat(technicalScore.toFixed(3)),

@@ -36,7 +36,7 @@ import * as twitter from "./src/twitter.js";
 import * as stocks from "./src/stocks.js";
 import * as coingecko from "./src/coingecko.js";
 import { getHistoricalOHLCV } from "./src/coingecko.js";
-import { analyzeAsset, formatAnalysis } from "./src/technical-signals.js";
+import { analyzeAsset } from "./src/technical-signals.js";
 import * as maps from "./src/maps.js";
 import * as gws from "./src/gws.js";
 import * as youtube from "./src/youtube.js";
@@ -1183,65 +1183,85 @@ function buildCoinGeckoTools(): ToolDefinition[] {
     {
       name: "crypto_trending",
       label: "Crypto Trending",
-      description: "Get trending cryptocurrencies and categories on CoinGecko. Shows top 15 trending coins with price and 24h change, plus top trending categories.",
+      description: "Get trending cryptocurrencies and categories on CoinGecko. Returns structured JSON with coins (name, symbol, rank, price, 24h change) and trending categories.",
       parameters: Type.Object({}),
       async execute() {
-        const result = await coingecko.getTrending();
-        return { content: [{ type: "text" as const, text: result }], details: {} };
+        try {
+          const result = await coingecko.getTrending();
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
       },
     },
     {
       name: "crypto_movers",
       label: "Crypto Movers",
-      description: "Get top crypto gainers or losers by 24h price change. Returns price, 24h/7d change, and market cap for each.",
+      description: "Get top crypto gainers or losers by 24h price change. Returns structured JSON with direction and coins array (name, symbol, price, 24h/7d change, market cap).",
       parameters: Type.Object({
         direction: Type.Optional(Type.Union([Type.Literal("gainers"), Type.Literal("losers")], { description: "Show top gainers or losers. Default: gainers", default: "gainers" })),
         limit: Type.Optional(Type.Number({ description: "Number of results (max 50). Default: 20", default: 20 })),
       }),
       async execute(_toolCallId: string, params: any) {
-        const result = await coingecko.getMovers(params.direction || "gainers", Math.min(params.limit || 20, 50));
-        return { content: [{ type: "text" as const, text: result }], details: {} };
+        try {
+          const result = await coingecko.getMovers(params.direction || "gainers", Math.min(params.limit || 20, 50));
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
       },
     },
     {
       name: "crypto_categories",
       label: "Crypto Categories",
-      description: "Get crypto market categories sorted by 24h market cap change. Shows category name, 24h change, market cap, and volume. Useful for sector analysis (DeFi, AI, L1, memes, etc.).",
+      description: "Get crypto market categories sorted by 24h market cap change. Returns structured JSON with categories array (name, 24h change, market cap, volume). Useful for sector analysis.",
       parameters: Type.Object({
         limit: Type.Optional(Type.Number({ description: "Number of categories (max 50). Default: 20", default: 20 })),
       }),
       async execute(_toolCallId: string, params: any) {
-        const result = await coingecko.getCategories(Math.min(params.limit || 20, 50));
-        return { content: [{ type: "text" as const, text: result }], details: {} };
+        try {
+          const result = await coingecko.getCategories(Math.min(params.limit || 20, 50));
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
       },
     },
     {
       name: "crypto_market_overview",
       label: "Crypto Market Overview",
-      description: "Get global crypto market overview: total market cap, 24h volume, BTC/ETH dominance, number of active cryptocurrencies, and 24h market cap change.",
+      description: "Get global crypto market overview. Returns structured JSON: total market cap, 24h volume, BTC/ETH dominance, active cryptocurrencies, and 24h market cap change.",
       parameters: Type.Object({}),
       async execute() {
-        const result = await coingecko.getMarketOverview();
-        return { content: [{ type: "text" as const, text: result }], details: {} };
+        try {
+          const result = await coingecko.getMarketOverview();
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
       },
     },
     {
       name: "crypto_historical",
       label: "Crypto Historical Data",
-      description: "Get historical price data summary for a cryptocurrency (hourly candles). Shows period high/low, return, and candle count. Data is cached locally and refreshes max once per hour.",
+      description: "Get historical price data summary for a cryptocurrency. Returns structured JSON: coin_id, days, candle_count, period dates, current price, high/low, return %. Data cached hourly.",
       parameters: Type.Object({
         coin: Type.String({ description: "Cryptocurrency name or ticker (e.g. 'bitcoin', 'BTC', 'ethereum')" }),
         days: Type.Optional(Type.Number({ description: "Number of days of history (max 90). Default: 90", default: 90 })),
       }),
       async execute(_toolCallId: string, params: any) {
-        const result = await coingecko.getHistoricalOHLCVFormatted(params.coin, Math.min(params.days || 90, 90));
-        return { content: [{ type: "text" as const, text: result }], details: {} };
+        try {
+          const result = await coingecko.getHistoricalOHLCVFormatted(params.coin, Math.min(params.days || 90, 90));
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
       },
     },
     {
       name: "technical_analysis",
       label: "Technical Analysis",
-      description: "Run technical analysis on a cryptocurrency. Returns composite technical_score (0.0-1.0), market regime (TRENDING/RANGING/VOLATILE), ATR-based stop loss price, and per-signal breakdown (EMA crossover, RSI, momentum). Uses cached hourly OHLCV data. Parameters are UNVALIDATED starting points — not yet proven on small-cap tokens.",
+      description: "Run technical analysis on a cryptocurrency. Returns structured JSON: technical_score (0.0-1.0), regime (TRENDING/RANGING/VOLATILE), ATR stop loss, per-signal breakdown, data quality. Uses cached hourly OHLCV. Parameters are UNVALIDATED starting points.",
       parameters: Type.Object({
         coin: Type.String({ description: "Cryptocurrency name or ticker (e.g. 'bitcoin', 'BTC', 'BNKR', 'VIRTUAL')" }),
         days: Type.Optional(Type.Number({ description: "Days of data to analyze (max 90). Default: 90", default: 90 })),
@@ -1250,14 +1270,12 @@ function buildCoinGeckoTools(): ToolDefinition[] {
         try {
           const candles = await getHistoricalOHLCV(params.coin, Math.min(params.days || 90, 90));
           if (candles.length === 0) {
-            return { content: [{ type: "text" as const, text: `No historical data available for "${params.coin}". Cannot run technical analysis.` }], details: {} };
+            return { content: [{ type: "text" as const, text: JSON.stringify({ error: `No historical data available for "${params.coin}"` }) }], details: {} };
           }
           const result = analyzeAsset(candles);
-          const formatted = formatAnalysis(result, params.coin);
-          return { content: [{ type: "text" as const, text: formatted }], details: {} };
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return { content: [{ type: "text" as const, text: `Technical analysis failed for "${params.coin}": ${msg}` }], details: {} };
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
         }
       },
     },
