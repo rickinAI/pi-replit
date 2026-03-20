@@ -19,6 +19,7 @@ export interface EnsembleResult {
   signals: SignalResult[];
   active_signal_count: number;
   data_quality: "sufficient" | "insufficient";
+  parameters_validated: boolean;
   reason?: string;
 }
 
@@ -395,6 +396,7 @@ export function analyzeAsset(candles: OHLCVCandle[], config?: Partial<SignalConf
       signals: [],
       active_signal_count: 0,
       data_quality: "insufficient",
+      parameters_validated: false,
       reason: `Only ${closes.length} candles available, need at least 30`,
     };
   }
@@ -424,6 +426,7 @@ export function analyzeAsset(candles: OHLCVCandle[], config?: Partial<SignalConf
       signals,
       active_signal_count: activeSignals.length,
       data_quality: "insufficient",
+      parameters_validated: false,
       reason: "Fewer than 2 active signals with data",
     };
   }
@@ -456,6 +459,7 @@ export function analyzeAsset(candles: OHLCVCandle[], config?: Partial<SignalConf
     signals,
     active_signal_count: activeSignals.length,
     data_quality: "sufficient",
+    parameters_validated: false,
   };
 }
 

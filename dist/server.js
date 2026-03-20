@@ -3848,6 +3848,7 @@ function analyzeAsset(candles, config3) {
       signals: [],
       active_signal_count: 0,
       data_quality: "insufficient",
+      parameters_validated: false,
       reason: `Only ${closes.length} candles available, need at least 30`
     };
   }
@@ -3874,6 +3875,7 @@ function analyzeAsset(candles, config3) {
       signals,
       active_signal_count: activeSignals.length,
       data_quality: "insufficient",
+      parameters_validated: false,
       reason: "Fewer than 2 active signals with data"
     };
   }
@@ -3902,7 +3904,8 @@ function analyzeAsset(candles, config3) {
     current_price: currentPrice,
     signals,
     active_signal_count: activeSignals.length,
-    data_quality: "sufficient"
+    data_quality: "sufficient",
+    parameters_validated: false
   };
 }
 
