@@ -20,7 +20,8 @@
     "googleapis": "^148.0.0",
     "http-proxy-middleware": "^3.0.3",
     "pdf-parse": "^2.4.5",
-    "pg": "^8.19.0"
+    "pg": "^8.19.0",
+    "puppeteer-core": "^24.40.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
