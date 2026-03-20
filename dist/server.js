@@ -10,8 +10,8 @@ import express from "express";
 import cors from "cors";
 import { createServer } from "http";
 import { fileURLToPath } from "url";
-import path5 from "path";
-import fs4 from "fs";
+import path6 from "path";
+import fs5 from "fs";
 import { execSync, spawn } from "child_process";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
@@ -891,11 +891,11 @@ async function init4() {
   const existing = await getPool().query(`SELECT tokens FROM oauth_tokens WHERE service = 'google'`);
   if (existing.rows.length === 0) {
     try {
-      const fs5 = await import("fs");
-      const path6 = await import("path");
-      const legacyPath = path6.default.join(process.cwd(), "data", "gmail-tokens.json");
-      if (fs5.default.existsSync(legacyPath)) {
-        const tokens = JSON.parse(fs5.default.readFileSync(legacyPath, "utf-8"));
+      const fs6 = await import("fs");
+      const path7 = await import("path");
+      const legacyPath = path7.default.join(process.cwd(), "data", "gmail-tokens.json");
+      if (fs6.default.existsSync(legacyPath)) {
+        const tokens = JSON.parse(fs6.default.readFileSync(legacyPath, "utf-8"));
         await getPool().query(
           `INSERT INTO oauth_tokens (service, tokens, updated_at) VALUES ('google', $1, $2)`,
           [JSON.stringify(tokens), Date.now()]
@@ -2438,11 +2438,11 @@ async function init5() {
   const existing = await getPool().query(`SELECT count(*) FROM tasks`);
   if (parseInt(existing.rows[0].count) === 0) {
     try {
-      const fs5 = await import("fs");
+      const fs6 = await import("fs");
       const pathMod = await import("path");
       const legacyPath = pathMod.default.join(process.cwd(), "data", "tasks.json");
-      if (fs5.default.existsSync(legacyPath)) {
-        const legacyTasks = JSON.parse(fs5.default.readFileSync(legacyPath, "utf-8"));
+      if (fs6.default.existsSync(legacyPath)) {
+        const legacyTasks = JSON.parse(fs6.default.readFileSync(legacyPath, "utf-8"));
         for (const t of legacyTasks) {
           await getPool().query(
             `INSERT INTO tasks (id, title, description, due_date, priority, completed, created_at, completed_at, tags)
@@ -3290,14 +3290,690 @@ async function getCryptoPrice(coin) {
   }
 }
 
+// src/coingecko.ts
+import * as fs2 from "fs";
+import * as path2 from "path";
+var TIMEOUT_MS3 = 15e3;
+var BASE_URL = "https://api.coingecko.com/api/v3";
+var CACHE_DIR = path2.join(process.env.HOME || "/tmp", ".cache", "coingecko");
+var CRYPTO_ALIASES2 = {
+  btc: "bitcoin",
+  bitcoin: "bitcoin",
+  eth: "ethereum",
+  ethereum: "ethereum",
+  sol: "solana",
+  solana: "solana",
+  doge: "dogecoin",
+  dogecoin: "dogecoin",
+  ada: "cardano",
+  cardano: "cardano",
+  xrp: "ripple",
+  ripple: "ripple",
+  dot: "polkadot",
+  polkadot: "polkadot",
+  matic: "matic-network",
+  polygon: "matic-network",
+  avax: "avalanche-2",
+  avalanche: "avalanche-2",
+  link: "chainlink",
+  chainlink: "chainlink",
+  bnb: "binancecoin",
+  binancecoin: "binancecoin",
+  ltc: "litecoin",
+  litecoin: "litecoin",
+  shib: "shiba-inu",
+  uni: "uniswap",
+  uniswap: "uniswap",
+  atom: "cosmos",
+  cosmos: "cosmos",
+  near: "near",
+  apt: "aptos",
+  aptos: "aptos",
+  arb: "arbitrum",
+  arbitrum: "arbitrum",
+  op: "optimism",
+  optimism: "optimism",
+  sui: "sui",
+  pepe: "pepe",
+  bnkr: "bankr",
+  bankr: "bankr",
+  virtual: "virtual-protocol",
+  virtuals: "virtual-protocol"
+};
+var RateLimiter = class {
+  tokens;
+  maxTokens;
+  refillRate;
+  lastRefill;
+  queue = [];
+  processing = false;
+  constructor(maxPerMinute) {
+    this.maxTokens = maxPerMinute;
+    this.tokens = maxPerMinute;
+    this.refillRate = maxPerMinute / 60;
+    this.lastRefill = Date.now();
+  }
+  async acquire() {
+    return new Promise((resolve) => {
+      this.queue.push(resolve);
+      this.processQueue();
+    });
+  }
+  async processQueue() {
+    if (this.processing) return;
+    this.processing = true;
+    while (this.queue.length > 0) {
+      this.refill();
+      if (this.tokens >= 1) {
+        this.tokens -= 1;
+        const next = this.queue.shift();
+        if (next) next();
+      } else {
+        const waitMs = Math.ceil((1 - this.tokens) / this.refillRate * 1e3);
+        await new Promise((r) => setTimeout(r, Math.max(waitMs, 100)));
+      }
+    }
+    this.processing = false;
+  }
+  refill() {
+    const now = Date.now();
+    const elapsed = (now - this.lastRefill) / 1e3;
+    this.tokens = Math.min(this.maxTokens, this.tokens + elapsed * this.refillRate);
+    this.lastRefill = now;
+  }
+};
+var rateLimiter = new RateLimiter(10);
+function getApiHeaders() {
+  const headers2 = { "User-Agent": "darknode/1.0" };
+  const apiKey = process.env.COINGECKO_API_KEY;
+  if (apiKey) {
+    headers2["x-cg-demo-api-key"] = apiKey;
+  }
+  return headers2;
+}
+async function cgFetch(urlPath) {
+  await rateLimiter.acquire();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS3);
+  try {
+    const url = `${BASE_URL}${urlPath}`;
+    const res = await fetch(url, {
+      headers: getApiHeaders(),
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    if (!res.ok) {
+      throw new Error(`CoinGecko API error ${res.status}: ${res.statusText}`);
+    }
+    return await res.json();
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err.name === "AbortError") throw new Error("CoinGecko request timed out");
+    throw err;
+  }
+}
+function resolveId(input) {
+  const key = input.toLowerCase().trim().replace(/^\$/, "");
+  return CRYPTO_ALIASES2[key] || key;
+}
+function ensureCacheDir() {
+  if (!fs2.existsSync(CACHE_DIR)) {
+    fs2.mkdirSync(CACHE_DIR, { recursive: true });
+  }
+}
+function formatNum2(n) {
+  if (n >= 1e12) return `$${(n / 1e12).toFixed(2)}T`;
+  if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
+  if (n >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
+  return `$${n.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+}
+function formatPrice2(n) {
+  if (n >= 1) return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (n >= 0.01) return `$${n.toFixed(4)}`;
+  return `$${n.toFixed(8)}`;
+}
+async function getTrending() {
+  try {
+    const data = await cgFetch("/search/trending");
+    const coins = data.coins?.slice(0, 15) || [];
+    if (coins.length === 0) return "No trending coins found.";
+    const lines = ["Trending Coins on CoinGecko:", ""];
+    for (const item of coins) {
+      const c = item.item;
+      const price = c.data?.price ? formatPrice2(parseFloat(c.data.price)) : "N/A";
+      const change24h = c.data?.price_change_percentage_24h?.usd;
+      const changeStr = change24h != null ? ` (${change24h >= 0 ? "+" : ""}${change24h.toFixed(1)}% 24h)` : "";
+      const rank = c.market_cap_rank ? ` #${c.market_cap_rank}` : "";
+      lines.push(`${c.name} (${c.symbol.toUpperCase()})${rank} \u2014 ${price}${changeStr}`);
+    }
+    const categories = data.categories?.slice(0, 5) || [];
+    if (categories.length > 0) {
+      lines.push("", "Trending Categories:");
+      for (const cat of categories) {
+        const mcChange = cat.data?.market_cap_change_percentage_24h;
+        const changeStr = mcChange != null ? ` (${mcChange >= 0 ? "+" : ""}${mcChange.toFixed(1)}% 24h)` : "";
+        lines.push(`  ${cat.name}${changeStr}`);
+      }
+    }
+    return lines.join("\n");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[coingecko] trending error:", msg);
+    return `Unable to fetch trending: ${msg}`;
+  }
+}
+async function getMovers(direction = "gainers", limit = 20) {
+  try {
+    const order = direction === "gainers" ? "market_cap_desc" : "market_cap_desc";
+    const data = await cgFetch(`/coins/markets?vs_currency=usd&order=${order}&per_page=100&page=1&sparkline=false&price_change_percentage=24h,7d`);
+    if (!Array.isArray(data) || data.length === 0) return "No market data available.";
+    const sorted = [...data].sort((a, b) => {
+      const aChange = a.price_change_percentage_24h ?? 0;
+      const bChange = b.price_change_percentage_24h ?? 0;
+      return direction === "gainers" ? bChange - aChange : aChange - bChange;
+    });
+    const top = sorted.slice(0, limit);
+    const label = direction === "gainers" ? "Top Gainers (24h)" : "Top Losers (24h)";
+    const lines = [label, ""];
+    for (const coin of top) {
+      const change24h = coin.price_change_percentage_24h;
+      const change7d = coin.price_change_percentage_7d_in_currency;
+      const arrow = (change24h ?? 0) >= 0 ? "\u25B2" : "\u25BC";
+      const sign = (change24h ?? 0) >= 0 ? "+" : "";
+      const c7d = change7d != null ? ` | 7d: ${change7d >= 0 ? "+" : ""}${change7d.toFixed(1)}%` : "";
+      lines.push(`${coin.name} (${coin.symbol.toUpperCase()}) \u2014 ${formatPrice2(coin.current_price)} ${arrow} ${sign}${(change24h ?? 0).toFixed(1)}%${c7d} | MCap: ${formatNum2(coin.market_cap)}`);
+    }
+    return lines.join("\n");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[coingecko] movers error:", msg);
+    return `Unable to fetch movers: ${msg}`;
+  }
+}
+async function getCategories(limit = 20) {
+  try {
+    const data = await cgFetch("/coins/categories?order=market_cap_change_percentage_24h_desc");
+    if (!Array.isArray(data) || data.length === 0) return "No category data available.";
+    const top = data.slice(0, limit);
+    const lines = ["Crypto Categories (sorted by 24h market cap change):", ""];
+    for (const cat of top) {
+      const change = cat.market_cap_change_percentage_24h;
+      const changeStr = change != null ? `${change >= 0 ? "+" : ""}${change.toFixed(1)}%` : "N/A";
+      const mcap = cat.market_cap ? formatNum2(cat.market_cap) : "N/A";
+      const vol = cat.total_volume ? formatNum2(cat.total_volume) : "N/A";
+      lines.push(`${cat.name} \u2014 24h: ${changeStr} | MCap: ${mcap} | Vol: ${vol} | ${cat.top_3_coins_id?.length || 0} top coins`);
+    }
+    return lines.join("\n");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[coingecko] categories error:", msg);
+    return `Unable to fetch categories: ${msg}`;
+  }
+}
+async function getMarketOverview() {
+  try {
+    const data = await cgFetch("/global");
+    const g = data.data;
+    if (!g) return "No global market data available.";
+    const lines = [
+      "Global Crypto Market Overview:",
+      "",
+      `Total Market Cap: ${formatNum2(g.total_market_cap?.usd || 0)}`,
+      `24h Volume: ${formatNum2(g.total_volume?.usd || 0)}`,
+      `BTC Dominance: ${(g.market_cap_percentage?.btc || 0).toFixed(1)}%`,
+      `ETH Dominance: ${(g.market_cap_percentage?.eth || 0).toFixed(1)}%`,
+      `Active Cryptocurrencies: ${(g.active_cryptocurrencies || 0).toLocaleString()}`,
+      `Market Cap Change 24h: ${(g.market_cap_change_percentage_24h_usd ?? 0) >= 0 ? "+" : ""}${(g.market_cap_change_percentage_24h_usd ?? 0).toFixed(2)}%`
+    ];
+    return lines.join("\n");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[coingecko] market overview error:", msg);
+    return `Unable to fetch market overview: ${msg}`;
+  }
+}
+async function getHistoricalOHLCV(coin, days = 90) {
+  const coinId = resolveId(coin);
+  ensureCacheDir();
+  const cacheFile = path2.join(CACHE_DIR, `${coinId}_${days}d_hourly.json`);
+  if (fs2.existsSync(cacheFile)) {
+    try {
+      const raw = fs2.readFileSync(cacheFile, "utf-8");
+      const cached = JSON.parse(raw);
+      const ageMs = Date.now() - cached.fetchedAt;
+      if (ageMs < 36e5 && cached.candles.length > 0) {
+        return cached.candles;
+      }
+    } catch {
+    }
+  }
+  const data = await cgFetch(`/coins/${encodeURIComponent(coinId)}/market_chart?vs_currency=usd&days=${days}`);
+  const prices = data.prices || [];
+  const volumes = data.total_volumes || [];
+  const volumeMap = /* @__PURE__ */ new Map();
+  for (const [ts, vol] of volumes) {
+    const hourKey = Math.floor(ts / 36e5) * 36e5;
+    volumeMap.set(hourKey, vol);
+  }
+  const hourBuckets = /* @__PURE__ */ new Map();
+  for (const [ts, price] of prices) {
+    const hourKey = Math.floor(ts / 36e5) * 36e5;
+    if (!hourBuckets.has(hourKey)) {
+      hourBuckets.set(hourKey, { prices: [], volume: volumeMap.get(hourKey) || 0 });
+    }
+    hourBuckets.get(hourKey).prices.push(price);
+  }
+  const candles = [];
+  const sortedKeys = Array.from(hourBuckets.keys()).sort((a, b) => a - b);
+  for (const hourKey of sortedKeys) {
+    const bucket = hourBuckets.get(hourKey);
+    const p = bucket.prices;
+    candles.push({
+      timestamp: hourKey,
+      open: p[0],
+      high: Math.max(...p),
+      low: Math.min(...p),
+      close: p[p.length - 1],
+      volume: bucket.volume
+    });
+  }
+  const cacheEntry = { fetchedAt: Date.now(), candles };
+  try {
+    fs2.writeFileSync(cacheFile, JSON.stringify(cacheEntry));
+  } catch (err) {
+    console.warn("[coingecko] cache write error:", err);
+  }
+  return candles;
+}
+async function getHistoricalOHLCVFormatted(coin, days = 90) {
+  try {
+    const candles = await getHistoricalOHLCV(coin, days);
+    if (candles.length === 0) return `No historical data found for "${coin}".`;
+    const coinId = resolveId(coin);
+    const last = candles[candles.length - 1];
+    const first = candles[0];
+    const totalReturn = ((last.close - first.open) / first.open * 100).toFixed(2);
+    const allHighs = candles.map((c) => c.high);
+    const allLows = candles.map((c) => c.low);
+    const periodHigh = Math.max(...allHighs);
+    const periodLow = Math.min(...allLows);
+    const lines = [
+      `Historical Data: ${coinId} (${days} days, ${candles.length} hourly candles)`,
+      `Period: ${new Date(first.timestamp).toISOString().slice(0, 10)} to ${new Date(last.timestamp).toISOString().slice(0, 10)}`,
+      `Current: ${formatPrice2(last.close)}`,
+      `Period High: ${formatPrice2(periodHigh)} | Low: ${formatPrice2(periodLow)}`,
+      `Period Return: ${totalReturn}%`,
+      `Candles available for technical analysis: ${candles.length}`
+    ];
+    return lines.join("\n");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[coingecko] OHLCV error:", msg);
+    return `Unable to fetch historical data for "${coin}": ${msg}`;
+  }
+}
+
+// src/technical-signals.ts
+var DEFAULT_CONFIG = {
+  ema_fast: 7,
+  ema_slow: 26,
+  rsi_period: 8,
+  rsi_overbought: 69,
+  rsi_oversold: 31,
+  momentum_short_hours: 12,
+  momentum_long_hours: 24,
+  macd_fast: 14,
+  macd_slow: 23,
+  macd_signal: 9,
+  bb_period: 7,
+  bb_percentile_threshold: 90,
+  vol_lookback_bars: 24,
+  atr_period: 14,
+  atr_stop_multiplier: 5.5,
+  enable_macd: false,
+  enable_bb: false,
+  enable_volatility_regime: false
+};
+function ema(data, period) {
+  if (data.length === 0) return [];
+  const k = 2 / (period + 1);
+  const result = [data[0]];
+  for (let i = 1; i < data.length; i++) {
+    result.push(data[i] * k + result[i - 1] * (1 - k));
+  }
+  return result;
+}
+function clamp(v, min = 0, max = 1) {
+  return Math.max(min, Math.min(max, v));
+}
+function computeEMACrossover(closes, cfg) {
+  const name = "ema_crossover";
+  if (closes.length < cfg.ema_slow + 5) {
+    return { name, score: 0, enabled: false, detail: "Insufficient data for EMA" };
+  }
+  const fast = ema(closes, cfg.ema_fast);
+  const slow = ema(closes, cfg.ema_slow);
+  const idx = closes.length - 1;
+  const fastVal = fast[idx];
+  const slowVal = slow[idx];
+  const diff = (fastVal - slowVal) / slowVal;
+  const prevDiff = idx > 0 ? (fast[idx - 1] - slow[idx - 1]) / slow[idx - 1] : diff;
+  const crossingUp = prevDiff <= 0 && diff > 0;
+  let score;
+  if (crossingUp) {
+    score = 0.85;
+  } else if (diff > 0.02) {
+    score = clamp(0.5 + diff * 10, 0.5, 0.9);
+  } else if (diff > 0) {
+    score = clamp(0.4 + diff * 20, 0.3, 0.6);
+  } else if (diff > -0.02) {
+    score = clamp(0.3 + diff * 10, 0.1, 0.4);
+  } else {
+    score = clamp(0.1 + (diff + 0.1) * 5, 0, 0.2);
+  }
+  const detail = `EMA${cfg.ema_fast}=${fastVal.toFixed(4)} vs EMA${cfg.ema_slow}=${slowVal.toFixed(4)}, diff=${(diff * 100).toFixed(2)}%${crossingUp ? " [CROSS UP]" : ""}`;
+  return { name, score: clamp(score), enabled: true, detail };
+}
+function computeRSI(closes, cfg) {
+  const name = "rsi";
+  const period = cfg.rsi_period;
+  if (closes.length < period + 2) {
+    return { name, score: 0, enabled: false, detail: "Insufficient data for RSI" };
+  }
+  const changes = [];
+  for (let i = 1; i < closes.length; i++) {
+    changes.push(closes[i] - closes[i - 1]);
+  }
+  let avgGain = 0;
+  let avgLoss = 0;
+  for (let i = 0; i < period; i++) {
+    if (changes[i] > 0) avgGain += changes[i];
+    else avgLoss += Math.abs(changes[i]);
+  }
+  avgGain /= period;
+  avgLoss /= period;
+  for (let i = period; i < changes.length; i++) {
+    const gain = changes[i] > 0 ? changes[i] : 0;
+    const loss = changes[i] < 0 ? Math.abs(changes[i]) : 0;
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+  }
+  let rsi;
+  if (avgLoss === 0 && avgGain === 0) {
+    rsi = 50;
+  } else if (avgLoss === 0) {
+    rsi = 100;
+  } else {
+    const rs = avgGain / avgLoss;
+    rsi = 100 - 100 / (1 + rs);
+  }
+  let score;
+  if (rsi <= cfg.rsi_oversold) {
+    score = clamp(0.7 + (cfg.rsi_oversold - rsi) / cfg.rsi_oversold * 0.3, 0.7, 1);
+  } else if (rsi >= cfg.rsi_overbought) {
+    score = clamp(0.3 - (rsi - cfg.rsi_overbought) / (100 - cfg.rsi_overbought) * 0.3, 0, 0.3);
+  } else {
+    const mid = (cfg.rsi_oversold + cfg.rsi_overbought) / 2;
+    if (rsi < mid) {
+      score = clamp(0.5 + (mid - rsi) / (mid - cfg.rsi_oversold) * 0.2, 0.5, 0.7);
+    } else {
+      score = clamp(0.5 - (rsi - mid) / (cfg.rsi_overbought - mid) * 0.2, 0.3, 0.5);
+    }
+  }
+  const detail = `RSI(${period})=${rsi.toFixed(1)} [oversold<${cfg.rsi_oversold}, overbought>${cfg.rsi_overbought}]`;
+  return { name, score: clamp(score), enabled: true, detail };
+}
+function computeMomentum(closes, cfg) {
+  const name = "momentum";
+  const longH = cfg.momentum_long_hours;
+  if (closes.length < longH + 1) {
+    return { name, score: 0, enabled: false, detail: "Insufficient data for momentum" };
+  }
+  const current = closes[closes.length - 1];
+  const shortIdx = closes.length - 1 - cfg.momentum_short_hours;
+  const longIdx = closes.length - 1 - longH;
+  const shortReturn = shortIdx >= 0 ? (current - closes[shortIdx]) / closes[shortIdx] : 0;
+  const longReturn = longIdx >= 0 ? (current - closes[longIdx]) / closes[longIdx] : 0;
+  const avgReturn = (shortReturn + longReturn) / 2;
+  let score;
+  if (avgReturn > 0.05) {
+    score = clamp(0.7 + avgReturn * 3, 0.7, 0.95);
+  } else if (avgReturn > 0.01) {
+    score = clamp(0.5 + avgReturn * 5, 0.5, 0.7);
+  } else if (avgReturn > -0.01) {
+    score = 0.45;
+  } else if (avgReturn > -0.05) {
+    score = clamp(0.3 + (avgReturn + 0.05) * 5, 0.2, 0.4);
+  } else {
+    score = clamp(0.1 + (avgReturn + 0.1) * 2, 0, 0.2);
+  }
+  const shortPct = (shortReturn * 100).toFixed(2);
+  const longPct = (longReturn * 100).toFixed(2);
+  const detail = `Momentum: ${cfg.momentum_short_hours}h=${shortPct}%, ${longH}h=${longPct}%, avg=${(avgReturn * 100).toFixed(2)}%`;
+  return { name, score: clamp(score), enabled: true, detail };
+}
+function computeMACD(closes, cfg) {
+  const name = "macd";
+  if (!cfg.enable_macd) {
+    return { name, score: 0, enabled: false, detail: "DISABLED \u2014 enable post-beta after validation" };
+  }
+  if (closes.length < cfg.macd_slow + cfg.macd_signal + 5) {
+    return { name, score: 0, enabled: false, detail: "Insufficient data for MACD" };
+  }
+  const fastEMA = ema(closes, cfg.macd_fast);
+  const slowEMA = ema(closes, cfg.macd_slow);
+  const macdLine = [];
+  for (let i = 0; i < closes.length; i++) {
+    macdLine.push(fastEMA[i] - slowEMA[i]);
+  }
+  const signalLine = ema(macdLine, cfg.macd_signal);
+  const idx = closes.length - 1;
+  const histogram = macdLine[idx] - signalLine[idx];
+  const prevHistogram = idx > 0 ? macdLine[idx - 1] - signalLine[idx - 1] : histogram;
+  const crossingUp = prevHistogram <= 0 && histogram > 0;
+  let score;
+  const normHist = histogram / closes[idx];
+  if (crossingUp) {
+    score = 0.8;
+  } else if (normHist > 1e-3) {
+    score = clamp(0.5 + normHist * 200, 0.5, 0.85);
+  } else if (normHist > 0) {
+    score = clamp(0.4 + normHist * 500, 0.35, 0.55);
+  } else {
+    score = clamp(0.3 + normHist * 200, 0.05, 0.35);
+  }
+  const detail = `MACD(${cfg.macd_fast},${cfg.macd_slow},${cfg.macd_signal}): line=${macdLine[idx].toFixed(4)}, signal=${signalLine[idx].toFixed(4)}, hist=${histogram.toFixed(4)}${crossingUp ? " [CROSS UP]" : ""}`;
+  return { name, score: clamp(score), enabled: true, detail };
+}
+function computeBBWidth(closes, cfg) {
+  const name = "bb_width";
+  if (!cfg.enable_bb) {
+    return { name, score: 0, enabled: false, detail: "DISABLED \u2014 enable post-beta after validation" };
+  }
+  if (closes.length < cfg.bb_period + 50) {
+    return { name, score: 0, enabled: false, detail: "Insufficient data for BB width" };
+  }
+  const period = cfg.bb_period;
+  const widths = [];
+  for (let i = period - 1; i < closes.length; i++) {
+    let sum = 0;
+    for (let j = i - period + 1; j <= i; j++) sum += closes[j];
+    const mean = sum / period;
+    let variance = 0;
+    for (let j = i - period + 1; j <= i; j++) variance += (closes[j] - mean) ** 2;
+    const std = Math.sqrt(variance / period);
+    widths.push(2 * 2 * std / mean);
+  }
+  const currentWidth = widths[widths.length - 1];
+  const sortedWidths = [...widths].sort((a, b) => a - b);
+  const percentileIdx = Math.floor(sortedWidths.length * (1 - cfg.bb_percentile_threshold / 100));
+  const isCompressed = currentWidth <= sortedWidths[Math.max(0, percentileIdx)];
+  let score;
+  if (isCompressed) {
+    const rank = sortedWidths.indexOf(sortedWidths.find((w) => w >= currentWidth) || currentWidth);
+    const percentile = rank / sortedWidths.length;
+    score = clamp(0.6 + (1 - percentile) * 0.35, 0.6, 0.95);
+  } else {
+    score = clamp(0.3 + (1 - currentWidth / sortedWidths[sortedWidths.length - 1]) * 0.2, 0.2, 0.45);
+  }
+  const pctile = (widths.filter((w) => w <= currentWidth).length / widths.length * 100).toFixed(0);
+  const detail = `BB Width(${period}): ${(currentWidth * 100).toFixed(2)}%, percentile=${pctile}%${isCompressed ? " [COMPRESSED]" : ""}`;
+  return { name, score: clamp(score), enabled: true, detail };
+}
+function computeVolatilityRegime(closes, cfg) {
+  const name = "volatility_regime";
+  if (!cfg.enable_volatility_regime) {
+    return { name, score: 0, enabled: false, detail: "DISABLED \u2014 enable post-beta after validation" };
+  }
+  const lookback = cfg.vol_lookback_bars;
+  if (closes.length < lookback + 10) {
+    return { name, score: 0, enabled: false, detail: "Insufficient data for volatility regime" };
+  }
+  const returns = [];
+  for (let i = closes.length - lookback; i < closes.length; i++) {
+    returns.push(Math.log(closes[i] / closes[i - 1]));
+  }
+  const mean = returns.reduce((s, r) => s + r, 0) / returns.length;
+  const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / returns.length;
+  const vol = Math.sqrt(variance);
+  const annualizedVol = vol * Math.sqrt(24 * 365);
+  let score;
+  if (annualizedVol < 0.5) {
+    score = 0.6;
+  } else if (annualizedVol < 1) {
+    score = 0.5;
+  } else if (annualizedVol < 2) {
+    score = 0.4;
+  } else {
+    score = clamp(0.3 - (annualizedVol - 2) * 0.1, 0.05, 0.3);
+  }
+  const detail = `Realized Vol (${lookback}h): ${(vol * 100).toFixed(3)}% hourly, ${(annualizedVol * 100).toFixed(1)}% annualized`;
+  return { name, score: clamp(score), enabled: true, detail };
+}
+function computeATR(candles, period = 14) {
+  if (candles.length < period + 1) return 0;
+  const trueRanges = [];
+  for (let i = 1; i < candles.length; i++) {
+    const high = candles[i].high;
+    const low = candles[i].low;
+    const prevClose = candles[i - 1].close;
+    trueRanges.push(Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)));
+  }
+  let atr = 0;
+  for (let i = 0; i < period; i++) {
+    atr += trueRanges[trueRanges.length - period + i];
+  }
+  atr /= period;
+  return atr;
+}
+function classifyRegime(closes, cfg) {
+  if (closes.length < cfg.ema_slow + 10) return "RANGING";
+  const fast = ema(closes, cfg.ema_fast);
+  const slow = ema(closes, cfg.ema_slow);
+  const idx = closes.length - 1;
+  const slopeWindow = Math.min(10, idx);
+  const slopeStart = fast[idx - slopeWindow];
+  const slopeEnd = fast[idx];
+  const slope = (slopeEnd - slopeStart) / slopeStart;
+  const lookback = Math.min(cfg.vol_lookback_bars, closes.length - 1);
+  const returns = [];
+  for (let i = closes.length - lookback; i < closes.length; i++) {
+    returns.push(Math.log(closes[i] / closes[i - 1]));
+  }
+  const mean = returns.reduce((s, r) => s + r, 0) / returns.length;
+  const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / returns.length;
+  const vol = Math.sqrt(variance);
+  const annualizedVol = vol * Math.sqrt(24 * 365);
+  if (annualizedVol > 1.5) return "VOLATILE";
+  if (Math.abs(slope) > 0.01) return "TRENDING";
+  return "RANGING";
+}
+function analyzeAsset(candles, config3) {
+  const cfg = { ...DEFAULT_CONFIG, ...config3 };
+  const closes = candles.map((c) => c.close);
+  const currentPrice = closes.length > 0 ? closes[closes.length - 1] : 0;
+  if (closes.length < 30) {
+    return {
+      technical_score: 0,
+      regime: "RANGING",
+      atr_value: 0,
+      atr_stop_price: 0,
+      atr_stop_multiplier: cfg.atr_stop_multiplier,
+      current_price: currentPrice,
+      signals: [],
+      active_signal_count: 0,
+      data_quality: "insufficient",
+      reason: `Only ${closes.length} candles available, need at least 30`
+    };
+  }
+  const signals = [
+    computeEMACrossover(closes, cfg),
+    computeRSI(closes, cfg),
+    computeMomentum(closes, cfg),
+    computeMACD(closes, cfg),
+    computeBBWidth(closes, cfg),
+    computeVolatilityRegime(closes, cfg)
+  ];
+  const activeSignals = signals.filter((s) => s.enabled);
+  const regime = classifyRegime(closes, cfg);
+  const atrValue = computeATR(candles, cfg.atr_period);
+  const atrStopPrice = currentPrice - atrValue * cfg.atr_stop_multiplier;
+  if (activeSignals.length < 2) {
+    return {
+      technical_score: 0,
+      regime,
+      atr_value: atrValue,
+      atr_stop_price: atrStopPrice,
+      atr_stop_multiplier: cfg.atr_stop_multiplier,
+      current_price: currentPrice,
+      signals,
+      active_signal_count: activeSignals.length,
+      data_quality: "insufficient",
+      reason: "Fewer than 2 active signals with data"
+    };
+  }
+  const totalScore = activeSignals.reduce((sum, s) => sum + s.score, 0);
+  const technicalScore = totalScore / activeSignals.length;
+  return {
+    technical_score: parseFloat(technicalScore.toFixed(3)),
+    regime,
+    atr_value: parseFloat(atrValue.toFixed(6)),
+    atr_stop_price: parseFloat(atrStopPrice.toFixed(6)),
+    atr_stop_multiplier: cfg.atr_stop_multiplier,
+    current_price: currentPrice,
+    signals,
+    active_signal_count: activeSignals.length,
+    data_quality: "sufficient"
+  };
+}
+function formatAnalysis(result, assetName) {
+  const lines = [
+    `Technical Analysis: ${assetName}`,
+    `Score: ${result.technical_score.toFixed(3)} | Regime: ${result.regime} | Data: ${result.data_quality}`,
+    `Price: $${result.current_price.toFixed(result.current_price >= 1 ? 2 : 8)}`,
+    `ATR: ${result.atr_value.toFixed(6)} | Stop (${result.atr_stop_multiplier}x ATR): $${result.atr_stop_price.toFixed(result.atr_stop_price >= 1 ? 2 : 8)}`,
+    "",
+    "Signals:"
+  ];
+  for (const s of result.signals) {
+    const status = s.enabled ? `${s.score.toFixed(3)}` : "OFF";
+    lines.push(`  [${status}] ${s.name}: ${s.detail}`);
+  }
+  if (result.reason) {
+    lines.push("", `Note: ${result.reason}`);
+  }
+  lines.push("", "\u26A0\uFE0F All parameters are UNVALIDATED starting points from Nunchi research. Not yet proven on spot small-cap tokens.");
+  return lines.join("\n");
+}
+
 // src/maps.ts
-var TIMEOUT_MS3 = 1e4;
+var TIMEOUT_MS4 = 1e4;
 var NOMINATIM_BASE = "https://nominatim.openstreetmap.org";
 var OSRM_BASE = "https://router.project-osrm.org";
 var UA = "pi-assistant/1.0 (personal-project)";
 async function fetchWithTimeout2(url) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS3);
+  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS4);
   try {
     const res = await fetch(url, {
       headers: { "User-Agent": UA, Accept: "application/json" },
@@ -3424,9 +4100,9 @@ ${lines.join("\n\n")}`;
 
 // src/gws.ts
 import { execFile } from "child_process";
-import path2 from "path";
-var GWS_BIN = path2.join(process.cwd(), "bin", "gws");
-var TIMEOUT_MS4 = 15e3;
+import path3 from "path";
+var GWS_BIN = path3.join(process.cwd(), "bin", "gws");
+var TIMEOUT_MS5 = 15e3;
 function parseHexColor(hex) {
   return {
     red: parseInt(hex.slice(1, 3), 16) / 255,
@@ -3441,7 +4117,7 @@ async function runGws(args) {
   }
   return new Promise((resolve) => {
     const env = { ...process.env, GOOGLE_WORKSPACE_CLI_TOKEN: token };
-    execFile(GWS_BIN, args, { env, timeout: TIMEOUT_MS4, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(GWS_BIN, args, { env, timeout: TIMEOUT_MS5, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
         const errMsg = [stderr, stdout, err.message].filter(Boolean).join("\n").trim() || "Unknown error";
         console.error(`[gws] Error running: gws ${args.join(" ")}`, errMsg);
@@ -4120,20 +4796,20 @@ async function slidesBatchUpdate(presentationId, requests) {
 }
 
 // src/youtube.ts
-var BASE_URL = "https://www.googleapis.com/youtube/v3";
-var TIMEOUT_MS5 = 15e3;
+var BASE_URL2 = "https://www.googleapis.com/youtube/v3";
+var TIMEOUT_MS6 = 15e3;
 async function ytFetch(endpoint, params) {
   const token = await getAccessToken();
   if (!token) {
     return { ok: false, data: null, raw: "Google not connected \u2014 visit /api/gmail/auth to connect" };
   }
-  const url = new URL(`${BASE_URL}/${endpoint}`);
+  const url = new URL(`${BASE_URL2}/${endpoint}`);
   for (const [k, v] of Object.entries(params)) {
     url.searchParams.set(k, v);
   }
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS5);
+    const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS6);
     const res = await fetch(url.toString(), {
       headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal
@@ -4297,7 +4973,7 @@ ${lines.join("\n\n")}`;
 
 // src/alerts.ts
 import Anthropic2 from "@anthropic-ai/sdk";
-var DEFAULT_CONFIG = {
+var DEFAULT_CONFIG2 = {
   timezone: "America/New_York",
   location: "New York",
   briefs: {
@@ -4321,7 +4997,7 @@ var DEFAULT_CONFIG = {
   lastPrices: {},
   lastBriefRun: {}
 };
-var config = { ...DEFAULT_CONFIG };
+var config = { ...DEFAULT_CONFIG2 };
 var broadcastFn = null;
 var saveBriefFn = null;
 var briefInterval = null;
@@ -4336,12 +5012,12 @@ async function init6() {
   const existing = await getPool().query(`SELECT value FROM app_config WHERE key = 'alerts'`);
   if (existing.rows.length === 0) {
     try {
-      const fs5 = await import("fs");
-      const path6 = await import("path");
-      const legacyPath = path6.default.join(process.cwd(), "data", "alerts-config.json");
-      if (fs5.default.existsSync(legacyPath)) {
-        const raw = JSON.parse(fs5.default.readFileSync(legacyPath, "utf-8"));
-        const migrated = { ...DEFAULT_CONFIG, ...raw, briefs: { ...DEFAULT_CONFIG.briefs, ...raw.briefs }, alerts: { ...DEFAULT_CONFIG.alerts, ...raw.alerts } };
+      const fs6 = await import("fs");
+      const path7 = await import("path");
+      const legacyPath = path7.default.join(process.cwd(), "data", "alerts-config.json");
+      if (fs6.default.existsSync(legacyPath)) {
+        const raw = JSON.parse(fs6.default.readFileSync(legacyPath, "utf-8"));
+        const migrated = { ...DEFAULT_CONFIG2, ...raw, briefs: { ...DEFAULT_CONFIG2.briefs, ...raw.briefs }, alerts: { ...DEFAULT_CONFIG2.alerts, ...raw.alerts } };
         await getPool().query(
           `INSERT INTO app_config (key, value, updated_at) VALUES ('alerts', $1, $2)`,
           [JSON.stringify(migrated), Date.now()]
@@ -4363,12 +5039,12 @@ async function loadConfig() {
     const result = await getPool().query(`SELECT value FROM app_config WHERE key = 'alerts'`);
     if (result.rows.length > 0) {
       const raw = result.rows[0].value;
-      return { ...DEFAULT_CONFIG, ...raw, briefs: { ...DEFAULT_CONFIG.briefs, ...raw.briefs }, alerts: { ...DEFAULT_CONFIG.alerts, ...raw.alerts } };
+      return { ...DEFAULT_CONFIG2, ...raw, briefs: { ...DEFAULT_CONFIG2.briefs, ...raw.briefs }, alerts: { ...DEFAULT_CONFIG2.alerts, ...raw.alerts } };
     }
   } catch (err) {
     console.error("[alerts] Failed to load config:", err);
   }
-  return { ...DEFAULT_CONFIG };
+  return { ...DEFAULT_CONFIG2 };
 }
 async function saveConfig() {
   try {
@@ -6396,13 +7072,13 @@ async function triggerJob(jobId) {
     const savePath = getJobSavePath(job.id, todayKey, safeName);
     if (job.id === "moodys-daily-intel") {
       try {
-        const fs5 = await import("fs");
-        const path6 = await import("path");
-        const briefDir = path6.join(process.cwd(), "data/vault/Scheduled Reports/Moody's Intelligence/Daily");
-        if (fs5.existsSync(briefDir)) {
-          const files = fs5.readdirSync(briefDir).filter((f) => f.endsWith("-Brief.md") && f > `${todayKey}-Brief.md`).sort().reverse();
+        const fs6 = await import("fs");
+        const path7 = await import("path");
+        const briefDir = path7.join(process.cwd(), "data/vault/Scheduled Reports/Moody's Intelligence/Daily");
+        if (fs6.existsSync(briefDir)) {
+          const files = fs6.readdirSync(briefDir).filter((f) => f.endsWith("-Brief.md") && f > `${todayKey}-Brief.md`).sort().reverse();
           for (const fname of files) {
-            const content = fs5.readFileSync(path6.join(briefDir, fname), "utf-8");
+            const content = fs6.readFileSync(path7.join(briefDir, fname), "utf-8");
             if (content.length > 1e3 && content.includes("## \u{1F3E2}")) {
               result = content;
               console.log(`[scheduled-jobs] Moody's brief: using agent-saved file ${fname} (${result.length} chars)`);
@@ -6476,17 +7152,17 @@ ${result}`);
 }
 
 // src/agents/loader.ts
-import fs2 from "fs";
-import path3 from "path";
+import fs3 from "fs";
+import path4 from "path";
 var agents = [];
 var configPath = "";
 var registeredToolNames = null;
 function init8(dataDir) {
-  configPath = path3.join(dataDir, "agents.json");
+  configPath = path4.join(dataDir, "agents.json");
   loadAgents();
   let reloadTimer = null;
   try {
-    fs2.watch(configPath, () => {
+    fs3.watch(configPath, () => {
       if (reloadTimer) clearTimeout(reloadTimer);
       reloadTimer = setTimeout(() => {
         console.log("[agents] Config file changed \u2014 reloading");
@@ -6514,7 +7190,7 @@ function validateAgentTools() {
 }
 function loadAgents() {
   try {
-    const raw = fs2.readFileSync(configPath, "utf-8");
+    const raw = fs3.readFileSync(configPath, "utf-8");
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) {
       console.error("[agents] agents.json must be an array");
@@ -6558,9 +7234,9 @@ function getAgent(id) {
 import Anthropic3 from "@anthropic-ai/sdk";
 
 // src/obsidian-skills.ts
-import fs3 from "fs";
-import path4 from "path";
-var SKILLS_DIR = path4.join(process.cwd(), "data", "skills");
+import fs4 from "fs";
+import path5 from "path";
+var SKILLS_DIR = path5.join(process.cwd(), "data", "skills");
 var CACHE_TTL = 24 * 60 * 60 * 1e3;
 var GITHUB_BASE = "https://raw.githubusercontent.com/kepano/obsidian-skills/main/skills";
 var SKILL_FILES = {
@@ -6571,20 +7247,20 @@ var SKILL_FILES = {
 };
 var memoryCache = /* @__PURE__ */ new Map();
 function ensureDir() {
-  if (!fs3.existsSync(SKILLS_DIR)) {
-    fs3.mkdirSync(SKILLS_DIR, { recursive: true });
+  if (!fs4.existsSync(SKILLS_DIR)) {
+    fs4.mkdirSync(SKILLS_DIR, { recursive: true });
   }
 }
 function getCachePath(name) {
-  return path4.join(SKILLS_DIR, `${name}.md`);
+  return path5.join(SKILLS_DIR, `${name}.md`);
 }
 function readDiskCache(name) {
   const p = getCachePath(name);
   const metaPath = p + ".meta";
   try {
-    if (!fs3.existsSync(p) || !fs3.existsSync(metaPath)) return null;
-    const content = fs3.readFileSync(p, "utf-8");
-    const meta = JSON.parse(fs3.readFileSync(metaPath, "utf-8"));
+    if (!fs4.existsSync(p) || !fs4.existsSync(metaPath)) return null;
+    const content = fs4.readFileSync(p, "utf-8");
+    const meta = JSON.parse(fs4.readFileSync(metaPath, "utf-8"));
     return { content, fetchedAt: meta.fetchedAt || 0 };
   } catch {
     return null;
@@ -6592,8 +7268,8 @@ function readDiskCache(name) {
 }
 function writeDiskCache(name, content) {
   ensureDir();
-  fs3.writeFileSync(getCachePath(name), content, "utf-8");
-  fs3.writeFileSync(getCachePath(name) + ".meta", JSON.stringify({ fetchedAt: Date.now() }), "utf-8");
+  fs4.writeFileSync(getCachePath(name), content, "utf-8");
+  fs4.writeFileSync(getCachePath(name) + ".meta", JSON.stringify({ fetchedAt: Date.now() }), "utf-8");
 }
 async function fetchSkill(name) {
   const cached = memoryCache.get(name);
@@ -7421,14 +8097,14 @@ var USERS = {
 };
 var SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path5.dirname(__filename);
-var PROJECT_ROOT = __filename.includes("/dist/") ? path5.resolve(__dirname, "..") : __dirname;
-var PUBLIC_DIR = path5.join(PROJECT_ROOT, "public");
-var AGENT_DIR = path5.join(PROJECT_ROOT, ".pi/agent");
-var VAULT_DIR = path5.join(PROJECT_ROOT, "data", "vault");
-fs4.mkdirSync(AGENT_DIR, { recursive: true });
+var __dirname = path6.dirname(__filename);
+var PROJECT_ROOT = __filename.includes("/dist/") ? path6.resolve(__dirname, "..") : __dirname;
+var PUBLIC_DIR = path6.join(PROJECT_ROOT, "public");
+var AGENT_DIR = path6.join(PROJECT_ROOT, ".pi/agent");
+var VAULT_DIR = path6.join(PROJECT_ROOT, "data", "vault");
+fs5.mkdirSync(AGENT_DIR, { recursive: true });
 init(VAULT_DIR);
-init8(path5.join(PROJECT_ROOT, "data"));
+init8(path6.join(PROJECT_ROOT, "data"));
 loadAllSkills().catch((err) => console.warn("[startup] Failed to preload Obsidian skills:", err));
 var useLocalVault = isConfigured2();
 setInterval(() => {
@@ -7455,7 +8131,7 @@ if (useLocalVault) {
 }
 if (!APP_PASSWORD) console.warn("APP_PASSWORD is not set \u2014 auth disabled.");
 console.log(`[boot] PORT=${PORT} PUBLIC_DIR=${PUBLIC_DIR} AGENT_DIR=${AGENT_DIR}`);
-console.log(`[boot] public/ exists: ${fs4.existsSync(PUBLIC_DIR)}`);
+console.log(`[boot] public/ exists: ${fs5.existsSync(PUBLIC_DIR)}`);
 function kbList(p) {
   return useLocalVault ? listNotes2(p) : listNotes(p);
 }
@@ -8059,8 +8735,8 @@ ${description}` }],
 }
 function buildRenderPageTools() {
   const bbKey = process.env.BROWSERBASE_API_KEY;
-  const lightpandaBin = path5.join(PROJECT_ROOT, ".bin/lightpanda");
-  const hasLightpanda = fs4.existsSync(lightpandaBin);
+  const lightpandaBin = path6.join(PROJECT_ROOT, ".bin/lightpanda");
+  const hasLightpanda = fs5.existsSync(lightpandaBin);
   if (!bbKey && !hasLightpanda) return [];
   function isBlockedUrl(url) {
     try {
@@ -8503,6 +9179,91 @@ function buildStockTools() {
       async execute(_toolCallId, params) {
         const result = await getCryptoPrice(params.coin);
         return { content: [{ type: "text", text: result }], details: {} };
+      }
+    }
+  ];
+}
+function buildCoinGeckoTools() {
+  return [
+    {
+      name: "crypto_trending",
+      label: "Crypto Trending",
+      description: "Get trending cryptocurrencies and categories on CoinGecko. Shows top 15 trending coins with price and 24h change, plus top trending categories.",
+      parameters: Type.Object({}),
+      async execute() {
+        const result = await getTrending();
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "crypto_movers",
+      label: "Crypto Movers",
+      description: "Get top crypto gainers or losers by 24h price change. Returns price, 24h/7d change, and market cap for each.",
+      parameters: Type.Object({
+        direction: Type.Optional(Type.Union([Type.Literal("gainers"), Type.Literal("losers")], { description: "Show top gainers or losers. Default: gainers", default: "gainers" })),
+        limit: Type.Optional(Type.Number({ description: "Number of results (max 50). Default: 20", default: 20 }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = await getMovers(params.direction || "gainers", Math.min(params.limit || 20, 50));
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "crypto_categories",
+      label: "Crypto Categories",
+      description: "Get crypto market categories sorted by 24h market cap change. Shows category name, 24h change, market cap, and volume. Useful for sector analysis (DeFi, AI, L1, memes, etc.).",
+      parameters: Type.Object({
+        limit: Type.Optional(Type.Number({ description: "Number of categories (max 50). Default: 20", default: 20 }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = await getCategories(Math.min(params.limit || 20, 50));
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "crypto_market_overview",
+      label: "Crypto Market Overview",
+      description: "Get global crypto market overview: total market cap, 24h volume, BTC/ETH dominance, number of active cryptocurrencies, and 24h market cap change.",
+      parameters: Type.Object({}),
+      async execute() {
+        const result = await getMarketOverview();
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "crypto_historical",
+      label: "Crypto Historical Data",
+      description: "Get historical price data summary for a cryptocurrency (hourly candles). Shows period high/low, return, and candle count. Data is cached locally and refreshes max once per hour.",
+      parameters: Type.Object({
+        coin: Type.String({ description: "Cryptocurrency name or ticker (e.g. 'bitcoin', 'BTC', 'ethereum')" }),
+        days: Type.Optional(Type.Number({ description: "Number of days of history (max 90). Default: 90", default: 90 }))
+      }),
+      async execute(_toolCallId, params) {
+        const result = await getHistoricalOHLCVFormatted(params.coin, Math.min(params.days || 90, 90));
+        return { content: [{ type: "text", text: result }], details: {} };
+      }
+    },
+    {
+      name: "technical_analysis",
+      label: "Technical Analysis",
+      description: "Run technical analysis on a cryptocurrency. Returns composite technical_score (0.0-1.0), market regime (TRENDING/RANGING/VOLATILE), ATR-based stop loss price, and per-signal breakdown (EMA crossover, RSI, momentum). Uses cached hourly OHLCV data. Parameters are UNVALIDATED starting points \u2014 not yet proven on small-cap tokens.",
+      parameters: Type.Object({
+        coin: Type.String({ description: "Cryptocurrency name or ticker (e.g. 'bitcoin', 'BTC', 'BNKR', 'VIRTUAL')" }),
+        days: Type.Optional(Type.Number({ description: "Days of data to analyze (max 90). Default: 90", default: 90 }))
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const candles = await getHistoricalOHLCV(params.coin, Math.min(params.days || 90, 90));
+          if (candles.length === 0) {
+            return { content: [{ type: "text", text: `No historical data available for "${params.coin}". Cannot run technical analysis.` }], details: {} };
+          }
+          const result = analyzeAsset(candles);
+          const formatted = formatAnalysis(result, params.coin);
+          return { content: [{ type: "text", text: formatted }], details: {} };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { content: [{ type: "text", text: `Technical analysis failed for "${params.coin}": ${msg}` }], details: {} };
+        }
       }
     }
   ];
@@ -9632,7 +10393,7 @@ ${snippetText}`;
   ];
 }
 function buildWebPublishTools() {
-  const PUBLISH_SCRIPT = path5.join(PROJECT_ROOT, "scripts", "herenow-publish.sh");
+  const PUBLISH_SCRIPT = path6.join(PROJECT_ROOT, "scripts", "herenow-publish.sh");
   return [
     {
       name: "web_publish",
@@ -9650,10 +10411,10 @@ function buildWebPublishTools() {
       }),
       async execute(_toolCallId, params) {
         try {
-          let targetPath = path5.resolve(params.path);
-          if (!fs4.existsSync(targetPath)) {
-            const vaultPath2 = path5.join(VAULT_DIR, params.path);
-            if (fs4.existsSync(vaultPath2)) {
+          let targetPath = path6.resolve(params.path);
+          if (!fs5.existsSync(targetPath)) {
+            const vaultPath2 = path6.join(VAULT_DIR, params.path);
+            if (fs5.existsSync(vaultPath2)) {
               targetPath = vaultPath2;
             } else {
               return {
@@ -9662,8 +10423,8 @@ function buildWebPublishTools() {
               };
             }
           }
-          const realTarget = fs4.realpathSync(targetPath);
-          const projectReal = fs4.realpathSync(PROJECT_ROOT);
+          const realTarget = fs5.realpathSync(targetPath);
+          const projectReal = fs5.realpathSync(PROJECT_ROOT);
           if (!realTarget.startsWith(projectReal + "/") && realTarget !== projectReal) {
             return {
               content: [{ type: "text", text: `Error: Can only publish files within the project directory.` }],
@@ -9671,7 +10432,7 @@ function buildWebPublishTools() {
             };
           }
           const blocked = [".env", "auth.json", "credentials", ".herenow"];
-          const relPath = path5.relative(projectReal, realTarget);
+          const relPath = path6.relative(projectReal, realTarget);
           if (blocked.some((b) => relPath.split("/").includes(b) || relPath === b)) {
             return {
               content: [{ type: "text", text: `Error: Cannot publish sensitive files.` }],
@@ -9743,11 +10504,11 @@ ${stderr || stdout || err.message}`
           if (!slug) {
             return { content: [{ type: "text", text: "Error: Invalid slug \u2014 must contain at least one alphanumeric character." }], details: {} };
           }
-          const pagesDir = path5.join(PROJECT_ROOT, "data", "pages");
-          if (!fs4.existsSync(pagesDir)) fs4.mkdirSync(pagesDir, { recursive: true });
-          const filePath = path5.join(pagesDir, `${slug}.html`);
-          const existed = fs4.existsSync(filePath);
-          fs4.writeFileSync(filePath, params.html, "utf-8");
+          const pagesDir = path6.join(PROJECT_ROOT, "data", "pages");
+          if (!fs5.existsSync(pagesDir)) fs5.mkdirSync(pagesDir, { recursive: true });
+          const filePath = path6.join(pagesDir, `${slug}.html`);
+          const existed = fs5.existsSync(filePath);
+          fs5.writeFileSync(filePath, params.html, "utf-8");
           const domain = process.env.REPLIT_DEPLOYMENT_URL || process.env.REPLIT_DEV_DOMAIN || "rickin.live";
           const protocol = domain.includes("localhost") ? "http" : "https";
           const pageUrl = `${protocol}://${domain}/pages/${slug}`;
@@ -9777,11 +10538,11 @@ This page is password-protected behind your login. Visit rickin.live/pages to se
       parameters: Type.Object({}),
       async execute() {
         try {
-          const pagesDir = path5.join(PROJECT_ROOT, "data", "pages");
-          if (!fs4.existsSync(pagesDir)) {
+          const pagesDir = path6.join(PROJECT_ROOT, "data", "pages");
+          if (!fs5.existsSync(pagesDir)) {
             return { content: [{ type: "text", text: "No pages saved yet." }], details: {} };
           }
-          const files = fs4.readdirSync(pagesDir).filter((f) => f.endsWith(".html")).sort();
+          const files = fs5.readdirSync(pagesDir).filter((f) => f.endsWith(".html")).sort();
           if (files.length === 0) {
             return { content: [{ type: "text", text: "No pages saved yet." }], details: {} };
           }
@@ -9789,7 +10550,7 @@ This page is password-protected behind your login. Visit rickin.live/pages to se
           const protocol = domain.includes("localhost") ? "http" : "https";
           const list2 = files.map((f) => {
             const slug = f.replace(/\.html$/, "");
-            const stat = fs4.statSync(path5.join(pagesDir, f));
+            const stat = fs5.statSync(path6.join(pagesDir, f));
             const sizeKB = Math.round(stat.size / 1024);
             const date = stat.mtime.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
             return `- ${slug} (${sizeKB}KB, ${date}) \u2014 ${protocol}://${domain}/pages/${slug}`;
@@ -9820,11 +10581,11 @@ All pages: ${protocol}://${domain}/pages` }],
           if (!slug) {
             return { content: [{ type: "text", text: "Error: Invalid slug." }], details: {} };
           }
-          const filePath = path5.join(PROJECT_ROOT, "data", "pages", `${slug}.html`);
-          if (!fs4.existsSync(filePath)) {
+          const filePath = path6.join(PROJECT_ROOT, "data", "pages", `${slug}.html`);
+          if (!fs5.existsSync(filePath)) {
             return { content: [{ type: "text", text: `Page "${slug}" not found.` }], details: {} };
           }
-          fs4.unlinkSync(filePath);
+          fs5.unlinkSync(filePath);
           return { content: [{ type: "text", text: `\u2705 Page "${slug}" deleted.` }], details: {} };
         } catch (err) {
           return { content: [{ type: "text", text: `Failed to delete page: ${err.message}` }], details: {} };
@@ -10148,17 +10909,17 @@ setInterval(async () => {
     }
   }
 }, 5 * 60 * 1e3);
-var TUNNEL_URL_FILE = path5.join(PROJECT_ROOT, "data", "tunnel-url.txt");
+var TUNNEL_URL_FILE = path6.join(PROJECT_ROOT, "data", "tunnel-url.txt");
 function loadPersistedTunnelUrl() {
   try {
-    return fs4.readFileSync(TUNNEL_URL_FILE, "utf-8").trim() || null;
+    return fs5.readFileSync(TUNNEL_URL_FILE, "utf-8").trim() || null;
   } catch {
     return null;
   }
 }
 function persistTunnelUrl(url) {
   try {
-    fs4.writeFileSync(TUNNEL_URL_FILE, url, "utf-8");
+    fs5.writeFileSync(TUNNEL_URL_FILE, url, "utf-8");
   } catch {
   }
 }
@@ -10304,18 +11065,18 @@ app.get("/api/logout", (_req, res) => {
   res.redirect("/login.html");
 });
 app.use(express.static(PUBLIC_DIR));
-var PAGES_DIR = path5.join(PROJECT_ROOT, "data", "pages");
-if (!fs4.existsSync(PAGES_DIR)) fs4.mkdirSync(PAGES_DIR, { recursive: true });
+var PAGES_DIR = path6.join(PROJECT_ROOT, "data", "pages");
+if (!fs5.existsSync(PAGES_DIR)) fs5.mkdirSync(PAGES_DIR, { recursive: true });
 app.get("/pages", (_req, res) => {
   try {
-    const files = fs4.readdirSync(PAGES_DIR).filter((f) => f.endsWith(".html")).sort();
+    const files = fs5.readdirSync(PAGES_DIR).filter((f) => f.endsWith(".html")).sort();
     if (files.length === 0) {
       res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pages \u2014 RICKIN</title><style>body{font-family:-apple-system,system-ui,sans-serif;background:#0a0a0a;color:#e0e0e0;padding:2rem;max-width:600px;margin:0 auto}h1{font-size:1.4rem;color:#fff}p{color:#888}</style></head><body><h1>Pages</h1><p>No pages published yet.</p></body></html>`);
       return;
     }
     const items = files.map((f) => {
       const slug = f.replace(/\.html$/, "");
-      const stat = fs4.statSync(path5.join(PAGES_DIR, f));
+      const stat = fs5.statSync(path6.join(PAGES_DIR, f));
       const date = stat.mtime.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
       return `<a href="/pages/${slug}">${slug}</a><span class="date">${date}</span>`;
     }).join("");
@@ -11537,15 +12298,15 @@ app.get("/pages/:slug", async (req, res) => {
     res.status(400).send("Invalid page slug.");
     return;
   }
-  const filePath = path5.join(PAGES_DIR, `${slug}.html`);
-  if (!fs4.existsSync(filePath)) {
+  const filePath = path6.join(PAGES_DIR, `${slug}.html`);
+  if (!fs5.existsSync(filePath)) {
     res.status(404).send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Not Found</title><style>body{font-family:-apple-system,sans-serif;background:#0a0a0a;color:#e0e0e0;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}h1{font-size:1.2rem;color:#888}</style></head><body><h1>Page not found.</h1></body></html>`);
     return;
   }
   const isTokenAuth = !!(req.query.user && req.query.token) || !!req.headers.authorization?.startsWith("Bearer ");
   if (slug === "baby-dashboard" && isTokenAuth && isConnected()) {
     try {
-      let html = fs4.readFileSync(filePath, "utf-8");
+      let html = fs5.readFileSync(filePath, "utf-8");
       let data = babyDashboardCache?.data;
       if (!data || Date.now() - (babyDashboardCache?.timestamp || 0) > BABY_CACHE_TTL) {
         let parseRows2 = function(raw) {
@@ -11669,12 +12430,12 @@ app.post("/api/pages/:slug/share", async (req, res) => {
     return;
   }
   try {
-    const filePath = path5.join(PAGES_DIR, `${slug}.html`);
-    if (!fs4.existsSync(filePath)) {
+    const filePath = path6.join(PAGES_DIR, `${slug}.html`);
+    if (!fs5.existsSync(filePath)) {
       res.status(404).json({ error: "Page not found" });
       return;
     }
-    let html = fs4.readFileSync(filePath, "utf-8");
+    let html = fs5.readFileSync(filePath, "utf-8");
     const now = /* @__PURE__ */ new Date();
     const cfg = getConfig();
     const tz = cfg.timezone || "America/New_York";
@@ -11815,15 +12576,15 @@ render(SNAPSHOT_DATA);`
     html = html.replace(/<\/body>/, `${snapshotFooter}
 </body>`);
     const tmpFile = `/tmp/snapshot-${slug}-${Date.now()}.html`;
-    fs4.writeFileSync(tmpFile, html);
-    const publishScript = path5.join(PROJECT_ROOT, "scripts", "herenow-publish.sh");
+    fs5.writeFileSync(tmpFile, html);
+    const publishScript = path6.join(PROJECT_ROOT, "scripts", "herenow-publish.sh");
     const titleStr = slug === "daily-brief" ? `Daily Brief \u2014 ${titleDate}` : slug === "x-intelligence" ? `X Intelligence \u2014 ${titleDate}` : `Baby Dashboard \u2014 ${titleDate}`;
     const output = execSync(`bash "${publishScript}" "${tmpFile}" --title "${titleStr}" --client "darknode"`, {
       encoding: "utf-8",
       timeout: 3e4
     });
     try {
-      fs4.unlinkSync(tmpFile);
+      fs5.unlinkSync(tmpFile);
     } catch {
     }
     const lines = output.trim().split("\n");
@@ -11886,6 +12647,7 @@ var cachedStaticTools = [
   ...buildNewsTools(),
   ...buildTwitterTools(),
   ...buildStockTools(),
+  ...buildCoinGeckoTools(),
   ...buildMapsTools(),
   ...buildDriveTools(),
   ...buildSheetsTools(),
@@ -11905,9 +12667,9 @@ app.post("/api/session", async (req, res) => {
   try {
     const { resumeConversationId } = req.body || {};
     const sessionId = `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const authStorage = AuthStorage.create(path5.join(AGENT_DIR, "auth.json"));
+    const authStorage = AuthStorage.create(path6.join(AGENT_DIR, "auth.json"));
     authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
-    const modelRegistry = new ModelRegistry(authStorage, path5.join(AGENT_DIR, "models.json"));
+    const modelRegistry = new ModelRegistry(authStorage, path6.join(AGENT_DIR, "models.json"));
     const fullModel = modelRegistry.find("anthropic", FULL_MODEL_ID);
     if (!fullModel) throw new Error(`Model ${FULL_MODEL_ID} not found in registry`);
     const coreTools = [
@@ -12152,9 +12914,9 @@ app.post("/api/session/:id/prompt", async (req, res) => {
   }
   if (chosenModelId !== entry.activeModelName) {
     try {
-      const authStorage = AuthStorage.create(path5.join(AGENT_DIR, "auth.json"));
+      const authStorage = AuthStorage.create(path6.join(AGENT_DIR, "auth.json"));
       authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
-      const modelRegistry = new ModelRegistry(authStorage, path5.join(AGENT_DIR, "models.json"));
+      const modelRegistry = new ModelRegistry(authStorage, path6.join(AGENT_DIR, "models.json"));
       const newModel = modelRegistry.find("anthropic", chosenModelId);
       if (newModel) {
         await entry.session.setModel(newModel);
@@ -12702,12 +13464,12 @@ app.post("/api/scheduled-jobs", (req, res) => {
 });
 app.get("/api/kb/read", async (req, res) => {
   try {
-    const path6 = req.query.path;
-    if (!path6) {
+    const path7 = req.query.path;
+    if (!path7) {
       res.status(400).json({ error: "path required" });
       return;
     }
-    const content = await kbRead(path6);
+    const content = await kbRead(path7);
     res.json({ content });
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to read" });
@@ -12986,7 +13748,7 @@ app.get("/api/kb-status", (_req, res) => {
 });
 var obSyncProcess = null;
 function startObSync() {
-  const vaultPath2 = path5.join(process.cwd(), "data", "vault");
+  const vaultPath2 = path6.join(process.cwd(), "data", "vault");
   const logPath = "/tmp/obsidian-sync.log";
   if (obSyncProcess) {
     try {
@@ -12999,7 +13761,7 @@ function startObSync() {
     execSync("pgrep -f 'ob sync' 2>/dev/null && pkill -f 'ob sync'", { encoding: "utf-8" });
   } catch {
   }
-  const logFd = fs4.openSync(logPath, "a");
+  const logFd = fs5.openSync(logPath, "a");
   const child = spawn("ob", ["sync", "--continuous", "--path", vaultPath2], {
     stdio: ["ignore", logFd, logFd],
     detached: false
@@ -13022,7 +13784,7 @@ function getSyncStatus() {
   const logPath = "/tmp/obsidian-sync.log";
   const lastChecked = (/* @__PURE__ */ new Date()).toISOString();
   try {
-    const content = fs4.readFileSync(logPath, "utf-8");
+    const content = fs5.readFileSync(logPath, "utf-8");
     const lines = content.trim().split("\n").filter((l) => l.trim());
     if (lines.length === 0) return { running: false, status: "not_running", lastLine: "", lastChecked };
     const lastLine = lines[lines.length - 1].trim();
@@ -13077,12 +13839,12 @@ app.get("/api/agents", (_req, res) => {
   res.json({ agents: agents2 });
 });
 async function buildVaultTree(dir) {
-  const entries = await fs4.promises.readdir(dir, { withFileTypes: true });
+  const entries = await fs5.promises.readdir(dir, { withFileTypes: true });
   const result = [];
   for (const entry of entries) {
     if (entry.name.startsWith(".")) continue;
     if (entry.isDirectory()) {
-      const children = await buildVaultTree(path5.join(dir, entry.name));
+      const children = await buildVaultTree(path6.join(dir, entry.name));
       result.push({ name: entry.name, type: "folder", children });
     } else {
       result.push({ name: entry.name, type: "file" });
@@ -13281,14 +14043,14 @@ async function startServer(maxRetries = 5) {
               return result;
             },
             broadcastToAll,
-            async (path6, content) => {
+            async (path7, content) => {
               try {
-                await kbCreate(path6, content);
+                await kbCreate(path7, content);
               } catch (err) {
-                console.error(`[scheduled-jobs] Vault save failed for ${path6}:`, err);
+                console.error(`[scheduled-jobs] Vault save failed for ${path7}:`, err);
               }
             },
-            async (path6) => kbList(path6),
+            async (path7) => kbList(path7),
             async (from, to) => kbMove(from, to),
             () => getPool()
           );
