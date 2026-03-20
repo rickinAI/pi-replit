@@ -46,7 +46,7 @@ import * as obsidianSkills from "./src/obsidian-skills.js";
 import { cleanHtmlToMarkdown, looksLikeHtml } from "./src/defuddle.js";
 import * as vaultGraph from "./src/vault-graph.js";
 
-const PORT = parseInt(process.env.PORT || "3000", 10);
+const PORT = parseInt(process.env.PORT || "5000", 10);
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
 const APP_PASSWORD = process.env.APP_PASSWORD || "";
 const POOJA_PASSWORD = process.env.POOJA_PASSWORD || "";

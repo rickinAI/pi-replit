@@ -7409,7 +7409,7 @@ ${backlinkHeading}${backlinkLine}`);
 }
 
 // server.ts
-var PORT = parseInt(process.env.PORT || "3000", 10);
+var PORT = parseInt(process.env.PORT || "5000", 10);
 var ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
 var APP_PASSWORD = process.env.APP_PASSWORD || "";
 var POOJA_PASSWORD = process.env.POOJA_PASSWORD || "";
