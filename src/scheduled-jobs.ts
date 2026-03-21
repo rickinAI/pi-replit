@@ -49,6 +49,7 @@ function getJobSavePath(jobId: string, dateStr: string, safeName: string): strin
   if (jobId === "scout-full-cycle") return `Scheduled Reports/Wealth Engines/Scout/${dateStr}-Full-Cycle.md`;
   if (jobId === "polymarket-activity-scan") return `Scheduled Reports/Wealth Engines/Polymarket/${dateStr}-Activity-Scan.md`;
   if (jobId === "polymarket-full-cycle") return `Scheduled Reports/Wealth Engines/Polymarket/${dateStr}-Full-Cycle.md`;
+  if (jobId === "weekly-memory-reflect") return `Scheduled Reports/Memory/${dateStr}-Weekly-Digest.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 
@@ -849,6 +850,29 @@ Output a full brief with:
 
 Do NOT use notes_create — the system saves automatically.`,
     schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 240 },
+    enabled: true,
+  },
+  {
+    id: "weekly-memory-reflect",
+    name: "Weekly Memory Reflect",
+    agentId: "knowledge-organizer",
+    prompt: `Run a WEEKLY MEMORY REFLECTION. Use memory_recall to surface patterns and insights from Rickin's accumulated memories.
+
+1. Use memory_recall with query "important decisions and preferences" (top 15)
+2. Use memory_recall with query "projects and work activities" (top 15)
+3. Use memory_recall with query "family, personal life, and routines" (top 15)
+4. Use memory_recall with query "action items and follow-ups" (top 10)
+
+Synthesize into a weekly digest:
+- **Key Themes**: What topics dominated this week
+- **Decisions Made**: Important choices or directions set
+- **Active Projects**: Status of ongoing work
+- **Personal**: Family, health, routine updates
+- **Open Items**: Things that need follow-up
+- **Patterns**: Recurring topics or concerns
+
+Keep it concise and actionable. Save to the vault automatically.`,
+    schedule: { type: "weekly", hour: 9, minute: 0, dayOfWeek: 0 },
     enabled: true,
   },
 ];

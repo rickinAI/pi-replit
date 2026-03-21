@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import * as hindsight from "./hindsight.js";
 
 interface ConversationMessage {
   role: "user" | "agent" | "system";
@@ -10,6 +11,7 @@ export interface ExtractionResult {
   profileUpdates: string[];
   actionItems: string[];
   skipReason?: string;
+  hindsightRetained?: number;
 }
 
 export async function extractAndFileInsights(
@@ -70,11 +72,42 @@ Rules:
     const cleaned = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
     const parsed = JSON.parse(cleaned) as ExtractionResult;
 
-    return {
+    const result: ExtractionResult = {
       profileUpdates: Array.isArray(parsed.profileUpdates) ? parsed.profileUpdates : [],
       actionItems: Array.isArray(parsed.actionItems) ? parsed.actionItems : [],
       skipReason: parsed.skipReason || undefined,
     };
+
+    if (hindsight.isConfigured() && !result.skipReason) {
+      try {
+        const retainItems: { text: string; metadata?: Record<string, string> }[] = [];
+        const dateStr = new Date().toISOString();
+
+        for (const update of result.profileUpdates) {
+          retainItems.push({
+            text: update,
+            metadata: { type: "profile_update", source: "conversation", date: dateStr },
+          });
+        }
+
+        for (const item of result.actionItems) {
+          retainItems.push({
+            text: item,
+            metadata: { type: "action_item", source: "conversation", date: dateStr },
+          });
+        }
+
+        if (retainItems.length > 0) {
+          const retained = await hindsight.retainBatch(retainItems);
+          result.hindsightRetained = retained;
+          console.log(`[memory] Hindsight: retained ${retained}/${retainItems.length} memories`);
+        }
+      } catch (err) {
+        console.warn("[memory] Hindsight dual-write failed (vault still saved):", err);
+      }
+    }
+
+    return result;
   } catch (err) {
     console.error("[memory-extractor] Extraction failed:", err);
     return { profileUpdates: [], actionItems: [], skipReason: "extraction_error" };

@@ -7618,6 +7618,7 @@ function getJobSavePath(jobId, dateStr, safeName) {
   if (jobId === "scout-full-cycle") return `Scheduled Reports/Wealth Engines/Scout/${dateStr}-Full-Cycle.md`;
   if (jobId === "polymarket-activity-scan") return `Scheduled Reports/Wealth Engines/Polymarket/${dateStr}-Activity-Scan.md`;
   if (jobId === "polymarket-full-cycle") return `Scheduled Reports/Wealth Engines/Polymarket/${dateStr}-Full-Cycle.md`;
+  if (jobId === "weekly-memory-reflect") return `Scheduled Reports/Memory/${dateStr}-Weekly-Digest.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 var jobStatusCache = {};
@@ -8415,6 +8416,29 @@ Output a full brief with:
 
 Do NOT use notes_create \u2014 the system saves automatically.`,
     schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 240 },
+    enabled: true
+  },
+  {
+    id: "weekly-memory-reflect",
+    name: "Weekly Memory Reflect",
+    agentId: "knowledge-organizer",
+    prompt: `Run a WEEKLY MEMORY REFLECTION. Use memory_recall to surface patterns and insights from Rickin's accumulated memories.
+
+1. Use memory_recall with query "important decisions and preferences" (top 15)
+2. Use memory_recall with query "projects and work activities" (top 15)
+3. Use memory_recall with query "family, personal life, and routines" (top 15)
+4. Use memory_recall with query "action items and follow-ups" (top 10)
+
+Synthesize into a weekly digest:
+- **Key Themes**: What topics dominated this week
+- **Decisions Made**: Important choices or directions set
+- **Active Projects**: Status of ongoing work
+- **Personal**: Family, health, routine updates
+- **Open Items**: Things that need follow-up
+- **Patterns**: Recurring topics or concerns
+
+Keep it concise and actionable. Save to the vault automatically.`,
+    schedule: { type: "weekly", hour: 9, minute: 0, dayOfWeek: 0 },
     enabled: true
   }
 ];
@@ -9844,6 +9868,106 @@ ${opts.task}`;
 
 // src/memory-extractor.ts
 import Anthropic4 from "@anthropic-ai/sdk";
+
+// src/hindsight.ts
+var BASE_URL4 = "https://api.vectorize.io/v1";
+var TIMEOUT_MS8 = 15e3;
+var MAX_RETRIES2 = 2;
+function getConfig2() {
+  const apiKey = process.env.VECTORIZE_API_KEY;
+  const organizationId = process.env.VECTORIZE_ORG_ID;
+  const knowledgeBaseId = process.env.VECTORIZE_KB_ID;
+  if (!apiKey || !organizationId || !knowledgeBaseId) return null;
+  return { apiKey, organizationId, knowledgeBaseId };
+}
+function isConfigured7() {
+  return getConfig2() !== null;
+}
+async function apiRequest(method, path8, body, retries = MAX_RETRIES2) {
+  const config3 = getConfig2();
+  if (!config3) throw new Error("Hindsight not configured: missing VECTORIZE_API_KEY, VECTORIZE_ORG_ID, or VECTORIZE_KB_ID");
+  const url = `${BASE_URL4}/org/${config3.organizationId}/knowledgebases/${config3.knowledgeBaseId}${path8}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS8);
+  try {
+    const res = await fetch(url, {
+      method,
+      headers: {
+        "Authorization": config3.apiKey,
+        "Content-Type": "application/json"
+      },
+      body: body ? JSON.stringify(body) : void 0,
+      signal: controller.signal
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      if (retries > 0 && (res.status === 429 || res.status >= 500)) {
+        const delay = res.status === 429 ? 2e3 : 1e3;
+        await new Promise((r) => setTimeout(r, delay));
+        return apiRequest(method, path8, body, retries - 1);
+      }
+      throw new Error(`Hindsight API ${res.status}: ${text.slice(0, 200)}`);
+    }
+    const contentType = res.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      return await res.json();
+    }
+    return await res.text();
+  } catch (err) {
+    if (err.name === "AbortError") {
+      if (retries > 0) return apiRequest(method, path8, body, retries - 1);
+      throw new Error("Hindsight API timeout");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function retain(params) {
+  try {
+    await apiRequest("POST", "/memory", {
+      text: params.text,
+      metadata: params.metadata || {}
+    });
+    return true;
+  } catch (err) {
+    console.error("[hindsight] retain failed:", err);
+    return false;
+  }
+}
+async function retainBatch(items) {
+  let succeeded = 0;
+  for (const item of items) {
+    const ok = await retain(item);
+    if (ok) succeeded++;
+  }
+  return succeeded;
+}
+async function recall(params) {
+  try {
+    const data = await apiRequest("POST", "/memory/retrieve", {
+      question: params.query,
+      topK: params.topK || 10
+    });
+    const memories = Array.isArray(data) ? data.map((m) => ({
+      text: m.text || m.content || "",
+      score: m.score || m.similarity || 0,
+      metadata: m.metadata || {},
+      createdAt: m.createdAt || m.created_at || void 0
+    })) : Array.isArray(data?.results) ? data.results.map((m) => ({
+      text: m.text || m.content || "",
+      score: m.score || m.similarity || 0,
+      metadata: m.metadata || {},
+      createdAt: m.createdAt || m.created_at || void 0
+    })) : [];
+    return { memories };
+  } catch (err) {
+    console.error("[hindsight] recall failed:", err);
+    return { memories: [] };
+  }
+}
+
+// src/memory-extractor.ts
 async function extractAndFileInsights(messages, currentProfile) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -9891,11 +10015,37 @@ Rules:
     const text = response.content[0]?.type === "text" ? response.content[0].text : "";
     const cleaned = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
     const parsed = JSON.parse(cleaned);
-    return {
+    const result = {
       profileUpdates: Array.isArray(parsed.profileUpdates) ? parsed.profileUpdates : [],
       actionItems: Array.isArray(parsed.actionItems) ? parsed.actionItems : [],
       skipReason: parsed.skipReason || void 0
     };
+    if (isConfigured7() && !result.skipReason) {
+      try {
+        const retainItems = [];
+        const dateStr = (/* @__PURE__ */ new Date()).toISOString();
+        for (const update of result.profileUpdates) {
+          retainItems.push({
+            text: update,
+            metadata: { type: "profile_update", source: "conversation", date: dateStr }
+          });
+        }
+        for (const item of result.actionItems) {
+          retainItems.push({
+            text: item,
+            metadata: { type: "action_item", source: "conversation", date: dateStr }
+          });
+        }
+        if (retainItems.length > 0) {
+          const retained = await retainBatch(retainItems);
+          result.hindsightRetained = retained;
+          console.log(`[memory] Hindsight: retained ${retained}/${retainItems.length} memories`);
+        }
+      } catch (err) {
+        console.warn("[memory] Hindsight dual-write failed (vault still saved):", err);
+      }
+    }
+    return result;
   } catch (err) {
     console.error("[memory-extractor] Extraction failed:", err);
     return { profileUpdates: [], actionItems: [], skipReason: "extraction_error" };
@@ -13165,6 +13315,38 @@ ${snippetText}`;
     }
   ];
 }
+function buildMemoryTools() {
+  return [
+    {
+      name: "memory_recall",
+      label: "Memory Recall",
+      description: "Search Rickin's long-term semantic memory for relevant context. Use this when you need to remember past conversations, decisions, preferences, or facts about Rickin that might not be in the current session. Returns ranked memory fragments with timestamps. Example queries: 'What does Rickin think about X?', 'What projects is Rickin working on?', 'What decisions were made about Y?'",
+      parameters: Type.Object({
+        query: Type.String({ description: "Natural language query to search memories. Be specific for better results." }),
+        top_k: Type.Optional(Type.Number({ description: "Number of memories to return (default 10, max 25)" }))
+      }),
+      async execute(_toolCallId, params) {
+        if (!isConfigured7()) {
+          return { content: [{ type: "text", text: "Memory recall is not configured. Set VECTORIZE_API_KEY, VECTORIZE_ORG_ID, and VECTORIZE_KB_ID to enable." }], details: {} };
+        }
+        const topK = Math.min(params.top_k || 10, 25);
+        const result = await recall({ query: params.query, topK });
+        if (result.memories.length === 0) {
+          return { content: [{ type: "text", text: `No memories found matching "${params.query}".` }], details: {} };
+        }
+        const formatted = result.memories.map((m, i) => {
+          const score = (m.score * 100).toFixed(0);
+          const date = m.createdAt ? new Date(m.createdAt).toLocaleDateString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", year: "numeric" }) : "unknown";
+          const meta = m.metadata?.type ? ` [${m.metadata.type}]` : "";
+          return `${i + 1}. (${score}% match, ${date}${meta}) ${m.text}`;
+        }).join("\n");
+        return { content: [{ type: "text", text: `Found ${result.memories.length} relevant memories:
+
+${formatted}` }], details: {} };
+      }
+    }
+  ];
+}
 function buildWebPublishTools() {
   const PUBLISH_SCRIPT = path7.join(PROJECT_ROOT, "scripts", "herenow-publish.sh");
   return [
@@ -15521,6 +15703,7 @@ var cachedStaticTools = [
   ...buildYouTubeTools(),
   ...buildRealEstateTools(),
   ...buildConversationTools(),
+  ...buildMemoryTools(),
   ...buildWebPublishTools()
 ];
 {
@@ -15663,7 +15846,21 @@ IMPORTANT: When Rickin says something brief like "test it", "try again", "do it"
       const recentSummary = await getRecentSummary(5);
       const lastConvoContext = await getLastConversationContext(10);
       const vaultIndex = await getVaultIndex();
-      combinedContext = [lastConvoContext, recentSummary, vaultIndex].filter(Boolean).join("\n\n---\n\n") || null;
+      let hindsightContext = null;
+      if (isConfigured7()) {
+        try {
+          const memResult = await recall({ query: "What has Rickin been working on and talking about recently? Important decisions, preferences, and context.", topK: 8 });
+          if (memResult.memories.length > 0) {
+            const memLines = memResult.memories.map((m) => `- ${m.text}`).join("\n");
+            hindsightContext = `[Long-term Memory Context]
+Relevant memories from past sessions:
+${memLines}`;
+          }
+        } catch (err) {
+          console.warn("[session] Hindsight recall for greeting failed:", err);
+        }
+      }
+      combinedContext = [lastConvoContext, recentSummary, hindsightContext, vaultIndex].filter(Boolean).join("\n\n---\n\n") || null;
     }
     entry.startupContext = combinedContext || void 0;
     res.json({ sessionId, recentContext: combinedContext, messages: resumedMessages });

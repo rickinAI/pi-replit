@@ -55,6 +55,7 @@ import { extractAndFileInsights } from "./src/memory-extractor.js";
 import * as obsidianSkills from "./src/obsidian-skills.js";
 import { cleanHtmlToMarkdown, looksLikeHtml } from "./src/defuddle.js";
 import * as vaultGraph from "./src/vault-graph.js";
+import * as hindsight from "./src/hindsight.js";
 
 const PORT = parseInt(process.env.PORT || "5000", 10);
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
@@ -2936,6 +2937,41 @@ function buildConversationTools(): ToolDefinition[] {
   ];
 }
 
+function buildMemoryTools(): ToolDefinition[] {
+  return [
+    {
+      name: "memory_recall",
+      label: "Memory Recall",
+      description: "Search Rickin's long-term semantic memory for relevant context. Use this when you need to remember past conversations, decisions, preferences, or facts about Rickin that might not be in the current session. Returns ranked memory fragments with timestamps. Example queries: 'What does Rickin think about X?', 'What projects is Rickin working on?', 'What decisions were made about Y?'",
+      parameters: Type.Object({
+        query: Type.String({ description: "Natural language query to search memories. Be specific for better results." }),
+        top_k: Type.Optional(Type.Number({ description: "Number of memories to return (default 10, max 25)" })),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        if (!hindsight.isConfigured()) {
+          return { content: [{ type: "text" as const, text: "Memory recall is not configured. Set VECTORIZE_API_KEY, VECTORIZE_ORG_ID, and VECTORIZE_KB_ID to enable." }], details: {} };
+        }
+
+        const topK = Math.min(params.top_k || 10, 25);
+        const result = await hindsight.recall({ query: params.query, topK });
+
+        if (result.memories.length === 0) {
+          return { content: [{ type: "text" as const, text: `No memories found matching "${params.query}".` }], details: {} };
+        }
+
+        const formatted = result.memories.map((m, i) => {
+          const score = (m.score * 100).toFixed(0);
+          const date = m.createdAt ? new Date(m.createdAt).toLocaleDateString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", year: "numeric" }) : "unknown";
+          const meta = m.metadata?.type ? ` [${m.metadata.type}]` : "";
+          return `${i + 1}. (${score}% match, ${date}${meta}) ${m.text}`;
+        }).join("\n");
+
+        return { content: [{ type: "text" as const, text: `Found ${result.memories.length} relevant memories:\n\n${formatted}` }], details: {} };
+      },
+    },
+  ];
+}
+
 function buildWebPublishTools(): ToolDefinition[] {
   const PUBLISH_SCRIPT = path.join(PROJECT_ROOT, "scripts", "herenow-publish.sh");
 
@@ -5284,6 +5320,7 @@ const cachedStaticTools: ToolDefinition[] = [
   ...buildYouTubeTools(),
   ...buildRealEstateTools(),
   ...buildConversationTools(),
+  ...buildMemoryTools(),
   ...buildWebPublishTools(),
 ];
 
@@ -5432,7 +5469,21 @@ app.post("/api/session", async (req: Request, res: Response) => {
       const recentSummary = await conversations.getRecentSummary(5);
       const lastConvoContext = await conversations.getLastConversationContext(10);
       const vaultIndex = await getVaultIndex();
-      combinedContext = [lastConvoContext, recentSummary, vaultIndex].filter(Boolean).join("\n\n---\n\n") || null;
+
+      let hindsightContext: string | null = null;
+      if (hindsight.isConfigured()) {
+        try {
+          const memResult = await hindsight.recall({ query: "What has Rickin been working on and talking about recently? Important decisions, preferences, and context.", topK: 8 });
+          if (memResult.memories.length > 0) {
+            const memLines = memResult.memories.map(m => `- ${m.text}`).join("\n");
+            hindsightContext = `[Long-term Memory Context]\nRelevant memories from past sessions:\n${memLines}`;
+          }
+        } catch (err) {
+          console.warn("[session] Hindsight recall for greeting failed:", err);
+        }
+      }
+
+      combinedContext = [lastConvoContext, recentSummary, hindsightContext, vaultIndex].filter(Boolean).join("\n\n---\n\n") || null;
     }
     entry.startupContext = combinedContext || undefined;
 
