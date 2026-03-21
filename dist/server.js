@@ -12609,7 +12609,8 @@ function buildCoinGeckoTools() {
         direction: Type.String({ description: "LONG, SHORT, YES, or NO" }),
         leverage: Type.Number({ description: "Leverage multiplier (max 2)" }),
         entry_price: Type.Number(),
-        stop_price: Type.Number()
+        stop_price: Type.Number(),
+        confidence: Type.Optional(Type.Number({ description: "Confidence score 1-5 for tiered approval" }))
       }),
       async execute(_toolCallId, params) {
         try {

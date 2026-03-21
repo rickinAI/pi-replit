@@ -1,5 +1,3 @@
-import { getPool } from "./db.js";
-
 const BNKR_API_KEY = process.env.BANKR_API_KEY || "";
 const BNKR_WALLET = process.env.BANKR_WALLET_ADDRESS || "";
 const BNKR_BASE_URL = process.env.BANKR_API_URL || "https://api.bnkr.com/v1";
