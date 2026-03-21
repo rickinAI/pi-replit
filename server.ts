@@ -4275,17 +4275,17 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
       const regimeMatch = raw.match(/(?:Regime\s*[:\|]\s*|[\|]\s*)(TRENDING|RANGING|VOLATILE|BEARISH|BULLISH)(?:\s*[\|])/i);
       if (regimeMatch) scoutRegime = regimeMatch[1].toUpperCase();
     }
-  } catch {}
+  } catch (err) { console.warn("[wealth-engines] scout query failed:", err instanceof Error ? err.message : err); }
 
   try {
     const pmRes = await pool.query(`SELECT created_at FROM job_history WHERE job_id IN ('polymarket-activity-scan', 'polymarket-full-cycle') ORDER BY created_at DESC LIMIT 1`);
     if (pmRes.rows.length > 0) pmLastRun = pmRes.rows[0].created_at;
-  } catch {}
+  } catch (err) { console.warn("[wealth-engines] pm last run query failed:", err instanceof Error ? err.message : err); }
 
   try {
     const tickRes = await pool.query(`SELECT value FROM app_config WHERE key = 'bankr_monitor_last_tick'`);
     if (tickRes.rows.length > 0) monitorLastTick = new Date(parseInt(String(tickRes.rows[0].value))).toISOString();
-  } catch {}
+  } catch (err) { console.warn("[wealth-engines] monitor tick query failed:", err instanceof Error ? err.message : err); }
 
   const now = Date.now();
   const scoutHealthy = scoutLastRun ? (now - new Date(scoutLastRun).getTime()) < 6 * 60 * 60_000 : false;
