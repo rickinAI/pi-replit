@@ -469,6 +469,7 @@ export async function rollbackParams(domain: "crypto" | "polymarket"): Promise<{
 
   if (domain === "crypto") {
     await setConfigValue(DB_KEYS.cryptoParams, previous);
+    invalidateCryptoParamsCache();
   } else {
     await setConfigValue(DB_KEYS.polymarketParams, previous);
   }
@@ -557,8 +558,6 @@ export async function runCryptoResearch(experimentsCount: number = 15): Promise<
   const currentParams = await getCryptoParams();
   const currentRecord = currentParams as Record<string, number>;
 
-  await pushParamHistory("crypto", currentRecord);
-
   let candles: OHLCVCandle[];
   try {
     candles = await getHistoricalOHLCV("bitcoin", 90);
@@ -620,6 +619,7 @@ export async function runCryptoResearch(experimentsCount: number = 15): Promise<
   }
 
   if (improvements > 0) {
+    await pushParamHistory("crypto", currentRecord);
     await setConfigValue(DB_KEYS.cryptoParams, bestParams);
     invalidateCryptoParamsCache();
   }
@@ -640,8 +640,6 @@ export async function runPolymarketResearch(experimentsCount: number = 15): Prom
   const start = Date.now();
   const currentParams = await getPolymarketParams();
   const currentRecord = currentParams as unknown as Record<string, number>;
-
-  await pushParamHistory("polymarket", currentRecord);
 
   const markets = await buildPMSimMarkets();
   if (markets.length === 0) {
@@ -698,6 +696,7 @@ export async function runPolymarketResearch(experimentsCount: number = 15): Prom
   }
 
   if (improvements > 0) {
+    await pushParamHistory("polymarket", currentRecord);
     await setConfigValue(DB_KEYS.polymarketParams, bestParams);
   }
 
