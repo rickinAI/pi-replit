@@ -5897,6 +5897,16 @@ app.get("/api/vault-tree", async (_req, res) => {
   }
 });
 
+app.post("/api/telegram/webhook", express.json(), async (req, res) => {
+  try {
+    await telegram.handleWebhookUpdate(req.body);
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("[telegram] Webhook handler error:", err);
+    res.sendStatus(200);
+  }
+});
+
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", sessions: sessions.size, ts: Date.now() });
 });

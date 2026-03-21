@@ -5836,6 +5836,17 @@ function timeAgo(timestamp) {
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
 }
+async function isJobEnabled(pool2, agentId) {
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scheduled_jobs'`);
+    if (res.rows.length > 0 && res.rows[0].value?.jobs) {
+      const jobs = res.rows[0].value.jobs;
+      return jobs.some((j) => j.agentId === agentId && j.enabled);
+    }
+  } catch {
+  }
+  return false;
+}
 async function checkDeadManSwitches() {
   if (!isConfigured5()) return;
   const pool2 = getPool();
@@ -5847,59 +5858,127 @@ async function checkDeadManSwitches() {
   } catch {
   }
   if (paused) return;
-  try {
-    const scoutRes = await pool2.query(
-      `SELECT created_at FROM job_history WHERE agent_id = 'scout' ORDER BY created_at DESC LIMIT 1`
-    );
-    if (scoutRes.rows.length > 0) {
-      const lastRun = new Date(scoutRes.rows[0].created_at).getTime();
-      const hoursSince = (Date.now() - lastRun) / (3600 * 1e3);
-      if (hoursSince > 36) {
-        const lastAlert = lastDeadManAlert["scout"] || 0;
-        if (Date.now() - lastAlert > 12 * 3600 * 1e3) {
-          lastDeadManAlert["scout"] = Date.now();
-          await sendMessage(
-            `${mode} \u26A0\uFE0F *Dead Man's Switch: SCOUT*
+  const scoutEnabled = await isJobEnabled(pool2, "scout");
+  if (scoutEnabled) {
+    try {
+      const scoutRes = await pool2.query(
+        `SELECT created_at FROM job_history WHERE agent_id = 'scout' ORDER BY created_at DESC LIMIT 1`
+      );
+      if (scoutRes.rows.length > 0) {
+        const lastRun = new Date(scoutRes.rows[0].created_at).getTime();
+        const hoursSince = (Date.now() - lastRun) / (3600 * 1e3);
+        if (hoursSince > 36) {
+          const lastAlert = lastDeadManAlert["scout"] || 0;
+          if (Date.now() - lastAlert > 12 * 3600 * 1e3) {
+            lastDeadManAlert["scout"] = Date.now();
+            await sendMessage(
+              `${mode} \u26A0\uFE0F *Dead Man's Switch: SCOUT*
 
 SCOUT has not run in ${Math.floor(hoursSince)}h (threshold: 36h).
 Last run: ${timeAgo(lastRun)}
 
 Check scheduled jobs or run manually.`
-          );
+            );
+          }
+        } else {
+          delete lastDeadManAlert["scout"];
         }
-      } else {
-        delete lastDeadManAlert["scout"];
       }
+    } catch (err) {
+      console.error("[telegram] Dead man switch SCOUT check failed:", err);
     }
-  } catch (err) {
-    console.error("[telegram] Dead man switch SCOUT check failed:", err);
+  } else {
+    delete lastDeadManAlert["scout"];
   }
-  try {
-    const bankrRes = await pool2.query(
-      `SELECT created_at FROM job_history WHERE agent_id = 'bankr' ORDER BY created_at DESC LIMIT 1`
-    );
-    if (bankrRes.rows.length > 0) {
-      const lastRun = new Date(bankrRes.rows[0].created_at).getTime();
-      const hoursSince = (Date.now() - lastRun) / (3600 * 1e3);
-      if (hoursSince > 8) {
-        const lastAlert = lastDeadManAlert["bankr"] || 0;
-        if (Date.now() - lastAlert > 4 * 3600 * 1e3) {
-          lastDeadManAlert["bankr"] = Date.now();
-          await sendMessage(
-            `${mode} \u26A0\uFE0F *Dead Man's Switch: BANKR*
+  const bankrEnabled = await isJobEnabled(pool2, "bankr");
+  if (bankrEnabled) {
+    try {
+      const bankrRes = await pool2.query(
+        `SELECT created_at FROM job_history WHERE agent_id = 'bankr' ORDER BY created_at DESC LIMIT 1`
+      );
+      if (bankrRes.rows.length > 0) {
+        const lastRun = new Date(bankrRes.rows[0].created_at).getTime();
+        const hoursSince = (Date.now() - lastRun) / (3600 * 1e3);
+        if (hoursSince > 8) {
+          const lastAlert = lastDeadManAlert["bankr"] || 0;
+          if (Date.now() - lastAlert > 4 * 3600 * 1e3) {
+            lastDeadManAlert["bankr"] = Date.now();
+            await sendMessage(
+              `${mode} \u26A0\uFE0F *Dead Man's Switch: BANKR*
 
 BANKR monitor has not run in ${Math.floor(hoursSince)}h (threshold: 8h).
 Last run: ${timeAgo(lastRun)}
 
 Check scheduled jobs or run manually.`
-          );
+            );
+          }
+        } else {
+          delete lastDeadManAlert["bankr"];
         }
-      } else {
-        delete lastDeadManAlert["bankr"];
+      }
+    } catch (err) {
+      console.error("[telegram] Dead man switch BANKR check failed:", err);
+    }
+  } else {
+    delete lastDeadManAlert["bankr"];
+  }
+}
+var webhookMode = false;
+async function registerWebhook() {
+  const domain = process.env.REPLIT_DEV_DOMAIN || process.env.REPLIT_DOMAINS?.split(",")[0];
+  if (!domain) {
+    console.warn("[telegram] No domain available for webhook \u2014 falling back to long-polling");
+    return false;
+  }
+  const webhookUrl = `https://${domain}/api/telegram/webhook`;
+  try {
+    const result = await tgFetch("setWebhook", {
+      url: webhookUrl,
+      allowed_updates: ["message", "callback_query"]
+    });
+    if (result.ok) {
+      console.log(`[telegram] Webhook registered: ${webhookUrl}`);
+      return true;
+    }
+    console.warn("[telegram] Webhook registration failed:", result.description);
+    return false;
+  } catch (err) {
+    console.warn("[telegram] Webhook registration failed:", err instanceof Error ? err.message : err);
+    return false;
+  }
+}
+async function deleteWebhook() {
+  try {
+    await tgFetch("deleteWebhook");
+  } catch {
+  }
+}
+async function handleWebhookUpdate(update) {
+  if (!isConfigured5()) return;
+  if (update.callback_query) {
+    const cbq = update.callback_query;
+    if (String(cbq.message?.chat?.id) === CHAT_ID) {
+      await handleCallbackQuery(cbq.id, cbq.data || "");
+    }
+    return;
+  }
+  if (update.message?.text && String(update.message.chat.id) === CHAT_ID) {
+    const text = update.message.text.trim();
+    if (text.startsWith("/")) {
+      const parts = text.split(/\s+/);
+      const cmd = parts[0].toLowerCase().replace(/@\w+/, "").replace("/", "");
+      const args = parts.slice(1).join(" ");
+      const handler = commands[cmd];
+      if (handler) {
+        try {
+          const response = await handler(args);
+          await sendMessage(response);
+        } catch (err) {
+          console.error(`[telegram] Command /${cmd} failed:`, err);
+          await sendMessage(`\u274C Command failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
     }
-  } catch (err) {
-    console.error("[telegram] Dead man switch BANKR check failed:", err);
   }
 }
 async function init7() {
@@ -5927,12 +6006,18 @@ async function init7() {
     console.error("[telegram] Failed to connect:", err instanceof Error ? err.message : err);
     return;
   }
-  pollingActive = true;
-  pollUpdates();
+  webhookMode = await registerWebhook();
+  if (!webhookMode) {
+    await deleteWebhook();
+    pollingActive = true;
+    pollUpdates();
+    console.log("[telegram] initialized (long-polling fallback, dead man switches hourly)");
+  } else {
+    console.log("[telegram] initialized (webhook mode, dead man switches hourly)");
+  }
   deadManInterval = setInterval(() => {
     checkDeadManSwitches().catch((err) => console.error("[telegram] Dead man check error:", err));
   }, 60 * 60 * 1e3);
-  console.log("[telegram] initialized (long-polling mode, dead man switches hourly)");
 }
 function stop() {
   pollingActive = false;
@@ -14378,6 +14463,15 @@ app.get("/api/vault-tree", async (_req, res) => {
     res.json({ vault: tree });
   } catch (err) {
     res.status(500).json({ error: "Failed to read vault structure" });
+  }
+});
+app.post("/api/telegram/webhook", express.json(), async (req, res) => {
+  try {
+    await handleWebhookUpdate(req.body);
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("[telegram] Webhook handler error:", err);
+    res.sendStatus(200);
   }
 });
 app.get("/health", (_req, res) => {
