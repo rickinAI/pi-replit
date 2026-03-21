@@ -15388,7 +15388,7 @@ function buildCoinGeckoTools() {
         condition_id: Type.String({ description: "Polymarket market condition ID" }),
         direction: Type.Union([Type.Literal("YES"), Type.Literal("NO")]),
         confidence: Type.Union([Type.Literal("HIGH"), Type.Literal("MEDIUM"), Type.Literal("LOW"), Type.Literal("SPECULATIVE")]),
-        whale_wallets: Type.Array(Type.String(), { description: "Wallet addresses in consensus (empty array OK for SPECULATIVE)" }),
+        whale_wallets: Type.Array(Type.String(), { description: "Wallet addresses in consensus (empty array OK for LOW volume-weighted fallback)" }),
         whale_avg_score: Type.Number(),
         total_whale_amount: Type.Number(),
         reasoning: Type.String()
