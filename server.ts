@@ -7638,6 +7638,8 @@ async function startServer(maxRetries = 5) {
   }
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    killPort(PORT);
+    await new Promise(r => setTimeout(r, attempt === 1 ? 500 : 1000));
     try {
       await new Promise<void>((resolve, reject) => {
         server = createServer(app);
