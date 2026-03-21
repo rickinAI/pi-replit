@@ -6413,8 +6413,12 @@ async function sendDailyPerformanceSummary() {
 }
 async function autoTrackShadowTrade(params) {
   const existing = await getShadowTrades("open");
-  const alreadyTracked = existing.some((t) => t.asset === params.asset && t.direction === params.direction);
-  if (alreadyTracked) return null;
+  const match = existing.find((t) => t.asset === params.asset && t.direction === params.direction);
+  if (match) {
+    const ageHours = (Date.now() - new Date(match.opened_at).getTime()) / 36e5;
+    if (ageHours < 24) return null;
+    await closeShadowTrade(match.id, match.entry_price, "replaced_by_newer_thesis");
+  }
   const shadow = await openShadowTrade({
     thesis_id: params.thesis_id,
     asset: params.asset,
