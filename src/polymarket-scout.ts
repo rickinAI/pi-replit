@@ -8,7 +8,7 @@ export interface PolymarketThesis {
   market_id: string;
   market_slug: string;
   direction: "YES" | "NO";
-  confidence: "HIGH" | "MEDIUM" | "LOW";
+  confidence: "HIGH" | "MEDIUM" | "LOW" | "SPECULATIVE";
   current_odds: number;
   entry_odds: number;
   exit_odds: number;
@@ -81,7 +81,7 @@ export async function retireThesis(thesisId: string): Promise<void> {
 export function buildThesis(params: {
   market: polymarket.PolymarketMarket;
   direction: "YES" | "NO";
-  confidence: "HIGH" | "MEDIUM" | "LOW";
+  confidence: "HIGH" | "MEDIUM" | "LOW" | "SPECULATIVE";
   whale_consensus: number;
   whale_wallets: string[];
   whale_avg_score: number;
@@ -207,14 +207,14 @@ export async function meetsThesisThresholds(params: {
 
   if (params.whale_consensus >= 1 && params.whale_score >= 0.7) {
     passed.push(`Single whale signal: score ${params.whale_score.toFixed(2)}`);
-    console.log(`[pm-scout] Threshold PASS (LOW): ${passed.join("; ")}`);
-    return { meets: true, tier: "LOW", failures: [], passed };
+    console.log(`[pm-scout] Threshold PASS (SPECULATIVE): ${passed.join("; ")}`);
+    return { meets: true, tier: "SPECULATIVE", failures: [], passed };
   }
 
   if (volumeAbove500K && oddsInTightRange && params.whale_consensus === 0) {
     passed.push(`Volume-weighted fallback: $${(params.market_volume / 1000).toFixed(0)}K volume, ${(params.odds * 100).toFixed(0)}% odds (high uncertainty edge)`);
-    console.log(`[pm-scout] Threshold PASS (SPECULATIVE): ${passed.join("; ")}`);
-    return { meets: true, tier: "SPECULATIVE", failures: [], passed };
+    console.log(`[pm-scout] Threshold PASS (LOW): ${passed.join("; ")}`);
+    return { meets: true, tier: "LOW", failures: [], passed };
   }
 
   failures.push(`Whale consensus ${params.whale_consensus} whales, score ${params.whale_score.toFixed(2)} — insufficient for any tier`);

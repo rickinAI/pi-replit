@@ -844,10 +844,10 @@ Keep this concise — it runs every 30 minutes. Only flag actionable consensus.`
 7. Evaluate EACH qualifying market against TIERED thesis criteria (try all tiers top-down):
    - HIGH: 3+ whales aligned, avg score >= 0.8
    - MEDIUM: 2+ whales aligned, avg score >= 0.5
-   - LOW: 1 whale with score >= 0.7
-   - SPECULATIVE: No whales needed IF volume > $500K AND odds 30-70% (maximum uncertainty = edge)
+   - SPECULATIVE: 1 whale with score >= 0.7 (single-whale signal)
+   - LOW: No whales needed IF volume > $500K AND odds 30-70% (volume-weighted edge)
    For ANY market matching ANY tier, generate thesis via save_pm_thesis with the tier as confidence.
-   For SPECULATIVE theses: use empty whale_wallets=[], whale_avg_score=0, total_whale_amount=0.
+   For LOW theses (volume-only): use empty whale_wallets=[], whale_avg_score=0, total_whale_amount=0.
 8. Check existing polymarket_theses — retire any that have expired or resolved
 9. Search X for sentiment on top markets
 

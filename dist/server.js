@@ -5239,6 +5239,56 @@ function buildThesis2(params) {
     status: "active"
   };
 }
+async function meetsThesisThresholds(params) {
+  const failures = [];
+  const passed = [];
+  const oddsInRange = params.odds >= 0.15 && params.odds <= 0.85;
+  const oddsInTightRange = params.odds >= 0.3 && params.odds <= 0.7;
+  const volumeAbove50K = params.market_volume >= 5e4;
+  const volumeAbove100K = params.market_volume >= 1e5;
+  const volumeAbove500K = params.market_volume >= 5e5;
+  const minResolution = volumeAbove100K ? 12 : 24;
+  const resolutionOk = params.hours_to_resolution >= minResolution;
+  if (!oddsInRange) failures.push(`Odds ${(params.odds * 100).toFixed(0)}% outside 15-85% range`);
+  else passed.push(`Odds ${(params.odds * 100).toFixed(0)}% in range`);
+  if (!resolutionOk) failures.push(`Resolution in ${params.hours_to_resolution.toFixed(0)}h < ${minResolution}h minimum`);
+  else passed.push(`Resolution ${params.hours_to_resolution.toFixed(0)}h >= ${minResolution}h`);
+  if (!volumeAbove50K) failures.push(`Volume $${params.market_volume.toFixed(0)} < $50,000`);
+  else passed.push(`Volume $${params.market_volume.toFixed(0)}`);
+  if (!oddsInRange || !resolutionOk || !volumeAbove50K) {
+    console.log(`[pm-scout] Threshold REJECT: ${failures.join("; ")}`);
+    return { meets: false, tier: null, failures, passed };
+  }
+  if (params.whale_consensus >= 3 && params.whale_score >= 0.8) {
+    passed.push(`Strong whale consensus: ${params.whale_consensus} whales, score ${params.whale_score.toFixed(2)}`);
+    console.log(`[pm-scout] Threshold PASS (HIGH): ${passed.join("; ")}`);
+    return { meets: true, tier: "HIGH", failures: [], passed };
+  }
+  if (params.whale_consensus >= 2 && params.whale_score >= 0.5) {
+    passed.push(`Whale consensus: ${params.whale_consensus} whales, score ${params.whale_score.toFixed(2)}`);
+    console.log(`[pm-scout] Threshold PASS (MEDIUM): ${passed.join("; ")}`);
+    return { meets: true, tier: "MEDIUM", failures: [], passed };
+  }
+  if (params.whale_consensus >= 1 && params.whale_score >= 0.7) {
+    passed.push(`Single whale signal: score ${params.whale_score.toFixed(2)}`);
+    console.log(`[pm-scout] Threshold PASS (SPECULATIVE): ${passed.join("; ")}`);
+    return { meets: true, tier: "SPECULATIVE", failures: [], passed };
+  }
+  if (volumeAbove500K && oddsInTightRange && params.whale_consensus === 0) {
+    passed.push(`Volume-weighted fallback: $${(params.market_volume / 1e3).toFixed(0)}K volume, ${(params.odds * 100).toFixed(0)}% odds (high uncertainty edge)`);
+    console.log(`[pm-scout] Threshold PASS (LOW): ${passed.join("; ")}`);
+    return { meets: true, tier: "LOW", failures: [], passed };
+  }
+  failures.push(`Whale consensus ${params.whale_consensus} whales, score ${params.whale_score.toFixed(2)} \u2014 insufficient for any tier`);
+  if (!volumeAbove500K && params.whale_consensus === 0) {
+    failures.push(`Volume $${params.market_volume.toFixed(0)} < $500K for volume-only fallback`);
+  }
+  if (!oddsInTightRange && params.whale_consensus === 0) {
+    failures.push(`Odds ${(params.odds * 100).toFixed(0)}% outside 30-70% for volume-only fallback`);
+  }
+  console.log(`[pm-scout] Threshold REJECT: ${failures.join("; ")}`);
+  return { meets: false, tier: null, failures, passed };
+}
 
 // src/bankr.ts
 init_db();
@@ -11394,10 +11444,10 @@ Keep this concise \u2014 it runs every 30 minutes. Only flag actionable consensu
 7. Evaluate EACH qualifying market against TIERED thesis criteria (try all tiers top-down):
    - HIGH: 3+ whales aligned, avg score >= 0.8
    - MEDIUM: 2+ whales aligned, avg score >= 0.5
-   - LOW: 1 whale with score >= 0.7
-   - SPECULATIVE: No whales needed IF volume > $500K AND odds 30-70% (maximum uncertainty = edge)
+   - SPECULATIVE: 1 whale with score >= 0.7 (single-whale signal)
+   - LOW: No whales needed IF volume > $500K AND odds 30-70% (volume-weighted edge)
    For ANY market matching ANY tier, generate thesis via save_pm_thesis with the tier as confidence.
-   For SPECULATIVE theses: use empty whale_wallets=[], whale_avg_score=0, total_whale_amount=0.
+   For LOW theses (volume-only): use empty whale_wallets=[], whale_avg_score=0, total_whale_amount=0.
 8. Check existing polymarket_theses \u2014 retire any that have expired or resolved
 9. Search X for sentiment on top markets
 
@@ -15323,8 +15373,8 @@ function buildCoinGeckoTools() {
       parameters: Type.Object({
         condition_id: Type.String({ description: "Polymarket market condition ID" }),
         direction: Type.Union([Type.Literal("YES"), Type.Literal("NO")]),
-        confidence: Type.Union([Type.Literal("HIGH"), Type.Literal("MEDIUM"), Type.Literal("LOW")]),
-        whale_wallets: Type.Array(Type.String(), { description: "Wallet addresses in consensus" }),
+        confidence: Type.Union([Type.Literal("HIGH"), Type.Literal("MEDIUM"), Type.Literal("LOW"), Type.Literal("SPECULATIVE")]),
+        whale_wallets: Type.Array(Type.String(), { description: "Wallet addresses in consensus (empty array OK for SPECULATIVE)" }),
         whale_avg_score: Type.Number(),
         total_whale_amount: Type.Number(),
         reasoning: Type.String()
@@ -15333,6 +15383,19 @@ function buildCoinGeckoTools() {
         try {
           const market = await getMarketDetails(params.condition_id);
           if (!market) return { content: [{ type: "text", text: JSON.stringify({ error: "Market not found" }) }], details: {} };
+          const yesPrice = market.tokens.find((t) => t.outcome === "Yes")?.price || 0;
+          const noPrice = market.tokens.find((t) => t.outcome === "No")?.price || 0;
+          const odds = params.direction === "YES" ? yesPrice : noPrice;
+          const hoursToResolution = market.end_date_iso ? (new Date(market.end_date_iso).getTime() - Date.now()) / (60 * 60 * 1e3) : 9999;
+          const thresholdResult = await meetsThesisThresholds({
+            whale_score: params.whale_avg_score,
+            whale_consensus: params.whale_wallets.length,
+            market_volume: market.volume,
+            market_liquidity: market.liquidity,
+            odds,
+            hours_to_resolution: hoursToResolution
+          });
+          console.log(`[pm-scout] save_pm_thesis: ${market.question?.slice(0, 50)} \u2014 threshold ${thresholdResult.meets ? "PASS" : "REJECT"} (tier=${thresholdResult.tier || "none"}, agent_confidence=${params.confidence})`);
           const thesis = buildThesis2({
             market,
             direction: params.direction,
@@ -15345,7 +15408,7 @@ function buildCoinGeckoTools() {
             reasoning: params.reasoning
           });
           await saveTheses2([thesis]);
-          return { content: [{ type: "text", text: JSON.stringify({ saved: true, thesis_id: thesis.id }) }], details: {} };
+          return { content: [{ type: "text", text: JSON.stringify({ saved: true, thesis_id: thesis.id, threshold: thresholdResult }) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
         }

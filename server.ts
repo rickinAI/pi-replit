@@ -1755,8 +1755,8 @@ function buildCoinGeckoTools(): ToolDefinition[] {
       parameters: Type.Object({
         condition_id: Type.String({ description: "Polymarket market condition ID" }),
         direction: Type.Union([Type.Literal("YES"), Type.Literal("NO")]),
-        confidence: Type.Union([Type.Literal("HIGH"), Type.Literal("MEDIUM"), Type.Literal("LOW")]),
-        whale_wallets: Type.Array(Type.String(), { description: "Wallet addresses in consensus" }),
+        confidence: Type.Union([Type.Literal("HIGH"), Type.Literal("MEDIUM"), Type.Literal("LOW"), Type.Literal("SPECULATIVE")]),
+        whale_wallets: Type.Array(Type.String(), { description: "Wallet addresses in consensus (empty array OK for SPECULATIVE)" }),
         whale_avg_score: Type.Number(),
         total_whale_amount: Type.Number(),
         reasoning: Type.String(),
@@ -1765,6 +1765,22 @@ function buildCoinGeckoTools(): ToolDefinition[] {
         try {
           const market = await polymarket.getMarketDetails(params.condition_id);
           if (!market) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Market not found" }) }], details: {} };
+
+          const yesPrice = market.tokens.find((t: any) => t.outcome === "Yes")?.price || 0;
+          const noPrice = market.tokens.find((t: any) => t.outcome === "No")?.price || 0;
+          const odds = params.direction === "YES" ? yesPrice : noPrice;
+          const hoursToResolution = market.end_date_iso ? (new Date(market.end_date_iso).getTime() - Date.now()) / (60 * 60 * 1000) : 9999;
+
+          const thresholdResult = await polymarketScout.meetsThesisThresholds({
+            whale_score: params.whale_avg_score,
+            whale_consensus: params.whale_wallets.length,
+            market_volume: market.volume,
+            market_liquidity: market.liquidity,
+            odds,
+            hours_to_resolution: hoursToResolution,
+          });
+          console.log(`[pm-scout] save_pm_thesis: ${market.question?.slice(0, 50)} — threshold ${thresholdResult.meets ? "PASS" : "REJECT"} (tier=${thresholdResult.tier || "none"}, agent_confidence=${params.confidence})`);
+
           const thesis = polymarketScout.buildThesis({
             market,
             direction: params.direction,
@@ -1777,7 +1793,7 @@ function buildCoinGeckoTools(): ToolDefinition[] {
             reasoning: params.reasoning,
           });
           await polymarketScout.saveTheses([thesis]);
-          return { content: [{ type: "text" as const, text: JSON.stringify({ saved: true, thesis_id: thesis.id }) }], details: {} };
+          return { content: [{ type: "text" as const, text: JSON.stringify({ saved: true, thesis_id: thesis.id, threshold: thresholdResult }) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
         }
