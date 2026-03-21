@@ -5898,6 +5898,11 @@ app.get("/api/vault-tree", async (_req, res) => {
 });
 
 app.post("/api/telegram/webhook", express.json(), async (req, res) => {
+  const secretHeader = req.headers["x-telegram-bot-api-secret-token"];
+  if (secretHeader !== telegram.getWebhookSecret()) {
+    res.sendStatus(403);
+    return;
+  }
   try {
     await telegram.handleWebhookUpdate(req.body);
     res.sendStatus(200);

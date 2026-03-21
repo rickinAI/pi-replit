@@ -5440,9 +5440,11 @@ async function triggerBrief(type) {
 }
 
 // src/telegram.ts
+import { randomBytes } from "crypto";
 var BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 var CHAT_ID = process.env.TELEGRAM_CHAT_ID || "";
 var API_BASE2 = `https://api.telegram.org/bot${BOT_TOKEN}`;
+var WEBHOOK_SECRET = randomBytes(32).toString("hex");
 var pollingActive = false;
 var pollingTimeout = null;
 var lastUpdateId = 0;
@@ -5450,7 +5452,13 @@ var deadManInterval = null;
 var lastDeadManAlert = {};
 var commands = {};
 var pendingApprovals = /* @__PURE__ */ new Map();
-function getMode() {
+async function getMode() {
+  try {
+    const pool2 = getPool();
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_mode'`);
+    if (res.rows.length > 0 && res.rows[0].value === "LIVE") return "[LIVE]";
+  } catch {
+  }
   return "[BETA]";
 }
 function isConfigured5() {
@@ -5511,7 +5519,7 @@ function registerCommand(name, handler) {
   commands[name.toLowerCase()] = handler;
 }
 async function handleStatusCommand() {
-  const mode = getMode();
+  const mode = await getMode();
   const pool2 = getPool();
   let killSwitchActive = false;
   try {
@@ -5550,7 +5558,7 @@ async function handleStatusCommand() {
   return lines.join("\n");
 }
 async function handlePortfolioCommand() {
-  const mode = getMode();
+  const mode = await getMode();
   const pool2 = getPool();
   let positions = [];
   try {
@@ -5583,7 +5591,7 @@ _Use /trades to see recent trade history._`;
   return lines.join("\n");
 }
 async function handleIntelCommand() {
-  const mode = getMode();
+  const mode = await getMode();
   const pool2 = getPool();
   try {
     const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scout_latest_brief'`);
@@ -5602,7 +5610,7 @@ ${truncated}`;
 No SCOUT brief available yet. SCOUT agent has not run.`;
 }
 async function handlePauseCommand() {
-  const mode = getMode();
+  const mode = await getMode();
   const pool2 = getPool();
   try {
     await pool2.query(
@@ -5621,7 +5629,7 @@ Use /resume to restart.`;
   }
 }
 async function handleResumeCommand() {
-  const mode = getMode();
+  const mode = await getMode();
   const pool2 = getPool();
   try {
     await pool2.query(
@@ -5639,7 +5647,7 @@ All Wealth Engine jobs are active again.`;
   }
 }
 async function handleScoutCommand() {
-  const mode = getMode();
+  const mode = await getMode();
   const pool2 = getPool();
   try {
     const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scout_active_theses'`);
@@ -5662,7 +5670,7 @@ async function handleScoutCommand() {
 No active theses. SCOUT has not generated any yet.`;
 }
 async function handleTradesCommand(args) {
-  const mode = getMode();
+  const mode = await getMode();
   const pool2 = getPool();
   const limit = Math.min(Math.max(parseInt(args) || 5, 1), 20);
   try {
@@ -5688,7 +5696,7 @@ async function handleTradesCommand(args) {
 No trade history yet.`;
 }
 async function handlePublicCommand(args) {
-  const mode = getMode();
+  const mode = await getMode();
   const pool2 = getPool();
   const val = args.trim().toLowerCase();
   if (val !== "on" && val !== "off") {
@@ -5717,8 +5725,8 @@ Usage: /public on | /public off`;
     return `${mode} \u274C Failed to update: ${msg}`;
   }
 }
-function handleHelpCommand() {
-  const mode = getMode();
+async function handleHelpCommand() {
+  const mode = await getMode();
   return [
     `${mode} *DarkNode Commands*`,
     "",
@@ -5765,7 +5773,7 @@ async function handleCallbackQuery(callbackQueryId, data) {
     skip: "\u23ED SKIPPED",
     hold: "\u23F8 ON HOLD"
   };
-  const mode = getMode();
+  const mode = await getMode();
   if (pending.messageId) {
     await editMessage(
       pending.messageId,
@@ -5850,7 +5858,7 @@ async function isJobEnabled(pool2, agentId) {
 async function checkDeadManSwitches() {
   if (!isConfigured5()) return;
   const pool2 = getPool();
-  const mode = getMode();
+  const mode = await getMode();
   let paused = false;
   try {
     const pa = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_paused'`);
@@ -5934,7 +5942,8 @@ async function registerWebhook() {
   try {
     const result = await tgFetch("setWebhook", {
       url: webhookUrl,
-      allowed_updates: ["message", "callback_query"]
+      allowed_updates: ["message", "callback_query"],
+      secret_token: WEBHOOK_SECRET
     });
     if (result.ok) {
       console.log(`[telegram] Webhook registered: ${webhookUrl}`);
@@ -5952,6 +5961,9 @@ async function deleteWebhook() {
     await tgFetch("deleteWebhook");
   } catch {
   }
+}
+function getWebhookSecret() {
+  return WEBHOOK_SECRET;
 }
 async function handleWebhookUpdate(update) {
   if (!isConfigured5()) return;
@@ -6033,7 +6045,7 @@ function stop() {
 }
 async function forwardAlertToTelegram(event) {
   if (!isConfigured5()) return;
-  const mode = getMode();
+  const mode = await getMode();
   if (event.type === "brief") {
     const briefLabel = event.briefType ? event.briefType.charAt(0).toUpperCase() + event.briefType.slice(1) : "Daily";
     const truncated = event.content.length > 3500 ? event.content.slice(0, 3500) + "\n\n_(truncated)_" : event.content;
@@ -14466,6 +14478,11 @@ app.get("/api/vault-tree", async (_req, res) => {
   }
 });
 app.post("/api/telegram/webhook", express.json(), async (req, res) => {
+  const secretHeader = req.headers["x-telegram-bot-api-secret-token"];
+  if (secretHeader !== getWebhookSecret()) {
+    res.sendStatus(403);
+    return;
+  }
   try {
     await handleWebhookUpdate(req.body);
     res.sendStatus(200);

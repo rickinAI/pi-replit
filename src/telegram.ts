@@ -4,6 +4,9 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID || "";
 const API_BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
+import { randomBytes } from "crypto";
+const WEBHOOK_SECRET = randomBytes(32).toString("hex");
+
 let pollingActive = false;
 let pollingTimeout: ReturnType<typeof setTimeout> | null = null;
 let lastUpdateId = 0;
@@ -25,7 +28,12 @@ interface PendingApproval {
 
 const pendingApprovals = new Map<string, PendingApproval>();
 
-function getMode(): string {
+async function getMode(): Promise<string> {
+  try {
+    const pool = getPool();
+    const res = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_mode'`);
+    if (res.rows.length > 0 && res.rows[0].value === "LIVE") return "[LIVE]";
+  } catch {}
   return "[BETA]";
 }
 
@@ -115,7 +123,7 @@ function registerCommand(name: string, handler: CommandHandler): void {
 }
 
 async function handleStatusCommand(): Promise<string> {
-  const mode = getMode();
+  const mode = await getMode();
   const pool = getPool();
 
   let killSwitchActive = false;
@@ -155,7 +163,7 @@ async function handleStatusCommand(): Promise<string> {
 }
 
 async function handlePortfolioCommand(): Promise<string> {
-  const mode = getMode();
+  const mode = await getMode();
   const pool = getPool();
 
   let positions: any[] = [];
@@ -188,7 +196,7 @@ async function handlePortfolioCommand(): Promise<string> {
 }
 
 async function handleIntelCommand(): Promise<string> {
-  const mode = getMode();
+  const mode = await getMode();
   const pool = getPool();
 
   try {
@@ -205,7 +213,7 @@ async function handleIntelCommand(): Promise<string> {
 }
 
 async function handlePauseCommand(): Promise<string> {
-  const mode = getMode();
+  const mode = await getMode();
   const pool = getPool();
 
   try {
@@ -223,7 +231,7 @@ async function handlePauseCommand(): Promise<string> {
 }
 
 async function handleResumeCommand(): Promise<string> {
-  const mode = getMode();
+  const mode = await getMode();
   const pool = getPool();
 
   try {
@@ -241,7 +249,7 @@ async function handleResumeCommand(): Promise<string> {
 }
 
 async function handleScoutCommand(): Promise<string> {
-  const mode = getMode();
+  const mode = await getMode();
   const pool = getPool();
 
   try {
@@ -264,7 +272,7 @@ async function handleScoutCommand(): Promise<string> {
 }
 
 async function handleTradesCommand(args: string): Promise<string> {
-  const mode = getMode();
+  const mode = await getMode();
   const pool = getPool();
   const limit = Math.min(Math.max(parseInt(args) || 5, 1), 20);
 
@@ -290,7 +298,7 @@ async function handleTradesCommand(args: string): Promise<string> {
 }
 
 async function handlePublicCommand(args: string): Promise<string> {
-  const mode = getMode();
+  const mode = await getMode();
   const pool = getPool();
   const val = args.trim().toLowerCase();
 
@@ -318,8 +326,8 @@ async function handlePublicCommand(args: string): Promise<string> {
   }
 }
 
-function handleHelpCommand(): string {
-  const mode = getMode();
+async function handleHelpCommand(): Promise<string> {
+  const mode = await getMode();
   return [
     `${mode} *DarkNode Commands*`,
     "",
@@ -346,7 +354,7 @@ export async function requestTradeApproval(params: {
   riskAmount: string;
   reason: string;
 }): Promise<"approve" | "skip" | "hold"> {
-  const mode = getMode();
+  const mode = await getMode();
   if (!isConfigured()) {
     console.warn("[telegram] Trade approval requested but Telegram not configured — auto-skipping");
     return "skip";
@@ -441,7 +449,7 @@ async function handleCallbackQuery(callbackQueryId: string, data: string): Promi
     hold: "⏸ ON HOLD",
   };
 
-  const mode = getMode();
+  const mode = await getMode();
   if (pending.messageId) {
     await editMessage(
       pending.messageId,
@@ -531,7 +539,7 @@ async function isJobEnabled(pool: any, agentId: string): Promise<boolean> {
 async function checkDeadManSwitches(): Promise<void> {
   if (!isConfigured()) return;
   const pool = getPool();
-  const mode = getMode();
+  const mode = await getMode();
 
   let paused = false;
   try {
@@ -607,7 +615,7 @@ export async function sendTradeAlert(params: {
   pnl?: number;
   reason?: string;
 }): Promise<void> {
-  const mode = getMode();
+  const mode = await getMode();
   const icons: Record<string, string> = {
     executed: "📈",
     stopped: "🛑",
@@ -632,7 +640,7 @@ export async function sendTradeAlert(params: {
 }
 
 export async function sendScoutBrief(brief: string): Promise<void> {
-  const mode = getMode();
+  const mode = await getMode();
   const truncated = brief.length > 3500 ? brief.slice(0, 3500) + "\n\n_(truncated)_" : brief;
   await sendMessage(`${mode} 🔍 *SCOUT Morning Brief*\n\n${truncated}`);
 }
@@ -651,6 +659,7 @@ async function registerWebhook(): Promise<boolean> {
     const result = await tgFetch("setWebhook", {
       url: webhookUrl,
       allowed_updates: ["message", "callback_query"],
+      secret_token: WEBHOOK_SECRET,
     });
     if (result.ok) {
       console.log(`[telegram] Webhook registered: ${webhookUrl}`);
@@ -668,6 +677,10 @@ async function deleteWebhook(): Promise<void> {
   try {
     await tgFetch("deleteWebhook");
   } catch {}
+}
+
+export function getWebhookSecret(): string {
+  return WEBHOOK_SECRET;
 }
 
 export async function handleWebhookUpdate(update: any): Promise<void> {
@@ -760,7 +773,7 @@ export function stop(): void {
 export async function forwardAlertToTelegram(event: { type: string; briefType?: string; alertType?: string; title?: string; content: string }): Promise<void> {
   if (!isConfigured()) return;
 
-  const mode = getMode();
+  const mode = await getMode();
 
   if (event.type === "brief") {
     const briefLabel = event.briefType ? event.briefType.charAt(0).toUpperCase() + event.briefType.slice(1) : "Daily";
