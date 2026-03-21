@@ -1781,10 +1781,16 @@ function buildCoinGeckoTools(): ToolDefinition[] {
           });
           console.log(`[pm-scout] save_pm_thesis: ${market.question?.slice(0, 50)} — threshold ${thresholdResult.meets ? "PASS" : "REJECT"} (tier=${thresholdResult.tier || "none"}, agent_confidence=${params.confidence})`);
 
+          if (!thresholdResult.meets) {
+            return { content: [{ type: "text" as const, text: JSON.stringify({ saved: false, rejected: true, failures: thresholdResult.failures }) }], details: {} };
+          }
+
+          const resolvedConfidence = thresholdResult.tier || params.confidence;
+
           const thesis = polymarketScout.buildThesis({
             market,
             direction: params.direction,
-            confidence: params.confidence,
+            confidence: resolvedConfidence,
             whale_consensus: params.whale_wallets.length,
             whale_wallets: params.whale_wallets,
             whale_avg_score: params.whale_avg_score,
