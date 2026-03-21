@@ -1660,17 +1660,20 @@ function buildCoinGeckoTools(): ToolDefinition[] {
     {
       name: "bankr_open_position",
       label: "BANKR Open Position",
-      description: "Open a new position. Runs risk checks, calculates position size (2% risk), and records the trade. Requires Telegram approval in BETA mode.",
+      description: "Open a new position. Runs risk checks with tiered approval (autonomous/dead_zone/human_required), calculates position size (2% risk), executes via BNKR or Coinbase.",
       parameters: Type.Object({
         thesis_id: Type.String(),
         asset: Type.String(),
         asset_class: Type.Union([Type.Literal("crypto"), Type.Literal("polymarket")]),
+        source: Type.Optional(Type.Union([Type.Literal("crypto_scout"), Type.Literal("polymarket_scout"), Type.Literal("manual")])),
         direction: Type.String(),
         leverage: Type.Number(),
         entry_price: Type.Number(),
         stop_price: Type.Number(),
         atr_value: Type.Number(),
         venue: Type.Union([Type.Literal("bnkr"), Type.Literal("coinbase"), Type.Literal("kreo")]),
+        confidence: Type.Optional(Type.Number({ description: "Confidence score 1-5 for tiered approval" })),
+        market_id: Type.Optional(Type.String({ description: "Polymarket market ID for BNKR execution" })),
       }),
       async execute(_toolCallId: string, params: any) {
         try {
@@ -1681,31 +1684,43 @@ function buildCoinGeckoTools(): ToolDefinition[] {
             leverage: params.leverage,
             entry_price: params.entry_price,
             stop_price: params.stop_price,
+            confidence: params.confidence,
           });
           if (!riskCheck.passed) {
-            return { content: [{ type: "text" as const, text: JSON.stringify({ executed: false, reason: riskCheck.rejection_reason, checks: riskCheck.checks }) }], details: {} };
+            return { content: [{ type: "text" as const, text: JSON.stringify({ executed: false, tier: riskCheck.tier, reason: riskCheck.rejection_reason, checks: riskCheck.checks }) }], details: {} };
           }
           const mode = await bankr.getMode();
           if (mode === "SHADOW") {
-            return { content: [{ type: "text" as const, text: JSON.stringify({ executed: false, reason: "SHADOW mode — trade logged but not executed", checks: riskCheck.checks }) }], details: {} };
+            return { content: [{ type: "text" as const, text: JSON.stringify({ executed: false, tier: riskCheck.tier, reason: "SHADOW mode — trade logged but not executed", checks: riskCheck.checks }) }], details: {} };
           }
-          const portfolio = await bankr.getPortfolioValue();
-          const riskAmount = portfolio * 0.02;
-          const approval = await telegram.requestTradeApproval({
-            thesisId: params.thesis_id,
-            asset: params.asset,
-            direction: params.direction,
-            leverage: `${params.leverage}x`,
-            entryPrice: params.entry_price.toFixed(2),
-            stopLoss: params.stop_price.toFixed(2),
-            takeProfit: "TBD",
-            riskAmount: riskAmount.toFixed(2),
-            reason: `Risk checks passed. Mode: ${mode}`,
-          });
-          if (approval !== "approve") {
-            return { content: [{ type: "text" as const, text: JSON.stringify({ executed: false, reason: `Trade ${approval} via Telegram` }) }], details: {} };
+          if (riskCheck.tier === "human_required") {
+            const portfolio = await bankr.getPortfolioValue();
+            const riskAmount = portfolio * 0.02;
+            const approval = await telegram.requestTradeApproval({
+              thesisId: params.thesis_id,
+              asset: params.asset,
+              direction: params.direction,
+              leverage: `${params.leverage}x`,
+              entryPrice: params.entry_price.toFixed(2),
+              stopLoss: params.stop_price.toFixed(2),
+              takeProfit: "TBD",
+              riskAmount: riskAmount.toFixed(2),
+              reason: `Tier: HUMAN REQUIRED. Mode: ${mode}`,
+            });
+            if (approval !== "approve") {
+              return { content: [{ type: "text" as const, text: JSON.stringify({ executed: false, tier: "human_required", reason: `Trade ${approval} via Telegram` }) }], details: {} };
+            }
+          } else if (riskCheck.tier === "dead_zone") {
+            await telegram.sendTradeAlert({
+              type: "flagged",
+              asset: params.asset,
+              direction: params.direction,
+              leverage: `${params.leverage}x`,
+              entryPrice: params.entry_price.toFixed(2),
+              reason: "Dead zone trade (20-30% capital) — executing but flagging",
+            });
           }
-          const result = await bankr.openPosition(params);
+          const result = await bankr.openPosition({ ...params, source: params.source });
           await telegram.sendTradeAlert({
             type: "executed",
             asset: params.asset,
@@ -1713,7 +1728,7 @@ function buildCoinGeckoTools(): ToolDefinition[] {
             leverage: `${params.leverage}x`,
             entryPrice: params.entry_price.toFixed(2),
           });
-          return { content: [{ type: "text" as const, text: JSON.stringify({ executed: true, position_id: result.position.id, size: result.position.size }) }], details: {} };
+          return { content: [{ type: "text" as const, text: JSON.stringify({ executed: true, tier: riskCheck.tier, position_id: result.position.id, size: result.position.size, bnkr_order_id: result.bnkr_order_id }) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
         }

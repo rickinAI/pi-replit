@@ -14,7 +14,7 @@ import path7 from "path";
 import fs6 from "fs";
 import { execSync, spawn } from "child_process";
 import cookieParser from "cookie-parser";
-import crypto from "crypto";
+import crypto2 from "crypto";
 import {
   createAgentSession,
   AuthStorage,
@@ -4720,8 +4720,222 @@ function buildThesis2(params) {
   };
 }
 
+// src/bnkr.ts
+var BNKR_API_KEY = process.env.BANKR_API_KEY || "";
+var BNKR_WALLET = process.env.BANKR_WALLET_ADDRESS || "";
+var BNKR_BASE_URL = process.env.BANKR_API_URL || "https://api.bnkr.com/v1";
+function isConfigured6() {
+  return BNKR_API_KEY.length > 0 && BNKR_WALLET.length > 0;
+}
+async function bnkrFetch(path8, body) {
+  const url = `${BNKR_BASE_URL}${path8}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15e3);
+  try {
+    const opts = {
+      method: body ? "POST" : "GET",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${BNKR_API_KEY}`,
+        "X-Wallet-Address": BNKR_WALLET
+      },
+      signal: controller.signal
+    };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch(url, opts);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`BNKR API ${path8} failed (${res.status}): ${text}`);
+    }
+    return res.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+async function openCryptoPosition(params) {
+  if (!isConfigured6()) {
+    console.log(`[bnkr] SHADOW: openCryptoPosition ${params.asset} ${params.direction} ${params.leverage}x size=${params.size}`);
+    return {
+      order_id: `shadow_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      asset: params.asset,
+      direction: params.direction,
+      leverage: params.leverage,
+      size: params.size,
+      entry_price: 0,
+      status: "filled",
+      tx_hash: null
+    };
+  }
+  const result = await bnkrFetch("/crypto/open", {
+    asset: params.asset,
+    direction: params.direction,
+    leverage: params.leverage,
+    size: params.size,
+    stop_price: params.stop_price,
+    wallet: BNKR_WALLET
+  });
+  return result;
+}
+async function closeCryptoPosition(orderId) {
+  if (!isConfigured6()) {
+    console.log(`[bnkr] SHADOW: closeCryptoPosition ${orderId}`);
+    return { tx_hash: "", exit_price: 0 };
+  }
+  return bnkrFetch("/crypto/close", { order_id: orderId, wallet: BNKR_WALLET });
+}
+async function openPolymarketPosition(params) {
+  if (!isConfigured6()) {
+    console.log(`[bnkr] SHADOW: openPolymarketPosition market=${params.market_id} ${params.direction} $${params.amount_usd}`);
+    return {
+      order_id: `shadow_pm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      market_id: params.market_id,
+      direction: params.direction,
+      amount_usd: params.amount_usd,
+      entry_odds: 0,
+      status: "filled",
+      tx_hash: null
+    };
+  }
+  return bnkrFetch("/polymarket/open", {
+    market_id: params.market_id,
+    direction: params.direction,
+    amount_usd: params.amount_usd,
+    wallet: BNKR_WALLET
+  });
+}
+async function closePolymarketPosition(orderId) {
+  if (!isConfigured6()) {
+    console.log(`[bnkr] SHADOW: closePolymarketPosition ${orderId}`);
+    return { tx_hash: "", exit_odds: 0 };
+  }
+  return bnkrFetch("/polymarket/close", { order_id: orderId, wallet: BNKR_WALLET });
+}
+
+// src/coinbase-wallet.ts
+var COINBASE_API_KEY = process.env.COINBASE_API_KEY || "";
+var COINBASE_API_SECRET = process.env.COINBASE_API_SECRET || "";
+var COINBASE_BASE_URL = "https://api.coinbase.com/v2";
+function isConfigured7() {
+  return COINBASE_API_KEY.length > 0 && COINBASE_API_SECRET.length > 0;
+}
+async function coinbaseFetch(path8, method = "GET", body) {
+  const url = `${COINBASE_BASE_URL}${path8}`;
+  const timestamp = Math.floor(Date.now() / 1e3).toString();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15e3);
+  try {
+    const opts = {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        "CB-ACCESS-KEY": COINBASE_API_KEY,
+        "CB-ACCESS-SIGN": await signRequest(timestamp, method, path8, body),
+        "CB-ACCESS-TIMESTAMP": timestamp,
+        "CB-VERSION": "2024-01-01"
+      },
+      signal: controller.signal
+    };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch(url, opts);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Coinbase API ${path8} failed (${res.status}): ${text}`);
+    }
+    return res.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+async function signRequest(timestamp, method, path8, body) {
+  const message = timestamp + method.toUpperCase() + path8 + (body ? JSON.stringify(body) : "");
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(COINBASE_API_SECRET),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(message));
+  return Array.from(new Uint8Array(signature)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+async function buySpot(params) {
+  if (!isConfigured7()) {
+    console.log(`[coinbase] SHADOW: buySpot ${params.asset} $${params.amount_usd}`);
+    return {
+      id: `shadow_buy_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      asset: params.asset,
+      direction: "buy",
+      amount_usd: params.amount_usd,
+      quantity: 0,
+      price: 0,
+      status: "completed"
+    };
+  }
+  const accountId = await findAccountId(params.asset);
+  if (!accountId) throw new Error(`No Coinbase account found for ${params.asset}`);
+  const result = await coinbaseFetch(`/accounts/${accountId}/buys`, "POST", {
+    amount: params.amount_usd.toString(),
+    currency: "USD",
+    commit: true
+  });
+  return {
+    id: result.data?.id || "",
+    asset: params.asset,
+    direction: "buy",
+    amount_usd: params.amount_usd,
+    quantity: parseFloat(result.data?.amount?.amount || "0"),
+    price: parseFloat(result.data?.unit_price?.amount || "0"),
+    status: result.data?.status === "completed" ? "completed" : "pending"
+  };
+}
+async function sellSpot(params) {
+  if (!isConfigured7()) {
+    console.log(`[coinbase] SHADOW: sellSpot ${params.asset} qty=${params.quantity}`);
+    return {
+      id: `shadow_sell_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      asset: params.asset,
+      direction: "sell",
+      amount_usd: 0,
+      quantity: params.quantity,
+      price: 0,
+      status: "completed"
+    };
+  }
+  const accountId = await findAccountId(params.asset);
+  if (!accountId) throw new Error(`No Coinbase account found for ${params.asset}`);
+  const result = await coinbaseFetch(`/accounts/${accountId}/sells`, "POST", {
+    amount: params.quantity.toString(),
+    currency: params.asset.toUpperCase(),
+    commit: true
+  });
+  return {
+    id: result.data?.id || "",
+    asset: params.asset,
+    direction: "sell",
+    amount_usd: parseFloat(result.data?.total?.amount || "0"),
+    quantity: params.quantity,
+    price: parseFloat(result.data?.unit_price?.amount || "0"),
+    status: result.data?.status === "completed" ? "completed" : "pending"
+  };
+}
+async function findAccountId(asset) {
+  try {
+    const result = await coinbaseFetch("/accounts");
+    const accounts = result.data || [];
+    const match = accounts.find(
+      (a) => (a.currency?.code || a.currency)?.toLowerCase() === asset.toLowerCase()
+    );
+    return match?.id || null;
+  } catch {
+    return null;
+  }
+}
+
 // src/bankr.ts
 var PORTFOLIO_VALUE_KEY = "wealth_engines_portfolio_value";
+var PEAK_PORTFOLIO_KEY = "wealth_engines_peak_portfolio";
+var CONSECUTIVE_LOSSES_KEY = "wealth_engines_consecutive_losses";
 var DEFAULT_PORTFOLIO = 50;
 async function getPortfolioValue() {
   const pool2 = getPool();
@@ -4741,6 +4955,60 @@ async function setPortfolioValue(value) {
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
     [PORTFOLIO_VALUE_KEY, JSON.stringify(value), Date.now()]
   );
+  const peak = await getPeakPortfolioValue();
+  if (value > peak) {
+    await pool2.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [PEAK_PORTFOLIO_KEY, JSON.stringify(value), Date.now()]
+    );
+  }
+}
+async function getPeakPortfolioValue() {
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = $1`, [PEAK_PORTFOLIO_KEY]);
+    if (res.rows.length > 0 && typeof res.rows[0].value === "number") {
+      return res.rows[0].value;
+    }
+  } catch {
+  }
+  return DEFAULT_PORTFOLIO;
+}
+async function getConsecutiveLosses() {
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = $1`, [CONSECUTIVE_LOSSES_KEY]);
+    if (res.rows.length > 0 && typeof res.rows[0].value === "number") {
+      return res.rows[0].value;
+    }
+  } catch {
+  }
+  return 0;
+}
+async function updateConsecutiveLosses(pnl) {
+  const pool2 = getPool();
+  const current = await getConsecutiveLosses();
+  const newCount = pnl < 0 ? current + 1 : 0;
+  await pool2.query(
+    `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [CONSECUTIVE_LOSSES_KEY, JSON.stringify(newCount), Date.now()]
+  );
+  return newCount;
+}
+async function isFirstTradeForAsset(asset, assetClass) {
+  const history = await getTradeHistory();
+  return !history.some((t) => t.asset === asset && t.asset_class === assetClass);
+}
+function determineApprovalTier(params) {
+  if (params.capitalPct > 30 || params.consecutiveLosses >= 3 || params.drawdownPct < -25 || params.isFirstForAsset || params.leverageIncrease) {
+    return "human_required";
+  }
+  if (params.capitalPct > 20 || params.confidence < 3.5) {
+    return "dead_zone";
+  }
+  return "autonomous";
 }
 async function getPositions() {
   const pool2 = getPool();
@@ -4831,7 +5099,6 @@ async function runPreExecutionChecks(params) {
   checks.push({ name: "pause_state", passed: !paused, detail: paused ? "System is PAUSED" : "System active" });
   if (paused) allPassed = false;
   const mode = await getMode();
-  const isLiveOrBeta = mode === "LIVE" || mode === "BETA";
   checks.push({ name: "mode_check", passed: true, detail: `Mode: ${mode}${mode === "SHADOW" ? " (shadow trades only)" : ""}` });
   const levOk = params.leverage <= 2;
   checks.push({ name: "leverage_cap", passed: levOk, detail: `Requested: ${params.leverage}x, Max: 2x` });
@@ -4869,8 +5136,25 @@ async function runPreExecutionChecks(params) {
   const correlationOk = bucketCount < 2;
   checks.push({ name: "correlation_limit", passed: correlationOk, detail: `Bucket "${bucket}": ${bucketCount}/2 positions` });
   if (!correlationOk) allPassed = false;
+  const consecutiveLosses = await getConsecutiveLosses();
+  checks.push({ name: "consecutive_losses", passed: consecutiveLosses < 3, detail: `Consecutive losses: ${consecutiveLosses}/3` });
+  const peakPortfolio = await getPeakPortfolioValue();
+  const drawdownPct = peakPortfolio > 0 ? (portfolio - peakPortfolio) / peakPortfolio * 100 : 0;
+  const drawdownOk = drawdownPct > -25;
+  checks.push({ name: "peak_drawdown", passed: drawdownOk, detail: `Drawdown from peak: ${drawdownPct.toFixed(1)}% (limit: -25%)` });
+  const capitalPct = portfolio > 0 ? newExposure / portfolio * 100 : 0;
+  const firstForAsset = await isFirstTradeForAsset(params.asset, params.asset_class);
+  const tier = determineApprovalTier({
+    capitalPct,
+    confidence: params.confidence || 3.5,
+    consecutiveLosses,
+    drawdownPct,
+    isFirstForAsset: firstForAsset,
+    leverageIncrease: false
+  });
+  checks.push({ name: "approval_tier", passed: true, detail: `Tier: ${tier} (capital: ${capitalPct.toFixed(1)}%, losses: ${consecutiveLosses}, drawdown: ${drawdownPct.toFixed(1)}%, first: ${firstForAsset})` });
   const rejectionReason = allPassed ? null : checks.filter((c) => !c.passed).map((c) => c.detail).join("; ");
-  return { passed: allPassed, checks, rejection_reason: rejectionReason };
+  return { passed: allPassed, tier, checks, rejection_reason: rejectionReason };
 }
 async function openPosition(params) {
   const portfolio = await getPortfolioValue();
@@ -4879,40 +5163,105 @@ async function openPosition(params) {
   const size = riskDistance > 0 ? maxRisk / riskDistance : 0;
   const posId = `pos_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const tradeId = `trade_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  let bnkrOrderId;
+  let fillQuantity;
+  const source = params.source || (params.asset_class === "polymarket" ? "polymarket_scout" : "crypto_scout");
+  if (params.venue === "bnkr" && isConfigured6()) {
+    if (params.asset_class === "crypto") {
+      const order = await openCryptoPosition({
+        asset: params.asset,
+        direction: params.direction,
+        leverage: params.leverage,
+        size,
+        stop_price: params.stop_price
+      });
+      bnkrOrderId = order.order_id;
+      if (order.entry_price > 0) params.entry_price = order.entry_price;
+    } else if (params.asset_class === "polymarket") {
+      if (!params.market_id) {
+        throw new Error("market_id is required for Polymarket positions via BNKR");
+      }
+      const order = await openPolymarketPosition({
+        market_id: params.market_id,
+        direction: params.direction,
+        amount_usd: size * params.entry_price
+      });
+      bnkrOrderId = order.order_id;
+      if (order.entry_odds > 0) params.entry_price = order.entry_odds;
+    }
+  } else if (params.venue === "coinbase" && isConfigured7()) {
+    const order = await buySpot({
+      asset: params.asset,
+      amount_usd: size * params.entry_price
+    });
+    if (order.price > 0) params.entry_price = order.price;
+    if (order.quantity > 0) fillQuantity = order.quantity;
+  }
   const position = {
     id: posId,
     thesis_id: params.thesis_id,
     asset: params.asset,
     asset_class: params.asset_class,
+    source,
     direction: params.direction,
     leverage: `${params.leverage}x`,
     entry_price: params.entry_price,
     current_price: params.entry_price,
-    size,
+    size: fillQuantity || size,
+    fill_quantity: fillQuantity || void 0,
     unrealized_pnl: 0,
     peak_price: params.entry_price,
     atr_value: params.atr_value,
     atr_stop_price: params.direction === "SHORT" || params.direction === "NO" ? params.entry_price + params.atr_value * 5.5 : params.entry_price - params.atr_value * 5.5,
     opened_at: (/* @__PURE__ */ new Date()).toISOString(),
     venue: params.venue,
-    exposure_bucket: getExposureBucket(params.asset, params.asset_class)
+    exposure_bucket: getExposureBucket(params.asset, params.asset_class),
+    bnkr_order_id: bnkrOrderId
   };
   const positions = await getPositions();
   positions.push(position);
   await savePositions(positions);
   recordSignal(params.asset.toLowerCase(), "entry");
-  return { position, trade_id: tradeId };
+  return { position, trade_id: tradeId, bnkr_order_id: bnkrOrderId };
 }
 async function closePosition(positionId, exitPrice, closeReason, txHash) {
   const positions = await getPositions();
   const idx = positions.findIndex((p) => p.id === positionId);
   if (idx === -1) return null;
   const pos = positions[idx];
+  if (pos.bnkr_order_id && isConfigured6()) {
+    try {
+      if (pos.asset_class === "crypto") {
+        const result = await closeCryptoPosition(pos.bnkr_order_id);
+        if (result.exit_price > 0) exitPrice = result.exit_price;
+        txHash = txHash || result.tx_hash;
+      } else if (pos.asset_class === "polymarket") {
+        const result = await closePolymarketPosition(pos.bnkr_order_id);
+        if (result.exit_odds > 0) exitPrice = result.exit_odds;
+        txHash = txHash || result.tx_hash;
+      }
+    } catch (err) {
+      console.error(`[bankr] BNKR close failed for ${pos.bnkr_order_id}:`, err instanceof Error ? err.message : err);
+      return null;
+    }
+  } else if (pos.venue === "coinbase" && isConfigured7() && pos.asset_class === "crypto") {
+    try {
+      const actualQty = pos.fill_quantity || pos.size;
+      await sellSpot({ asset: pos.asset, quantity: actualQty });
+    } catch (err) {
+      console.error(`[bankr] Coinbase sell failed for ${pos.asset}:`, err instanceof Error ? err.message : err);
+      return null;
+    }
+  }
   const isLong = pos.direction === "LONG" || pos.direction === "YES";
   const priceDiff = isLong ? exitPrice - pos.entry_price : pos.entry_price - exitPrice;
   const pnl = priceDiff * pos.size;
   const pnlPct = pos.entry_price > 0 ? priceDiff / pos.entry_price * 100 : 0;
   const fees = pos.size * exitPrice * 1e-3;
+  const acquiredDate = new Date(pos.opened_at);
+  const disposedDate = /* @__PURE__ */ new Date();
+  const holdingMs = disposedDate.getTime() - acquiredDate.getTime();
+  const holdingPeriod = holdingMs > 365 * 24 * 60 * 60 * 1e3 ? "long" : "short";
   const taxLot = {
     id: `lot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     asset: pos.asset,
@@ -4921,10 +5270,10 @@ async function closePosition(positionId, exitPrice, closeReason, txHash) {
     cost_basis: pos.size * pos.entry_price + fees,
     cost_per_unit: pos.entry_price,
     acquired_at: pos.opened_at,
-    disposed_at: (/* @__PURE__ */ new Date()).toISOString(),
+    disposed_at: disposedDate.toISOString(),
     proceeds: pos.size * exitPrice - fees,
     gain_loss: pnl - fees * 2,
-    holding_period: "short",
+    holding_period: holdingPeriod,
     wash_sale_flagged: false,
     wash_sale_disallowed: 0,
     venue: pos.venue,
@@ -4935,6 +5284,7 @@ async function closePosition(positionId, exitPrice, closeReason, txHash) {
     thesis_id: pos.thesis_id,
     asset: pos.asset,
     asset_class: pos.asset_class,
+    source: pos.source || "manual",
     direction: pos.direction,
     leverage: pos.leverage,
     entry_price: pos.entry_price,
@@ -4945,7 +5295,7 @@ async function closePosition(positionId, exitPrice, closeReason, txHash) {
     pnl_pct: parseFloat(pnlPct.toFixed(2)),
     fees: parseFloat(fees.toFixed(4)),
     opened_at: pos.opened_at,
-    closed_at: (/* @__PURE__ */ new Date()).toISOString(),
+    closed_at: disposedDate.toISOString(),
     close_reason: closeReason,
     tax_lot: taxLot
   };
@@ -4954,6 +5304,7 @@ async function closePosition(positionId, exitPrice, closeReason, txHash) {
   await appendTradeHistory(tradeRecord);
   const portfolio = await getPortfolioValue();
   await setPortfolioValue(portfolio + pnl - fees * 2);
+  await updateConsecutiveLosses(pnl);
   recordSignal(pos.asset.toLowerCase(), "exit");
   return tradeRecord;
 }
@@ -4974,7 +5325,9 @@ async function checkCircuitBreaker() {
   const rolling7dayPnl = recentTrades.reduce((sum, t) => sum + t.pnl, 0);
   const portfolio = await getPortfolioValue();
   const pnlPct = portfolio > 0 ? rolling7dayPnl / portfolio * 100 : 0;
-  const triggered = pnlPct < -15;
+  const peakPortfolio = await getPeakPortfolioValue();
+  const peakDrawdownPct = peakPortfolio > 0 ? (portfolio - peakPortfolio) / peakPortfolio * 100 : 0;
+  const triggered = pnlPct < -15 || peakDrawdownPct < -25;
   if (triggered) {
     const pool2 = getPool();
     await pool2.query(
@@ -4982,9 +5335,15 @@ async function checkCircuitBreaker() {
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
       [JSON.stringify(true), Date.now()]
     );
-    console.log(`[bankr] Circuit breaker TRIGGERED: 7-day P&L ${pnlPct.toFixed(1)}% < -15%`);
+    const reason = peakDrawdownPct < -25 ? `Peak drawdown ${peakDrawdownPct.toFixed(1)}% < -25%` : `7-day P&L ${pnlPct.toFixed(1)}% < -15%`;
+    console.log(`[bankr] Circuit breaker TRIGGERED: ${reason}`);
   }
-  return { triggered, rolling7dayPnl: parseFloat(rolling7dayPnl.toFixed(4)), pnlPct: parseFloat(pnlPct.toFixed(2)) };
+  return {
+    triggered,
+    rolling7dayPnl: parseFloat(rolling7dayPnl.toFixed(4)),
+    pnlPct: parseFloat(pnlPct.toFixed(2)),
+    peakDrawdownPct: parseFloat(peakDrawdownPct.toFixed(2))
+  };
 }
 async function runPositionMonitor() {
   const killActive = await isKillSwitchActive();
@@ -5077,6 +5436,13 @@ async function monitorCryptoPosition(pos, closed) {
     }
   } catch {
   }
+  const hoursOpen = (Date.now() - new Date(pos.opened_at).getTime()) / (60 * 60 * 1e3);
+  if (hoursOpen > 72) {
+    console.log(`[bankr] Time exit (${hoursOpen.toFixed(0)}h > 72h) for ${pos.asset}`);
+    const record = await closePosition(pos.id, currentPrice, "time_exit");
+    if (record) closed.push(record);
+    return;
+  }
 }
 async function monitorPolymarketPosition(pos, closed) {
   let thesis = null;
@@ -5158,6 +5524,13 @@ async function monitorPolymarketPosition(pos, closed) {
     if (record) closed.push(record);
     return;
   }
+  const daysOpen = (Date.now() - new Date(pos.opened_at).getTime()) / (24 * 60 * 60 * 1e3);
+  if (daysOpen > 30 && livePos.unrealized_pnl < 0) {
+    console.log(`[bankr] Polymarket time exit (${daysOpen.toFixed(0)}d underwater) for ${pos.asset.slice(0, 60)}`);
+    const record = await closePosition(pos.id, currentOdds, "pm_time_exit_underwater");
+    if (record) closed.push(record);
+    return;
+  }
   try {
     const activities = await getWhaleActivities();
     const marketActivities = activities.filter((a) => a.market_id === thesis.market_id);
@@ -5176,8 +5549,10 @@ async function monitorPolymarketPosition(pos, closed) {
   }
 }
 async function getPortfolioSummary() {
-  const [portfolio, positions, mode, paused, killSwitch] = await Promise.all([
+  const [portfolio, peakPortfolio, consecutiveLosses, positions, mode, paused, killSwitch] = await Promise.all([
     getPortfolioValue(),
+    getPeakPortfolioValue(),
+    getConsecutiveLosses(),
     getPositions(),
     getMode(),
     isPaused(),
@@ -5185,14 +5560,20 @@ async function getPortfolioSummary() {
   ]);
   const totalExposure = positions.reduce((sum, p) => sum + p.size * p.entry_price, 0);
   const unrealizedPnl = positions.reduce((sum, p) => sum + p.unrealized_pnl, 0);
+  const peakDrawdownPct = peakPortfolio > 0 ? (portfolio - peakPortfolio) / peakPortfolio * 100 : 0;
   return {
     portfolio_value: portfolio,
+    peak_portfolio_value: peakPortfolio,
+    peak_drawdown_pct: parseFloat(peakDrawdownPct.toFixed(2)),
+    consecutive_losses: consecutiveLosses,
     open_positions: positions.length,
     total_exposure: parseFloat(totalExposure.toFixed(2)),
     unrealized_pnl: parseFloat(unrealizedPnl.toFixed(4)),
     mode,
     paused,
     kill_switch: killSwitch,
+    bnkr_configured: isConfigured6(),
+    coinbase_configured: isConfigured7(),
     positions
   };
 }
@@ -6808,7 +7189,7 @@ async function getMode2() {
   }
   return "[BETA]";
 }
-function isConfigured6() {
+function isConfigured8() {
   return BOT_TOKEN.length > 0 && CHAT_ID.length > 0;
 }
 async function tgFetch(method, body) {
@@ -6826,7 +7207,7 @@ async function tgFetch(method, body) {
   return resp.json();
 }
 async function sendMessage(text, parseMode = "Markdown") {
-  if (!isConfigured6()) return null;
+  if (!isConfigured8()) return null;
   try {
     const result = await tgFetch("sendMessage", {
       chat_id: CHAT_ID,
@@ -6841,7 +7222,7 @@ async function sendMessage(text, parseMode = "Markdown") {
   }
 }
 async function sendMessageWithKeyboard(text, keyboard, parseMode = "Markdown") {
-  if (!isConfigured6()) return null;
+  if (!isConfigured8()) return null;
   try {
     const result = await tgFetch("sendMessage", {
       chat_id: CHAT_ID,
@@ -7268,7 +7649,7 @@ async function handleHelpCommand() {
 }
 async function requestTradeApproval(params) {
   const mode = await getMode2();
-  if (!isConfigured6()) {
+  if (!isConfigured8()) {
     console.warn("[telegram] Trade approval requested but Telegram not configured \u2014 auto-skipping");
     return "skip";
   }
@@ -7367,7 +7748,7 @@ _Decision recorded at ${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { t
   console.log(`[telegram] Trade ${decision}: ${pending.asset} ${pending.direction} (thesis: ${pending.thesisId})`);
 }
 async function pollUpdates() {
-  if (!pollingActive || !isConfigured6()) return;
+  if (!pollingActive || !isConfigured8()) return;
   try {
     const result = await tgFetch("getUpdates", {
       offset: lastUpdateId + 1,
@@ -7434,7 +7815,7 @@ async function isJobEnabled(pool2, agentId) {
   return false;
 }
 async function checkDeadManSwitches() {
-  if (!isConfigured6()) return;
+  if (!isConfigured8()) return;
   const pool2 = getPool();
   const mode = await getMode2();
   let paused = false;
@@ -7594,7 +7975,7 @@ function getWebhookSecret() {
   return WEBHOOK_SECRET;
 }
 async function handleWebhookUpdate(update) {
-  if (!isConfigured6()) return;
+  if (!isConfigured8()) return;
   if (update.callback_query) {
     const cbq = update.callback_query;
     if (String(cbq.message?.chat?.id) === CHAT_ID) {
@@ -7676,7 +8057,7 @@ function stop() {
   console.log("[telegram] stopped");
 }
 async function forwardAlertToTelegram(event) {
-  if (!isConfigured6()) return;
+  if (!isConfigured8()) return;
   const mode = await getMode2();
   if (event.type === "brief") {
     const briefLabel = event.briefType ? event.briefType.charAt(0).toUpperCase() + event.briefType.slice(1) : "Daily";
@@ -7718,6 +8099,7 @@ function getJobSavePath(jobId, dateStr, safeName) {
   if (jobId === "polymarket-activity-scan") return `Scheduled Reports/Wealth Engines/Polymarket/${dateStr}-Activity-Scan.md`;
   if (jobId === "polymarket-full-cycle") return `Scheduled Reports/Wealth Engines/Polymarket/${dateStr}-Full-Cycle.md`;
   if (jobId === "weekly-memory-reflect") return `Scheduled Reports/Memory/${dateStr}-Weekly-Digest.md`;
+  if (jobId === "bankr-execute") return `Scheduled Reports/Wealth Engines/BANKR/${dateStr}-Execution.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 var jobStatusCache = {};
@@ -8515,6 +8897,30 @@ Output a full brief with:
 
 Do NOT use notes_create \u2014 the system saves automatically.`,
     schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 240 },
+    enabled: true
+  },
+  {
+    id: "bankr-execute",
+    name: "BANKR Execute",
+    agentId: "bankr",
+    prompt: `Run a BANKR EXECUTION CYCLE. Check for actionable theses and execute trades.
+
+1. Check scout_theses for active crypto theses with confidence HIGH or MEDIUM
+2. Check polymarket_theses for active polymarket theses with confidence HIGH or MEDIUM
+3. For each thesis NOT already associated with an open position (check bankr_positions):
+   a. Run bankr_risk_check to validate the trade passes all risk rules
+   b. If risk check passes AND tier is "autonomous" or "dead_zone":
+      - For autonomous: execute directly via bankr_open_position
+      - For dead_zone: execute but note it for Telegram flagging
+   c. If tier is "human_required": log the thesis but do NOT execute \u2014 it needs Telegram approval
+4. Report execution summary:
+   - Theses evaluated (crypto + polymarket)
+   - Trades executed (with position IDs)
+   - Trades skipped (with reasons)
+   - Current portfolio state
+
+Keep this concise. The position monitor handles exits independently.`,
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 30 },
     enabled: true
   },
   {
@@ -9983,7 +10389,7 @@ function getConfig2() {
   if (!apiKey || !organizationId || !knowledgeBaseId) return null;
   return { apiKey, organizationId, knowledgeBaseId };
 }
-function isConfigured7() {
+function isConfigured9() {
   return getConfig2() !== null;
 }
 async function apiRequest(method, path8, body, retries = MAX_RETRIES2) {
@@ -10179,7 +10585,7 @@ Rules:
       actionItems: Array.isArray(parsed.actionItems) ? parsed.actionItems : [],
       skipReason: parsed.skipReason || void 0
     };
-    if (isConfigured7() && !result.skipReason) {
+    if (isConfigured9() && !result.skipReason) {
       try {
         const retainItems = [];
         const dateStr = (/* @__PURE__ */ new Date()).toISOString();
@@ -10656,7 +11062,7 @@ var USERS = {
   pooja: { password: POOJA_PASSWORD, displayName: "Pooja" },
   darknode: { password: DARKNODE_PASSWORD, displayName: "DarkNode" }
 };
-var SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
+var SESSION_SECRET = process.env.SESSION_SECRET || crypto2.randomBytes(32).toString("hex");
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path7.dirname(__filename);
 var PROJECT_ROOT = __filename.includes("/dist/") ? path7.resolve(__dirname, "..") : __dirname;
@@ -12217,17 +12623,20 @@ function buildCoinGeckoTools() {
     {
       name: "bankr_open_position",
       label: "BANKR Open Position",
-      description: "Open a new position. Runs risk checks, calculates position size (2% risk), and records the trade. Requires Telegram approval in BETA mode.",
+      description: "Open a new position. Runs risk checks with tiered approval (autonomous/dead_zone/human_required), calculates position size (2% risk), executes via BNKR or Coinbase.",
       parameters: Type.Object({
         thesis_id: Type.String(),
         asset: Type.String(),
         asset_class: Type.Union([Type.Literal("crypto"), Type.Literal("polymarket")]),
+        source: Type.Optional(Type.Union([Type.Literal("crypto_scout"), Type.Literal("polymarket_scout"), Type.Literal("manual")])),
         direction: Type.String(),
         leverage: Type.Number(),
         entry_price: Type.Number(),
         stop_price: Type.Number(),
         atr_value: Type.Number(),
-        venue: Type.Union([Type.Literal("bnkr"), Type.Literal("coinbase"), Type.Literal("kreo")])
+        venue: Type.Union([Type.Literal("bnkr"), Type.Literal("coinbase"), Type.Literal("kreo")]),
+        confidence: Type.Optional(Type.Number({ description: "Confidence score 1-5 for tiered approval" })),
+        market_id: Type.Optional(Type.String({ description: "Polymarket market ID for BNKR execution" }))
       }),
       async execute(_toolCallId, params) {
         try {
@@ -12237,32 +12646,44 @@ function buildCoinGeckoTools() {
             direction: params.direction,
             leverage: params.leverage,
             entry_price: params.entry_price,
-            stop_price: params.stop_price
+            stop_price: params.stop_price,
+            confidence: params.confidence
           });
           if (!riskCheck.passed) {
-            return { content: [{ type: "text", text: JSON.stringify({ executed: false, reason: riskCheck.rejection_reason, checks: riskCheck.checks }) }], details: {} };
+            return { content: [{ type: "text", text: JSON.stringify({ executed: false, tier: riskCheck.tier, reason: riskCheck.rejection_reason, checks: riskCheck.checks }) }], details: {} };
           }
           const mode = await getMode();
           if (mode === "SHADOW") {
-            return { content: [{ type: "text", text: JSON.stringify({ executed: false, reason: "SHADOW mode \u2014 trade logged but not executed", checks: riskCheck.checks }) }], details: {} };
+            return { content: [{ type: "text", text: JSON.stringify({ executed: false, tier: riskCheck.tier, reason: "SHADOW mode \u2014 trade logged but not executed", checks: riskCheck.checks }) }], details: {} };
           }
-          const portfolio = await getPortfolioValue();
-          const riskAmount = portfolio * 0.02;
-          const approval = await requestTradeApproval({
-            thesisId: params.thesis_id,
-            asset: params.asset,
-            direction: params.direction,
-            leverage: `${params.leverage}x`,
-            entryPrice: params.entry_price.toFixed(2),
-            stopLoss: params.stop_price.toFixed(2),
-            takeProfit: "TBD",
-            riskAmount: riskAmount.toFixed(2),
-            reason: `Risk checks passed. Mode: ${mode}`
-          });
-          if (approval !== "approve") {
-            return { content: [{ type: "text", text: JSON.stringify({ executed: false, reason: `Trade ${approval} via Telegram` }) }], details: {} };
+          if (riskCheck.tier === "human_required") {
+            const portfolio = await getPortfolioValue();
+            const riskAmount = portfolio * 0.02;
+            const approval = await requestTradeApproval({
+              thesisId: params.thesis_id,
+              asset: params.asset,
+              direction: params.direction,
+              leverage: `${params.leverage}x`,
+              entryPrice: params.entry_price.toFixed(2),
+              stopLoss: params.stop_price.toFixed(2),
+              takeProfit: "TBD",
+              riskAmount: riskAmount.toFixed(2),
+              reason: `Tier: HUMAN REQUIRED. Mode: ${mode}`
+            });
+            if (approval !== "approve") {
+              return { content: [{ type: "text", text: JSON.stringify({ executed: false, tier: "human_required", reason: `Trade ${approval} via Telegram` }) }], details: {} };
+            }
+          } else if (riskCheck.tier === "dead_zone") {
+            await sendTradeAlert({
+              type: "flagged",
+              asset: params.asset,
+              direction: params.direction,
+              leverage: `${params.leverage}x`,
+              entryPrice: params.entry_price.toFixed(2),
+              reason: "Dead zone trade (20-30% capital) \u2014 executing but flagging"
+            });
           }
-          const result = await openPosition(params);
+          const result = await openPosition({ ...params, source: params.source });
           await sendTradeAlert({
             type: "executed",
             asset: params.asset,
@@ -12270,7 +12691,7 @@ function buildCoinGeckoTools() {
             leverage: `${params.leverage}x`,
             entryPrice: params.entry_price.toFixed(2)
           });
-          return { content: [{ type: "text", text: JSON.stringify({ executed: true, position_id: result.position.id, size: result.position.size }) }], details: {} };
+          return { content: [{ type: "text", text: JSON.stringify({ executed: true, tier: riskCheck.tier, position_id: result.position.id, size: result.position.size, bnkr_order_id: result.bnkr_order_id }) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
         }
@@ -13485,7 +13906,7 @@ function buildMemoryTools() {
         top_k: Type.Optional(Type.Number({ description: "Number of memories to return (default 10, max 25)" }))
       }),
       async execute(_toolCallId, params) {
-        if (!isConfigured7()) {
+        if (!isConfigured9()) {
           return { content: [{ type: "text", text: "Memory recall is not configured. Set VECTORIZE_API_KEY, VECTORIZE_ORG_ID, and VECTORIZE_KB_ID to enable." }], details: {} };
         }
         const topK = Math.min(params.top_k || 10, 25);
@@ -13510,7 +13931,7 @@ ${formatted}` }], details: {} };
       description: "Consolidate and reflect on accumulated memories. Calls the Hindsight knowledge graph reflect operation to surface patterns, recurring themes, and insights across all stored memories. Use this for weekly memory digests or when asked 'what patterns do you see in my activity?'",
       parameters: Type.Object({}),
       async execute() {
-        if (!isConfigured7()) {
+        if (!isConfigured9()) {
           return { content: [{ type: "text", text: "Memory reflect is not configured. Set VECTORIZE_API_KEY, VECTORIZE_ORG_ID, and VECTORIZE_KB_ID to enable." }], details: {} };
         }
         const result = await reflect();
@@ -16034,7 +16455,7 @@ IMPORTANT: When Rickin says something brief like "test it", "try again", "do it"
       const lastConvoContext = await getLastConversationContext(10);
       const vaultIndex = await getVaultIndex();
       let hindsightContext = null;
-      if (isConfigured7()) {
+      if (isConfigured9()) {
         try {
           const memResult = await recall({ query: "What has Rickin been working on and talking about recently? Important decisions, preferences, and context.", topK: 8 });
           if (memResult.memories.length > 0) {
@@ -16790,7 +17211,7 @@ app.post("/api/v1/chat/completions", async (req, res) => {
       messages: anthropicMessages
     });
     const textContent = response.content.filter((b) => b.type === "text").map((b) => b.text).join("");
-    const completionId = `chatcmpl-${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
+    const completionId = `chatcmpl-${crypto2.randomUUID().replace(/-/g, "").slice(0, 24)}`;
     res.json({
       id: completionId,
       object: "chat.completion",

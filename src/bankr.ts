@@ -2,6 +2,8 @@ import { getPool } from "./db.js";
 import { analyzeAsset, checkCooldown, recordSignal, type OHLCVCandle } from "./technical-signals.js";
 import { getHistoricalOHLCV } from "./coingecko.js";
 import * as polymarket from "./polymarket.js";
+import * as bnkr from "./bnkr.js";
+import * as coinbaseWallet from "./coinbase-wallet.js";
 import type { PolymarketThesis } from "./polymarket-scout.js";
 
 export interface Position {
@@ -9,6 +11,7 @@ export interface Position {
   thesis_id: string;
   asset: string;
   asset_class: "crypto" | "polymarket";
+  source: "crypto_scout" | "polymarket_scout" | "manual";
   direction: string;
   leverage: string;
   entry_price: number;
@@ -21,6 +24,8 @@ export interface Position {
   opened_at: string;
   venue: "bnkr" | "coinbase" | "kreo";
   exposure_bucket: string;
+  bnkr_order_id?: string;
+  fill_quantity?: number;
 }
 
 export interface TradeRecord {
@@ -28,6 +33,7 @@ export interface TradeRecord {
   thesis_id: string;
   asset: string;
   asset_class: "crypto" | "polymarket";
+  source: "crypto_scout" | "polymarket_scout" | "manual";
   direction: string;
   leverage: string;
   entry_price: number;
@@ -61,13 +67,18 @@ export interface TaxLot {
   tx_hash: string | null;
 }
 
+export type ApprovalTier = "autonomous" | "dead_zone" | "human_required";
+
 export interface RiskCheckResult {
   passed: boolean;
+  tier: ApprovalTier;
   checks: { name: string; passed: boolean; detail: string }[];
   rejection_reason: string | null;
 }
 
 const PORTFOLIO_VALUE_KEY = "wealth_engines_portfolio_value";
+const PEAK_PORTFOLIO_KEY = "wealth_engines_peak_portfolio";
+const CONSECUTIVE_LOSSES_KEY = "wealth_engines_consecutive_losses";
 const DEFAULT_PORTFOLIO = 50;
 
 export async function getPortfolioValue(): Promise<number> {
@@ -88,6 +99,76 @@ async function setPortfolioValue(value: number): Promise<void> {
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
     [PORTFOLIO_VALUE_KEY, JSON.stringify(value), Date.now()]
   );
+  const peak = await getPeakPortfolioValue();
+  if (value > peak) {
+    await pool.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [PEAK_PORTFOLIO_KEY, JSON.stringify(value), Date.now()]
+    );
+  }
+}
+
+export async function getPeakPortfolioValue(): Promise<number> {
+  const pool = getPool();
+  try {
+    const res = await pool.query(`SELECT value FROM app_config WHERE key = $1`, [PEAK_PORTFOLIO_KEY]);
+    if (res.rows.length > 0 && typeof res.rows[0].value === "number") {
+      return res.rows[0].value;
+    }
+  } catch {}
+  return DEFAULT_PORTFOLIO;
+}
+
+export async function getConsecutiveLosses(): Promise<number> {
+  const pool = getPool();
+  try {
+    const res = await pool.query(`SELECT value FROM app_config WHERE key = $1`, [CONSECUTIVE_LOSSES_KEY]);
+    if (res.rows.length > 0 && typeof res.rows[0].value === "number") {
+      return res.rows[0].value;
+    }
+  } catch {}
+  return 0;
+}
+
+async function updateConsecutiveLosses(pnl: number): Promise<number> {
+  const pool = getPool();
+  const current = await getConsecutiveLosses();
+  const newCount = pnl < 0 ? current + 1 : 0;
+  await pool.query(
+    `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [CONSECUTIVE_LOSSES_KEY, JSON.stringify(newCount), Date.now()]
+  );
+  return newCount;
+}
+
+async function isFirstTradeForAsset(asset: string, assetClass: string): Promise<boolean> {
+  const history = await getTradeHistory();
+  return !history.some(t => t.asset === asset && t.asset_class === assetClass);
+}
+
+export function determineApprovalTier(params: {
+  capitalPct: number;
+  confidence: number;
+  consecutiveLosses: number;
+  drawdownPct: number;
+  isFirstForAsset: boolean;
+  leverageIncrease: boolean;
+}): ApprovalTier {
+  if (
+    params.capitalPct > 30 ||
+    params.consecutiveLosses >= 3 ||
+    params.drawdownPct < -25 ||
+    params.isFirstForAsset ||
+    params.leverageIncrease
+  ) {
+    return "human_required";
+  }
+  if (params.capitalPct > 20 || params.confidence < 3.5) {
+    return "dead_zone";
+  }
+  return "autonomous";
 }
 
 export async function getPositions(): Promise<Position[]> {
@@ -178,6 +259,7 @@ export async function runPreExecutionChecks(params: {
   entry_price: number;
   stop_price: number;
   risk_amount?: number;
+  confidence?: number;
 }): Promise<RiskCheckResult> {
   const checks: { name: string; passed: boolean; detail: string }[] = [];
   let allPassed = true;
@@ -191,7 +273,6 @@ export async function runPreExecutionChecks(params: {
   if (paused) allPassed = false;
 
   const mode = await getMode();
-  const isLiveOrBeta = mode === "LIVE" || mode === "BETA";
   checks.push({ name: "mode_check", passed: true, detail: `Mode: ${mode}${mode === "SHADOW" ? " (shadow trades only)" : ""}` });
 
   const levOk = params.leverage <= 2;
@@ -236,15 +317,36 @@ export async function runPreExecutionChecks(params: {
   checks.push({ name: "correlation_limit", passed: correlationOk, detail: `Bucket "${bucket}": ${bucketCount}/2 positions` });
   if (!correlationOk) allPassed = false;
 
+  const consecutiveLosses = await getConsecutiveLosses();
+  checks.push({ name: "consecutive_losses", passed: consecutiveLosses < 3, detail: `Consecutive losses: ${consecutiveLosses}/3` });
+
+  const peakPortfolio = await getPeakPortfolioValue();
+  const drawdownPct = peakPortfolio > 0 ? ((portfolio - peakPortfolio) / peakPortfolio) * 100 : 0;
+  const drawdownOk = drawdownPct > -25;
+  checks.push({ name: "peak_drawdown", passed: drawdownOk, detail: `Drawdown from peak: ${drawdownPct.toFixed(1)}% (limit: -25%)` });
+
+  const capitalPct = portfolio > 0 ? (newExposure / portfolio) * 100 : 0;
+  const firstForAsset = await isFirstTradeForAsset(params.asset, params.asset_class);
+  const tier = determineApprovalTier({
+    capitalPct,
+    confidence: params.confidence || 3.5,
+    consecutiveLosses,
+    drawdownPct,
+    isFirstForAsset: firstForAsset,
+    leverageIncrease: false,
+  });
+  checks.push({ name: "approval_tier", passed: true, detail: `Tier: ${tier} (capital: ${capitalPct.toFixed(1)}%, losses: ${consecutiveLosses}, drawdown: ${drawdownPct.toFixed(1)}%, first: ${firstForAsset})` });
+
   const rejectionReason = allPassed ? null : checks.filter(c => !c.passed).map(c => c.detail).join("; ");
 
-  return { passed: allPassed, checks, rejection_reason: rejectionReason };
+  return { passed: allPassed, tier, checks, rejection_reason: rejectionReason };
 }
 
 export async function openPosition(params: {
   thesis_id: string;
   asset: string;
   asset_class: "crypto" | "polymarket";
+  source?: "crypto_scout" | "polymarket_scout" | "manual";
   direction: string;
   leverage: number;
   entry_price: number;
@@ -252,7 +354,8 @@ export async function openPosition(params: {
   atr_value: number;
   venue: "bnkr" | "coinbase" | "kreo";
   tx_hash?: string;
-}): Promise<{ position: Position; trade_id: string }> {
+  market_id?: string;
+}): Promise<{ position: Position; trade_id: string; bnkr_order_id?: string }> {
   const portfolio = await getPortfolioValue();
   const maxRisk = portfolio * 0.02;
   const riskDistance = Math.abs(params.entry_price - params.stop_price);
@@ -261,16 +364,54 @@ export async function openPosition(params: {
   const posId = `pos_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const tradeId = `trade_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
+  let bnkrOrderId: string | undefined;
+  let fillQuantity: number | undefined;
+  const source = params.source || (params.asset_class === "polymarket" ? "polymarket_scout" : "crypto_scout");
+
+  if (params.venue === "bnkr" && bnkr.isConfigured()) {
+    if (params.asset_class === "crypto") {
+      const order = await bnkr.openCryptoPosition({
+        asset: params.asset,
+        direction: params.direction as "LONG" | "SHORT",
+        leverage: params.leverage,
+        size,
+        stop_price: params.stop_price,
+      });
+      bnkrOrderId = order.order_id;
+      if (order.entry_price > 0) params.entry_price = order.entry_price;
+    } else if (params.asset_class === "polymarket") {
+      if (!params.market_id) {
+        throw new Error("market_id is required for Polymarket positions via BNKR");
+      }
+      const order = await bnkr.openPolymarketPosition({
+        market_id: params.market_id,
+        direction: params.direction as "YES" | "NO",
+        amount_usd: size * params.entry_price,
+      });
+      bnkrOrderId = order.order_id;
+      if (order.entry_odds > 0) params.entry_price = order.entry_odds;
+    }
+  } else if (params.venue === "coinbase" && coinbaseWallet.isConfigured()) {
+    const order = await coinbaseWallet.buySpot({
+      asset: params.asset,
+      amount_usd: size * params.entry_price,
+    });
+    if (order.price > 0) params.entry_price = order.price;
+    if (order.quantity > 0) fillQuantity = order.quantity;
+  }
+
   const position: Position = {
     id: posId,
     thesis_id: params.thesis_id,
     asset: params.asset,
     asset_class: params.asset_class,
+    source,
     direction: params.direction,
     leverage: `${params.leverage}x`,
     entry_price: params.entry_price,
     current_price: params.entry_price,
-    size,
+    size: fillQuantity || size,
+    fill_quantity: fillQuantity || undefined,
     unrealized_pnl: 0,
     peak_price: params.entry_price,
     atr_value: params.atr_value,
@@ -280,6 +421,7 @@ export async function openPosition(params: {
     opened_at: new Date().toISOString(),
     venue: params.venue,
     exposure_bucket: getExposureBucket(params.asset, params.asset_class),
+    bnkr_order_id: bnkrOrderId,
   };
 
   const positions = await getPositions();
@@ -288,7 +430,7 @@ export async function openPosition(params: {
 
   recordSignal(params.asset.toLowerCase(), "entry");
 
-  return { position, trade_id: tradeId };
+  return { position, trade_id: tradeId, bnkr_order_id: bnkrOrderId };
 }
 
 export async function closePosition(positionId: string, exitPrice: number, closeReason: string, txHash?: string): Promise<TradeRecord | null> {
@@ -297,11 +439,42 @@ export async function closePosition(positionId: string, exitPrice: number, close
   if (idx === -1) return null;
 
   const pos = positions[idx];
+
+  if (pos.bnkr_order_id && bnkr.isConfigured()) {
+    try {
+      if (pos.asset_class === "crypto") {
+        const result = await bnkr.closeCryptoPosition(pos.bnkr_order_id);
+        if (result.exit_price > 0) exitPrice = result.exit_price;
+        txHash = txHash || result.tx_hash;
+      } else if (pos.asset_class === "polymarket") {
+        const result = await bnkr.closePolymarketPosition(pos.bnkr_order_id);
+        if (result.exit_odds > 0) exitPrice = result.exit_odds;
+        txHash = txHash || result.tx_hash;
+      }
+    } catch (err) {
+      console.error(`[bankr] BNKR close failed for ${pos.bnkr_order_id}:`, err instanceof Error ? err.message : err);
+      return null;
+    }
+  } else if (pos.venue === "coinbase" && coinbaseWallet.isConfigured() && pos.asset_class === "crypto") {
+    try {
+      const actualQty = pos.fill_quantity || pos.size;
+      await coinbaseWallet.sellSpot({ asset: pos.asset, quantity: actualQty });
+    } catch (err) {
+      console.error(`[bankr] Coinbase sell failed for ${pos.asset}:`, err instanceof Error ? err.message : err);
+      return null;
+    }
+  }
+
   const isLong = pos.direction === "LONG" || pos.direction === "YES";
   const priceDiff = isLong ? exitPrice - pos.entry_price : pos.entry_price - exitPrice;
   const pnl = priceDiff * pos.size;
   const pnlPct = pos.entry_price > 0 ? (priceDiff / pos.entry_price) * 100 : 0;
   const fees = pos.size * exitPrice * 0.001;
+
+  const acquiredDate = new Date(pos.opened_at);
+  const disposedDate = new Date();
+  const holdingMs = disposedDate.getTime() - acquiredDate.getTime();
+  const holdingPeriod: "short" | "long" = holdingMs > 365 * 24 * 60 * 60 * 1000 ? "long" : "short";
 
   const taxLot: TaxLot = {
     id: `lot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -311,10 +484,10 @@ export async function closePosition(positionId: string, exitPrice: number, close
     cost_basis: pos.size * pos.entry_price + fees,
     cost_per_unit: pos.entry_price,
     acquired_at: pos.opened_at,
-    disposed_at: new Date().toISOString(),
+    disposed_at: disposedDate.toISOString(),
     proceeds: pos.size * exitPrice - fees,
     gain_loss: pnl - fees * 2,
-    holding_period: "short",
+    holding_period: holdingPeriod,
     wash_sale_flagged: false,
     wash_sale_disallowed: 0,
     venue: pos.venue,
@@ -326,6 +499,7 @@ export async function closePosition(positionId: string, exitPrice: number, close
     thesis_id: pos.thesis_id,
     asset: pos.asset,
     asset_class: pos.asset_class,
+    source: pos.source || "manual",
     direction: pos.direction,
     leverage: pos.leverage,
     entry_price: pos.entry_price,
@@ -336,7 +510,7 @@ export async function closePosition(positionId: string, exitPrice: number, close
     pnl_pct: parseFloat(pnlPct.toFixed(2)),
     fees: parseFloat(fees.toFixed(4)),
     opened_at: pos.opened_at,
-    closed_at: new Date().toISOString(),
+    closed_at: disposedDate.toISOString(),
     close_reason: closeReason,
     tax_lot: taxLot,
   };
@@ -347,6 +521,8 @@ export async function closePosition(positionId: string, exitPrice: number, close
 
   const portfolio = await getPortfolioValue();
   await setPortfolioValue(portfolio + pnl - fees * 2);
+
+  await updateConsecutiveLosses(pnl);
 
   recordSignal(pos.asset.toLowerCase(), "exit");
 
@@ -363,7 +539,7 @@ export async function closeAllPositions(reason: string): Promise<TradeRecord[]> 
   return records;
 }
 
-export async function checkCircuitBreaker(): Promise<{ triggered: boolean; rolling7dayPnl: number; pnlPct: number }> {
+export async function checkCircuitBreaker(): Promise<{ triggered: boolean; rolling7dayPnl: number; pnlPct: number; peakDrawdownPct: number }> {
   const history = await getTradeHistory();
   const now = Date.now();
   const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
@@ -373,7 +549,10 @@ export async function checkCircuitBreaker(): Promise<{ triggered: boolean; rolli
   const portfolio = await getPortfolioValue();
   const pnlPct = portfolio > 0 ? (rolling7dayPnl / portfolio) * 100 : 0;
 
-  const triggered = pnlPct < -15;
+  const peakPortfolio = await getPeakPortfolioValue();
+  const peakDrawdownPct = peakPortfolio > 0 ? ((portfolio - peakPortfolio) / peakPortfolio) * 100 : 0;
+
+  const triggered = pnlPct < -15 || peakDrawdownPct < -25;
 
   if (triggered) {
     const pool = getPool();
@@ -382,10 +561,18 @@ export async function checkCircuitBreaker(): Promise<{ triggered: boolean; rolli
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
       [JSON.stringify(true), Date.now()]
     );
-    console.log(`[bankr] Circuit breaker TRIGGERED: 7-day P&L ${pnlPct.toFixed(1)}% < -15%`);
+    const reason = peakDrawdownPct < -25
+      ? `Peak drawdown ${peakDrawdownPct.toFixed(1)}% < -25%`
+      : `7-day P&L ${pnlPct.toFixed(1)}% < -15%`;
+    console.log(`[bankr] Circuit breaker TRIGGERED: ${reason}`);
   }
 
-  return { triggered, rolling7dayPnl: parseFloat(rolling7dayPnl.toFixed(4)), pnlPct: parseFloat(pnlPct.toFixed(2)) };
+  return {
+    triggered,
+    rolling7dayPnl: parseFloat(rolling7dayPnl.toFixed(4)),
+    pnlPct: parseFloat(pnlPct.toFixed(2)),
+    peakDrawdownPct: parseFloat(peakDrawdownPct.toFixed(2)),
+  };
 }
 
 export async function runPositionMonitor(): Promise<{ checked: number; closed: TradeRecord[]; errors: string[] }> {
@@ -491,6 +678,14 @@ async function monitorCryptoPosition(pos: Position, closed: TradeRecord[]): Prom
       }
     }
   } catch {}
+
+  const hoursOpen = (Date.now() - new Date(pos.opened_at).getTime()) / (60 * 60 * 1000);
+  if (hoursOpen > 72) {
+    console.log(`[bankr] Time exit (${hoursOpen.toFixed(0)}h > 72h) for ${pos.asset}`);
+    const record = await closePosition(pos.id, currentPrice, "time_exit");
+    if (record) closed.push(record);
+    return;
+  }
 }
 
 async function monitorPolymarketPosition(pos: Position, closed: TradeRecord[]): Promise<void> {
@@ -581,6 +776,14 @@ async function monitorPolymarketPosition(pos: Position, closed: TradeRecord[]): 
     return;
   }
 
+  const daysOpen = (Date.now() - new Date(pos.opened_at).getTime()) / (24 * 60 * 60 * 1000);
+  if (daysOpen > 30 && livePos.unrealized_pnl < 0) {
+    console.log(`[bankr] Polymarket time exit (${daysOpen.toFixed(0)}d underwater) for ${pos.asset.slice(0, 60)}`);
+    const record = await closePosition(pos.id, currentOdds, "pm_time_exit_underwater");
+    if (record) closed.push(record);
+    return;
+  }
+
   try {
     const activities = await polymarket.getWhaleActivities();
     const marketActivities = activities.filter(a => a.market_id === thesis.market_id);
@@ -600,16 +803,23 @@ async function monitorPolymarketPosition(pos: Position, closed: TradeRecord[]): 
 
 export async function getPortfolioSummary(): Promise<{
   portfolio_value: number;
+  peak_portfolio_value: number;
+  peak_drawdown_pct: number;
+  consecutive_losses: number;
   open_positions: number;
   total_exposure: number;
   unrealized_pnl: number;
   mode: string;
   paused: boolean;
   kill_switch: boolean;
+  bnkr_configured: boolean;
+  coinbase_configured: boolean;
   positions: Position[];
 }> {
-  const [portfolio, positions, mode, paused, killSwitch] = await Promise.all([
+  const [portfolio, peakPortfolio, consecutiveLosses, positions, mode, paused, killSwitch] = await Promise.all([
     getPortfolioValue(),
+    getPeakPortfolioValue(),
+    getConsecutiveLosses(),
     getPositions(),
     getMode(),
     isPaused(),
@@ -618,15 +828,21 @@ export async function getPortfolioSummary(): Promise<{
 
   const totalExposure = positions.reduce((sum, p) => sum + p.size * p.entry_price, 0);
   const unrealizedPnl = positions.reduce((sum, p) => sum + p.unrealized_pnl, 0);
+  const peakDrawdownPct = peakPortfolio > 0 ? ((portfolio - peakPortfolio) / peakPortfolio) * 100 : 0;
 
   return {
     portfolio_value: portfolio,
+    peak_portfolio_value: peakPortfolio,
+    peak_drawdown_pct: parseFloat(peakDrawdownPct.toFixed(2)),
+    consecutive_losses: consecutiveLosses,
     open_positions: positions.length,
     total_exposure: parseFloat(totalExposure.toFixed(2)),
     unrealized_pnl: parseFloat(unrealizedPnl.toFixed(4)),
     mode,
     paused,
     kill_switch: killSwitch,
+    bnkr_configured: bnkr.isConfigured(),
+    coinbase_configured: coinbaseWallet.isConfigured(),
     positions,
   };
 }

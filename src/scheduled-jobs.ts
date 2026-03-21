@@ -50,6 +50,7 @@ function getJobSavePath(jobId: string, dateStr: string, safeName: string): strin
   if (jobId === "polymarket-activity-scan") return `Scheduled Reports/Wealth Engines/Polymarket/${dateStr}-Activity-Scan.md`;
   if (jobId === "polymarket-full-cycle") return `Scheduled Reports/Wealth Engines/Polymarket/${dateStr}-Full-Cycle.md`;
   if (jobId === "weekly-memory-reflect") return `Scheduled Reports/Memory/${dateStr}-Weekly-Digest.md`;
+  if (jobId === "bankr-execute") return `Scheduled Reports/Wealth Engines/BANKR/${dateStr}-Execution.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 
@@ -850,6 +851,30 @@ Output a full brief with:
 
 Do NOT use notes_create — the system saves automatically.`,
     schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 240 },
+    enabled: true,
+  },
+  {
+    id: "bankr-execute",
+    name: "BANKR Execute",
+    agentId: "bankr",
+    prompt: `Run a BANKR EXECUTION CYCLE. Check for actionable theses and execute trades.
+
+1. Check scout_theses for active crypto theses with confidence HIGH or MEDIUM
+2. Check polymarket_theses for active polymarket theses with confidence HIGH or MEDIUM
+3. For each thesis NOT already associated with an open position (check bankr_positions):
+   a. Run bankr_risk_check to validate the trade passes all risk rules
+   b. If risk check passes AND tier is "autonomous" or "dead_zone":
+      - For autonomous: execute directly via bankr_open_position
+      - For dead_zone: execute but note it for Telegram flagging
+   c. If tier is "human_required": log the thesis but do NOT execute — it needs Telegram approval
+4. Report execution summary:
+   - Theses evaluated (crypto + polymarket)
+   - Trades executed (with position IDs)
+   - Trades skipped (with reasons)
+   - Current portfolio state
+
+Keep this concise. The position monitor handles exits independently.`,
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 30 },
     enabled: true,
   },
   {
