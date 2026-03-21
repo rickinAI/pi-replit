@@ -524,7 +524,7 @@
 function esc(s){if(!s)return '';var d=document.createElement('div');d.textContent=s;return d.innerHTML;}
 function fmt$(n){if(n==null)return '$0.00';var a=Math.abs(n);if(a>=1e6)return(n<0?'-':'')+'$'+(a/1e6).toFixed(2)+'M';if(a>=1e3)return(n<0?'-':'')+'$'+a.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});return(n<0?'-':'')+'$'+a.toFixed(2);}
 function fmtPct(n){if(n==null)return '0.0%';return(n>=0?'+':'')+n.toFixed(1)+'%';}
-function timeAgo(d){if(!d)return 'never';var ms=Date.now()-new Date(d).getTime();var m=Math.floor(ms/6e4);if(m<1)return 'now';if(m<60)return m+'m';var h=Math.floor(m/60);if(h<24)return h+'h';return Math.floor(h/24)+'d';}
+function timeAgo(d){if(!d)return 'never';var ms=Date.now()-new Date(d).getTime();var m=Math.floor(ms/6e4);if(m<1)return 'just now';if(m<60)return m+' min ago';var h=Math.floor(m/60);if(h<24)return h+' hr ago';var dy=Math.floor(h/24);return dy+(dy===1?' day ago':' days ago');}
 function jobName(id){var m={'scout-micro-scan':'Scout Micro','scout-full-cycle':'Scout Full','polymarket-activity-scan':'PM Scan','polymarket-full-cycle':'PM Full','bankr-execute':'BANKR','oversight-health-check':'Oversight','oversight-shadow-refresh':'Shadow Refresh','oversight-daily-summary':'Daily Summary','oversight-weekly-review':'Weekly Review','autoresearch-weekly':'Autoresearch'};return m[id]||id;}
 
 var collapsed={};
