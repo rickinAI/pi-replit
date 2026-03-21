@@ -41,7 +41,6 @@ const confirmModal  = document.getElementById("confirm-modal");
 const modalConfirm  = document.getElementById("modal-confirm");
 const modalCancel   = document.getElementById("modal-cancel");
 const alertsSettingsBtn = document.getElementById("alerts-settings-btn");
-const generateBriefBtn = document.getElementById("generate-brief-btn");
 const modelBadge    = document.getElementById("model-badge");
 const modelModeEl   = document.getElementById("model-mode");
 const modelNameEl   = document.getElementById("model-name");
@@ -393,6 +392,11 @@ async function showLanding() {
           <rect x="3" y="11" width="18" height="10" rx="2"/><line x1="12" y1="2" x2="12" y2="6"/><circle cx="12" cy="6" r="2"/><circle cx="9" cy="16" r="1"/><circle cx="15" cy="16" r="1"/>
         </svg>
       </button>
+      <a href="/pages/wealth-engines" class="landing-header-btn" id="landing-darknode-btn" title="DarkNode Wealth Engines">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+        </svg>
+      </a>
       <button class="landing-header-btn" id="landing-settings-btn" title="Settings">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
@@ -3160,17 +3164,6 @@ planToggle.addEventListener("click", async () => {
   } catch (err) { console.warn("Planning mode switch failed:", err); }
 });
 
-generateBriefBtn.addEventListener("click", async () => {
-  const hour = new Date().getHours();
-  const type = hour < 12 ? "morning" : hour < 17 ? "afternoon" : "evening";
-  generateBriefBtn.disabled = true;
-  generateBriefBtn.classList.add("loading");
-  try {
-    await fetch(`/api/alerts/trigger/${type}`, { method: "POST" });
-  } catch (err) { console.warn("Generate brief failed:", err); }
-  generateBriefBtn.disabled = false;
-  generateBriefBtn.classList.remove("loading");
-});
 
 const uploadBtn = document.getElementById("upload-btn");
 const imageUpload = document.getElementById("image-upload");
