@@ -7443,15 +7443,33 @@ ${fullResult}`);
     });
   }
 }
+var WEALTH_ENGINE_AGENTS = /* @__PURE__ */ new Set(["scout", "bankr"]);
+async function isWealthEnginesPaused() {
+  try {
+    const pool2 = dbPoolFn ? dbPoolFn() : getPool();
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_paused'`);
+    return res.rows.length > 0 && res.rows[0].value === true;
+  } catch {
+    return false;
+  }
+}
 async function checkJobs() {
   if (jobRunning || !runAgentFn) return;
   const now = getNow2();
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
   const todayKey = getTodayKey2();
   const dayOfWeek = now.getDay();
+  let wePaused = null;
   for (const job of config2.jobs) {
     if (!job.enabled) continue;
     if (!shouldJobRun(job, now, nowMinutes, todayKey, dayOfWeek)) continue;
+    if (WEALTH_ENGINE_AGENTS.has(job.agentId)) {
+      if (wePaused === null) wePaused = await isWealthEnginesPaused();
+      if (wePaused) {
+        console.log(`[scheduled-jobs] Skipping ${job.name} \u2014 Wealth Engines paused`);
+        continue;
+      }
+    }
     if (job.schedule.type !== "interval") {
       const runKey = `${job.id}_${todayKey}`;
       config2.lastJobRun[runKey] = true;

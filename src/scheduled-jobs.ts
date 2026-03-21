@@ -1464,6 +1464,18 @@ After processing, briefly confirm what you did.`;
   }
 }
 
+const WEALTH_ENGINE_AGENTS = new Set(["scout", "bankr"]);
+
+async function isWealthEnginesPaused(): Promise<boolean> {
+  try {
+    const pool = dbPoolFn ? dbPoolFn() : getPool();
+    const res = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_paused'`);
+    return res.rows.length > 0 && res.rows[0].value === true;
+  } catch {
+    return false;
+  }
+}
+
 async function checkJobs(): Promise<void> {
   if (jobRunning || !runAgentFn) return;
 
@@ -1472,9 +1484,19 @@ async function checkJobs(): Promise<void> {
   const todayKey = getTodayKey();
   const dayOfWeek = now.getDay();
 
+  let wePaused: boolean | null = null;
+
   for (const job of config.jobs) {
     if (!job.enabled) continue;
     if (!shouldJobRun(job, now, nowMinutes, todayKey, dayOfWeek)) continue;
+
+    if (WEALTH_ENGINE_AGENTS.has(job.agentId)) {
+      if (wePaused === null) wePaused = await isWealthEnginesPaused();
+      if (wePaused) {
+        console.log(`[scheduled-jobs] Skipping ${job.name} — Wealth Engines paused`);
+        continue;
+      }
+    }
 
     if (job.schedule.type !== "interval") {
       const runKey = `${job.id}_${todayKey}`;
