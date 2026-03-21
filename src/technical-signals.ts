@@ -103,15 +103,16 @@ const DEFAULT_CONFIG: SignalConfig = {
 };
 
 const cooldownTracker: Map<string, { lastSignalTime: number; lastSignalType: "entry" | "exit" }> = new Map();
-const COOLDOWN_BARS_MS = 2 * 60 * 60 * 1000;
+const BAR_INTERVAL_MS = 60 * 60 * 1000;
 
-export function checkCooldown(assetId: string): { inCooldown: boolean; detail: string } {
+export function checkCooldown(assetId: string, cooldownBars: number = DEFAULT_CONFIG.cooldown_bars): { inCooldown: boolean; detail: string } {
   const entry = cooldownTracker.get(assetId);
   if (!entry) return { inCooldown: false, detail: "No recent signals" };
+  const cooldownMs = cooldownBars * BAR_INTERVAL_MS;
   const elapsed = Date.now() - entry.lastSignalTime;
-  if (elapsed < COOLDOWN_BARS_MS) {
-    const remaining = Math.ceil((COOLDOWN_BARS_MS - elapsed) / (60 * 1000));
-    return { inCooldown: true, detail: `Cooldown active (${remaining}min remaining after ${entry.lastSignalType})` };
+  if (elapsed < cooldownMs) {
+    const remaining = Math.ceil((cooldownMs - elapsed) / (60 * 1000));
+    return { inCooldown: true, detail: `Cooldown active (${remaining}min remaining after ${entry.lastSignalType}, ${cooldownBars}-bar)` };
   }
   return { inCooldown: false, detail: "Cooldown expired" };
 }
@@ -638,7 +639,7 @@ export function analyzeAsset(candles: OHLCVCandle[], config?: Partial<SignalConf
 
   let cooldownResult: { in_cooldown: boolean; detail: string } | undefined;
   if (assetId) {
-    const cd = checkCooldown(assetId);
+    const cd = checkCooldown(assetId, cfg.cooldown_bars);
     cooldownResult = { in_cooldown: cd.inCooldown, detail: cd.detail };
     if (cd.inCooldown && votes.entry_signal) {
       votes.entry_signal = false;

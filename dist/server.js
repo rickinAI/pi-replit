@@ -3586,14 +3586,15 @@ var DEFAULT_CONFIG = {
   enable_volatility_regime: true
 };
 var cooldownTracker = /* @__PURE__ */ new Map();
-var COOLDOWN_BARS_MS = 2 * 60 * 60 * 1e3;
-function checkCooldown(assetId) {
+var BAR_INTERVAL_MS = 60 * 60 * 1e3;
+function checkCooldown(assetId, cooldownBars = DEFAULT_CONFIG.cooldown_bars) {
   const entry = cooldownTracker.get(assetId);
   if (!entry) return { inCooldown: false, detail: "No recent signals" };
+  const cooldownMs = cooldownBars * BAR_INTERVAL_MS;
   const elapsed = Date.now() - entry.lastSignalTime;
-  if (elapsed < COOLDOWN_BARS_MS) {
-    const remaining = Math.ceil((COOLDOWN_BARS_MS - elapsed) / (60 * 1e3));
-    return { inCooldown: true, detail: `Cooldown active (${remaining}min remaining after ${entry.lastSignalType})` };
+  if (elapsed < cooldownMs) {
+    const remaining = Math.ceil((cooldownMs - elapsed) / (60 * 1e3));
+    return { inCooldown: true, detail: `Cooldown active (${remaining}min remaining after ${entry.lastSignalType}, ${cooldownBars}-bar)` };
   }
   return { inCooldown: false, detail: "Cooldown expired" };
 }
@@ -4004,7 +4005,7 @@ function analyzeAsset(candles, config3, btcCandles, assetId) {
   }
   let cooldownResult;
   if (assetId) {
-    const cd = checkCooldown(assetId);
+    const cd = checkCooldown(assetId, cfg.cooldown_bars);
     cooldownResult = { in_cooldown: cd.inCooldown, detail: cd.detail };
     if (cd.inCooldown && votes.entry_signal) {
       votes.entry_signal = false;
