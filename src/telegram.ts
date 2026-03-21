@@ -714,7 +714,7 @@ async function handleHelpCommand(): Promise<string> {
     "/resume — Resume Wealth Engine jobs",
     "/public on|off — Toggle dashboard access",
     "/alerts — Bot connection status",
-    "/notify [smart|immediate] — Notification mode",
+    "/notify [smart|immediate|digest] — Notification mode",
     "/research [crypto|polymarket|status] — Autoresearch",
     "/help — This message",
   ].join("\n");
@@ -1048,6 +1048,53 @@ export async function sendScoutBrief(brief: string): Promise<void> {
 let lastScoutNotifyHash = "";
 let lastPmNotifyHash = "";
 
+interface DigestEvent {
+  timestamp: number;
+  jobId: string;
+  jobName: string;
+  status: string;
+  detail: string;
+}
+const digestQueue: DigestEvent[] = [];
+let digestFlushInterval: ReturnType<typeof setInterval> | null = null;
+
+async function flushDigestQueue(): Promise<void> {
+  if (digestQueue.length === 0) return;
+  if (!isConfigured()) { digestQueue.length = 0; return; }
+
+  const mode = await getMode();
+  const events = digestQueue.splice(0, digestQueue.length);
+
+  const grouped: Record<string, DigestEvent[]> = {};
+  for (const e of events) {
+    const key = e.jobId.split("-")[0];
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(e);
+  }
+
+  const lines = [`${mode} 📊 *Wealth Engines Digest*`, ""];
+  const groupIcons: Record<string, string> = {
+    scout: "🔍", polymarket: "🎰", bankr: "💰",
+    oversight: "🛡️", autoresearch: "🔬",
+  };
+
+  for (const [group, evts] of Object.entries(grouped)) {
+    const icon = groupIcons[group] || "⚙️";
+    const successes = evts.filter(e => e.status !== "error").length;
+    const errors = evts.filter(e => e.status === "error").length;
+    lines.push(`${icon} *${evts[0].jobName}* — ${successes} run(s)${errors > 0 ? `, ${errors} error(s)` : ""}`);
+    const lastEvent = evts[evts.length - 1];
+    if (lastEvent.detail) lines.push(`  ${lastEvent.detail}`);
+  }
+
+  lines.push("");
+  lines.push(`_${events.length} events over last 4h_`);
+  lines.push(`_${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`);
+
+  await sendMessage(lines.join("\n"));
+  console.log(`[telegram] Digest flushed: ${events.length} events`);
+}
+
 export async function sendJobCompletionNotification(params: {
   jobId: string;
   jobName: string;
@@ -1116,38 +1163,73 @@ export async function sendJobCompletionNotification(params: {
   };
   const icon = icons[params.jobId] || "⚙️";
 
-  let detail = "";
+  let detailLines: string[] = [];
   try {
     if (params.jobId.startsWith("scout-")) {
       const res = await pool.query(`SELECT value FROM app_config WHERE key = 'scout_active_theses'`);
       if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
-        const active = res.rows[0].value.filter((t: any) => !t.expires_at || t.expires_at > Date.now());
-        detail = `Active theses: ${active.length}`;
+        const now = Date.now();
+        const active = res.rows[0].value.filter((t: any) => !t.expires_at || t.expires_at > now);
+        const newTheses = active.filter((t: any) => t.created_at && (now - t.created_at) < 3600000);
+        detailLines.push(`*Theses:* ${active.length} active${newTheses.length > 0 ? ` (${newTheses.length} new)` : ""}`);
         if (active.length > 0) {
-          detail += "\n" + active.slice(0, 3).map((t: any) => `  • ${t.asset} ${t.direction} (${t.confidence || "?"})`).join("\n");
+          const regimes = [...new Set(active.map((t: any) => t.market_regime || t.regime).filter(Boolean))];
+          if (regimes.length > 0) detailLines.push(`*Regime:* ${regimes.join(", ")}`);
+          for (const t of active.slice(0, 3)) {
+            const vc = t.vote_count ?? t.votes;
+            const votes = vc != null ? (typeof vc === "string" && vc.includes("/") ? vc : `${vc}/6`) : "";
+            const score = t.technical_score != null ? `score=${t.technical_score.toFixed(2)}` : "";
+            const parts = [`${t.asset} ${t.direction}`, t.confidence, votes, score].filter(Boolean);
+            detailLines.push(`  • ${parts.join(" | ")}`);
+          }
         }
       }
+      try {
+        const { getFearGreedIndex } = await import("./signal-sources.js");
+        const fg = await getFearGreedIndex();
+        detailLines.push(`*F&G:* ${fg.value} (${fg.classification})`);
+      } catch {}
     } else if (params.jobId.startsWith("polymarket-")) {
       const res = await pool.query(`SELECT value FROM app_config WHERE key = 'polymarket_scout_active_theses'`);
       if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+        const now = Date.now();
         const active = res.rows[0].value.filter((t: any) => t.status === "active");
-        detail = `Active PM theses: ${active.length}`;
+        const newTheses = active.filter((t: any) => t.created_at && (now - t.created_at) < 3600000);
+        detailLines.push(`*PM Theses:* ${active.length} active${newTheses.length > 0 ? ` (${newTheses.length} new)` : ""}`);
+        for (const t of active.slice(0, 3)) {
+          const odds = t.current_odds != null ? `${(t.current_odds * 100).toFixed(0)}%` : "";
+          const whales = t.whale_consensus ? `whales=${t.whale_consensus}` : "";
+          const parts = [(t.asset || "").slice(0, 40), t.direction, odds, whales].filter(Boolean);
+          detailLines.push(`  • ${parts.join(" | ")}`);
+        }
       }
     } else if (params.jobId === "bankr-execute") {
-      detail = params.summary.slice(0, 200);
+      detailLines.push(params.summary.slice(0, 200));
     } else if (params.jobId === "oversight-health") {
       const res = await pool.query(`SELECT value FROM app_config WHERE key = 'oversight_health_reports'`);
       if (res.rows.length > 0 && Array.isArray(res.rows[0].value) && res.rows[0].value.length > 0) {
         const latest = res.rows[0].value[res.rows[0].value.length - 1];
-        detail = `Status: ${latest.overall_status}`;
+        const icons2: Record<string, string> = { healthy: "🟢", degraded: "🟡", critical: "🔴" };
+        detailLines.push(`${icons2[latest.overall_status] || "⚪"} ${latest.overall_status}: ${latest.summary || ""}`);
       }
     }
   } catch {}
 
+  if (notifyMode === "digest") {
+    digestQueue.push({
+      timestamp: Date.now(),
+      jobId: params.jobId,
+      jobName: params.jobName,
+      status: params.status,
+      detail: detailLines.join(" | ").slice(0, 200),
+    });
+    return;
+  }
+
   const lines = [
     `${mode} ${icon} *${params.jobName}* ${statusIcon}${durationStr}`,
   ];
-  if (detail) lines.push(detail);
+  lines.push(...detailLines);
   lines.push(`_${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`);
 
   await sendMessage(lines.join("\n"));
@@ -1195,11 +1277,14 @@ export async function sendShadowTradeNotification(params: {
   }
 }
 
-async function getNotificationMode(): Promise<"smart" | "immediate"> {
+async function getNotificationMode(): Promise<"smart" | "immediate" | "digest"> {
   try {
     const pool = getPool();
     const res = await pool.query(`SELECT value FROM app_config WHERE key = 'we_notification_mode'`);
-    if (res.rows.length > 0 && res.rows[0].value === "immediate") return "immediate";
+    if (res.rows.length > 0) {
+      const v = res.rows[0].value;
+      if (v === "immediate" || v === "digest") return v;
+    }
   } catch {}
   return "smart";
 }
@@ -1208,16 +1293,18 @@ async function handleNotifyCommand(args: string): Promise<string> {
   const mode = await getMode();
   const pool = getPool();
   const val = args.trim().toLowerCase();
+  const validModes = ["smart", "immediate", "digest"];
 
-  if (val !== "smart" && val !== "immediate") {
+  if (!validModes.includes(val)) {
     const current = await getNotificationMode();
     return [
       `${mode} *Notification Mode:* ${current}`,
       "",
-      `*smart* — Only notify on material changes (new thesis, regime shift, P&L change)`,
+      `*smart* — Only notify on material changes (new thesis, regime shift)`,
       `*immediate* — Notify on every job completion`,
+      `*digest* — Queue events, send batched summary every 4h`,
       "",
-      `Usage: /notify smart | /notify immediate`,
+      `Usage: /notify smart | /notify immediate | /notify digest`,
     ].join("\n");
   }
 
@@ -1227,6 +1314,19 @@ async function handleNotifyCommand(args: string): Promise<string> {
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
       [JSON.stringify(val), Date.now()]
     );
+
+    if (val === "digest" && !digestFlushInterval) {
+      digestFlushInterval = setInterval(() => {
+        flushDigestQueue().catch(err => console.error("[telegram] Digest flush error:", err));
+      }, 4 * 60 * 60 * 1000);
+    } else if (val !== "digest" && digestFlushInterval) {
+      clearInterval(digestFlushInterval);
+      digestFlushInterval = null;
+      if (digestQueue.length > 0) {
+        flushDigestQueue().catch(() => {});
+      }
+    }
+
     return `${mode} ✅ Notification mode set to *${val}*`;
   } catch (err) {
     return `${mode} ❌ Failed: ${err instanceof Error ? err.message : String(err)}`;
@@ -1524,6 +1624,14 @@ export async function init(): Promise<void> {
     }, 4 * 60 * 60 * 1000);
     console.log("[telegram] Mission Control status digest enabled (every 4h)");
   }
+
+  const notifyMode = await getNotificationMode();
+  if (notifyMode === "digest") {
+    digestFlushInterval = setInterval(() => {
+      flushDigestQueue().catch(err => console.error("[telegram] Digest flush error:", err));
+    }, 4 * 60 * 60 * 1000);
+    console.log("[telegram] Digest mode active — events queued, flushed every 4h");
+  }
 }
 
 export function stop(): void {
@@ -1539,6 +1647,10 @@ export function stop(): void {
   if (missionControlDigestInterval) {
     clearInterval(missionControlDigestInterval);
     missionControlDigestInterval = null;
+  }
+  if (digestFlushInterval) {
+    clearInterval(digestFlushInterval);
+    digestFlushInterval = null;
   }
   console.log("[telegram] stopped");
 }

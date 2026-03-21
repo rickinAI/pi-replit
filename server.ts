@@ -7643,8 +7643,9 @@ async function startServer(maxRetries = 5) {
         server = createServer(app);
         server.once("error", (err: NodeJS.ErrnoException) => {
           if (err.code === "EADDRINUSE" && attempt < maxRetries) {
-            console.warn(`[boot] EADDRINUSE on attempt ${attempt}/${maxRetries} — retrying in 3s...`);
+            console.warn(`[boot] EADDRINUSE on attempt ${attempt}/${maxRetries} — killing port and retrying...`);
             server.close();
+            killPort(PORT);
             reject(err);
           } else {
             console.error(`[boot] Fatal server error:`, err);
@@ -7721,7 +7722,9 @@ async function startServer(maxRetries = 5) {
       return;
     } catch {
       killPort(PORT);
-      await new Promise(r => setTimeout(r, 3000));
+      const delay = Math.min(3000 * attempt, 10000);
+      console.log(`[boot] Waiting ${delay}ms before retry...`);
+      await new Promise(r => setTimeout(r, delay));
     }
   }
 
