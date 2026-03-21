@@ -1,5 +1,5 @@
 import { getPool } from "./db.js";
-import { analyzeAsset, checkCooldown, recordSignal, type OHLCVCandle } from "./technical-signals.js";
+import { analyzeAsset, checkCooldown, recordSignal, loadCryptoSignalParams, type OHLCVCandle } from "./technical-signals.js";
 import { getHistoricalOHLCV } from "./coingecko.js";
 import * as polymarket from "./polymarket.js";
 import * as bnkr from "./bnkr.js";
@@ -747,7 +747,8 @@ async function monitorCryptoPosition(pos: Position, closed: TradeRecord[]): Prom
   try {
     const candles = await getHistoricalOHLCV(pos.asset, 14);
     if (candles.length >= 30) {
-      const result = analyzeAsset(candles);
+      const dbSignalParams = await loadCryptoSignalParams();
+      const result = analyzeAsset(candles, dbSignalParams);
       if (isLong && result.votes.rsi_overbought) {
         console.log(`[bankr] RSI exit (overbought) for ${pos.asset}`);
         const record = await closePosition(pos.id, currentPrice, "rsi_exit");

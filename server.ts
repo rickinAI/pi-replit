@@ -36,7 +36,7 @@ import * as twitter from "./src/twitter.js";
 import * as stocks from "./src/stocks.js";
 import * as coingecko from "./src/coingecko.js";
 import { getHistoricalOHLCV } from "./src/coingecko.js";
-import { analyzeAsset, recordSignal } from "./src/technical-signals.js";
+import { analyzeAsset, recordSignal, loadCryptoSignalParams, invalidateCryptoParamsCache } from "./src/technical-signals.js";
 import * as nansen from "./src/nansen.js";
 import { runBacktest } from "./src/backtest.js";
 import * as cryptoScout from "./src/crypto-scout.js";
@@ -1290,7 +1290,8 @@ function buildCoinGeckoTools(): ToolDefinition[] {
               btcCandles = await getHistoricalOHLCV("bitcoin", Math.min(params.days || 90, 90));
             } catch {}
           }
-          const result = analyzeAsset(candles, undefined, btcCandles, coinLower);
+          const dbParams = await loadCryptoSignalParams();
+          const result = analyzeAsset(candles, dbParams, btcCandles, coinLower);
           return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };

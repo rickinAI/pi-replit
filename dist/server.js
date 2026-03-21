@@ -3613,6 +3613,31 @@ var DEFAULT_CONFIG = {
   enable_bb: true,
   enable_volatility_regime: true
 };
+var _dbParamsCache = null;
+var _dbParamsCacheTime = 0;
+var DB_PARAMS_CACHE_TTL = 3e5;
+async function loadCryptoSignalParams() {
+  const now = Date.now();
+  if (_dbParamsCache && now - _dbParamsCacheTime < DB_PARAMS_CACHE_TTL) {
+    return _dbParamsCache;
+  }
+  try {
+    const pool2 = getPool();
+    const res = await pool2.query("SELECT value FROM app_config WHERE key = 'crypto_signal_parameters'");
+    if (res.rows.length > 0) {
+      const parsed = typeof res.rows[0].value === "string" ? JSON.parse(res.rows[0].value) : res.rows[0].value;
+      _dbParamsCache = parsed;
+      _dbParamsCacheTime = now;
+      return _dbParamsCache;
+    }
+  } catch {
+  }
+  return {};
+}
+function invalidateCryptoParamsCache() {
+  _dbParamsCache = null;
+  _dbParamsCacheTime = 0;
+}
 var cooldownTracker = /* @__PURE__ */ new Map();
 var BAR_INTERVAL_MS = 60 * 60 * 1e3;
 function checkCooldown(assetId, cooldownBars = DEFAULT_CONFIG.cooldown_bars) {
@@ -6568,7 +6593,8 @@ async function monitorCryptoPosition(pos, closed) {
   try {
     const candles = await getHistoricalOHLCV(pos.asset, 14);
     if (candles.length >= 30) {
-      const result = analyzeAsset(candles);
+      const dbSignalParams = await loadCryptoSignalParams();
+      const result = analyzeAsset(candles, dbSignalParams);
       if (isLong && result.votes.rsi_overbought) {
         console.log(`[bankr] RSI exit (overbought) for ${pos.asset}`);
         const record = await closePosition(pos.id, currentPrice, "rsi_exit");
@@ -8767,6 +8793,7 @@ async function runCryptoResearch(experimentsCount = 15) {
   }
   if (improvements > 0) {
     await setConfigValue2(DB_KEYS.cryptoParams, bestParams);
+    invalidateCryptoParamsCache();
   }
   return {
     domain: "crypto",
@@ -14237,7 +14264,8 @@ function buildCoinGeckoTools() {
             } catch {
             }
           }
-          const result = analyzeAsset(candles, void 0, btcCandles, coinLower);
+          const dbParams = await loadCryptoSignalParams();
+          const result = analyzeAsset(candles, dbParams, btcCandles, coinLower);
           return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };

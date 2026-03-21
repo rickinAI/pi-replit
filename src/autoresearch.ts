@@ -1,5 +1,5 @@
 import { getPool } from "./db.js";
-import { analyzeAsset, type SignalConfig } from "./technical-signals.js";
+import { analyzeAsset, invalidateCryptoParamsCache, type SignalConfig } from "./technical-signals.js";
 import { getHistoricalOHLCV, type OHLCVCandle } from "./coingecko.js";
 
 const DB_KEYS = {
@@ -621,6 +621,7 @@ export async function runCryptoResearch(experimentsCount: number = 15): Promise<
 
   if (improvements > 0) {
     await setConfigValue(DB_KEYS.cryptoParams, bestParams);
+    invalidateCryptoParamsCache();
   }
 
   return {
