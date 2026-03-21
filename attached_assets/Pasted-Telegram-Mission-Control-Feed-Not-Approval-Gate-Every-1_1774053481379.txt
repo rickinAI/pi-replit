@@ -1,0 +1,83 @@
+Telegram = Mission Control Feed (Not Approval Gate)
+
+
+Every 10 minutes, a status heartbeat:
+
+🧠 SCOUT — Scanning X watchlist... 4/19 accounts processed
+💰 BANKR — Position open: SOL LONG 10x | Entry $142.30 | P&L +1.8%
+📈 AMPLIFY — 3 content pieces PENDING review
+⏱️ Next full cycle: 47 min
+
+
+When something meaningful happens, richer alerts:
+
+🎯 NEW SIGNAL
+Token: ARB | Confidence: 4.2/5 | Direction: LONG
+Sources: GitHub buzz (3), X mentions (7), Smart money inflow ($12K)
+Macro: BTC +2.1%, funding neutral, VIX calm
+→ Deploying $100 × 10x = $1,000 exposure
+→ Stop: -3% ($30) | Trail: +3% at +6% | TP: +15% | Time exit: 72h
+
+🔒 No human action required. Monitoring.
+
+
+Human Override = Risk Controls Only
+
+
+You only get pulled in for:
+
+⧉ Copy
+Trigger	What Happens
+Position size > 30% of capital	Telegram asks for approval before executing
+3+ consecutive losses	System pauses, sends full diagnostic, waits for your GO/NO-GO
+Drawdown hits -25% from peak	Hard circuit breaker — all positions closed, system pauses, requires manual restart
+New token (never traded before)	First trade in any new token requires approval, subsequent trades autonomous
+Leverage change request	If SCOUT recommends increasing from 10x, needs your sign-off
+Config changes	Any parameter changes to risk limits require Telegram confirmation
+
+Everything else — signal scoring, entry timing, position management, trailing stops, take profits, time exits — fully autonomous.
+
+
+
+The 10-Minute Heartbeat Architecture
+
+
+This changes the Replit build spec. Instead of SCOUT running once daily at 7AM:
+
+⧉ Copy
+Loop	Frequency	What
+Heartbeat	Every 10 min	Status of all agents → Telegram
+SCOUT micro-scan	Every 30 min	Quick X + price check, update signal scores
+SCOUT full cycle	Every 4 hours	Full 7-source scan, thesis generation, Sheet update
+BANKR monitor	Every 5 min	Check open positions, manage stops/trails/exits
+BANKR execute	On SCOUT signal	Deploy trade if gates pass
+AMPLIFY	Mon/Wed/Fri	Content generation (unchanged)
+
+The heartbeat is the cheapest job — it just reads current state from the Sheet and formats a Telegram message. No API calls to external services, no compute.
+
+
+
+Updated Risk Framework
+
+
+AUTONOMOUS (no human needed):
+├── Trade ≤ 20% of capital           → Execute
+├── Confidence ≥ 3.5/5               → Execute
+├── Stop loss hit                     → Close immediately
+├── Trailing stop triggered           → Close immediately
+├── Take profit hit                   → Close immediately
+├── 72h time exit                     → Close immediately
+└── Position rotation (new top pick)  → Close old, open new
+
+HUMAN REQUIRED (Telegram approval):
+├── Trade > 30% of capital            → Ask first
+├── 3 consecutive losses              → Pause + diagnostic
+├── -25% drawdown from peak           → Circuit breaker (hard stop)
+├── First trade in new token          → Ask first
+├── Leverage increase                 → Ask first
+└── Config parameter changes          → Ask first
+
+DEAD ZONE (20-30% of capital):
+└── Execute but flag in Telegram      → "⚠️ Above-average sizing"
+
+
