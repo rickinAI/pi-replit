@@ -350,6 +350,7 @@ export async function runPreExecutionChecks(params: {
         source,
         direction: params.direction,
         entry_price: params.entry_price,
+        stop_price: params.stop_price,
         reason: `risk_check_failed: ${rejectionReason}`,
       });
     } catch (e) {

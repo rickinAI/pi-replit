@@ -2229,7 +2229,7 @@ function buildOversightTools(): ToolDefinition[] {
     {
       name: "oversight_auto_shadow",
       label: "Oversight Auto Shadow Trade",
-      description: "Automatically track a shadow trade for a thesis that BANKR chose not to execute (e.g., rejected by approval, outside parameters). Deduplicates by thesis+asset.",
+      description: "Automatically track a shadow trade for a thesis that BANKR chose not to execute (e.g., rejected by approval, outside parameters). Deduplicates by asset+direction. Carries over stop_price and target_price from the thesis for auto-close tracking.",
       parameters: Type.Object({
         thesis_id: Type.String({ description: "Thesis ID to shadow" }),
         asset: Type.String({ description: "Asset symbol" }),
@@ -2238,11 +2238,14 @@ function buildOversightTools(): ToolDefinition[] {
         direction: Type.String({ description: "Trade direction (LONG/SHORT/YES/NO)" }),
         entry_price: Type.Number({ description: "Entry price at time of shadow" }),
         reason: Type.String({ description: "Why this is being shadow-tracked instead of executed" }),
+        stop_price: Type.Optional(Type.Number({ description: "Stop-loss price from thesis" })),
+        target_price: Type.Optional(Type.Number({ description: "Take-profit price from thesis" })),
       }),
-      async execute(_toolCallId, params: {
+      async execute(_toolCallId: string, params: {
         thesis_id: string; asset: string;
         asset_class: "crypto" | "polymarket"; source: "crypto_scout" | "polymarket_scout";
         direction: string; entry_price: number; reason: string;
+        stop_price?: number; target_price?: number;
       }) {
         try {
           const shadow = await oversight.autoTrackShadowTrade(params);

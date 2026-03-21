@@ -130,6 +130,167 @@ var init_db = __esm({
   }
 });
 
+// src/crypto-scout.ts
+var crypto_scout_exports = {};
+__export(crypto_scout_exports, {
+  buildThesis: () => buildThesis,
+  createThesisId: () => createThesisId,
+  formatThesesSummary: () => formatThesesSummary,
+  formatThesis: () => formatThesis,
+  getActiveTheses: () => getActiveTheses,
+  getSignalParameters: () => getSignalParameters,
+  getWatchlist: () => getWatchlist,
+  retireThesis: () => retireThesis,
+  saveLatestBrief: () => saveLatestBrief,
+  saveTheses: () => saveTheses,
+  updateWatchlist: () => updateWatchlist
+});
+function createThesisId(asset) {
+  const date = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10).replace(/-/g, "_");
+  const rand = Math.random().toString(36).slice(2, 8);
+  return `scout_${date}_${asset.toLowerCase().replace(/[^a-z0-9]/g, "_")}_${rand}`;
+}
+async function saveTheses(theses) {
+  const pool2 = getPool();
+  const existing = await getActiveTheses();
+  const expiredIds = /* @__PURE__ */ new Set();
+  const now = Date.now();
+  for (const t of existing) {
+    if (t.expires_at < now) {
+      expiredIds.add(t.id);
+    }
+  }
+  const activeExisting = existing.filter((t) => !expiredIds.has(t.id) && t.status === "active");
+  const newAssetIds = new Set(theses.map((t) => t.asset_id));
+  const kept = activeExisting.filter((t) => !newAssetIds.has(t.asset_id));
+  const merged = [...kept, ...theses];
+  await pool2.query(
+    `INSERT INTO app_config (key, value, updated_at) VALUES ('scout_active_theses', $1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [JSON.stringify(merged), Date.now()]
+  );
+}
+async function getActiveTheses() {
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scout_active_theses'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+      const now = Date.now();
+      return res.rows[0].value.filter((t) => t.status === "active" && t.expires_at > now);
+    }
+  } catch (err) {
+    console.error("[crypto-scout] getActiveTheses failed:", err);
+  }
+  return [];
+}
+async function retireThesis(thesisId) {
+  const pool2 = getPool();
+  const theses = await getActiveTheses();
+  const updated = theses.map((t) => t.id === thesisId ? { ...t, status: "retired" } : t);
+  await pool2.query(
+    `INSERT INTO app_config (key, value, updated_at) VALUES ('scout_active_theses', $1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [JSON.stringify(updated), Date.now()]
+  );
+}
+async function getWatchlist() {
+  const pool2 = getPool();
+  const defaults = ["bitcoin", "ethereum", "solana", "bankr"];
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scout_watchlist'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+      const wl = res.rows[0].value;
+      const merged = /* @__PURE__ */ new Set([...defaults, ...wl]);
+      return Array.from(merged);
+    }
+  } catch {
+  }
+  return defaults;
+}
+async function updateWatchlist(assets) {
+  const pool2 = getPool();
+  const defaults = ["bitcoin", "ethereum", "solana", "bankr"];
+  const merged = Array.from(/* @__PURE__ */ new Set([...defaults, ...assets]));
+  await pool2.query(
+    `INSERT INTO app_config (key, value, updated_at) VALUES ('scout_watchlist', $1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [JSON.stringify(merged), Date.now()]
+  );
+}
+async function saveLatestBrief(brief) {
+  const pool2 = getPool();
+  await pool2.query(
+    `INSERT INTO app_config (key, value, updated_at) VALUES ('scout_latest_brief', $1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [JSON.stringify(brief), Date.now()]
+  );
+}
+async function getSignalParameters() {
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'crypto_signal_parameters'`);
+    if (res.rows.length > 0 && res.rows[0].value) {
+      return res.rows[0].value;
+    }
+  } catch {
+  }
+  return null;
+}
+function buildThesis(params) {
+  const now = Date.now();
+  return {
+    id: createThesisId(params.asset),
+    asset: params.asset,
+    asset_id: params.asset_id,
+    asset_class: "crypto",
+    direction: params.direction,
+    confidence: params.confidence,
+    technical_score: params.technical_score,
+    vote_count: params.vote_count,
+    market_regime: params.market_regime,
+    entry_price: params.entry_price,
+    exit_price: params.exit_price,
+    stop_price: params.stop_price,
+    atr_value: params.atr_value,
+    time_horizon: params.time_horizon || "24h",
+    sources: params.sources,
+    backtest_score: params.backtest_score ?? null,
+    nansen_flow_direction: params.nansen_flow_direction ?? null,
+    created_at: now,
+    expires_at: now + THESIS_EXPIRY_MS,
+    status: "active",
+    reasoning: params.reasoning
+  };
+}
+function formatThesis(t) {
+  const conf = { HIGH: "\u{1F7E2}", MEDIUM: "\u{1F7E1}", LOW: "\u{1F534}" }[t.confidence] || "\u26AA";
+  const dir = t.direction === "LONG" ? "\u{1F4C8} LONG" : "\u{1F4C9} SHORT";
+  const age = Math.round((Date.now() - t.created_at) / (60 * 60 * 1e3));
+  const expiry = Math.round((t.expires_at - Date.now()) / (60 * 60 * 1e3));
+  const lines = [
+    `${conf} *${t.asset}* \u2014 ${dir}`,
+    `   Score: ${t.technical_score.toFixed(3)} | Votes: ${t.vote_count} | Regime: ${t.market_regime}`,
+    `   Entry: $${t.entry_price.toFixed(2)} | Stop: $${t.stop_price.toFixed(2)} | Target: $${t.exit_price.toFixed(2)}`,
+    `   Sources: ${t.sources.join(", ")}`
+  ];
+  if (t.nansen_flow_direction) lines.push(`   Nansen: ${t.nansen_flow_direction}`);
+  if (t.backtest_score != null) lines.push(`   Backtest: ${t.backtest_score.toFixed(2)}`);
+  lines.push(`   Age: ${age}h | Expires: ${expiry}h | ID: \`${t.id}\``);
+  return lines.join("\n");
+}
+function formatThesesSummary(theses) {
+  if (theses.length === 0) return "No active theses.";
+  return theses.map(formatThesis).join("\n\n");
+}
+var THESIS_EXPIRY_MS;
+var init_crypto_scout = __esm({
+  "src/crypto-scout.ts"() {
+    "use strict";
+    init_db();
+    THESIS_EXPIRY_MS = 72 * 60 * 60 * 1e3;
+  }
+});
+
 // server.ts
 import express from "express";
 import cors from "cors";
@@ -4839,107 +5000,8 @@ function runBacktest(candles, assetName, config3) {
   };
 }
 
-// src/crypto-scout.ts
-init_db();
-var THESIS_EXPIRY_MS = 72 * 60 * 60 * 1e3;
-function createThesisId(asset) {
-  const date = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10).replace(/-/g, "_");
-  const rand = Math.random().toString(36).slice(2, 8);
-  return `scout_${date}_${asset.toLowerCase().replace(/[^a-z0-9]/g, "_")}_${rand}`;
-}
-async function saveTheses(theses) {
-  const pool2 = getPool();
-  const existing = await getActiveTheses();
-  const expiredIds = /* @__PURE__ */ new Set();
-  const now = Date.now();
-  for (const t of existing) {
-    if (t.expires_at < now) {
-      expiredIds.add(t.id);
-    }
-  }
-  const activeExisting = existing.filter((t) => !expiredIds.has(t.id) && t.status === "active");
-  const newAssetIds = new Set(theses.map((t) => t.asset_id));
-  const kept = activeExisting.filter((t) => !newAssetIds.has(t.asset_id));
-  const merged = [...kept, ...theses];
-  await pool2.query(
-    `INSERT INTO app_config (key, value, updated_at) VALUES ('scout_active_theses', $1, $2)
-     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
-    [JSON.stringify(merged), Date.now()]
-  );
-}
-async function getActiveTheses() {
-  const pool2 = getPool();
-  try {
-    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scout_active_theses'`);
-    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
-      const now = Date.now();
-      return res.rows[0].value.filter((t) => t.status === "active" && t.expires_at > now);
-    }
-  } catch (err) {
-    console.error("[crypto-scout] getActiveTheses failed:", err);
-  }
-  return [];
-}
-async function retireThesis(thesisId) {
-  const pool2 = getPool();
-  const theses = await getActiveTheses();
-  const updated = theses.map((t) => t.id === thesisId ? { ...t, status: "retired" } : t);
-  await pool2.query(
-    `INSERT INTO app_config (key, value, updated_at) VALUES ('scout_active_theses', $1, $2)
-     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
-    [JSON.stringify(updated), Date.now()]
-  );
-}
-async function getWatchlist() {
-  const pool2 = getPool();
-  const defaults = ["bitcoin", "ethereum", "solana", "bankr"];
-  try {
-    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scout_watchlist'`);
-    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
-      const wl = res.rows[0].value;
-      const merged = /* @__PURE__ */ new Set([...defaults, ...wl]);
-      return Array.from(merged);
-    }
-  } catch {
-  }
-  return defaults;
-}
-async function updateWatchlist(assets) {
-  const pool2 = getPool();
-  const defaults = ["bitcoin", "ethereum", "solana", "bankr"];
-  const merged = Array.from(/* @__PURE__ */ new Set([...defaults, ...assets]));
-  await pool2.query(
-    `INSERT INTO app_config (key, value, updated_at) VALUES ('scout_watchlist', $1, $2)
-     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
-    [JSON.stringify(merged), Date.now()]
-  );
-}
-function buildThesis(params) {
-  const now = Date.now();
-  return {
-    id: createThesisId(params.asset),
-    asset: params.asset,
-    asset_id: params.asset_id,
-    asset_class: "crypto",
-    direction: params.direction,
-    confidence: params.confidence,
-    technical_score: params.technical_score,
-    vote_count: params.vote_count,
-    market_regime: params.market_regime,
-    entry_price: params.entry_price,
-    exit_price: params.exit_price,
-    stop_price: params.stop_price,
-    atr_value: params.atr_value,
-    time_horizon: params.time_horizon || "24h",
-    sources: params.sources,
-    backtest_score: params.backtest_score ?? null,
-    nansen_flow_direction: params.nansen_flow_direction ?? null,
-    created_at: now,
-    expires_at: now + THESIS_EXPIRY_MS,
-    status: "active",
-    reasoning: params.reasoning
-  };
-}
+// server.ts
+init_crypto_scout();
 
 // src/polymarket.ts
 init_db();
@@ -6143,7 +6205,9 @@ async function openShadowTrade(params) {
     hypothetical_pnl: 0,
     opened_at: Date.now(),
     market_id: params.market_id,
-    status: "open"
+    status: "open",
+    stop_price: params.stop_price,
+    target_price: params.target_price
   };
   const trades = await getConfigValue(SHADOW_TRADES_KEY, []);
   trades.push(shadow);
@@ -6201,23 +6265,47 @@ async function refreshShadowTradesFromMarket() {
       continue;
     }
     try {
+      let latestPrice = null;
       if (trade.asset_class === "crypto") {
         const candles = await getHistoricalOHLCV(trade.asset, 1);
         if (candles.length > 0) {
-          const latestPrice = candles[candles.length - 1].close;
-          trade.current_price = latestPrice;
-          const multiplier = trade.direction === "LONG" || trade.direction === "SHORT" ? trade.direction === "LONG" ? 1 : -1 : 1;
-          trade.hypothetical_pnl = (latestPrice - trade.entry_price) * multiplier;
-          updated++;
+          latestPrice = candles[candles.length - 1].close;
         }
       } else if (trade.asset_class === "polymarket" && trade.market_id) {
         const market = await getMarketDetails(trade.market_id);
         if (market && market.outcome_prices && market.outcome_prices.length > 0) {
-          const currentOdds = parseFloat(String(market.outcome_prices[0])) || trade.current_price;
-          trade.current_price = currentOdds;
-          const multiplier = trade.direction === "YES" ? 1 : -1;
-          trade.hypothetical_pnl = (currentOdds - trade.entry_price) * multiplier;
-          updated++;
+          latestPrice = parseFloat(String(market.outcome_prices[0])) || null;
+        }
+      }
+      if (latestPrice != null) {
+        trade.current_price = latestPrice;
+        const isLong = trade.direction === "LONG" || trade.direction === "YES";
+        const multiplier = isLong ? 1 : -1;
+        trade.hypothetical_pnl = (latestPrice - trade.entry_price) * multiplier;
+        updated++;
+        if (trade.stop_price != null) {
+          const stopHit = isLong ? latestPrice <= trade.stop_price : latestPrice >= trade.stop_price;
+          if (stopHit) {
+            trade.status = "closed";
+            trade.closed_at = now;
+            trade.close_reason = "stop_hit";
+            trade.exit_price = latestPrice;
+            closed++;
+            console.log(`[oversight] Shadow stop hit: ${trade.asset} ${trade.direction} @ $${latestPrice} (stop=$${trade.stop_price}) P&L: $${trade.hypothetical_pnl.toFixed(4)}`);
+            continue;
+          }
+        }
+        if (trade.target_price != null) {
+          const targetHit = isLong ? latestPrice >= trade.target_price : latestPrice <= trade.target_price;
+          if (targetHit) {
+            trade.status = "closed";
+            trade.closed_at = now;
+            trade.close_reason = "target_hit";
+            trade.exit_price = latestPrice;
+            closed++;
+            console.log(`[oversight] Shadow target hit: ${trade.asset} ${trade.direction} @ $${latestPrice} (target=$${trade.target_price}) P&L: $${trade.hypothetical_pnl.toFixed(4)}`);
+            continue;
+          }
         }
       }
     } catch (e) {
@@ -6419,6 +6507,20 @@ async function autoTrackShadowTrade(params) {
     if (ageHours < 24) return null;
     await closeShadowTrade(match.id, match.entry_price, "replaced_by_newer_thesis");
   }
+  let stopPrice = params.stop_price;
+  let targetPrice = params.target_price;
+  if (!stopPrice || !targetPrice) {
+    try {
+      const { getActiveTheses: getActiveTheses3 } = await Promise.resolve().then(() => (init_crypto_scout(), crypto_scout_exports));
+      const theses = await getActiveTheses3();
+      const thesis = theses.find((t) => t.id === params.thesis_id || t.asset === params.asset && t.direction === params.direction);
+      if (thesis) {
+        if (!stopPrice && thesis.stop_price) stopPrice = thesis.stop_price;
+        if (!targetPrice && thesis.exit_price) targetPrice = thesis.exit_price;
+      }
+    } catch {
+    }
+  }
   const shadow = await openShadowTrade({
     thesis_id: params.thesis_id,
     asset: params.asset,
@@ -6426,9 +6528,11 @@ async function autoTrackShadowTrade(params) {
     source: params.source,
     direction: params.direction,
     entry_price: params.entry_price,
-    market_id: params.market_id
+    market_id: params.market_id,
+    stop_price: stopPrice,
+    target_price: targetPrice
   });
-  console.log(`[oversight] Auto-shadow: ${params.asset} ${params.direction} @ $${params.entry_price} \u2014 ${params.reason}`);
+  console.log(`[oversight] Auto-shadow: ${params.asset} ${params.direction} @ $${params.entry_price} | stop=$${stopPrice ?? "none"} target=$${targetPrice ?? "none"} \u2014 ${params.reason}`);
   return shadow;
 }
 
@@ -6664,6 +6768,7 @@ async function runPreExecutionChecks(params) {
         source,
         direction: params.direction,
         entry_price: params.entry_price,
+        stop_price: params.stop_price,
         reason: `risk_check_failed: ${rejectionReason}`
       });
     } catch (e) {
@@ -15691,7 +15796,7 @@ function buildOversightTools() {
     {
       name: "oversight_auto_shadow",
       label: "Oversight Auto Shadow Trade",
-      description: "Automatically track a shadow trade for a thesis that BANKR chose not to execute (e.g., rejected by approval, outside parameters). Deduplicates by thesis+asset.",
+      description: "Automatically track a shadow trade for a thesis that BANKR chose not to execute (e.g., rejected by approval, outside parameters). Deduplicates by asset+direction. Carries over stop_price and target_price from the thesis for auto-close tracking.",
       parameters: Type.Object({
         thesis_id: Type.String({ description: "Thesis ID to shadow" }),
         asset: Type.String({ description: "Asset symbol" }),
@@ -15699,7 +15804,9 @@ function buildOversightTools() {
         source: Type.Union([Type.Literal("crypto_scout"), Type.Literal("polymarket_scout")], { description: "Signal source" }),
         direction: Type.String({ description: "Trade direction (LONG/SHORT/YES/NO)" }),
         entry_price: Type.Number({ description: "Entry price at time of shadow" }),
-        reason: Type.String({ description: "Why this is being shadow-tracked instead of executed" })
+        reason: Type.String({ description: "Why this is being shadow-tracked instead of executed" }),
+        stop_price: Type.Optional(Type.Number({ description: "Stop-loss price from thesis" })),
+        target_price: Type.Optional(Type.Number({ description: "Take-profit price from thesis" }))
       }),
       async execute(_toolCallId, params) {
         try {
