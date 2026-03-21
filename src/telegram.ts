@@ -488,7 +488,7 @@ async function pollUpdates(): Promise<void> {
         const text = update.message.text.trim();
         if (text.startsWith("/")) {
           const parts = text.split(/\s+/);
-          const cmd = parts[0].toLowerCase().replace("@", "").replace(/\//, "");
+          const cmd = parts[0].toLowerCase().replace(/@\w+/, "").replace("/", "");
           const args = parts.slice(1).join(" ");
           const handler = commands[cmd];
           if (handler) {
