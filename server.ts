@@ -4900,7 +4900,7 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
 
   let oversightLastRun: string | null = null;
   try {
-    const osRes = await pool.query(`SELECT created_at FROM job_history WHERE job_id = 'oversight-health-check' ORDER BY created_at DESC LIMIT 1`);
+    const osRes = await pool.query(`SELECT created_at FROM job_history WHERE job_id = 'oversight-health' ORDER BY created_at DESC LIMIT 1`);
     if (osRes.rows.length > 0) oversightLastRun = osRes.rows[0].created_at;
   } catch {}
 
