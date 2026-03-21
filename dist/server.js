@@ -8916,6 +8916,24 @@ import { randomBytes } from "crypto";
 var BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 var CHAT_ID = process.env.TELEGRAM_CHAT_ID || "";
 var API_BASE2 = `https://api.telegram.org/bot${BOT_TOKEN}`;
+var ALERTS_BOT_TOKEN = process.env.TELEGRAM_ALERTS_BOT_TOKEN || "";
+var ALERTS_CHAT_ID = process.env.TELEGRAM_CHAT_ID || "";
+var ALERTS_API_BASE = `https://api.telegram.org/bot${ALERTS_BOT_TOKEN}`;
+function isAlertsBotConfigured() {
+  return ALERTS_BOT_TOKEN.length > 0 && ALERTS_CHAT_ID.length > 0;
+}
+async function sendAlertsBotMessage(text, parseMode = "Markdown") {
+  if (!isAlertsBotConfigured()) return;
+  try {
+    await fetch(`${ALERTS_API_BASE}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: ALERTS_CHAT_ID, text, parse_mode: parseMode })
+    });
+  } catch (err) {
+    console.error("[telegram-alerts] sendMessage failed:", err instanceof Error ? err.message : err);
+  }
+}
 var WEBHOOK_SECRET = randomBytes(32).toString("hex");
 var pollingActive = false;
 var pollingTimeout = null;
@@ -9492,6 +9510,20 @@ No shadow trades recorded yet.`;
 \u274C Failed to fetch: ${err instanceof Error ? err.message : String(err)}`;
   }
 }
+async function handleAlertsCommand() {
+  const mode = await getMode2();
+  const darkNodeStatus = isConfigured8() ? "\u2705 Connected" : "\u274C Disconnected";
+  const alertsStatus = isAlertsBotConfigured() ? "\u2705 Connected" : "\u274C Disconnected";
+  return [
+    `${mode} *Telegram Bots Status*`,
+    "",
+    `\u{1F916} *DarkNode* (trading): ${darkNodeStatus}`,
+    "  \u2192 Scout signals, BANKR execution, oversight, circuit breakers, autoresearch, trade approvals",
+    "",
+    `\u{1F4CB} *Mission Control* (personal): ${alertsStatus}`,
+    "  \u2192 Daily briefs, calendar, email, stock watchlist, task alerts"
+  ].join("\n");
+}
 async function handleHelpCommand() {
   const mode = await getMode2();
   return [
@@ -9511,6 +9543,8 @@ async function handleHelpCommand() {
     "/pause \u2014 Halt all Wealth Engine jobs",
     "/resume \u2014 Resume Wealth Engine jobs",
     "/public on|off \u2014 Toggle dashboard access",
+    "/alerts \u2014 Bot connection status",
+    "/research [crypto|pm] \u2014 Run autoresearch",
     "/help \u2014 This message"
   ].join("\n");
 }
@@ -9937,6 +9971,7 @@ async function init7() {
   registerCommand("oversight", async () => handleOversightCommand());
   registerCommand("shadow", async () => handleShadowCommand());
   registerCommand("research", async (args) => handleResearchCommand(args));
+  registerCommand("alerts", async () => handleAlertsCommand());
   registerCommand("help", async () => handleHelpCommand());
   try {
     const me = await tgFetch("getMe");
@@ -9944,6 +9979,17 @@ async function init7() {
   } catch (err) {
     console.error("[telegram] Failed to connect:", err instanceof Error ? err.message : err);
     return;
+  }
+  if (isAlertsBotConfigured()) {
+    try {
+      const alertsMe = await fetch(`${ALERTS_API_BASE}/getMe`, { method: "POST", headers: { "Content-Type": "application/json" } });
+      const alertsData = await alertsMe.json();
+      console.log(`[telegram-alerts] Alerts bot connected: @${alertsData.result?.username || "unknown"}`);
+    } catch (err) {
+      console.warn("[telegram-alerts] Failed to connect alerts bot:", err instanceof Error ? err.message : err);
+    }
+  } else {
+    console.warn("[telegram-alerts] TELEGRAM_ALERTS_BOT_TOKEN not set \u2014 personal alerts bot disabled");
   }
   webhookMode = await registerWebhook();
   if (!webhookMode) {
@@ -9971,27 +10017,36 @@ function stop() {
   console.log("[telegram] stopped");
 }
 async function forwardAlertToTelegram(event) {
-  if (!isConfigured8()) return;
   const mode = await getMode2();
   if (event.type === "brief") {
+    if (!isAlertsBotConfigured()) return;
     const briefLabel = event.briefType ? event.briefType.charAt(0).toUpperCase() + event.briefType.slice(1) : "Daily";
     const truncated = event.content.length > 3500 ? event.content.slice(0, 3500) + "\n\n_(truncated)_" : event.content;
-    await sendMessage(`${mode} \u{1F4CB} *${briefLabel} Brief*
+    await sendAlertsBotMessage(`${mode} \u{1F4CB} *${briefLabel} Brief*
 
 ${truncated}`);
     return;
   }
   if (event.type === "alert") {
-    const icons = {
-      calendar: "\u{1F4C5}",
-      stock: "\u{1F4CA}",
-      task: "\u2705",
-      email: "\u{1F4E7}"
-    };
-    const icon = icons[event.alertType || ""] || "\u{1F514}";
-    await sendMessage(`${mode} ${icon} *${event.title || "Alert"}*
+    const personalAlertTypes = /* @__PURE__ */ new Set(["calendar", "stock", "task", "email"]);
+    if (personalAlertTypes.has(event.alertType || "")) {
+      if (!isAlertsBotConfigured()) return;
+      const icons = {
+        calendar: "\u{1F4C5}",
+        stock: "\u{1F4CA}",
+        task: "\u2705",
+        email: "\u{1F4E7}"
+      };
+      const icon = icons[event.alertType || ""] || "\u{1F514}";
+      await sendAlertsBotMessage(`${mode} ${icon} *${event.title || "Alert"}*
 
 ${event.content}`);
+    } else {
+      if (!isConfigured8()) return;
+      await sendMessage(`${mode} \u{1F514} *${event.title || "Alert"}*
+
+${event.content}`);
+    }
   }
 }
 

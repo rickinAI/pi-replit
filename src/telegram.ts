@@ -5,6 +5,27 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID || "";
 const API_BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
+const ALERTS_BOT_TOKEN = process.env.TELEGRAM_ALERTS_BOT_TOKEN || "";
+const ALERTS_CHAT_ID = process.env.TELEGRAM_CHAT_ID || "";
+const ALERTS_API_BASE = `https://api.telegram.org/bot${ALERTS_BOT_TOKEN}`;
+
+function isAlertsBotConfigured(): boolean {
+  return ALERTS_BOT_TOKEN.length > 0 && ALERTS_CHAT_ID.length > 0;
+}
+
+async function sendAlertsBotMessage(text: string, parseMode: string = "Markdown"): Promise<void> {
+  if (!isAlertsBotConfigured()) return;
+  try {
+    await fetch(`${ALERTS_API_BASE}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: ALERTS_CHAT_ID, text, parse_mode: parseMode }),
+    });
+  } catch (err) {
+    console.error("[telegram-alerts] sendMessage failed:", err instanceof Error ? err.message : err);
+  }
+}
+
 import { randomBytes } from "crypto";
 const WEBHOOK_SECRET = randomBytes(32).toString("hex");
 
@@ -621,6 +642,21 @@ async function handleShadowCommand(): Promise<string> {
   }
 }
 
+async function handleAlertsCommand(): Promise<string> {
+  const mode = await getMode();
+  const darkNodeStatus = isConfigured() ? "✅ Connected" : "❌ Disconnected";
+  const alertsStatus = isAlertsBotConfigured() ? "✅ Connected" : "❌ Disconnected";
+  return [
+    `${mode} *Telegram Bots Status*`,
+    "",
+    `🤖 *DarkNode* (trading): ${darkNodeStatus}`,
+    "  → Scout signals, BANKR execution, oversight, circuit breakers, autoresearch, trade approvals",
+    "",
+    `📋 *Mission Control* (personal): ${alertsStatus}`,
+    "  → Daily briefs, calendar, email, stock watchlist, task alerts",
+  ].join("\n");
+}
+
 async function handleHelpCommand(): Promise<string> {
   const mode = await getMode();
   return [
@@ -640,6 +676,8 @@ async function handleHelpCommand(): Promise<string> {
     "/pause — Halt all Wealth Engine jobs",
     "/resume — Resume Wealth Engine jobs",
     "/public on|off — Toggle dashboard access",
+    "/alerts — Bot connection status",
+    "/research [crypto|pm] — Run autoresearch",
     "/help — This message",
   ].join("\n");
 }
@@ -1115,6 +1153,7 @@ export async function init(): Promise<void> {
   registerCommand("oversight", async () => handleOversightCommand());
   registerCommand("shadow", async () => handleShadowCommand());
   registerCommand("research", async (args) => handleResearchCommand(args));
+  registerCommand("alerts", async () => handleAlertsCommand());
   registerCommand("help", async () => handleHelpCommand());
 
   try {
@@ -1123,6 +1162,18 @@ export async function init(): Promise<void> {
   } catch (err) {
     console.error("[telegram] Failed to connect:", err instanceof Error ? err.message : err);
     return;
+  }
+
+  if (isAlertsBotConfigured()) {
+    try {
+      const alertsMe = await fetch(`${ALERTS_API_BASE}/getMe`, { method: "POST", headers: { "Content-Type": "application/json" } });
+      const alertsData = await alertsMe.json();
+      console.log(`[telegram-alerts] Alerts bot connected: @${alertsData.result?.username || "unknown"}`);
+    } catch (err) {
+      console.warn("[telegram-alerts] Failed to connect alerts bot:", err instanceof Error ? err.message : err);
+    }
+  } else {
+    console.warn("[telegram-alerts] TELEGRAM_ALERTS_BOT_TOKEN not set — personal alerts bot disabled");
   }
 
   webhookMode = await registerWebhook();
@@ -1154,25 +1205,31 @@ export function stop(): void {
 }
 
 export async function forwardAlertToTelegram(event: { type: string; briefType?: string; alertType?: string; title?: string; content: string }): Promise<void> {
-  if (!isConfigured()) return;
-
   const mode = await getMode();
 
   if (event.type === "brief") {
+    if (!isAlertsBotConfigured()) return;
     const briefLabel = event.briefType ? event.briefType.charAt(0).toUpperCase() + event.briefType.slice(1) : "Daily";
     const truncated = event.content.length > 3500 ? event.content.slice(0, 3500) + "\n\n_(truncated)_" : event.content;
-    await sendMessage(`${mode} 📋 *${briefLabel} Brief*\n\n${truncated}`);
+    await sendAlertsBotMessage(`${mode} 📋 *${briefLabel} Brief*\n\n${truncated}`);
     return;
   }
 
   if (event.type === "alert") {
-    const icons: Record<string, string> = {
-      calendar: "📅",
-      stock: "📊",
-      task: "✅",
-      email: "📧",
-    };
-    const icon = icons[event.alertType || ""] || "🔔";
-    await sendMessage(`${mode} ${icon} *${event.title || "Alert"}*\n\n${event.content}`);
+    const personalAlertTypes = new Set(["calendar", "stock", "task", "email"]);
+    if (personalAlertTypes.has(event.alertType || "")) {
+      if (!isAlertsBotConfigured()) return;
+      const icons: Record<string, string> = {
+        calendar: "📅",
+        stock: "📊",
+        task: "✅",
+        email: "📧",
+      };
+      const icon = icons[event.alertType || ""] || "🔔";
+      await sendAlertsBotMessage(`${mode} ${icon} *${event.title || "Alert"}*\n\n${event.content}`);
+    } else {
+      if (!isConfigured()) return;
+      await sendMessage(`${mode} 🔔 *${event.title || "Alert"}*\n\n${event.content}`);
+    }
   }
 }
