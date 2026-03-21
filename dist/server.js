@@ -18056,9 +18056,8 @@ ${stderr || stdout || err.message}`
           const filePath = path7.join(pagesDir, `${slug}.html`);
           const existed = fs6.existsSync(filePath);
           fs6.writeFileSync(filePath, params.html, "utf-8");
-          const domain = process.env.REPLIT_DEPLOYMENT_URL || process.env.REPLIT_DEV_DOMAIN || "rickin.live";
-          const protocol = domain.includes("localhost") ? "http" : "https";
-          const pageUrl = `${protocol}://${domain}/pages/${slug}`;
+          const domain = "rickin.live";
+          const pageUrl = `https://${domain}/pages/${slug}`;
           return {
             content: [{
               type: "text",
@@ -18093,21 +18092,20 @@ This page is password-protected behind your login. Visit rickin.live/pages to se
           if (files.length === 0) {
             return { content: [{ type: "text", text: "No pages saved yet." }], details: {} };
           }
-          const domain = process.env.REPLIT_DEPLOYMENT_URL || process.env.REPLIT_DEV_DOMAIN || "rickin.live";
-          const protocol = domain.includes("localhost") ? "http" : "https";
+          const domain = "rickin.live";
           const list2 = files.map((f) => {
             const slug = f.replace(/\.html$/, "");
             const stat = fs6.statSync(path7.join(pagesDir, f));
             const sizeKB = Math.round(stat.size / 1024);
             const date = stat.mtime.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-            return `- ${slug} (${sizeKB}KB, ${date}) \u2014 ${protocol}://${domain}/pages/${slug}`;
+            return `- ${slug} (${sizeKB}KB, ${date}) \u2014 https://${domain}/pages/${slug}`;
           }).join("\n");
           return {
             content: [{ type: "text", text: `${files.length} saved page(s):
 
 ${list2}
 
-All pages: ${protocol}://${domain}/pages` }],
+All pages: https://${domain}/pages` }],
             details: {}
           };
         } catch (err) {

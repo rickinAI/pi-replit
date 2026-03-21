@@ -3739,9 +3739,8 @@ function buildWebPublishTools(): ToolDefinition[] {
           const existed = fs.existsSync(filePath);
           fs.writeFileSync(filePath, params.html, "utf-8");
 
-          const domain = process.env.REPLIT_DEPLOYMENT_URL || process.env.REPLIT_DEV_DOMAIN || "rickin.live";
-          const protocol = domain.includes("localhost") ? "http" : "https";
-          const pageUrl = `${protocol}://${domain}/pages/${slug}`;
+          const domain = "rickin.live";
+          const pageUrl = `https://${domain}/pages/${slug}`;
 
           return {
             content: [{
@@ -3773,17 +3772,16 @@ function buildWebPublishTools(): ToolDefinition[] {
           if (files.length === 0) {
             return { content: [{ type: "text" as const, text: "No pages saved yet." }], details: {} };
           }
-          const domain = process.env.REPLIT_DEPLOYMENT_URL || process.env.REPLIT_DEV_DOMAIN || "rickin.live";
-          const protocol = domain.includes("localhost") ? "http" : "https";
+          const domain = "rickin.live";
           const list = files.map(f => {
             const slug = f.replace(/\.html$/, "");
             const stat = fs.statSync(path.join(pagesDir, f));
             const sizeKB = Math.round(stat.size / 1024);
             const date = stat.mtime.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-            return `- ${slug} (${sizeKB}KB, ${date}) — ${protocol}://${domain}/pages/${slug}`;
+            return `- ${slug} (${sizeKB}KB, ${date}) — https://${domain}/pages/${slug}`;
           }).join("\n");
           return {
-            content: [{ type: "text" as const, text: `${files.length} saved page(s):\n\n${list}\n\nAll pages: ${protocol}://${domain}/pages` }],
+            content: [{ type: "text" as const, text: `${files.length} saved page(s):\n\n${list}\n\nAll pages: https://${domain}/pages` }],
             details: {},
           };
         } catch (err: any) {
