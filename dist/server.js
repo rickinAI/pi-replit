@@ -9544,7 +9544,7 @@ async function handleHelpCommand() {
     "/resume \u2014 Resume Wealth Engine jobs",
     "/public on|off \u2014 Toggle dashboard access",
     "/alerts \u2014 Bot connection status",
-    "/research [crypto|pm] \u2014 Run autoresearch",
+    "/research [crypto|polymarket|status] \u2014 Autoresearch",
     "/help \u2014 This message"
   ].join("\n");
 }

@@ -677,7 +677,7 @@ async function handleHelpCommand(): Promise<string> {
     "/resume — Resume Wealth Engine jobs",
     "/public on|off — Toggle dashboard access",
     "/alerts — Bot connection status",
-    "/research [crypto|pm] — Run autoresearch",
+    "/research [crypto|polymarket|status] — Autoresearch",
     "/help — This message",
   ].join("\n");
 }
