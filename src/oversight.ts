@@ -1084,7 +1084,8 @@ export async function refreshShadowTradesFromMarket(): Promise<{
       } else if (trade.asset_class === "polymarket" && trade.market_id) {
         const market = await polymarket.getMarketDetails(trade.market_id);
         if (market && market.outcome_prices && market.outcome_prices.length > 0) {
-          latestPrice = parseFloat(String(market.outcome_prices[0])) || null;
+          const parsed = parseFloat(String(market.outcome_prices[0]));
+          latestPrice = Number.isFinite(parsed) ? parsed : null;
         }
       }
 
