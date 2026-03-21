@@ -41,6 +41,7 @@ import * as maps from "./src/maps.js";
 import * as gws from "./src/gws.js";
 import * as youtube from "./src/youtube.js";
 import * as alerts from "./src/alerts.js";
+import * as telegram from "./src/telegram.js";
 import * as scheduledJobs from "./src/scheduled-jobs.js";
 import * as agentLoader from "./src/agents/loader.js";
 import { runSubAgent } from "./src/agents/orchestrator.js";
@@ -5919,6 +5920,7 @@ async function gracefulShutdown(signal: string) {
     obSyncProcess = null;
   }
   scheduledJobs.stopJobSystem();
+  telegram.stop();
   const ids = [...sessions.keys()];
   if (ids.length > 0) {
     console.error(`[shutdown] Saving ${ids.length} active session(s)...`);
@@ -5974,6 +5976,7 @@ async function startServer(maxRetries = 5) {
   await gmail.init();
   await tasks.init();
   await alerts.init();
+  await telegram.init();
   await scheduledJobs.init();
   console.log("[boot] PostgreSQL ready (shared pool, 4 tables)");
 
@@ -6012,6 +6015,9 @@ async function startServer(maxRetries = 5) {
         }
       }
     }
+    telegram.forwardAlertToTelegram(event).catch(err => {
+      console.error("[telegram] Forward failed:", err instanceof Error ? err.message : err);
+    });
   }
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {

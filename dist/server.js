@@ -5439,6 +5439,538 @@ async function triggerBrief(type) {
   return event;
 }
 
+// src/telegram.ts
+var BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
+var CHAT_ID = process.env.TELEGRAM_CHAT_ID || "";
+var API_BASE2 = `https://api.telegram.org/bot${BOT_TOKEN}`;
+var pollingActive = false;
+var pollingTimeout = null;
+var lastUpdateId = 0;
+var deadManInterval = null;
+var lastDeadManAlert = {};
+var commands = {};
+var pendingApprovals = /* @__PURE__ */ new Map();
+function getMode() {
+  return "[BETA]";
+}
+function isConfigured5() {
+  return BOT_TOKEN.length > 0 && CHAT_ID.length > 0;
+}
+async function tgFetch(method, body) {
+  const url = `${API_BASE2}/${method}`;
+  const opts = {
+    method: "POST",
+    headers: { "Content-Type": "application/json" }
+  };
+  if (body) opts.body = JSON.stringify(body);
+  const resp = await fetch(url, opts);
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Telegram API ${method} failed (${resp.status}): ${text}`);
+  }
+  return resp.json();
+}
+async function sendMessage(text, parseMode = "Markdown") {
+  if (!isConfigured5()) return null;
+  try {
+    const result = await tgFetch("sendMessage", {
+      chat_id: CHAT_ID,
+      text,
+      parse_mode: parseMode,
+      disable_web_page_preview: true
+    });
+    return result.result?.message_id || null;
+  } catch (err) {
+    console.error("[telegram] sendMessage failed:", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+async function answerCallbackQuery(callbackQueryId, text) {
+  try {
+    await tgFetch("answerCallbackQuery", {
+      callback_query_id: callbackQueryId,
+      text: text || "Received"
+    });
+  } catch (err) {
+    console.error("[telegram] answerCallbackQuery failed:", err instanceof Error ? err.message : err);
+  }
+}
+async function editMessage(messageId, text, parseMode = "Markdown") {
+  try {
+    await tgFetch("editMessageText", {
+      chat_id: CHAT_ID,
+      message_id: messageId,
+      text,
+      parse_mode: parseMode
+    });
+  } catch (err) {
+    console.error("[telegram] editMessage failed:", err instanceof Error ? err.message : err);
+  }
+}
+function registerCommand(name, handler) {
+  commands[name.toLowerCase()] = handler;
+}
+async function handleStatusCommand() {
+  const mode = getMode();
+  const pool2 = getPool();
+  let killSwitchActive = false;
+  try {
+    const ks = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_kill_switch'`);
+    killSwitchActive = ks.rows.length > 0 && ks.rows[0].value === true;
+  } catch {
+  }
+  let pauseActive = false;
+  try {
+    const pa = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_paused'`);
+    pauseActive = pa.rows.length > 0 && pa.rows[0].value === true;
+  } catch {
+  }
+  let scoutLastRun = "never";
+  let bankrLastRun = "never";
+  try {
+    const sr = await pool2.query(`SELECT created_at FROM job_history WHERE agent_id = 'scout' ORDER BY created_at DESC LIMIT 1`);
+    if (sr.rows.length > 0) scoutLastRun = timeAgo(new Date(sr.rows[0].created_at).getTime());
+  } catch {
+  }
+  try {
+    const br = await pool2.query(`SELECT created_at FROM job_history WHERE agent_id = 'bankr' ORDER BY created_at DESC LIMIT 1`);
+    if (br.rows.length > 0) bankrLastRun = timeAgo(new Date(br.rows[0].created_at).getTime());
+  } catch {
+  }
+  const lines = [
+    `${mode} *DarkNode Status*`,
+    "",
+    `\u{1F534} Kill Switch: ${killSwitchActive ? "ACTIVE" : "OFF"}`,
+    `\u23F8 Paused: ${pauseActive ? "YES" : "NO"}`,
+    `\u{1F50D} SCOUT last run: ${scoutLastRun}`,
+    `\u{1F4B0} BANKR last run: ${bankrLastRun}`,
+    "",
+    `_${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`
+  ];
+  return lines.join("\n");
+}
+async function handlePortfolioCommand() {
+  const mode = getMode();
+  const pool2 = getPool();
+  let positions = [];
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_positions'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+      positions = res.rows[0].value;
+    }
+  } catch {
+  }
+  if (positions.length === 0) {
+    return `${mode} *Portfolio*
+
+No open positions.
+
+_Use /trades to see recent trade history._`;
+  }
+  const lines = [`${mode} *Portfolio*`, ""];
+  let totalPnl = 0;
+  for (const pos of positions) {
+    const pnl = pos.unrealized_pnl || 0;
+    totalPnl += pnl;
+    const pnlStr = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
+    const arrow = pnl >= 0 ? "\u{1F7E2}" : "\u{1F534}";
+    lines.push(`${arrow} *${pos.asset}* ${pos.direction} ${pos.leverage || "1x"}`);
+    lines.push(`   Entry: $${pos.entry_price} | P&L: ${pnlStr}`);
+  }
+  lines.push("");
+  const totalStr = totalPnl >= 0 ? `+$${totalPnl.toFixed(2)}` : `-$${Math.abs(totalPnl).toFixed(2)}`;
+  lines.push(`*Total P&L:* ${totalStr}`);
+  return lines.join("\n");
+}
+async function handleIntelCommand() {
+  const mode = getMode();
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scout_latest_brief'`);
+    if (res.rows.length > 0 && res.rows[0].value) {
+      const brief = res.rows[0].value;
+      const summary = typeof brief === "string" ? brief : brief.summary || JSON.stringify(brief);
+      const truncated = summary.length > 3e3 ? summary.slice(0, 3e3) + "\n\n_(truncated)_" : summary;
+      return `${mode} *Latest SCOUT Intel*
+
+${truncated}`;
+    }
+  } catch {
+  }
+  return `${mode} *Latest SCOUT Intel*
+
+No SCOUT brief available yet. SCOUT agent has not run.`;
+}
+async function handlePauseCommand() {
+  const mode = getMode();
+  const pool2 = getPool();
+  try {
+    await pool2.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_paused', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(true), Date.now()]
+    );
+    console.log("[telegram] Wealth Engines PAUSED via Telegram");
+    return `${mode} \u23F8 *System PAUSED*
+
+All Wealth Engine jobs will halt within 60 seconds.
+Use /resume to restart.`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `${mode} \u274C Failed to pause: ${msg}`;
+  }
+}
+async function handleResumeCommand() {
+  const mode = getMode();
+  const pool2 = getPool();
+  try {
+    await pool2.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_paused', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(false), Date.now()]
+    );
+    console.log("[telegram] Wealth Engines RESUMED via Telegram");
+    return `${mode} \u25B6\uFE0F *System RESUMED*
+
+All Wealth Engine jobs are active again.`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `${mode} \u274C Failed to resume: ${msg}`;
+  }
+}
+async function handleScoutCommand() {
+  const mode = getMode();
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scout_active_theses'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value) && res.rows[0].value.length > 0) {
+      const theses = res.rows[0].value;
+      const lines = [`${mode} *Active SCOUT Theses*`, ""];
+      for (const t of theses.slice(0, 10)) {
+        const conf = t.confidence || "?";
+        const dir = t.direction || "?";
+        const score = t.technical_score != null ? ` (${t.technical_score.toFixed(2)})` : "";
+        lines.push(`\u2022 *${t.asset}* \u2014 ${dir} ${conf}${score}`);
+        if (t.entry_price) lines.push(`  Entry: $${t.entry_price} | Stop: $${t.stop_price || "?"}`);
+      }
+      return lines.join("\n");
+    }
+  } catch {
+  }
+  return `${mode} *Active SCOUT Theses*
+
+No active theses. SCOUT has not generated any yet.`;
+}
+async function handleTradesCommand(args) {
+  const mode = getMode();
+  const pool2 = getPool();
+  const limit = Math.min(Math.max(parseInt(args) || 5, 1), 20);
+  try {
+    const res = await pool2.query(
+      `SELECT value FROM app_config WHERE key = 'wealth_engines_trade_history'`
+    );
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value) && res.rows[0].value.length > 0) {
+      const trades = res.rows[0].value.slice(-limit).reverse();
+      const lines = [`${mode} *Recent Trades* (last ${trades.length})`, ""];
+      for (const t of trades) {
+        const pnl = t.pnl || 0;
+        const pnlStr = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
+        const icon = pnl >= 0 ? "\u{1F7E2}" : "\u{1F534}";
+        const date = t.closed_at ? new Date(t.closed_at).toLocaleDateString("en-US", { timeZone: "America/New_York" }) : "open";
+        lines.push(`${icon} *${t.asset}* ${t.direction} ${t.leverage || "1x"} \u2014 ${pnlStr} (${date})`);
+      }
+      return lines.join("\n");
+    }
+  } catch {
+  }
+  return `${mode} *Recent Trades*
+
+No trade history yet.`;
+}
+async function handlePublicCommand(args) {
+  const mode = getMode();
+  const pool2 = getPool();
+  const val = args.trim().toLowerCase();
+  if (val !== "on" && val !== "off") {
+    try {
+      const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_public'`);
+      const isPublic = res.rows.length > 0 && res.rows[0].value === true;
+      return `${mode} Dashboard is currently *${isPublic ? "PUBLIC" : "PRIVATE"}*.
+
+Usage: /public on | /public off`;
+    } catch {
+      return `${mode} Dashboard is currently *PRIVATE*.
+
+Usage: /public on | /public off`;
+    }
+  }
+  const newVal = val === "on";
+  try {
+    await pool2.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_public', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(newVal), Date.now()]
+    );
+    return `${mode} Dashboard is now *${newVal ? "PUBLIC" : "PRIVATE"}*.`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `${mode} \u274C Failed to update: ${msg}`;
+  }
+}
+function handleHelpCommand() {
+  const mode = getMode();
+  return [
+    `${mode} *DarkNode Commands*`,
+    "",
+    "/status \u2014 System health & mode",
+    "/portfolio \u2014 Open positions & P&L",
+    "/intel \u2014 Latest SCOUT brief",
+    "/scout \u2014 Active theses",
+    "/trades [n] \u2014 Last N trades (default 5)",
+    "/pause \u2014 Halt all Wealth Engine jobs",
+    "/resume \u2014 Resume Wealth Engine jobs",
+    "/public on|off \u2014 Toggle dashboard access",
+    "/help \u2014 This message"
+  ].join("\n");
+}
+async function handleCallbackQuery(callbackQueryId, data) {
+  const [action, approvalId] = data.split(":");
+  if (!action?.startsWith("trade_")) {
+    await answerCallbackQuery(callbackQueryId, "Unknown action");
+    return;
+  }
+  const pending = pendingApprovals.get(approvalId);
+  if (!pending) {
+    await answerCallbackQuery(callbackQueryId, "This approval has expired");
+    return;
+  }
+  const decision = action.replace("trade_", "");
+  pendingApprovals.delete(approvalId);
+  const pool2 = getPool();
+  try {
+    await pool2.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [
+        `trade_decision_${approvalId}`,
+        JSON.stringify({ decision, thesisId: pending.thesisId, asset: pending.asset, decidedAt: (/* @__PURE__ */ new Date()).toISOString() }),
+        Date.now()
+      ]
+    );
+  } catch (err) {
+    console.error("[telegram] Failed to record trade decision:", err);
+  }
+  const decisionLabels = {
+    approve: "\u2705 APPROVED",
+    skip: "\u23ED SKIPPED",
+    hold: "\u23F8 ON HOLD"
+  };
+  const mode = getMode();
+  if (pending.messageId) {
+    await editMessage(
+      pending.messageId,
+      `${mode} *Trade ${decisionLabels[decision]}*
+
+*${pending.asset}* ${pending.direction} ${pending.leverage}
+
+_Decision recorded at ${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`
+    );
+  }
+  await answerCallbackQuery(callbackQueryId, decisionLabels[decision]);
+  pending.resolve(decision);
+  console.log(`[telegram] Trade ${decision}: ${pending.asset} ${pending.direction} (thesis: ${pending.thesisId})`);
+}
+async function pollUpdates() {
+  if (!pollingActive || !isConfigured5()) return;
+  try {
+    const result = await tgFetch("getUpdates", {
+      offset: lastUpdateId + 1,
+      timeout: 30,
+      allowed_updates: ["message", "callback_query"]
+    });
+    const updates = result.result || [];
+    for (const update of updates) {
+      lastUpdateId = Math.max(lastUpdateId, update.update_id);
+      if (update.callback_query) {
+        const cbq = update.callback_query;
+        if (String(cbq.message?.chat?.id) === CHAT_ID) {
+          await handleCallbackQuery(cbq.id, cbq.data || "");
+        }
+        continue;
+      }
+      if (update.message?.text && String(update.message.chat.id) === CHAT_ID) {
+        const text = update.message.text.trim();
+        if (text.startsWith("/")) {
+          const parts = text.split(/\s+/);
+          const cmd = parts[0].toLowerCase().replace("@", "").replace(/\//, "");
+          const args = parts.slice(1).join(" ");
+          const handler = commands[cmd];
+          if (handler) {
+            try {
+              const response = await handler(args);
+              await sendMessage(response);
+            } catch (err) {
+              console.error(`[telegram] Command /${cmd} failed:`, err);
+              await sendMessage(`\u274C Command failed: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    if (err instanceof Error && !err.message.includes("ETIMEDOUT")) {
+      console.error("[telegram] Poll error:", err.message);
+    }
+  }
+  if (pollingActive) {
+    pollingTimeout = setTimeout(() => pollUpdates(), 1e3);
+  }
+}
+function timeAgo(timestamp) {
+  const diff = Date.now() - timestamp;
+  const minutes = Math.floor(diff / 6e4);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+async function checkDeadManSwitches() {
+  if (!isConfigured5()) return;
+  const pool2 = getPool();
+  const mode = getMode();
+  let paused = false;
+  try {
+    const pa = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_paused'`);
+    paused = pa.rows.length > 0 && pa.rows[0].value === true;
+  } catch {
+  }
+  if (paused) return;
+  try {
+    const scoutRes = await pool2.query(
+      `SELECT created_at FROM job_history WHERE agent_id = 'scout' ORDER BY created_at DESC LIMIT 1`
+    );
+    if (scoutRes.rows.length > 0) {
+      const lastRun = new Date(scoutRes.rows[0].created_at).getTime();
+      const hoursSince = (Date.now() - lastRun) / (3600 * 1e3);
+      if (hoursSince > 36) {
+        const lastAlert = lastDeadManAlert["scout"] || 0;
+        if (Date.now() - lastAlert > 12 * 3600 * 1e3) {
+          lastDeadManAlert["scout"] = Date.now();
+          await sendMessage(
+            `${mode} \u26A0\uFE0F *Dead Man's Switch: SCOUT*
+
+SCOUT has not run in ${Math.floor(hoursSince)}h (threshold: 36h).
+Last run: ${timeAgo(lastRun)}
+
+Check scheduled jobs or run manually.`
+          );
+        }
+      } else {
+        delete lastDeadManAlert["scout"];
+      }
+    }
+  } catch (err) {
+    console.error("[telegram] Dead man switch SCOUT check failed:", err);
+  }
+  try {
+    const bankrRes = await pool2.query(
+      `SELECT created_at FROM job_history WHERE agent_id = 'bankr' ORDER BY created_at DESC LIMIT 1`
+    );
+    if (bankrRes.rows.length > 0) {
+      const lastRun = new Date(bankrRes.rows[0].created_at).getTime();
+      const hoursSince = (Date.now() - lastRun) / (3600 * 1e3);
+      if (hoursSince > 8) {
+        const lastAlert = lastDeadManAlert["bankr"] || 0;
+        if (Date.now() - lastAlert > 4 * 3600 * 1e3) {
+          lastDeadManAlert["bankr"] = Date.now();
+          await sendMessage(
+            `${mode} \u26A0\uFE0F *Dead Man's Switch: BANKR*
+
+BANKR monitor has not run in ${Math.floor(hoursSince)}h (threshold: 8h).
+Last run: ${timeAgo(lastRun)}
+
+Check scheduled jobs or run manually.`
+          );
+        }
+      } else {
+        delete lastDeadManAlert["bankr"];
+      }
+    }
+  } catch (err) {
+    console.error("[telegram] Dead man switch BANKR check failed:", err);
+  }
+}
+async function init7() {
+  if (!BOT_TOKEN) {
+    console.warn("[telegram] TELEGRAM_BOT_TOKEN not set \u2014 Telegram bot disabled");
+    return;
+  }
+  if (!CHAT_ID) {
+    console.warn("[telegram] TELEGRAM_CHAT_ID not set \u2014 Telegram bot disabled");
+    return;
+  }
+  registerCommand("status", async () => handleStatusCommand());
+  registerCommand("portfolio", async () => handlePortfolioCommand());
+  registerCommand("intel", async () => handleIntelCommand());
+  registerCommand("pause", async () => handlePauseCommand());
+  registerCommand("resume", async () => handleResumeCommand());
+  registerCommand("scout", async () => handleScoutCommand());
+  registerCommand("trades", async (args) => handleTradesCommand(args));
+  registerCommand("public", async (args) => handlePublicCommand(args));
+  registerCommand("help", async () => handleHelpCommand());
+  try {
+    const me = await tgFetch("getMe");
+    console.log(`[telegram] Bot connected: @${me.result?.username || "unknown"}`);
+  } catch (err) {
+    console.error("[telegram] Failed to connect:", err instanceof Error ? err.message : err);
+    return;
+  }
+  pollingActive = true;
+  pollUpdates();
+  deadManInterval = setInterval(() => {
+    checkDeadManSwitches().catch((err) => console.error("[telegram] Dead man check error:", err));
+  }, 60 * 60 * 1e3);
+  console.log("[telegram] initialized (long-polling mode, dead man switches hourly)");
+}
+function stop() {
+  pollingActive = false;
+  if (pollingTimeout) {
+    clearTimeout(pollingTimeout);
+    pollingTimeout = null;
+  }
+  if (deadManInterval) {
+    clearInterval(deadManInterval);
+    deadManInterval = null;
+  }
+  console.log("[telegram] stopped");
+}
+async function forwardAlertToTelegram(event) {
+  if (!isConfigured5()) return;
+  const mode = getMode();
+  if (event.type === "brief") {
+    const briefLabel = event.briefType ? event.briefType.charAt(0).toUpperCase() + event.briefType.slice(1) : "Daily";
+    const truncated = event.content.length > 3500 ? event.content.slice(0, 3500) + "\n\n_(truncated)_" : event.content;
+    await sendMessage(`${mode} \u{1F4CB} *${briefLabel} Brief*
+
+${truncated}`);
+    return;
+  }
+  if (event.type === "alert") {
+    const icons = {
+      calendar: "\u{1F4C5}",
+      stock: "\u{1F4CA}",
+      task: "\u2705",
+      email: "\u{1F4E7}"
+    };
+    const icon = icons[event.alertType || ""] || "\u{1F514}";
+    await sendMessage(`${mode} ${icon} *${event.title || "Alert"}*
+
+${event.content}`);
+  }
+}
+
 // src/scheduled-jobs.ts
 function getJobSavePath(jobId, dateStr, safeName) {
   if (jobId === "moodys-daily-intel") return `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief.md`;
@@ -6302,7 +6834,7 @@ async function archiveOldReports() {
     console.log(`[scheduled-jobs] Archived ${archived} old brief(s)`);
   }
 }
-async function init7() {
+async function init8() {
   try {
     const result = await getPool().query(`SELECT value FROM app_config WHERE key = 'scheduled_jobs'`);
     if (result.rows.length > 0) {
@@ -7100,7 +7632,7 @@ import path4 from "path";
 var agents = [];
 var configPath = "";
 var registeredToolNames = null;
-function init8(dataDir) {
+function init9(dataDir) {
   configPath = path4.join(dataDir, "agents.json");
   loadAgents();
   let reloadTimer = null;
@@ -7703,7 +8235,7 @@ function looksLikeHtml(content) {
 
 // src/vault-graph.ts
 var ops = null;
-function init9(vaultOps) {
+function init10(vaultOps) {
   ops = vaultOps;
 }
 function extractWikilinks(markdown) {
@@ -8047,7 +8579,7 @@ var AGENT_DIR = path6.join(PROJECT_ROOT, ".pi/agent");
 var VAULT_DIR = path6.join(PROJECT_ROOT, "data", "vault");
 fs5.mkdirSync(AGENT_DIR, { recursive: true });
 init(VAULT_DIR);
-init8(path6.join(PROJECT_ROOT, "data"));
+init9(path6.join(PROJECT_ROOT, "data"));
 loadAllSkills().catch((err) => console.warn("[startup] Failed to preload Obsidian skills:", err));
 var useLocalVault = isConfigured2();
 setInterval(() => {
@@ -8105,7 +8637,7 @@ function kbListRecursive(p) {
 function kbFileInfo(p) {
   return useLocalVault ? fileInfo2(p) : fileInfo(p);
 }
-init9({
+init10({
   read: kbRead,
   list: kbList,
   listRecursive: kbListRecursive,
@@ -13870,6 +14402,7 @@ async function gracefulShutdown(signal) {
     obSyncProcess = null;
   }
   stopJobSystem();
+  stop();
   const ids = [...sessions.keys()];
   if (ids.length > 0) {
     console.error(`[shutdown] Saving ${ids.length} active session(s)...`);
@@ -13927,6 +14460,7 @@ async function startServer(maxRetries = 5) {
   await init5();
   await init6();
   await init7();
+  await init8();
   console.log("[boot] PostgreSQL ready (shared pool, 4 tables)");
   checkConnectionStatus().then((status) => {
     if (status.connected) console.log(`[boot] Google connected: ${status.email} (Gmail, Calendar, Drive, Sheets)`);
@@ -13963,6 +14497,9 @@ async function startServer(maxRetries = 5) {
         }
       }
     }
+    forwardAlertToTelegram(event).catch((err) => {
+      console.error("[telegram] Forward failed:", err instanceof Error ? err.message : err);
+    });
   }
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
