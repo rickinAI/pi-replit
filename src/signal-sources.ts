@@ -1,10 +1,15 @@
 const CACHE = new Map<string, { data: any; ts: number }>();
 const CACHE_TTL = 5 * 60 * 1000;
+const CACHE_MAX_SIZE = 200;
 
 function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
   const entry = CACHE.get(key);
   if (entry && Date.now() - entry.ts < ttlMs) return Promise.resolve(entry.data as T);
   return fn().then(data => {
+    if (CACHE.size >= CACHE_MAX_SIZE) {
+      const oldest = [...CACHE.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
+      if (oldest) CACHE.delete(oldest[0]);
+    }
     CACHE.set(key, { data, ts: Date.now() });
     return data;
   });
@@ -68,7 +73,7 @@ export async function getBinanceSignals(symbol: string = "BTCUSDT"): Promise<{
   price: number;
   volume_24h: number;
 }> {
-  const sym = symbol.toUpperCase().replace(/[^A-Z]/g, "");
+  const sym = symbol.toUpperCase().replace(/[^A-Z0-9]/g, "");
   const pair = sym.endsWith("USDT") ? sym : sym + "USDT";
 
   return cached(`binance_signal_${pair}`, CACHE_TTL, async () => {
@@ -152,7 +157,7 @@ export async function scanBinanceWatchlist(symbols: string[]): Promise<{
   top_signals: any[];
 }> {
   const syms = symbols.map(s => {
-    const upper = s.toUpperCase().replace(/[^A-Z]/g, "");
+    const upper = s.toUpperCase().replace(/[^A-Z0-9]/g, "");
     return upper.endsWith("USDT") ? upper : upper + "USDT";
   });
 
@@ -369,7 +374,7 @@ export async function getBinanceFundingRates(symbols?: string[]): Promise<{
     : "funding_rates";
   return cached(cacheKey, CACHE_TTL, async () => {
     const targetSymbols = symbols && symbols.length > 0
-      ? symbols.map(s => s.toUpperCase().replace(/[^A-Z]/g, ""))
+      ? symbols.map(s => s.toUpperCase().replace(/[^A-Z0-9]/g, ""))
       : ["BTC", "ETH", "SOL", "DOGE", "AVAX", "LINK", "ADA", "DOT", "MATIC", "UNI"];
 
     const tickers = await Promise.allSettled(
@@ -397,7 +402,7 @@ export async function getBinanceFundingRates(symbols?: string[]): Promise<{
     const avgRate = rates.length > 0 ? rates.reduce((s, r) => s + r.funding_rate, 0) / rates.length : 0;
     const extreme = rates.filter(r => Math.abs(r.funding_rate) > 0.03);
 
-    return { rates, average_rate: round(avgRate, 4), extreme_funding: extreme };
+    return { rates, average_rate: round(avgRate, 4), extreme_funding: extreme, source: "binance_us_spot_estimated" };
   });
 }
 
@@ -409,7 +414,7 @@ export async function getOpenInterestHistory(symbol: string = "BTCUSDT"): Promis
   long_short_ratio: number;
   signal: string;
 }> {
-  const sym = symbol.toUpperCase().replace(/[^A-Z]/g, "");
+  const sym = symbol.toUpperCase().replace(/[^A-Z0-9]/g, "");
   const pair = sym.endsWith("USDT") ? sym : sym + "USDT";
   return cached(`oi_${pair}`, CACHE_TTL, async () => {
     const ticker = await fetchJSON(`https://api.binance.us/api/v3/ticker/24hr?symbol=${pair}`);
@@ -436,6 +441,7 @@ export async function getOpenInterestHistory(symbol: string = "BTCUSDT"): Promis
       funding_rate: round(estimatedFunding, 4),
       long_short_ratio: round(ratio, 3),
       signal,
+      source: "binance_us_spot_estimated",
     };
   });
 }
