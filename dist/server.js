@@ -8925,11 +8925,15 @@ function isAlertsBotConfigured() {
 async function sendAlertsBotMessage(text, parseMode = "Markdown") {
   if (!isAlertsBotConfigured()) return;
   try {
-    await fetch(`${ALERTS_API_BASE}/sendMessage`, {
+    const resp = await fetch(`${ALERTS_API_BASE}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: ALERTS_CHAT_ID, text, parse_mode: parseMode })
     });
+    if (!resp.ok) {
+      const body = await resp.text();
+      console.error(`[telegram-alerts] sendMessage failed (${resp.status}): ${body}`);
+    }
   } catch (err) {
     console.error("[telegram-alerts] sendMessage failed:", err instanceof Error ? err.message : err);
   }
@@ -9983,8 +9987,16 @@ async function init7() {
   if (isAlertsBotConfigured()) {
     try {
       const alertsMe = await fetch(`${ALERTS_API_BASE}/getMe`, { method: "POST", headers: { "Content-Type": "application/json" } });
-      const alertsData = await alertsMe.json();
-      console.log(`[telegram-alerts] Alerts bot connected: @${alertsData.result?.username || "unknown"}`);
+      if (!alertsMe.ok) {
+        console.warn(`[telegram-alerts] Alerts bot getMe failed (${alertsMe.status}) \u2014 check TELEGRAM_ALERTS_BOT_TOKEN`);
+      } else {
+        const alertsData = await alertsMe.json();
+        if (alertsData.ok && alertsData.result?.username) {
+          console.log(`[telegram-alerts] Alerts bot connected: @${alertsData.result.username}`);
+        } else {
+          console.warn("[telegram-alerts] Alerts bot responded but identity unknown \u2014 check token");
+        }
+      }
     } catch (err) {
       console.warn("[telegram-alerts] Failed to connect alerts bot:", err instanceof Error ? err.message : err);
     }
