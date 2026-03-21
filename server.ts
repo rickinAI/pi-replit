@@ -36,7 +36,10 @@ import * as twitter from "./src/twitter.js";
 import * as stocks from "./src/stocks.js";
 import * as coingecko from "./src/coingecko.js";
 import { getHistoricalOHLCV } from "./src/coingecko.js";
-import { analyzeAsset } from "./src/technical-signals.js";
+import { analyzeAsset, formatAnalysis } from "./src/technical-signals.js";
+import * as nansen from "./src/nansen.js";
+import { runBacktest, formatBacktestResult } from "./src/backtest.js";
+import * as cryptoScout from "./src/crypto-scout.js";
 import * as maps from "./src/maps.js";
 import * as gws from "./src/gws.js";
 import * as youtube from "./src/youtube.js";
@@ -1275,6 +1278,105 @@ function buildCoinGeckoTools(): ToolDefinition[] {
           }
           const result = analyzeAsset(candles);
           return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "crypto_backtest",
+      label: "Crypto Backtest",
+      description: "Run a backtest of the 6-signal voting ensemble on historical OHLCV data. Returns Sharpe ratio, win rate, max drawdown, Nunchi composite score, and trade log.",
+      parameters: Type.Object({
+        coin: Type.String({ description: "Cryptocurrency name or ticker (e.g. 'bitcoin', 'BTC')" }),
+        days: Type.Optional(Type.Number({ description: "Days of data to backtest (max 90). Default: 30", default: 30 })),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        try {
+          const candles = await getHistoricalOHLCV(params.coin, Math.min(params.days || 30, 90));
+          if (candles.length === 0) {
+            return { content: [{ type: "text" as const, text: JSON.stringify({ error: `No historical data for "${params.coin}"` }) }], details: {} };
+          }
+          const result = runBacktest(candles, params.coin);
+          const { trades, ...summary } = result;
+          return { content: [{ type: "text" as const, text: JSON.stringify({ ...summary, recent_trades: trades.slice(-10) }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "nansen_smart_money",
+      label: "Nansen Smart Money",
+      description: "Get smart money wallet flow data for a token from Nansen. Shows net flow direction, inflow/outflow amounts, and number of smart money wallets buying vs selling.",
+      parameters: Type.Object({
+        token: Type.String({ description: "Token symbol or name (e.g. 'ethereum', 'bitcoin')" }),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        try {
+          const result = await nansen.getSmartMoneyFlow(params.token);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "nansen_token_holders",
+      label: "Nansen Token Holders",
+      description: "Get token holder distribution data from Nansen. Shows total holders, whale concentration, 24h holder change, and whale activity (accumulating/distributing/stable).",
+      parameters: Type.Object({
+        token: Type.String({ description: "Token symbol or name (e.g. 'ethereum', 'bitcoin')" }),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        try {
+          const result = await nansen.getTokenHolders(params.token);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "nansen_hot_contracts",
+      label: "Nansen Hot Contracts",
+      description: "Get trending smart contracts from Nansen. Shows contracts with highest smart money interaction counts, useful for identifying emerging DeFi activity.",
+      parameters: Type.Object({
+        chain: Type.Optional(Type.String({ description: "Blockchain to query (default: ethereum). Options: ethereum, base, solana", default: "ethereum" })),
+        limit: Type.Optional(Type.Number({ description: "Number of contracts to return (default: 10)", default: 10 })),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        try {
+          const result = await nansen.getHotContracts(params.chain || "ethereum", params.limit || 10);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "scout_theses",
+      label: "SCOUT Active Theses",
+      description: "Get all active CRYPTO SCOUT trading theses. Returns structured thesis data including vote counts, technical scores, entry/stop/target prices, and confidence levels.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const theses = await cryptoScout.getActiveTheses();
+          return { content: [{ type: "text" as const, text: JSON.stringify({ count: theses.length, theses }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "scout_watchlist",
+      label: "SCOUT Watchlist",
+      description: "Get the current SCOUT watchlist — the list of CoinGecko IDs that the micro-scan monitors every 30 minutes.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const watchlist = await cryptoScout.getWatchlist();
+          return { content: [{ type: "text" as const, text: JSON.stringify({ count: watchlist.length, assets: watchlist }) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
         }
@@ -3545,6 +3647,26 @@ async function fetchXIntelData(): Promise<Record<string, { visionaries: any[]; h
 
   return xIntelResult;
 }
+
+app.get("/api/wealth-engines/theses", async (_req: Request, res: Response) => {
+  try {
+    const theses = await cryptoScout.getActiveTheses();
+    res.json({ count: theses.length, theses });
+  } catch (err: any) {
+    console.error("[wealth-engines] theses error:", err);
+    res.status(500).json({ error: "Failed to fetch theses" });
+  }
+});
+
+app.get("/api/wealth-engines/watchlist", async (_req: Request, res: Response) => {
+  try {
+    const watchlist = await cryptoScout.getWatchlist();
+    res.json({ count: watchlist.length, assets: watchlist });
+  } catch (err: any) {
+    console.error("[wealth-engines] watchlist error:", err);
+    res.status(500).json({ error: "Failed to fetch watchlist" });
+  }
+});
 
 app.get("/api/x-intelligence/data", async (_req: Request, res: Response) => {
   try {

@@ -256,13 +256,28 @@ async function handleScoutCommand(): Promise<string> {
     const res = await pool.query(`SELECT value FROM app_config WHERE key = 'scout_active_theses'`);
     if (res.rows.length > 0 && Array.isArray(res.rows[0].value) && res.rows[0].value.length > 0) {
       const theses = res.rows[0].value;
-      const lines = [`${mode} *Active SCOUT Theses*`, ""];
-      for (const t of theses.slice(0, 10)) {
+      const now = Date.now();
+      const active = theses.filter((t: any) => !t.expires_at || t.expires_at > now);
+      if (active.length === 0) {
+        return `${mode} *Active SCOUT Theses*\n\nAll theses have expired. Waiting for next SCOUT cycle.`;
+      }
+      const lines = [`${mode} *Active SCOUT Theses* (${active.length})`, ""];
+      for (const t of active.slice(0, 10)) {
         const conf = t.confidence || "?";
         const dir = t.direction || "?";
-        const score = t.technical_score != null ? ` (${t.technical_score.toFixed(2)})` : "";
-        lines.push(`• *${t.asset}* — ${dir} ${conf}${score}`);
-        if (t.entry_price) lines.push(`  Entry: $${t.entry_price} | Stop: $${t.stop_price || "?"}`);
+        const vc = t.vote_count ?? t.votes;
+        const votes = vc != null ? `${vc}/6` : "?";
+        const score = t.technical_score != null ? t.technical_score.toFixed(2) : "?";
+        const regime = t.market_regime || t.regime || "?";
+        const nansenFlow = t.nansen_flow_direction || t.nansen_flow || "";
+        const target = t.exit_price || t.target_price || "?";
+        const age = t.created_at ? `${Math.floor((now - t.created_at) / 3600000)}h ago` : "";
+        lines.push(`• *${t.asset}* — ${dir} ${conf}`);
+        lines.push(`  Votes: ${votes} | Score: ${score} | ${regime}`);
+        if (t.entry_price) lines.push(`  Entry: $${t.entry_price} | Stop: $${t.stop_price || "?"} | Target: $${target}`);
+        if (nansenFlow) lines.push(`  Nansen: ${nansenFlow}`);
+        if (age) lines.push(`  _${age}_`);
+        lines.push("");
       }
       return lines.join("\n");
     }
@@ -557,12 +572,12 @@ async function checkDeadManSwitches(): Promise<void> {
       if (scoutRes.rows.length > 0) {
         const lastRun = new Date(scoutRes.rows[0].created_at).getTime();
         const hoursSince = (Date.now() - lastRun) / (3600 * 1000);
-        if (hoursSince > 36) {
+        if (hoursSince > 6) {
           const lastAlert = lastDeadManAlert["scout"] || 0;
-          if (Date.now() - lastAlert > 12 * 3600 * 1000) {
+          if (Date.now() - lastAlert > 4 * 3600 * 1000) {
             lastDeadManAlert["scout"] = Date.now();
             await sendMessage(
-              `${mode} ⚠️ *Dead Man's Switch: SCOUT*\n\nSCOUT has not run in ${Math.floor(hoursSince)}h (threshold: 36h).\nLast run: ${timeAgo(lastRun)}\n\nCheck scheduled jobs or run manually.`
+              `${mode} ⚠️ *Dead Man's Switch: SCOUT*\n\nSCOUT has not run in ${Math.floor(hoursSince)}h (threshold: 6h).\nLast run: ${timeAgo(lastRun)}\n\nCheck scheduled jobs or run manually.`
             );
           }
         } else {

@@ -10,8 +10,8 @@ import express from "express";
 import cors from "cors";
 import { createServer } from "http";
 import { fileURLToPath } from "url";
-import path6 from "path";
-import fs5 from "fs";
+import path7 from "path";
+import fs6 from "fs";
 import { execSync, spawn } from "child_process";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
@@ -891,11 +891,11 @@ async function init4() {
   const existing = await getPool().query(`SELECT tokens FROM oauth_tokens WHERE service = 'google'`);
   if (existing.rows.length === 0) {
     try {
-      const fs6 = await import("fs");
-      const path7 = await import("path");
-      const legacyPath = path7.default.join(process.cwd(), "data", "gmail-tokens.json");
-      if (fs6.default.existsSync(legacyPath)) {
-        const tokens = JSON.parse(fs6.default.readFileSync(legacyPath, "utf-8"));
+      const fs7 = await import("fs");
+      const path8 = await import("path");
+      const legacyPath = path8.default.join(process.cwd(), "data", "gmail-tokens.json");
+      if (fs7.default.existsSync(legacyPath)) {
+        const tokens = JSON.parse(fs7.default.readFileSync(legacyPath, "utf-8"));
         await getPool().query(
           `INSERT INTO oauth_tokens (service, tokens, updated_at) VALUES ('google', $1, $2)`,
           [JSON.stringify(tokens), Date.now()]
@@ -2438,11 +2438,11 @@ async function init5() {
   const existing = await getPool().query(`SELECT count(*) FROM tasks`);
   if (parseInt(existing.rows[0].count) === 0) {
     try {
-      const fs6 = await import("fs");
+      const fs7 = await import("fs");
       const pathMod = await import("path");
       const legacyPath = pathMod.default.join(process.cwd(), "data", "tasks.json");
-      if (fs6.default.existsSync(legacyPath)) {
-        const legacyTasks = JSON.parse(fs6.default.readFileSync(legacyPath, "utf-8"));
+      if (fs7.default.existsSync(legacyPath)) {
+        const legacyTasks = JSON.parse(fs7.default.readFileSync(legacyPath, "utf-8"));
         for (const t of legacyTasks) {
           await getPool().query(
             `INSERT INTO tasks (id, title, description, due_date, priority, completed, created_at, completed_at, tags)
@@ -3565,8 +3565,8 @@ var DEFAULT_CONFIG = {
   rsi_period: 8,
   rsi_overbought: 69,
   rsi_oversold: 31,
-  momentum_short_hours: 12,
-  momentum_long_hours: 24,
+  momentum_lookback: 12,
+  very_short_momentum_lookback: 6,
   macd_fast: 14,
   macd_slow: 23,
   macd_signal: 9,
@@ -3575,9 +3575,15 @@ var DEFAULT_CONFIG = {
   vol_lookback_bars: 24,
   atr_period: 14,
   atr_stop_multiplier: 5.5,
-  enable_macd: false,
-  enable_bb: false,
-  enable_volatility_regime: false
+  vote_threshold: 4,
+  cooldown_bars: 2,
+  enable_ema: true,
+  enable_rsi: true,
+  enable_momentum: true,
+  enable_very_short_momentum: true,
+  enable_macd: true,
+  enable_bb: true,
+  enable_volatility_regime: true
 };
 function ema(data, period) {
   if (data.length === 0) return [];
@@ -3593,8 +3599,11 @@ function clamp(v, min = 0, max = 1) {
 }
 function computeEMACrossover(closes, cfg) {
   const name = "ema_crossover";
+  if (!cfg.enable_ema) {
+    return { name, score: 0, enabled: false, detail: "DISABLED", bull_vote: false, bear_vote: false };
+  }
   if (closes.length < cfg.ema_slow + 5) {
-    return { name, score: 0, enabled: false, detail: "Insufficient data for EMA" };
+    return { name, score: 0, enabled: false, detail: "Insufficient data for EMA", bull_vote: false, bear_vote: false };
   }
   const fast = ema(closes, cfg.ema_fast);
   const slow = ema(closes, cfg.ema_slow);
@@ -3616,14 +3625,19 @@ function computeEMACrossover(closes, cfg) {
   } else {
     score = clamp(0.1 + (diff + 0.1) * 5, 0, 0.2);
   }
+  const bull_vote = fastVal > slowVal;
+  const bear_vote = fastVal < slowVal;
   const detail = `EMA${cfg.ema_fast}=${fastVal.toFixed(4)} vs EMA${cfg.ema_slow}=${slowVal.toFixed(4)}, diff=${(diff * 100).toFixed(2)}%${crossingUp ? " [CROSS UP]" : ""}`;
-  return { name, score: clamp(score), enabled: true, detail };
+  return { name, score: clamp(score), enabled: true, detail, bull_vote, bear_vote };
 }
 function computeRSI(closes, cfg) {
   const name = "rsi";
+  if (!cfg.enable_rsi) {
+    return { name, score: 0, enabled: false, detail: "DISABLED", bull_vote: false, bear_vote: false, rsi_value: 50 };
+  }
   const period = cfg.rsi_period;
   if (closes.length < period + 2) {
-    return { name, score: 0, enabled: false, detail: "Insufficient data for RSI" };
+    return { name, score: 0, enabled: false, detail: "Insufficient data for RSI", bull_vote: false, bear_vote: false, rsi_value: 50 };
   }
   const changes = [];
   for (let i = 1; i < closes.length; i++) {
@@ -3665,45 +3679,79 @@ function computeRSI(closes, cfg) {
       score = clamp(0.5 - (rsi - mid) / (cfg.rsi_overbought - mid) * 0.2, 0.3, 0.5);
     }
   }
+  const bull_vote = rsi < 45;
+  const bear_vote = rsi > 55;
   const detail = `RSI(${period})=${rsi.toFixed(1)} [oversold<${cfg.rsi_oversold}, overbought>${cfg.rsi_overbought}]`;
-  return { name, score: clamp(score), enabled: true, detail };
+  return { name, score: clamp(score), enabled: true, detail, bull_vote, bear_vote, rsi_value: rsi };
 }
 function computeMomentum(closes, cfg) {
   const name = "momentum";
-  const longH = cfg.momentum_long_hours;
-  if (closes.length < longH + 1) {
-    return { name, score: 0, enabled: false, detail: "Insufficient data for momentum" };
+  if (!cfg.enable_momentum) {
+    return { name, score: 0, enabled: false, detail: "DISABLED", bull_vote: false, bear_vote: false };
+  }
+  const lookback = cfg.momentum_lookback;
+  if (closes.length < lookback + 1) {
+    return { name, score: 0, enabled: false, detail: "Insufficient data for momentum", bull_vote: false, bear_vote: false };
   }
   const current = closes[closes.length - 1];
-  const shortIdx = closes.length - 1 - cfg.momentum_short_hours;
-  const longIdx = closes.length - 1 - longH;
-  const shortReturn = shortIdx >= 0 ? (current - closes[shortIdx]) / closes[shortIdx] : 0;
-  const longReturn = longIdx >= 0 ? (current - closes[longIdx]) / closes[longIdx] : 0;
-  const avgReturn = (shortReturn + longReturn) / 2;
+  const pastIdx = closes.length - 1 - lookback;
+  const ret = pastIdx >= 0 ? (current - closes[pastIdx]) / closes[pastIdx] : 0;
   let score;
-  if (avgReturn > 0.05) {
-    score = clamp(0.7 + avgReturn * 3, 0.7, 0.95);
-  } else if (avgReturn > 0.01) {
-    score = clamp(0.5 + avgReturn * 5, 0.5, 0.7);
-  } else if (avgReturn > -0.01) {
+  if (ret > 0.05) {
+    score = clamp(0.7 + ret * 3, 0.7, 0.95);
+  } else if (ret > 0.01) {
+    score = clamp(0.5 + ret * 5, 0.5, 0.7);
+  } else if (ret > -0.01) {
     score = 0.45;
-  } else if (avgReturn > -0.05) {
-    score = clamp(0.3 + (avgReturn + 0.05) * 5, 0.2, 0.4);
+  } else if (ret > -0.05) {
+    score = clamp(0.3 + (ret + 0.05) * 5, 0.2, 0.4);
   } else {
-    score = clamp(0.1 + (avgReturn + 0.1) * 2, 0, 0.2);
+    score = clamp(0.1 + (ret + 0.1) * 2, 0, 0.2);
   }
-  const shortPct = (shortReturn * 100).toFixed(2);
-  const longPct = (longReturn * 100).toFixed(2);
-  const detail = `Momentum: ${cfg.momentum_short_hours}h=${shortPct}%, ${longH}h=${longPct}%, avg=${(avgReturn * 100).toFixed(2)}%`;
-  return { name, score: clamp(score), enabled: true, detail };
+  const threshold = 5e-3;
+  const bull_vote = ret > threshold;
+  const bear_vote = ret < -threshold;
+  const retPct = (ret * 100).toFixed(2);
+  const detail = `Momentum(${lookback}-bar): ${retPct}%`;
+  return { name, score: clamp(score), enabled: true, detail, bull_vote, bear_vote };
+}
+function computeVeryShortMomentum(closes, cfg) {
+  const name = "very_short_momentum";
+  if (!cfg.enable_very_short_momentum) {
+    return { name, score: 0, enabled: false, detail: "DISABLED", bull_vote: false, bear_vote: false };
+  }
+  const lookback = cfg.very_short_momentum_lookback;
+  if (closes.length < lookback + 1) {
+    return { name, score: 0, enabled: false, detail: "Insufficient data for very-short momentum", bull_vote: false, bear_vote: false };
+  }
+  const current = closes[closes.length - 1];
+  const pastIdx = closes.length - 1 - lookback;
+  const ret = pastIdx >= 0 ? (current - closes[pastIdx]) / closes[pastIdx] : 0;
+  let score;
+  if (ret > 0.03) {
+    score = clamp(0.7 + ret * 5, 0.7, 0.95);
+  } else if (ret > 5e-3) {
+    score = clamp(0.5 + ret * 8, 0.5, 0.7);
+  } else if (ret > -5e-3) {
+    score = 0.45;
+  } else if (ret > -0.03) {
+    score = clamp(0.3 + (ret + 0.03) * 8, 0.2, 0.4);
+  } else {
+    score = clamp(0.1 + (ret + 0.06) * 3, 0, 0.2);
+  }
+  const bull_vote = ret > 0;
+  const bear_vote = ret < 0;
+  const retPct = (ret * 100).toFixed(2);
+  const detail = `VeryShort Momentum(${lookback}-bar): ${retPct}%`;
+  return { name, score: clamp(score), enabled: true, detail, bull_vote, bear_vote };
 }
 function computeMACD(closes, cfg) {
   const name = "macd";
   if (!cfg.enable_macd) {
-    return { name, score: 0, enabled: false, detail: "DISABLED \u2014 enable post-beta after validation" };
+    return { name, score: 0, enabled: false, detail: "DISABLED", bull_vote: false, bear_vote: false };
   }
   if (closes.length < cfg.macd_slow + cfg.macd_signal + 5) {
-    return { name, score: 0, enabled: false, detail: "Insufficient data for MACD" };
+    return { name, score: 0, enabled: false, detail: "Insufficient data for MACD", bull_vote: false, bear_vote: false };
   }
   const fastEMA = ema(closes, cfg.macd_fast);
   const slowEMA = ema(closes, cfg.macd_slow);
@@ -3727,16 +3775,18 @@ function computeMACD(closes, cfg) {
   } else {
     score = clamp(0.3 + normHist * 200, 0.05, 0.35);
   }
+  const bull_vote = histogram > 0 || crossingUp;
+  const bear_vote = histogram < 0 && !crossingUp;
   const detail = `MACD(${cfg.macd_fast},${cfg.macd_slow},${cfg.macd_signal}): line=${macdLine[idx].toFixed(4)}, signal=${signalLine[idx].toFixed(4)}, hist=${histogram.toFixed(4)}${crossingUp ? " [CROSS UP]" : ""}`;
-  return { name, score: clamp(score), enabled: true, detail };
+  return { name, score: clamp(score), enabled: true, detail, bull_vote, bear_vote };
 }
 function computeBBWidth(closes, cfg) {
   const name = "bb_width";
   if (!cfg.enable_bb) {
-    return { name, score: 0, enabled: false, detail: "DISABLED \u2014 enable post-beta after validation" };
+    return { name, score: 0, enabled: false, detail: "DISABLED", bull_vote: false, bear_vote: false };
   }
   if (closes.length < cfg.bb_period + 50) {
-    return { name, score: 0, enabled: false, detail: "Insufficient data for BB width" };
+    return { name, score: 0, enabled: false, detail: "Insufficient data for BB width", bull_vote: false, bear_vote: false };
   }
   const period = cfg.bb_period;
   const widths = [];
@@ -3761,39 +3811,11 @@ function computeBBWidth(closes, cfg) {
   } else {
     score = clamp(0.3 + (1 - currentWidth / sortedWidths[sortedWidths.length - 1]) * 0.2, 0.2, 0.45);
   }
+  const bull_vote = isCompressed;
+  const bear_vote = !isCompressed;
   const pctile = (widths.filter((w) => w <= currentWidth).length / widths.length * 100).toFixed(0);
   const detail = `BB Width(${period}): ${(currentWidth * 100).toFixed(2)}%, percentile=${pctile}%${isCompressed ? " [COMPRESSED]" : ""}`;
-  return { name, score: clamp(score), enabled: true, detail };
-}
-function computeVolatilityRegime(closes, cfg) {
-  const name = "volatility_regime";
-  if (!cfg.enable_volatility_regime) {
-    return { name, score: 0, enabled: false, detail: "DISABLED \u2014 enable post-beta after validation" };
-  }
-  const lookback = cfg.vol_lookback_bars;
-  if (closes.length < lookback + 10) {
-    return { name, score: 0, enabled: false, detail: "Insufficient data for volatility regime" };
-  }
-  const returns = [];
-  for (let i = closes.length - lookback; i < closes.length; i++) {
-    returns.push(Math.log(closes[i] / closes[i - 1]));
-  }
-  const mean = returns.reduce((s, r) => s + r, 0) / returns.length;
-  const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / returns.length;
-  const vol = Math.sqrt(variance);
-  const annualizedVol = vol * Math.sqrt(24 * 365);
-  let score;
-  if (annualizedVol < 0.5) {
-    score = 0.6;
-  } else if (annualizedVol < 1) {
-    score = 0.5;
-  } else if (annualizedVol < 2) {
-    score = 0.4;
-  } else {
-    score = clamp(0.3 - (annualizedVol - 2) * 0.1, 0.05, 0.3);
-  }
-  const detail = `Realized Vol (${lookback}h): ${(vol * 100).toFixed(3)}% hourly, ${(annualizedVol * 100).toFixed(1)}% annualized`;
-  return { name, score: clamp(score), enabled: true, detail };
+  return { name, score: clamp(score), enabled: true, detail, bull_vote, bear_vote };
 }
 function computeATR(candles, period = 14) {
   if (candles.length < period + 1) return 0;
@@ -3833,7 +3855,21 @@ function classifyRegime(closes, cfg) {
   if (Math.abs(slope) > 0.01) return "TRENDING";
   return "RANGING";
 }
-function analyzeAsset(candles, config3) {
+function computeVolAdjustedThreshold(closes, cfg) {
+  const lookback = Math.min(cfg.vol_lookback_bars, closes.length - 1);
+  if (lookback < 5) return cfg.vote_threshold;
+  const returns = [];
+  for (let i = closes.length - lookback; i < closes.length; i++) {
+    if (i > 0) returns.push(Math.abs((closes[i] - closes[i - 1]) / closes[i - 1]));
+  }
+  if (returns.length === 0) return cfg.vote_threshold;
+  const avgAbsReturn = returns.reduce((s, r) => s + r, 0) / returns.length;
+  const annualizedVol = avgAbsReturn * Math.sqrt(24 * 365);
+  if (annualizedVol > 2) return Math.min(cfg.vote_threshold + 1, 6);
+  if (annualizedVol < 0.5) return Math.max(cfg.vote_threshold - 1, 3);
+  return cfg.vote_threshold;
+}
+function analyzeAsset(candles, config3, btcCandles) {
   const cfg = { ...DEFAULT_CONFIG, ...config3 };
   const closes = candles.map((c) => c.close);
   const currentPrice = closes.length > 0 ? closes[closes.length - 1] : 0;
@@ -3846,24 +3882,29 @@ function analyzeAsset(candles, config3) {
       atr_stop_multiplier: cfg.atr_stop_multiplier,
       current_price: currentPrice,
       signals: [],
+      votes: { bull_votes: 0, bear_votes: 0, total_signals: 0, vote_summary: "0/0", entry_signal: false, exit_long_signal: false, exit_short_signal: false, rsi_overbought: false, rsi_oversold: false },
       active_signal_count: 0,
       data_quality: "insufficient",
       parameters_validated: false,
+      vol_adjusted_threshold: cfg.vote_threshold,
       reason: `Only ${closes.length} candles available, need at least 30`
     };
   }
+  const rsiResult = computeRSI(closes, cfg);
+  const rsiValue = rsiResult.rsi_value;
   const signals = [
     computeEMACrossover(closes, cfg),
-    computeRSI(closes, cfg),
+    rsiResult,
     computeMomentum(closes, cfg),
+    computeVeryShortMomentum(closes, cfg),
     computeMACD(closes, cfg),
-    computeBBWidth(closes, cfg),
-    computeVolatilityRegime(closes, cfg)
+    computeBBWidth(closes, cfg)
   ];
   const activeSignals = signals.filter((s) => s.enabled);
   const regime = classifyRegime(closes, cfg);
   const atrValue = computeATR(candles, cfg.atr_period);
   const atrStopPrice = currentPrice - atrValue * cfg.atr_stop_multiplier;
+  const volAdjustedThreshold = computeVolAdjustedThreshold(closes, cfg);
   if (activeSignals.length < 2) {
     return {
       technical_score: 0,
@@ -3873,16 +3914,42 @@ function analyzeAsset(candles, config3) {
       atr_stop_multiplier: cfg.atr_stop_multiplier,
       current_price: currentPrice,
       signals,
+      votes: { bull_votes: 0, bear_votes: 0, total_signals: 0, vote_summary: "0/0", entry_signal: false, exit_long_signal: false, exit_short_signal: false, rsi_overbought: false, rsi_oversold: false },
       active_signal_count: activeSignals.length,
       data_quality: "insufficient",
       parameters_validated: false,
+      vol_adjusted_threshold: volAdjustedThreshold,
       reason: "Fewer than 2 active signals with data"
     };
   }
+  let bull_votes = 0;
+  let bear_votes = 0;
+  for (const sig of activeSignals) {
+    if (sig.bull_vote) bull_votes++;
+    if (sig.bear_vote) bear_votes++;
+  }
+  const total_signals = activeSignals.length;
+  const rsi_overbought = rsiValue >= cfg.rsi_overbought;
+  const rsi_oversold = rsiValue <= cfg.rsi_oversold;
+  const entry_signal = bull_votes >= volAdjustedThreshold;
+  const exit_long_signal = rsi_overbought;
+  const exit_short_signal = rsi_oversold;
+  const votes = {
+    bull_votes,
+    bear_votes,
+    total_signals,
+    vote_summary: `${bull_votes}/${total_signals}`,
+    entry_signal,
+    exit_long_signal,
+    exit_short_signal,
+    rsi_overbought,
+    rsi_oversold
+  };
   const SIGNAL_WEIGHTS = {
     ema_crossover: 0.4,
     rsi: 0.25,
-    momentum: 0.2,
+    momentum: 0.15,
+    very_short_momentum: 0.05,
     macd: 0.1,
     bb_width: 0.03,
     volatility_regime: 0.02
@@ -3890,7 +3957,7 @@ function analyzeAsset(candles, config3) {
   let weightedSum = 0;
   let totalWeight = 0;
   for (const sig of activeSignals) {
-    const w = SIGNAL_WEIGHTS[sig.name] ?? 0.1;
+    const w = SIGNAL_WEIGHTS[sig.name] ?? 0.05;
     weightedSum += sig.score * w;
     totalWeight += w;
   }
@@ -3903,20 +3970,407 @@ function analyzeAsset(candles, config3) {
     atr_stop_multiplier: cfg.atr_stop_multiplier,
     current_price: currentPrice,
     signals,
+    votes,
     active_signal_count: activeSignals.length,
     data_quality: "sufficient",
-    parameters_validated: false
+    parameters_validated: false,
+    vol_adjusted_threshold: volAdjustedThreshold
   };
 }
 
+// src/nansen.ts
+import * as fs3 from "fs";
+import * as path3 from "path";
+var NANSEN_API_KEY = process.env.NANSEN_API_KEY || "";
+var BASE_URL2 = "https://api.nansen.ai/v1";
+var CACHE_DIR2 = path3.join(process.env.HOME || "/tmp", ".cache", "nansen");
+var TIMEOUT_MS4 = 15e3;
+var CACHE_TTL = {
+  smart_money: 30 * 60 * 1e3,
+  token_holders: 60 * 60 * 1e3,
+  hot_contracts: 15 * 60 * 1e3
+};
+function ensureCacheDir2() {
+  if (!fs3.existsSync(CACHE_DIR2)) {
+    fs3.mkdirSync(CACHE_DIR2, { recursive: true });
+  }
+}
+function getCached(key, ttlMs) {
+  ensureCacheDir2();
+  const cacheFile = path3.join(CACHE_DIR2, `${key}.json`);
+  if (!fs3.existsSync(cacheFile)) return null;
+  try {
+    const raw = fs3.readFileSync(cacheFile, "utf-8");
+    const entry = JSON.parse(raw);
+    if (Date.now() - entry.fetchedAt < ttlMs) return entry.data;
+  } catch {
+  }
+  return null;
+}
+function setCache(key, data) {
+  ensureCacheDir2();
+  const cacheFile = path3.join(CACHE_DIR2, `${key}.json`);
+  try {
+    fs3.writeFileSync(cacheFile, JSON.stringify({ fetchedAt: Date.now(), data }));
+  } catch (err) {
+    console.warn("[nansen] cache write error:", err);
+  }
+}
+function isConfigured5() {
+  return NANSEN_API_KEY.length > 0;
+}
+async function nansenFetch(endpoint) {
+  if (!isConfigured5()) {
+    throw new Error("Nansen API key not configured. Set NANSEN_API_KEY environment variable.");
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS4);
+  try {
+    const url = `${BASE_URL2}${endpoint}`;
+    const res = await fetch(url, {
+      headers: {
+        "Authorization": `Bearer ${NANSEN_API_KEY}`,
+        "Content-Type": "application/json",
+        "User-Agent": "darknode/1.0"
+      },
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Nansen API error ${res.status}: ${text}`);
+    }
+    return await res.json();
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err.name === "AbortError") throw new Error("Nansen request timed out");
+    throw err;
+  }
+}
+async function getSmartMoneyFlow(token) {
+  const cacheKey = `smart_money_${token.toLowerCase()}`;
+  const cached = getCached(cacheKey, CACHE_TTL.smart_money);
+  if (cached) return cached;
+  if (!isConfigured5()) {
+    return {
+      token,
+      net_flow_usd: 0,
+      inflow_usd: 0,
+      outflow_usd: 0,
+      smart_money_wallets_buying: 0,
+      smart_money_wallets_selling: 0,
+      direction: "neutral",
+      confidence: "low"
+    };
+  }
+  try {
+    const data = await nansenFetch(`/smart-money/token/${encodeURIComponent(token)}`);
+    const result = {
+      token,
+      net_flow_usd: data.net_flow_usd || 0,
+      inflow_usd: data.inflow_usd || 0,
+      outflow_usd: data.outflow_usd || 0,
+      smart_money_wallets_buying: data.wallets_buying || 0,
+      smart_money_wallets_selling: data.wallets_selling || 0,
+      direction: (data.net_flow_usd || 0) > 0 ? "inflow" : (data.net_flow_usd || 0) < 0 ? "outflow" : "neutral",
+      confidence: Math.abs(data.net_flow_usd || 0) > 1e6 ? "high" : Math.abs(data.net_flow_usd || 0) > 1e5 ? "medium" : "low"
+    };
+    setCache(cacheKey, result);
+    return result;
+  } catch (err) {
+    console.error(`[nansen] smart money flow failed for ${token}:`, err instanceof Error ? err.message : err);
+    return {
+      token,
+      net_flow_usd: 0,
+      inflow_usd: 0,
+      outflow_usd: 0,
+      smart_money_wallets_buying: 0,
+      smart_money_wallets_selling: 0,
+      direction: "neutral",
+      confidence: "low"
+    };
+  }
+}
+async function getTokenHolders(token) {
+  const cacheKey = `token_holders_${token.toLowerCase()}`;
+  const cached = getCached(cacheKey, CACHE_TTL.token_holders);
+  if (cached) return cached;
+  if (!isConfigured5()) {
+    return {
+      token,
+      total_holders: 0,
+      whale_holders: 0,
+      whale_concentration_pct: 0,
+      holder_change_24h: 0,
+      whale_activity: "stable"
+    };
+  }
+  try {
+    const data = await nansenFetch(`/token/${encodeURIComponent(token)}/holders`);
+    const result = {
+      token,
+      total_holders: data.total_holders || 0,
+      whale_holders: data.whale_holders || 0,
+      whale_concentration_pct: data.whale_concentration_pct || 0,
+      holder_change_24h: data.holder_change_24h || 0,
+      whale_activity: (data.holder_change_24h || 0) > 5 ? "accumulating" : (data.holder_change_24h || 0) < -5 ? "distributing" : "stable"
+    };
+    setCache(cacheKey, result);
+    return result;
+  } catch (err) {
+    console.error(`[nansen] token holders failed for ${token}:`, err instanceof Error ? err.message : err);
+    return {
+      token,
+      total_holders: 0,
+      whale_holders: 0,
+      whale_concentration_pct: 0,
+      holder_change_24h: 0,
+      whale_activity: "stable"
+    };
+  }
+}
+async function getHotContracts(chain = "ethereum", limit = 10) {
+  const cacheKey = `hot_contracts_${chain.toLowerCase()}`;
+  const cached = getCached(cacheKey, CACHE_TTL.hot_contracts);
+  if (cached) return cached;
+  if (!isConfigured5()) {
+    return [];
+  }
+  try {
+    const data = await nansenFetch(`/hot-contracts?chain=${encodeURIComponent(chain)}&limit=${limit}`);
+    const contracts = (data.contracts || []).map((c) => ({
+      address: c.address || "",
+      name: c.name || "Unknown",
+      chain: c.chain || chain,
+      interaction_count_24h: c.interaction_count_24h || 0,
+      unique_wallets_24h: c.unique_wallets_24h || 0,
+      smart_money_interactions: c.smart_money_interactions || 0,
+      category: c.category || "unknown"
+    }));
+    setCache(cacheKey, contracts);
+    return contracts;
+  } catch (err) {
+    console.error(`[nansen] hot contracts failed for ${chain}:`, err instanceof Error ? err.message : err);
+    return [];
+  }
+}
+
+// src/backtest.ts
+var DEFAULT_BACKTEST_CONFIG = {
+  ema_fast: 7,
+  ema_slow: 26,
+  rsi_period: 8,
+  rsi_overbought: 69,
+  rsi_oversold: 31,
+  momentum_lookback: 12,
+  very_short_momentum_lookback: 6,
+  macd_fast: 14,
+  macd_slow: 23,
+  macd_signal: 9,
+  bb_period: 7,
+  bb_percentile_threshold: 90,
+  vol_lookback_bars: 24,
+  atr_period: 14,
+  atr_stop_multiplier: 5.5,
+  vote_threshold: 4,
+  cooldown_bars: 2,
+  enable_ema: true,
+  enable_rsi: true,
+  enable_momentum: true,
+  enable_very_short_momentum: true,
+  enable_macd: true,
+  enable_bb: true,
+  enable_volatility_regime: true
+};
+function getVotesAtBar(closes, barIdx, cfg) {
+  const slice = closes.slice(0, barIdx + 1);
+  if (slice.length < 30) return { bull: 0, bear: 0, rsiOB: false, rsiOS: false };
+  const signals = [
+    computeEMACrossover(slice, cfg),
+    computeRSI(slice, cfg),
+    computeMomentum(slice, cfg),
+    computeVeryShortMomentum(slice, cfg),
+    computeMACD(slice, cfg),
+    computeBBWidth(slice, cfg)
+  ];
+  let bull = 0, bear = 0;
+  let rsiOB = false, rsiOS = false;
+  for (const s of signals) {
+    if (!s.enabled) continue;
+    if (s.bull_vote) bull++;
+    if (s.bear_vote) bear++;
+  }
+  const rsiSig = signals.find((s) => s.name === "rsi" && s.enabled);
+  if (rsiSig) {
+    const rsiResult = computeRSI(slice, cfg);
+    rsiOB = rsiResult.rsi_value >= cfg.rsi_overbought;
+    rsiOS = rsiResult.rsi_value <= cfg.rsi_oversold;
+  }
+  return { bull, bear, rsiOB, rsiOS };
+}
+function runBacktest(candles, assetName, config3) {
+  const cfg = { ...DEFAULT_BACKTEST_CONFIG, ...config3 };
+  const closes = candles.map((c) => c.close);
+  const trades = [];
+  const minBars = Math.max(cfg.ema_slow + 10, cfg.bb_period + 50, cfg.macd_slow + cfg.macd_signal + 5);
+  if (closes.length < minBars) {
+    return {
+      asset: assetName,
+      period_days: Math.round(closes.length / 24),
+      total_bars: closes.length,
+      total_trades: 0,
+      winning_trades: 0,
+      losing_trades: 0,
+      win_rate: 0,
+      total_return_pct: 0,
+      max_drawdown_pct: 0,
+      sharpe_ratio: 0,
+      avg_bars_held: 0,
+      nunchi_score: 0,
+      trades: [],
+      parameters_used: config3 || {}
+    };
+  }
+  let inPosition = false;
+  let entryBar = 0;
+  let entryPrice = 0;
+  let peakPrice = 0;
+  let lastExitBar = -cfg.cooldown_bars - 1;
+  for (let i = minBars; i < closes.length; i++) {
+    const price = closes[i];
+    if (inPosition) {
+      if (price > peakPrice) peakPrice = price;
+      const atr = computeATR(candles.slice(0, i + 1), cfg.atr_period);
+      const stopPrice = peakPrice - atr * cfg.atr_stop_multiplier;
+      const { rsiOB } = getVotesAtBar(closes, i, cfg);
+      let exitReason = null;
+      if (price <= stopPrice) exitReason = "stop_loss";
+      else if (rsiOB) exitReason = "rsi_exit";
+      if (exitReason) {
+        const pnl_pct = (price - entryPrice) / entryPrice * 100;
+        trades.push({
+          entry_bar: entryBar,
+          exit_bar: i,
+          entry_price: entryPrice,
+          exit_price: price,
+          direction: "LONG",
+          pnl_pct,
+          exit_reason: exitReason,
+          bars_held: i - entryBar
+        });
+        inPosition = false;
+        lastExitBar = i;
+      }
+    } else {
+      if (i - lastExitBar < cfg.cooldown_bars) continue;
+      const { bull } = getVotesAtBar(closes, i, cfg);
+      if (bull >= cfg.vote_threshold) {
+        inPosition = true;
+        entryBar = i;
+        entryPrice = price;
+        peakPrice = price;
+      }
+    }
+  }
+  if (inPosition) {
+    const lastPrice = closes[closes.length - 1];
+    const pnl_pct = (lastPrice - entryPrice) / entryPrice * 100;
+    trades.push({
+      entry_bar: entryBar,
+      exit_bar: closes.length - 1,
+      entry_price: entryPrice,
+      exit_price: lastPrice,
+      direction: "LONG",
+      pnl_pct,
+      exit_reason: "end_of_data",
+      bars_held: closes.length - 1 - entryBar
+    });
+  }
+  const winningTrades = trades.filter((t) => t.pnl_pct > 0);
+  const losingTrades = trades.filter((t) => t.pnl_pct <= 0);
+  const winRate = trades.length > 0 ? winningTrades.length / trades.length : 0;
+  const totalReturnPct = trades.reduce((sum, t) => sum + t.pnl_pct, 0);
+  const returns = trades.map((t) => t.pnl_pct / 100);
+  let maxDD = 0;
+  let peak = 1;
+  let equity = 1;
+  for (const r of returns) {
+    equity *= 1 + r;
+    if (equity > peak) peak = equity;
+    const dd = (peak - equity) / peak;
+    if (dd > maxDD) maxDD = dd;
+  }
+  const maxDrawdownPct = maxDD * 100;
+  let sharpe = 0;
+  if (returns.length > 1) {
+    const meanReturn = returns.reduce((s, r) => s + r, 0) / returns.length;
+    const variance = returns.reduce((s, r) => s + (r - meanReturn) ** 2, 0) / (returns.length - 1);
+    const stdDev = Math.sqrt(variance);
+    if (stdDev > 0) {
+      sharpe = meanReturn / stdDev * Math.sqrt(252);
+    }
+  }
+  const avgBarsHeld = trades.length > 0 ? trades.reduce((s, t) => s + t.bars_held, 0) / trades.length : 0;
+  const tradeCountFactor = Math.min(trades.length / 10, 1);
+  const drawdownPenalty = maxDrawdownPct > 20 ? (maxDrawdownPct - 20) * 0.1 : 0;
+  const turnoverPenalty = trades.length > 50 ? (trades.length - 50) * 0.01 : 0;
+  const nunchiScore = sharpe * Math.sqrt(tradeCountFactor) - drawdownPenalty - turnoverPenalty;
+  return {
+    asset: assetName,
+    period_days: Math.round(closes.length / 24),
+    total_bars: closes.length,
+    total_trades: trades.length,
+    winning_trades: winningTrades.length,
+    losing_trades: losingTrades.length,
+    win_rate: parseFloat(winRate.toFixed(3)),
+    total_return_pct: parseFloat(totalReturnPct.toFixed(2)),
+    max_drawdown_pct: parseFloat(maxDrawdownPct.toFixed(2)),
+    sharpe_ratio: parseFloat(sharpe.toFixed(3)),
+    avg_bars_held: parseFloat(avgBarsHeld.toFixed(1)),
+    nunchi_score: parseFloat(nunchiScore.toFixed(3)),
+    trades,
+    parameters_used: config3 || {}
+  };
+}
+
+// src/crypto-scout.ts
+var THESIS_EXPIRY_MS = 72 * 60 * 60 * 1e3;
+async function getActiveTheses() {
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scout_active_theses'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+      const now = Date.now();
+      return res.rows[0].value.filter((t) => t.status === "active" && t.expires_at > now);
+    }
+  } catch (err) {
+    console.error("[crypto-scout] getActiveTheses failed:", err);
+  }
+  return [];
+}
+async function getWatchlist() {
+  const pool2 = getPool();
+  const defaults = ["bitcoin", "ethereum", "solana", "bankr"];
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scout_watchlist'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+      const wl = res.rows[0].value;
+      const merged = /* @__PURE__ */ new Set([...defaults, ...wl]);
+      return Array.from(merged);
+    }
+  } catch {
+  }
+  return defaults;
+}
+
 // src/maps.ts
-var TIMEOUT_MS4 = 1e4;
+var TIMEOUT_MS5 = 1e4;
 var NOMINATIM_BASE = "https://nominatim.openstreetmap.org";
 var OSRM_BASE = "https://router.project-osrm.org";
 var UA = "pi-assistant/1.0 (personal-project)";
 async function fetchWithTimeout2(url) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS4);
+  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS5);
   try {
     const res = await fetch(url, {
       headers: { "User-Agent": UA, Accept: "application/json" },
@@ -4043,9 +4497,9 @@ ${lines.join("\n\n")}`;
 
 // src/gws.ts
 import { execFile } from "child_process";
-import path3 from "path";
-var GWS_BIN = path3.join(process.cwd(), "bin", "gws");
-var TIMEOUT_MS5 = 15e3;
+import path4 from "path";
+var GWS_BIN = path4.join(process.cwd(), "bin", "gws");
+var TIMEOUT_MS6 = 15e3;
 function parseHexColor(hex) {
   return {
     red: parseInt(hex.slice(1, 3), 16) / 255,
@@ -4060,7 +4514,7 @@ async function runGws(args) {
   }
   return new Promise((resolve) => {
     const env = { ...process.env, GOOGLE_WORKSPACE_CLI_TOKEN: token };
-    execFile(GWS_BIN, args, { env, timeout: TIMEOUT_MS5, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(GWS_BIN, args, { env, timeout: TIMEOUT_MS6, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
         const errMsg = [stderr, stdout, err.message].filter(Boolean).join("\n").trim() || "Unknown error";
         console.error(`[gws] Error running: gws ${args.join(" ")}`, errMsg);
@@ -4739,20 +5193,20 @@ async function slidesBatchUpdate(presentationId, requests) {
 }
 
 // src/youtube.ts
-var BASE_URL2 = "https://www.googleapis.com/youtube/v3";
-var TIMEOUT_MS6 = 15e3;
+var BASE_URL3 = "https://www.googleapis.com/youtube/v3";
+var TIMEOUT_MS7 = 15e3;
 async function ytFetch(endpoint, params) {
   const token = await getAccessToken();
   if (!token) {
     return { ok: false, data: null, raw: "Google not connected \u2014 visit /api/gmail/auth to connect" };
   }
-  const url = new URL(`${BASE_URL2}/${endpoint}`);
+  const url = new URL(`${BASE_URL3}/${endpoint}`);
   for (const [k, v] of Object.entries(params)) {
     url.searchParams.set(k, v);
   }
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS6);
+    const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS7);
     const res = await fetch(url.toString(), {
       headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal
@@ -4955,11 +5409,11 @@ async function init6() {
   const existing = await getPool().query(`SELECT value FROM app_config WHERE key = 'alerts'`);
   if (existing.rows.length === 0) {
     try {
-      const fs6 = await import("fs");
-      const path7 = await import("path");
-      const legacyPath = path7.default.join(process.cwd(), "data", "alerts-config.json");
-      if (fs6.default.existsSync(legacyPath)) {
-        const raw = JSON.parse(fs6.default.readFileSync(legacyPath, "utf-8"));
+      const fs7 = await import("fs");
+      const path8 = await import("path");
+      const legacyPath = path8.default.join(process.cwd(), "data", "alerts-config.json");
+      if (fs7.default.existsSync(legacyPath)) {
+        const raw = JSON.parse(fs7.default.readFileSync(legacyPath, "utf-8"));
         const migrated = { ...DEFAULT_CONFIG2, ...raw, briefs: { ...DEFAULT_CONFIG2.briefs, ...raw.briefs }, alerts: { ...DEFAULT_CONFIG2.alerts, ...raw.alerts } };
         await getPool().query(
           `INSERT INTO app_config (key, value, updated_at) VALUES ('alerts', $1, $2)`,
@@ -5461,7 +5915,7 @@ async function getMode() {
   }
   return "[BETA]";
 }
-function isConfigured5() {
+function isConfigured6() {
   return BOT_TOKEN.length > 0 && CHAT_ID.length > 0;
 }
 async function tgFetch(method, body) {
@@ -5479,7 +5933,7 @@ async function tgFetch(method, body) {
   return resp.json();
 }
 async function sendMessage(text, parseMode = "Markdown") {
-  if (!isConfigured5()) return null;
+  if (!isConfigured6()) return null;
   try {
     const result = await tgFetch("sendMessage", {
       chat_id: CHAT_ID,
@@ -5653,13 +6107,30 @@ async function handleScoutCommand() {
     const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scout_active_theses'`);
     if (res.rows.length > 0 && Array.isArray(res.rows[0].value) && res.rows[0].value.length > 0) {
       const theses = res.rows[0].value;
-      const lines = [`${mode} *Active SCOUT Theses*`, ""];
-      for (const t of theses.slice(0, 10)) {
+      const now = Date.now();
+      const active = theses.filter((t) => !t.expires_at || t.expires_at > now);
+      if (active.length === 0) {
+        return `${mode} *Active SCOUT Theses*
+
+All theses have expired. Waiting for next SCOUT cycle.`;
+      }
+      const lines = [`${mode} *Active SCOUT Theses* (${active.length})`, ""];
+      for (const t of active.slice(0, 10)) {
         const conf = t.confidence || "?";
         const dir = t.direction || "?";
-        const score = t.technical_score != null ? ` (${t.technical_score.toFixed(2)})` : "";
-        lines.push(`\u2022 *${t.asset}* \u2014 ${dir} ${conf}${score}`);
-        if (t.entry_price) lines.push(`  Entry: $${t.entry_price} | Stop: $${t.stop_price || "?"}`);
+        const vc = t.vote_count ?? t.votes;
+        const votes = vc != null ? `${vc}/6` : "?";
+        const score = t.technical_score != null ? t.technical_score.toFixed(2) : "?";
+        const regime = t.market_regime || t.regime || "?";
+        const nansenFlow = t.nansen_flow_direction || t.nansen_flow || "";
+        const target = t.exit_price || t.target_price || "?";
+        const age = t.created_at ? `${Math.floor((now - t.created_at) / 36e5)}h ago` : "";
+        lines.push(`\u2022 *${t.asset}* \u2014 ${dir} ${conf}`);
+        lines.push(`  Votes: ${votes} | Score: ${score} | ${regime}`);
+        if (t.entry_price) lines.push(`  Entry: $${t.entry_price} | Stop: $${t.stop_price || "?"} | Target: $${target}`);
+        if (nansenFlow) lines.push(`  Nansen: ${nansenFlow}`);
+        if (age) lines.push(`  _${age}_`);
+        lines.push("");
       }
       return lines.join("\n");
     }
@@ -5789,7 +6260,7 @@ _Decision recorded at ${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { t
   console.log(`[telegram] Trade ${decision}: ${pending.asset} ${pending.direction} (thesis: ${pending.thesisId})`);
 }
 async function pollUpdates() {
-  if (!pollingActive || !isConfigured5()) return;
+  if (!pollingActive || !isConfigured6()) return;
   try {
     const result = await tgFetch("getUpdates", {
       offset: lastUpdateId + 1,
@@ -5856,7 +6327,7 @@ async function isJobEnabled(pool2, agentId) {
   return false;
 }
 async function checkDeadManSwitches() {
-  if (!isConfigured5()) return;
+  if (!isConfigured6()) return;
   const pool2 = getPool();
   const mode = await getMode();
   let paused = false;
@@ -5875,14 +6346,14 @@ async function checkDeadManSwitches() {
       if (scoutRes.rows.length > 0) {
         const lastRun = new Date(scoutRes.rows[0].created_at).getTime();
         const hoursSince = (Date.now() - lastRun) / (3600 * 1e3);
-        if (hoursSince > 36) {
+        if (hoursSince > 6) {
           const lastAlert = lastDeadManAlert["scout"] || 0;
-          if (Date.now() - lastAlert > 12 * 3600 * 1e3) {
+          if (Date.now() - lastAlert > 4 * 3600 * 1e3) {
             lastDeadManAlert["scout"] = Date.now();
             await sendMessage(
               `${mode} \u26A0\uFE0F *Dead Man's Switch: SCOUT*
 
-SCOUT has not run in ${Math.floor(hoursSince)}h (threshold: 36h).
+SCOUT has not run in ${Math.floor(hoursSince)}h (threshold: 6h).
 Last run: ${timeAgo(lastRun)}
 
 Check scheduled jobs or run manually.`
@@ -5966,7 +6437,7 @@ function getWebhookSecret() {
   return WEBHOOK_SECRET;
 }
 async function handleWebhookUpdate(update) {
-  if (!isConfigured5()) return;
+  if (!isConfigured6()) return;
   if (update.callback_query) {
     const cbq = update.callback_query;
     if (String(cbq.message?.chat?.id) === CHAT_ID) {
@@ -6044,7 +6515,7 @@ function stop() {
   console.log("[telegram] stopped");
 }
 async function forwardAlertToTelegram(event) {
-  if (!isConfigured5()) return;
+  if (!isConfigured6()) return;
   const mode = await getMode();
   if (event.type === "brief") {
     const briefLabel = event.briefType ? event.briefType.charAt(0).toUpperCase() + event.briefType.slice(1) : "Daily";
@@ -6081,6 +6552,8 @@ function getJobSavePath(jobId, dateStr, safeName) {
   if (jobId === "weekly-inbox-deep-clean") return `Scheduled Reports/Inbox Cleanup/${dateStr}-weekly-summary.md`;
   if (jobId === "baby-dashboard-weekly-update") return `Scheduled Reports/Baby Dashboard/${dateStr}-Weekly-Log.md`;
   if (jobId === "birthday-calendar-sync") return `Scheduled Reports/Birthday Sync/${dateStr}-Sync.md`;
+  if (jobId === "scout-micro-scan") return `Scheduled Reports/Wealth Engines/Scout/${dateStr}-Micro-Scan.md`;
+  if (jobId === "scout-full-cycle") return `Scheduled Reports/Wealth Engines/Scout/${dateStr}-Full-Cycle.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 var jobStatusCache = {};
@@ -6786,6 +7259,49 @@ Process everything autonomously. Be thorough but efficient.`,
     prompt: "",
     schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 180 },
     enabled: true
+  },
+  {
+    id: "scout-micro-scan",
+    name: "SCOUT Micro-Scan",
+    agentId: "scout",
+    prompt: `Run a MICRO-SCAN cycle. This is a quick data refresh, not a full analysis.
+
+1. Get the current watchlist via scout_watchlist
+2. For each asset on the watchlist, run technical_analysis to get updated vote counts
+3. Report the results as a brief table:
+
+| Asset | Votes | Score | Regime | Entry Signal | Notes |
+|-------|-------|-------|--------|-------------|-------|
+
+4. Flag any assets where:
+   - Vote count changed significantly since last scan
+   - New entry signal appeared (votes crossed threshold)
+   - RSI exit signal appeared (overbought/oversold)
+
+Keep this concise \u2014 it runs every 30 minutes. No thesis generation, no Nansen/X checks, just signal refresh.`,
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 30 },
+    enabled: false
+  },
+  {
+    id: "scout-full-cycle",
+    name: "SCOUT Full Cycle",
+    agentId: "scout",
+    prompt: `Run a FULL CYCLE analysis. This is a comprehensive market scan.
+
+1. Start with BTC technical_analysis \u2014 check BTC momentum for alt confirmation filter
+2. Check crypto_trending and crypto_movers for candidates
+3. Run technical_analysis on top 20 candidates, filter for vote_count >= 3/6
+4. Run crypto_backtest on top 5 candidates (30-day data)
+5. Check nansen_smart_money on top candidates (gracefully handle if API key not set)
+6. Search X for sentiment on top 3 candidates
+7. Generate thesis for each candidate meeting entry criteria (votes >= 4/6)
+8. Include: vote count, technical score, regime, Nansen flow, backtest score, entry/stop/target
+9. Provide a brief market overview at the top (BTC dominance, market regime, sector rotations)
+10. List any watchlist changes (assets added/removed)
+
+Output the full brief \u2014 the system will save it automatically. Do NOT use notes_create.`,
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 240 },
+    enabled: false
   }
 ];
 var config2 = {
@@ -7550,6 +8066,21 @@ ${result}`);
         }
         console.log(`[scheduled-jobs] Job completed${isPartial ? " (partial)" : ""}: ${job.name}`);
         await writeJobHistory(job.id, job.name, job.lastStatus || "success", result.slice(0, 500), vaultSaved ? savePath : null, Date.now() - jobStartMs, agentResult.agentId, agentResult.modelUsed, agentResult.tokensUsed?.input, agentResult.tokensUsed?.output);
+        if (job.id === "scout-full-cycle" || job.id === "scout-micro-scan") {
+          try {
+            const pool2 = dbPoolFn ? dbPoolFn() : null;
+            if (pool2) {
+              await pool2.query(
+                `INSERT INTO app_config (key, value, updated_at) VALUES ('scout_latest_brief', $1, $2)
+                 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+                [JSON.stringify(result.slice(0, 1e4)), Date.now()]
+              );
+              console.log(`[scheduled-jobs] Saved SCOUT brief to scout_latest_brief`);
+            }
+          } catch (e) {
+            console.warn(`[scheduled-jobs] Failed to save SCOUT brief:`, e);
+          }
+        }
         if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit" || job.id === "weekly-inbox-deep-clean" || job.id === "baby-dashboard-weekly-update") && kbListFn && kbMoveFn) {
           await archiveOldReports();
         }
@@ -7662,13 +8193,13 @@ async function triggerJob(jobId) {
     const savePath = getJobSavePath(job.id, todayKey, safeName);
     if (job.id === "moodys-daily-intel") {
       try {
-        const fs6 = await import("fs");
-        const path7 = await import("path");
-        const briefDir = path7.join(process.cwd(), "data/vault/Scheduled Reports/Moody's Intelligence/Daily");
-        if (fs6.existsSync(briefDir)) {
-          const files = fs6.readdirSync(briefDir).filter((f) => f.endsWith("-Brief.md") && f > `${todayKey}-Brief.md`).sort().reverse();
+        const fs7 = await import("fs");
+        const path8 = await import("path");
+        const briefDir = path8.join(process.cwd(), "data/vault/Scheduled Reports/Moody's Intelligence/Daily");
+        if (fs7.existsSync(briefDir)) {
+          const files = fs7.readdirSync(briefDir).filter((f) => f.endsWith("-Brief.md") && f > `${todayKey}-Brief.md`).sort().reverse();
           for (const fname of files) {
-            const content = fs6.readFileSync(path7.join(briefDir, fname), "utf-8");
+            const content = fs7.readFileSync(path8.join(briefDir, fname), "utf-8");
             if (content.length > 1e3 && content.includes("## \u{1F3E2}")) {
               result = content;
               console.log(`[scheduled-jobs] Moody's brief: using agent-saved file ${fname} (${result.length} chars)`);
@@ -7693,6 +8224,21 @@ ${result}`);
       try {
         await writeJobStatus(job.id, { lastRun: job.lastRun, status: job.lastStatus, savedTo: vaultSaved ? savePath : null, error: vaultSaved ? null : "vault save failed" });
       } catch {
+      }
+    }
+    if (job.id === "scout-full-cycle" || job.id === "scout-micro-scan") {
+      try {
+        const pool2 = dbPoolFn ? dbPoolFn() : null;
+        if (pool2) {
+          await pool2.query(
+            `INSERT INTO app_config (key, value, updated_at) VALUES ('scout_latest_brief', $1, $2)
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+            [JSON.stringify(result.slice(0, 1e4)), Date.now()]
+          );
+          console.log(`[scheduled-jobs] Saved SCOUT brief to scout_latest_brief (manual trigger)`);
+        }
+      } catch (e) {
+        console.warn(`[scheduled-jobs] Failed to save SCOUT brief:`, e);
       }
     }
     if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit" || job.id === "weekly-inbox-deep-clean" || job.id === "baby-dashboard-weekly-update") && kbListFn && kbMoveFn) {
@@ -7742,17 +8288,17 @@ ${result}`);
 }
 
 // src/agents/loader.ts
-import fs3 from "fs";
-import path4 from "path";
+import fs4 from "fs";
+import path5 from "path";
 var agents = [];
 var configPath = "";
 var registeredToolNames = null;
 function init9(dataDir) {
-  configPath = path4.join(dataDir, "agents.json");
+  configPath = path5.join(dataDir, "agents.json");
   loadAgents();
   let reloadTimer = null;
   try {
-    fs3.watch(configPath, () => {
+    fs4.watch(configPath, () => {
       if (reloadTimer) clearTimeout(reloadTimer);
       reloadTimer = setTimeout(() => {
         console.log("[agents] Config file changed \u2014 reloading");
@@ -7780,7 +8326,7 @@ function validateAgentTools() {
 }
 function loadAgents() {
   try {
-    const raw = fs3.readFileSync(configPath, "utf-8");
+    const raw = fs4.readFileSync(configPath, "utf-8");
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) {
       console.error("[agents] agents.json must be an array");
@@ -7824,10 +8370,10 @@ function getAgent(id) {
 import Anthropic3 from "@anthropic-ai/sdk";
 
 // src/obsidian-skills.ts
-import fs4 from "fs";
-import path5 from "path";
-var SKILLS_DIR = path5.join(process.cwd(), "data", "skills");
-var CACHE_TTL = 24 * 60 * 60 * 1e3;
+import fs5 from "fs";
+import path6 from "path";
+var SKILLS_DIR = path6.join(process.cwd(), "data", "skills");
+var CACHE_TTL2 = 24 * 60 * 60 * 1e3;
 var GITHUB_BASE = "https://raw.githubusercontent.com/kepano/obsidian-skills/main/skills";
 var SKILL_FILES = {
   "obsidian-markdown": `${GITHUB_BASE}/obsidian-markdown/SKILL.md`,
@@ -7837,20 +8383,20 @@ var SKILL_FILES = {
 };
 var memoryCache = /* @__PURE__ */ new Map();
 function ensureDir() {
-  if (!fs4.existsSync(SKILLS_DIR)) {
-    fs4.mkdirSync(SKILLS_DIR, { recursive: true });
+  if (!fs5.existsSync(SKILLS_DIR)) {
+    fs5.mkdirSync(SKILLS_DIR, { recursive: true });
   }
 }
 function getCachePath(name) {
-  return path5.join(SKILLS_DIR, `${name}.md`);
+  return path6.join(SKILLS_DIR, `${name}.md`);
 }
 function readDiskCache(name) {
   const p = getCachePath(name);
   const metaPath = p + ".meta";
   try {
-    if (!fs4.existsSync(p) || !fs4.existsSync(metaPath)) return null;
-    const content = fs4.readFileSync(p, "utf-8");
-    const meta = JSON.parse(fs4.readFileSync(metaPath, "utf-8"));
+    if (!fs5.existsSync(p) || !fs5.existsSync(metaPath)) return null;
+    const content = fs5.readFileSync(p, "utf-8");
+    const meta = JSON.parse(fs5.readFileSync(metaPath, "utf-8"));
     return { content, fetchedAt: meta.fetchedAt || 0 };
   } catch {
     return null;
@@ -7858,16 +8404,16 @@ function readDiskCache(name) {
 }
 function writeDiskCache(name, content) {
   ensureDir();
-  fs4.writeFileSync(getCachePath(name), content, "utf-8");
-  fs4.writeFileSync(getCachePath(name) + ".meta", JSON.stringify({ fetchedAt: Date.now() }), "utf-8");
+  fs5.writeFileSync(getCachePath(name), content, "utf-8");
+  fs5.writeFileSync(getCachePath(name) + ".meta", JSON.stringify({ fetchedAt: Date.now() }), "utf-8");
 }
 async function fetchSkill(name) {
   const cached = memoryCache.get(name);
-  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL) {
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL2) {
     return cached.content;
   }
   const disk = readDiskCache(name);
-  if (disk && Date.now() - disk.fetchedAt < CACHE_TTL) {
+  if (disk && Date.now() - disk.fetchedAt < CACHE_TTL2) {
     memoryCache.set(name, disk);
     return disk.content;
   }
@@ -8687,14 +9233,14 @@ var USERS = {
 };
 var SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path6.dirname(__filename);
-var PROJECT_ROOT = __filename.includes("/dist/") ? path6.resolve(__dirname, "..") : __dirname;
-var PUBLIC_DIR = path6.join(PROJECT_ROOT, "public");
-var AGENT_DIR = path6.join(PROJECT_ROOT, ".pi/agent");
-var VAULT_DIR = path6.join(PROJECT_ROOT, "data", "vault");
-fs5.mkdirSync(AGENT_DIR, { recursive: true });
+var __dirname = path7.dirname(__filename);
+var PROJECT_ROOT = __filename.includes("/dist/") ? path7.resolve(__dirname, "..") : __dirname;
+var PUBLIC_DIR = path7.join(PROJECT_ROOT, "public");
+var AGENT_DIR = path7.join(PROJECT_ROOT, ".pi/agent");
+var VAULT_DIR = path7.join(PROJECT_ROOT, "data", "vault");
+fs6.mkdirSync(AGENT_DIR, { recursive: true });
 init(VAULT_DIR);
-init9(path6.join(PROJECT_ROOT, "data"));
+init9(path7.join(PROJECT_ROOT, "data"));
 loadAllSkills().catch((err) => console.warn("[startup] Failed to preload Obsidian skills:", err));
 var useLocalVault = isConfigured2();
 setInterval(() => {
@@ -8721,7 +9267,7 @@ if (useLocalVault) {
 }
 if (!APP_PASSWORD) console.warn("APP_PASSWORD is not set \u2014 auth disabled.");
 console.log(`[boot] PORT=${PORT} PUBLIC_DIR=${PUBLIC_DIR} AGENT_DIR=${AGENT_DIR}`);
-console.log(`[boot] public/ exists: ${fs5.existsSync(PUBLIC_DIR)}`);
+console.log(`[boot] public/ exists: ${fs6.existsSync(PUBLIC_DIR)}`);
 function kbList(p) {
   return useLocalVault ? listNotes2(p) : listNotes(p);
 }
@@ -9325,8 +9871,8 @@ ${description}` }],
 }
 function buildRenderPageTools() {
   const bbKey = process.env.BROWSERBASE_API_KEY;
-  const lightpandaBin = path6.join(PROJECT_ROOT, ".bin/lightpanda");
-  const hasLightpanda = fs5.existsSync(lightpandaBin);
+  const lightpandaBin = path7.join(PROJECT_ROOT, ".bin/lightpanda");
+  const hasLightpanda = fs6.existsSync(lightpandaBin);
   if (!bbKey && !hasLightpanda) return [];
   function isBlockedUrl(url) {
     try {
@@ -9869,6 +10415,105 @@ function buildCoinGeckoTools() {
           }
           const result = analyzeAsset(candles);
           return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "crypto_backtest",
+      label: "Crypto Backtest",
+      description: "Run a backtest of the 6-signal voting ensemble on historical OHLCV data. Returns Sharpe ratio, win rate, max drawdown, Nunchi composite score, and trade log.",
+      parameters: Type.Object({
+        coin: Type.String({ description: "Cryptocurrency name or ticker (e.g. 'bitcoin', 'BTC')" }),
+        days: Type.Optional(Type.Number({ description: "Days of data to backtest (max 90). Default: 30", default: 30 }))
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const candles = await getHistoricalOHLCV(params.coin, Math.min(params.days || 30, 90));
+          if (candles.length === 0) {
+            return { content: [{ type: "text", text: JSON.stringify({ error: `No historical data for "${params.coin}"` }) }], details: {} };
+          }
+          const result = runBacktest(candles, params.coin);
+          const { trades, ...summary } = result;
+          return { content: [{ type: "text", text: JSON.stringify({ ...summary, recent_trades: trades.slice(-10) }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "nansen_smart_money",
+      label: "Nansen Smart Money",
+      description: "Get smart money wallet flow data for a token from Nansen. Shows net flow direction, inflow/outflow amounts, and number of smart money wallets buying vs selling.",
+      parameters: Type.Object({
+        token: Type.String({ description: "Token symbol or name (e.g. 'ethereum', 'bitcoin')" })
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const result = await getSmartMoneyFlow(params.token);
+          return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "nansen_token_holders",
+      label: "Nansen Token Holders",
+      description: "Get token holder distribution data from Nansen. Shows total holders, whale concentration, 24h holder change, and whale activity (accumulating/distributing/stable).",
+      parameters: Type.Object({
+        token: Type.String({ description: "Token symbol or name (e.g. 'ethereum', 'bitcoin')" })
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const result = await getTokenHolders(params.token);
+          return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "nansen_hot_contracts",
+      label: "Nansen Hot Contracts",
+      description: "Get trending smart contracts from Nansen. Shows contracts with highest smart money interaction counts, useful for identifying emerging DeFi activity.",
+      parameters: Type.Object({
+        chain: Type.Optional(Type.String({ description: "Blockchain to query (default: ethereum). Options: ethereum, base, solana", default: "ethereum" })),
+        limit: Type.Optional(Type.Number({ description: "Number of contracts to return (default: 10)", default: 10 }))
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const result = await getHotContracts(params.chain || "ethereum", params.limit || 10);
+          return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "scout_theses",
+      label: "SCOUT Active Theses",
+      description: "Get all active CRYPTO SCOUT trading theses. Returns structured thesis data including vote counts, technical scores, entry/stop/target prices, and confidence levels.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const theses = await getActiveTheses();
+          return { content: [{ type: "text", text: JSON.stringify({ count: theses.length, theses }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "scout_watchlist",
+      label: "SCOUT Watchlist",
+      description: "Get the current SCOUT watchlist \u2014 the list of CoinGecko IDs that the micro-scan monitors every 30 minutes.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const watchlist = await getWatchlist();
+          return { content: [{ type: "text", text: JSON.stringify({ count: watchlist.length, assets: watchlist }) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
         }
@@ -11001,7 +11646,7 @@ ${snippetText}`;
   ];
 }
 function buildWebPublishTools() {
-  const PUBLISH_SCRIPT = path6.join(PROJECT_ROOT, "scripts", "herenow-publish.sh");
+  const PUBLISH_SCRIPT = path7.join(PROJECT_ROOT, "scripts", "herenow-publish.sh");
   return [
     {
       name: "web_publish",
@@ -11019,10 +11664,10 @@ function buildWebPublishTools() {
       }),
       async execute(_toolCallId, params) {
         try {
-          let targetPath = path6.resolve(params.path);
-          if (!fs5.existsSync(targetPath)) {
-            const vaultPath2 = path6.join(VAULT_DIR, params.path);
-            if (fs5.existsSync(vaultPath2)) {
+          let targetPath = path7.resolve(params.path);
+          if (!fs6.existsSync(targetPath)) {
+            const vaultPath2 = path7.join(VAULT_DIR, params.path);
+            if (fs6.existsSync(vaultPath2)) {
               targetPath = vaultPath2;
             } else {
               return {
@@ -11031,8 +11676,8 @@ function buildWebPublishTools() {
               };
             }
           }
-          const realTarget = fs5.realpathSync(targetPath);
-          const projectReal = fs5.realpathSync(PROJECT_ROOT);
+          const realTarget = fs6.realpathSync(targetPath);
+          const projectReal = fs6.realpathSync(PROJECT_ROOT);
           if (!realTarget.startsWith(projectReal + "/") && realTarget !== projectReal) {
             return {
               content: [{ type: "text", text: `Error: Can only publish files within the project directory.` }],
@@ -11040,7 +11685,7 @@ function buildWebPublishTools() {
             };
           }
           const blocked = [".env", "auth.json", "credentials", ".herenow"];
-          const relPath = path6.relative(projectReal, realTarget);
+          const relPath = path7.relative(projectReal, realTarget);
           if (blocked.some((b) => relPath.split("/").includes(b) || relPath === b)) {
             return {
               content: [{ type: "text", text: `Error: Cannot publish sensitive files.` }],
@@ -11112,11 +11757,11 @@ ${stderr || stdout || err.message}`
           if (!slug) {
             return { content: [{ type: "text", text: "Error: Invalid slug \u2014 must contain at least one alphanumeric character." }], details: {} };
           }
-          const pagesDir = path6.join(PROJECT_ROOT, "data", "pages");
-          if (!fs5.existsSync(pagesDir)) fs5.mkdirSync(pagesDir, { recursive: true });
-          const filePath = path6.join(pagesDir, `${slug}.html`);
-          const existed = fs5.existsSync(filePath);
-          fs5.writeFileSync(filePath, params.html, "utf-8");
+          const pagesDir = path7.join(PROJECT_ROOT, "data", "pages");
+          if (!fs6.existsSync(pagesDir)) fs6.mkdirSync(pagesDir, { recursive: true });
+          const filePath = path7.join(pagesDir, `${slug}.html`);
+          const existed = fs6.existsSync(filePath);
+          fs6.writeFileSync(filePath, params.html, "utf-8");
           const domain = process.env.REPLIT_DEPLOYMENT_URL || process.env.REPLIT_DEV_DOMAIN || "rickin.live";
           const protocol = domain.includes("localhost") ? "http" : "https";
           const pageUrl = `${protocol}://${domain}/pages/${slug}`;
@@ -11146,11 +11791,11 @@ This page is password-protected behind your login. Visit rickin.live/pages to se
       parameters: Type.Object({}),
       async execute() {
         try {
-          const pagesDir = path6.join(PROJECT_ROOT, "data", "pages");
-          if (!fs5.existsSync(pagesDir)) {
+          const pagesDir = path7.join(PROJECT_ROOT, "data", "pages");
+          if (!fs6.existsSync(pagesDir)) {
             return { content: [{ type: "text", text: "No pages saved yet." }], details: {} };
           }
-          const files = fs5.readdirSync(pagesDir).filter((f) => f.endsWith(".html")).sort();
+          const files = fs6.readdirSync(pagesDir).filter((f) => f.endsWith(".html")).sort();
           if (files.length === 0) {
             return { content: [{ type: "text", text: "No pages saved yet." }], details: {} };
           }
@@ -11158,7 +11803,7 @@ This page is password-protected behind your login. Visit rickin.live/pages to se
           const protocol = domain.includes("localhost") ? "http" : "https";
           const list2 = files.map((f) => {
             const slug = f.replace(/\.html$/, "");
-            const stat = fs5.statSync(path6.join(pagesDir, f));
+            const stat = fs6.statSync(path7.join(pagesDir, f));
             const sizeKB = Math.round(stat.size / 1024);
             const date = stat.mtime.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
             return `- ${slug} (${sizeKB}KB, ${date}) \u2014 ${protocol}://${domain}/pages/${slug}`;
@@ -11189,11 +11834,11 @@ All pages: ${protocol}://${domain}/pages` }],
           if (!slug) {
             return { content: [{ type: "text", text: "Error: Invalid slug." }], details: {} };
           }
-          const filePath = path6.join(PROJECT_ROOT, "data", "pages", `${slug}.html`);
-          if (!fs5.existsSync(filePath)) {
+          const filePath = path7.join(PROJECT_ROOT, "data", "pages", `${slug}.html`);
+          if (!fs6.existsSync(filePath)) {
             return { content: [{ type: "text", text: `Page "${slug}" not found.` }], details: {} };
           }
-          fs5.unlinkSync(filePath);
+          fs6.unlinkSync(filePath);
           return { content: [{ type: "text", text: `\u2705 Page "${slug}" deleted.` }], details: {} };
         } catch (err) {
           return { content: [{ type: "text", text: `Failed to delete page: ${err.message}` }], details: {} };
@@ -11517,17 +12162,17 @@ setInterval(async () => {
     }
   }
 }, 5 * 60 * 1e3);
-var TUNNEL_URL_FILE = path6.join(PROJECT_ROOT, "data", "tunnel-url.txt");
+var TUNNEL_URL_FILE = path7.join(PROJECT_ROOT, "data", "tunnel-url.txt");
 function loadPersistedTunnelUrl() {
   try {
-    return fs5.readFileSync(TUNNEL_URL_FILE, "utf-8").trim() || null;
+    return fs6.readFileSync(TUNNEL_URL_FILE, "utf-8").trim() || null;
   } catch {
     return null;
   }
 }
 function persistTunnelUrl(url) {
   try {
-    fs5.writeFileSync(TUNNEL_URL_FILE, url, "utf-8");
+    fs6.writeFileSync(TUNNEL_URL_FILE, url, "utf-8");
   } catch {
   }
 }
@@ -11673,18 +12318,18 @@ app.get("/api/logout", (_req, res) => {
   res.redirect("/login.html");
 });
 app.use(express.static(PUBLIC_DIR));
-var PAGES_DIR = path6.join(PROJECT_ROOT, "data", "pages");
-if (!fs5.existsSync(PAGES_DIR)) fs5.mkdirSync(PAGES_DIR, { recursive: true });
+var PAGES_DIR = path7.join(PROJECT_ROOT, "data", "pages");
+if (!fs6.existsSync(PAGES_DIR)) fs6.mkdirSync(PAGES_DIR, { recursive: true });
 app.get("/pages", (_req, res) => {
   try {
-    const files = fs5.readdirSync(PAGES_DIR).filter((f) => f.endsWith(".html")).sort();
+    const files = fs6.readdirSync(PAGES_DIR).filter((f) => f.endsWith(".html")).sort();
     if (files.length === 0) {
       res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pages \u2014 RICKIN</title><style>body{font-family:-apple-system,system-ui,sans-serif;background:#0a0a0a;color:#e0e0e0;padding:2rem;max-width:600px;margin:0 auto}h1{font-size:1.4rem;color:#fff}p{color:#888}</style></head><body><h1>Pages</h1><p>No pages published yet.</p></body></html>`);
       return;
     }
     const items = files.map((f) => {
       const slug = f.replace(/\.html$/, "");
-      const stat = fs5.statSync(path6.join(PAGES_DIR, f));
+      const stat = fs6.statSync(path7.join(PAGES_DIR, f));
       const date = stat.mtime.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
       return `<a href="/pages/${slug}">${slug}</a><span class="date">${date}</span>`;
     }).join("");
@@ -12117,6 +12762,24 @@ async function fetchXIntelData() {
   }
   return xIntelResult;
 }
+app.get("/api/wealth-engines/theses", async (_req, res) => {
+  try {
+    const theses = await getActiveTheses();
+    res.json({ count: theses.length, theses });
+  } catch (err) {
+    console.error("[wealth-engines] theses error:", err);
+    res.status(500).json({ error: "Failed to fetch theses" });
+  }
+});
+app.get("/api/wealth-engines/watchlist", async (_req, res) => {
+  try {
+    const watchlist = await getWatchlist();
+    res.json({ count: watchlist.length, assets: watchlist });
+  } catch (err) {
+    console.error("[wealth-engines] watchlist error:", err);
+    res.status(500).json({ error: "Failed to fetch watchlist" });
+  }
+});
 app.get("/api/x-intelligence/data", async (_req, res) => {
   try {
     const forceRefresh = _req.query.force === "1";
@@ -12906,15 +13569,15 @@ app.get("/pages/:slug", async (req, res) => {
     res.status(400).send("Invalid page slug.");
     return;
   }
-  const filePath = path6.join(PAGES_DIR, `${slug}.html`);
-  if (!fs5.existsSync(filePath)) {
+  const filePath = path7.join(PAGES_DIR, `${slug}.html`);
+  if (!fs6.existsSync(filePath)) {
     res.status(404).send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Not Found</title><style>body{font-family:-apple-system,sans-serif;background:#0a0a0a;color:#e0e0e0;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}h1{font-size:1.2rem;color:#888}</style></head><body><h1>Page not found.</h1></body></html>`);
     return;
   }
   const isTokenAuth = !!(req.query.user && req.query.token) || !!req.headers.authorization?.startsWith("Bearer ");
   if (slug === "baby-dashboard" && isTokenAuth && isConnected()) {
     try {
-      let html = fs5.readFileSync(filePath, "utf-8");
+      let html = fs6.readFileSync(filePath, "utf-8");
       let data = babyDashboardCache?.data;
       if (!data || Date.now() - (babyDashboardCache?.timestamp || 0) > BABY_CACHE_TTL) {
         let parseRows2 = function(raw) {
@@ -13038,12 +13701,12 @@ app.post("/api/pages/:slug/share", async (req, res) => {
     return;
   }
   try {
-    const filePath = path6.join(PAGES_DIR, `${slug}.html`);
-    if (!fs5.existsSync(filePath)) {
+    const filePath = path7.join(PAGES_DIR, `${slug}.html`);
+    if (!fs6.existsSync(filePath)) {
       res.status(404).json({ error: "Page not found" });
       return;
     }
-    let html = fs5.readFileSync(filePath, "utf-8");
+    let html = fs6.readFileSync(filePath, "utf-8");
     const now = /* @__PURE__ */ new Date();
     const cfg = getConfig();
     const tz = cfg.timezone || "America/New_York";
@@ -13184,15 +13847,15 @@ render(SNAPSHOT_DATA);`
     html = html.replace(/<\/body>/, `${snapshotFooter}
 </body>`);
     const tmpFile = `/tmp/snapshot-${slug}-${Date.now()}.html`;
-    fs5.writeFileSync(tmpFile, html);
-    const publishScript = path6.join(PROJECT_ROOT, "scripts", "herenow-publish.sh");
+    fs6.writeFileSync(tmpFile, html);
+    const publishScript = path7.join(PROJECT_ROOT, "scripts", "herenow-publish.sh");
     const titleStr = slug === "daily-brief" ? `Daily Brief \u2014 ${titleDate}` : slug === "x-intelligence" ? `X Intelligence \u2014 ${titleDate}` : `Baby Dashboard \u2014 ${titleDate}`;
     const output = execSync(`bash "${publishScript}" "${tmpFile}" --title "${titleStr}" --client "darknode"`, {
       encoding: "utf-8",
       timeout: 3e4
     });
     try {
-      fs5.unlinkSync(tmpFile);
+      fs6.unlinkSync(tmpFile);
     } catch {
     }
     const lines = output.trim().split("\n");
@@ -13275,9 +13938,9 @@ app.post("/api/session", async (req, res) => {
   try {
     const { resumeConversationId } = req.body || {};
     const sessionId = `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const authStorage = AuthStorage.create(path6.join(AGENT_DIR, "auth.json"));
+    const authStorage = AuthStorage.create(path7.join(AGENT_DIR, "auth.json"));
     authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
-    const modelRegistry = new ModelRegistry(authStorage, path6.join(AGENT_DIR, "models.json"));
+    const modelRegistry = new ModelRegistry(authStorage, path7.join(AGENT_DIR, "models.json"));
     const fullModel = modelRegistry.find("anthropic", FULL_MODEL_ID);
     if (!fullModel) throw new Error(`Model ${FULL_MODEL_ID} not found in registry`);
     const coreTools = [
@@ -13522,9 +14185,9 @@ app.post("/api/session/:id/prompt", async (req, res) => {
   }
   if (chosenModelId !== entry.activeModelName) {
     try {
-      const authStorage = AuthStorage.create(path6.join(AGENT_DIR, "auth.json"));
+      const authStorage = AuthStorage.create(path7.join(AGENT_DIR, "auth.json"));
       authStorage.setRuntimeApiKey("anthropic", ANTHROPIC_KEY);
-      const modelRegistry = new ModelRegistry(authStorage, path6.join(AGENT_DIR, "models.json"));
+      const modelRegistry = new ModelRegistry(authStorage, path7.join(AGENT_DIR, "models.json"));
       const newModel = modelRegistry.find("anthropic", chosenModelId);
       if (newModel) {
         await entry.session.setModel(newModel);
@@ -14072,12 +14735,12 @@ app.post("/api/scheduled-jobs", (req, res) => {
 });
 app.get("/api/kb/read", async (req, res) => {
   try {
-    const path7 = req.query.path;
-    if (!path7) {
+    const path8 = req.query.path;
+    if (!path8) {
       res.status(400).json({ error: "path required" });
       return;
     }
-    const content = await kbRead(path7);
+    const content = await kbRead(path8);
     res.json({ content });
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to read" });
@@ -14356,7 +15019,7 @@ app.get("/api/kb-status", (_req, res) => {
 });
 var obSyncProcess = null;
 function startObSync() {
-  const vaultPath2 = path6.join(process.cwd(), "data", "vault");
+  const vaultPath2 = path7.join(process.cwd(), "data", "vault");
   const logPath = "/tmp/obsidian-sync.log";
   if (obSyncProcess) {
     try {
@@ -14369,7 +15032,7 @@ function startObSync() {
     execSync("pgrep -f 'ob sync' 2>/dev/null && pkill -f 'ob sync'", { encoding: "utf-8" });
   } catch {
   }
-  const logFd = fs5.openSync(logPath, "a");
+  const logFd = fs6.openSync(logPath, "a");
   const child = spawn("ob", ["sync", "--continuous", "--path", vaultPath2], {
     stdio: ["ignore", logFd, logFd],
     detached: false
@@ -14392,7 +15055,7 @@ function getSyncStatus() {
   const logPath = "/tmp/obsidian-sync.log";
   const lastChecked = (/* @__PURE__ */ new Date()).toISOString();
   try {
-    const content = fs5.readFileSync(logPath, "utf-8");
+    const content = fs6.readFileSync(logPath, "utf-8");
     const lines = content.trim().split("\n").filter((l) => l.trim());
     if (lines.length === 0) return { running: false, status: "not_running", lastLine: "", lastChecked };
     const lastLine = lines[lines.length - 1].trim();
@@ -14447,12 +15110,12 @@ app.get("/api/agents", (_req, res) => {
   res.json({ agents: agents2 });
 });
 async function buildVaultTree(dir) {
-  const entries = await fs5.promises.readdir(dir, { withFileTypes: true });
+  const entries = await fs6.promises.readdir(dir, { withFileTypes: true });
   const result = [];
   for (const entry of entries) {
     if (entry.name.startsWith(".")) continue;
     if (entry.isDirectory()) {
-      const children = await buildVaultTree(path6.join(dir, entry.name));
+      const children = await buildVaultTree(path7.join(dir, entry.name));
       result.push({ name: entry.name, type: "folder", children });
     } else {
       result.push({ name: entry.name, type: "file" });
@@ -14670,14 +15333,14 @@ async function startServer(maxRetries = 5) {
               return result;
             },
             broadcastToAll,
-            async (path7, content) => {
+            async (path8, content) => {
               try {
-                await kbCreate(path7, content);
+                await kbCreate(path8, content);
               } catch (err) {
-                console.error(`[scheduled-jobs] Vault save failed for ${path7}:`, err);
+                console.error(`[scheduled-jobs] Vault save failed for ${path8}:`, err);
               }
             },
-            async (path7) => kbList(path7),
+            async (path8) => kbList(path8),
             async (from, to) => kbMove(from, to),
             () => getPool()
           );

@@ -45,6 +45,8 @@ function getJobSavePath(jobId: string, dateStr: string, safeName: string): strin
   if (jobId === "weekly-inbox-deep-clean") return `Scheduled Reports/Inbox Cleanup/${dateStr}-weekly-summary.md`;
   if (jobId === "baby-dashboard-weekly-update") return `Scheduled Reports/Baby Dashboard/${dateStr}-Weekly-Log.md`;
   if (jobId === "birthday-calendar-sync") return `Scheduled Reports/Birthday Sync/${dateStr}-Sync.md`;
+  if (jobId === "scout-micro-scan") return `Scheduled Reports/Wealth Engines/Scout/${dateStr}-Micro-Scan.md`;
+  if (jobId === "scout-full-cycle") return `Scheduled Reports/Wealth Engines/Scout/${dateStr}-Full-Cycle.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 
@@ -753,6 +755,49 @@ Process everything autonomously. Be thorough but efficient.`,
     prompt: "",
     schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 180 },
     enabled: true,
+  },
+  {
+    id: "scout-micro-scan",
+    name: "SCOUT Micro-Scan",
+    agentId: "scout",
+    prompt: `Run a MICRO-SCAN cycle. This is a quick data refresh, not a full analysis.
+
+1. Get the current watchlist via scout_watchlist
+2. For each asset on the watchlist, run technical_analysis to get updated vote counts
+3. Report the results as a brief table:
+
+| Asset | Votes | Score | Regime | Entry Signal | Notes |
+|-------|-------|-------|--------|-------------|-------|
+
+4. Flag any assets where:
+   - Vote count changed significantly since last scan
+   - New entry signal appeared (votes crossed threshold)
+   - RSI exit signal appeared (overbought/oversold)
+
+Keep this concise — it runs every 30 minutes. No thesis generation, no Nansen/X checks, just signal refresh.`,
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 30 },
+    enabled: false,
+  },
+  {
+    id: "scout-full-cycle",
+    name: "SCOUT Full Cycle",
+    agentId: "scout",
+    prompt: `Run a FULL CYCLE analysis. This is a comprehensive market scan.
+
+1. Start with BTC technical_analysis — check BTC momentum for alt confirmation filter
+2. Check crypto_trending and crypto_movers for candidates
+3. Run technical_analysis on top 20 candidates, filter for vote_count >= 3/6
+4. Run crypto_backtest on top 5 candidates (30-day data)
+5. Check nansen_smart_money on top candidates (gracefully handle if API key not set)
+6. Search X for sentiment on top 3 candidates
+7. Generate thesis for each candidate meeting entry criteria (votes >= 4/6)
+8. Include: vote count, technical score, regime, Nansen flow, backtest score, entry/stop/target
+9. Provide a brief market overview at the top (BTC dominance, market regime, sector rotations)
+10. List any watchlist changes (assets added/removed)
+
+Output the full brief — the system will save it automatically. Do NOT use notes_create.`,
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 240 },
+    enabled: false,
   },
 ];
 
@@ -1582,6 +1627,22 @@ async function checkJobs(): Promise<void> {
         console.log(`[scheduled-jobs] Job completed${isPartial ? " (partial)" : ""}: ${job.name}`);
         await writeJobHistory(job.id, job.name, job.lastStatus || "success", result.slice(0, 500), vaultSaved ? savePath : null, Date.now() - jobStartMs, agentResult.agentId, agentResult.modelUsed, agentResult.tokensUsed?.input, agentResult.tokensUsed?.output);
 
+        if (job.id === "scout-full-cycle" || job.id === "scout-micro-scan") {
+          try {
+            const pool = dbPoolFn ? dbPoolFn() : null;
+            if (pool) {
+              await pool.query(
+                `INSERT INTO app_config (key, value, updated_at) VALUES ('scout_latest_brief', $1, $2)
+                 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+                [JSON.stringify(result.slice(0, 10000)), Date.now()]
+              );
+              console.log(`[scheduled-jobs] Saved SCOUT brief to scout_latest_brief`);
+            }
+          } catch (e) {
+            console.warn(`[scheduled-jobs] Failed to save SCOUT brief:`, e);
+          }
+        }
+
         if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit" || job.id === "weekly-inbox-deep-clean" || job.id === "baby-dashboard-weekly-update") && kbListFn && kbMoveFn) {
           await archiveOldReports();
         }
@@ -1739,6 +1800,22 @@ export async function triggerJob(jobId: string): Promise<string> {
         vaultSaved = true;
       } catch {}
       try { await writeJobStatus(job.id, { lastRun: job.lastRun, status: job.lastStatus!, savedTo: vaultSaved ? savePath : null, error: vaultSaved ? null : "vault save failed" }); } catch {}
+    }
+
+    if (job.id === "scout-full-cycle" || job.id === "scout-micro-scan") {
+      try {
+        const pool = dbPoolFn ? dbPoolFn() : null;
+        if (pool) {
+          await pool.query(
+            `INSERT INTO app_config (key, value, updated_at) VALUES ('scout_latest_brief', $1, $2)
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+            [JSON.stringify(result.slice(0, 10000)), Date.now()]
+          );
+          console.log(`[scheduled-jobs] Saved SCOUT brief to scout_latest_brief (manual trigger)`);
+        }
+      } catch (e) {
+        console.warn(`[scheduled-jobs] Failed to save SCOUT brief:`, e);
+      }
     }
 
     if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit" || job.id === "weekly-inbox-deep-clean" || job.id === "baby-dashboard-weekly-update") && kbListFn && kbMoveFn) {
