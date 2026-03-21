@@ -53,6 +53,7 @@ function getJobSavePath(jobId: string, dateStr: string, safeName: string): strin
   if (jobId === "bankr-execute") return `Scheduled Reports/Wealth Engines/BANKR/${dateStr}-Execution.md`;
   if (jobId === "oversight-health") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Health.md`;
   if (jobId === "oversight-weekly") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Weekly-Review.md`;
+  if (jobId === "oversight-daily-summary") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Daily-Summary.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 
@@ -938,12 +939,28 @@ STEP 6: Compile a weekly report with these sections:
 - Performance: win rate, total P&L, Sharpe ratio, best/worst trades, slippage
 - Source Analysis: crypto_scout vs polymarket_scout signal quality comparison
 - Cross-Domain Exposure: any correlated positions flagged
-- Improvements: open items, resolved items, new items this week
+- Signal Attribution: which signal types contributed to wins vs losses
+- Bull/Bear Thesis Review: for each active thesis, construct bull case and bear case. If bear is stronger, capture improvement.
+- Improvements: open items, resolved items, new items this week, routing summary
 - Shadow Trading: shadow vs live comparison (if shadow trades exist)
 - Recommendations: 3-5 specific action items for next week
 
 Save the full report to the vault. Keep it actionable and data-driven.`,
     schedule: { type: "weekly", hour: 8, minute: 30, daysOfWeek: [0] },
+    enabled: true,
+  },
+  {
+    id: "oversight-daily-summary",
+    name: "Oversight Daily Summary",
+    agentId: "oversight",
+    prompt: `Generate and send the daily performance summary.
+
+1. Call oversight_daily_summary with send_telegram=true to generate and send the daily recap.
+2. This covers: portfolio value, drawdown, today's trades, system health, and open issues.
+3. Save a brief copy to the vault.
+
+Keep it quick — the daily summary is meant to be a 30-second glance at the day's results.`,
+    schedule: { type: "daily", hour: 20, minute: 0 },
     enabled: true,
   },
 ];

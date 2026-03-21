@@ -496,6 +496,9 @@ async function handleOversightCommand(): Promise<string> {
     const healthRes = await pool.query(`SELECT value FROM app_config WHERE key = 'oversight_health_reports'`);
     const queueRes = await pool.query(`SELECT value FROM app_config WHERE key = 'oversight_improvement_queue'`);
     const lastCheckRes = await pool.query(`SELECT value FROM app_config WHERE key = 'oversight_last_health_check'`);
+    const portfolioRes = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_portfolio_value'`);
+    const peakRes = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_peak_portfolio'`);
+    const historyRes = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_trade_history'`);
 
     let healthStatus = "No health checks run yet";
     let healthIcon = "⚪";
@@ -508,10 +511,26 @@ async function handleOversightCommand(): Promise<string> {
 
     let openImprovements = 0;
     let criticalImprovements = 0;
+    const activeItems: Array<{ severity: string; title: string; route: string }> = [];
     if (queueRes.rows.length > 0 && Array.isArray(queueRes.rows[0].value)) {
       const open = queueRes.rows[0].value.filter((i: any) => i.status === "open");
       openImprovements = open.length;
       criticalImprovements = open.filter((i: any) => i.severity === "critical").length;
+      for (const item of open.slice(0, 5)) {
+        activeItems.push({ severity: item.severity, title: item.title, route: item.route || "manual_review" });
+      }
+    }
+
+    const portfolio = portfolioRes.rows.length > 0 ? Number(portfolioRes.rows[0].value) : 50;
+    const peak = peakRes.rows.length > 0 ? Number(peakRes.rows[0].value) : 50;
+    const drawdownPct = peak > 0 ? ((peak - portfolio) / peak * 100) : 0;
+
+    let rolling7dPct = 0;
+    if (historyRes.rows.length > 0 && Array.isArray(historyRes.rows[0].value)) {
+      const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      const recent = historyRes.rows[0].value.filter((t: any) => new Date(t.closed_at).getTime() > sevenDaysAgo);
+      const rolling7d = recent.reduce((s: number, t: any) => s + (t.pnl || 0), 0);
+      rolling7dPct = portfolio > 0 ? (rolling7d / portfolio * 100) : 0;
     }
 
     let lastCheck = "never";
@@ -519,13 +538,28 @@ async function handleOversightCommand(): Promise<string> {
       lastCheck = timeAgo(lastCheckRes.rows[0].value);
     }
 
+    const ddIcon = drawdownPct > 25 ? "🔴" : drawdownPct > 15 ? "🟡" : "🟢";
+    const pnlIcon = rolling7dPct < -15 ? "🔴" : rolling7dPct < -5 ? "🟡" : "🟢";
+
     const lines = [
       `${mode} *Oversight Status*`,
       "",
       `${healthIcon} *Health:* ${healthStatus}`,
       `🕐 *Last Check:* ${lastCheck}`,
+      "",
+      `*Drawdown:*`,
+      `${ddIcon} Peak DD: ${drawdownPct.toFixed(1)}% ($${portfolio.toFixed(2)} / $${peak.toFixed(2)} peak)`,
+      `${pnlIcon} 7d P&L: ${rolling7dPct >= 0 ? "+" : ""}${rolling7dPct.toFixed(1)}%`,
+      "",
       `📋 *Open Improvements:* ${openImprovements}${criticalImprovements > 0 ? ` (${criticalImprovements} critical)` : ""}`,
     ];
+
+    if (activeItems.length > 0) {
+      const sevIcons: Record<string, string> = { critical: "🔴", high: "🟠", medium: "🟡", low: "⚪" };
+      for (const item of activeItems) {
+        lines.push(`  ${sevIcons[item.severity] || "⚪"} ${item.title} → ${item.route}`);
+      }
+    }
 
     return lines.join("\n");
   } catch (err) {

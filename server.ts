@@ -1892,15 +1892,27 @@ function buildOversightTools(): ToolDefinition[] {
         severity: Type.Union([
           Type.Literal("low"), Type.Literal("medium"), Type.Literal("high"), Type.Literal("critical"),
         ], { description: "Severity level" }),
+        domain: Type.Optional(Type.Union([
+          Type.Literal("crypto"), Type.Literal("polymarket"), Type.Literal("cross_domain"), Type.Literal("system"),
+        ], { description: "Domain this improvement relates to" })),
+        priority: Type.Optional(Type.Number({ description: "Priority (1=critical, 4=low). Auto-derived from severity if omitted." })),
         title: Type.String({ description: "Short title for the improvement" }),
         description: Type.String({ description: "Detailed description of the issue" }),
+        pattern_description: Type.Optional(Type.String({ description: "Description of the pattern or trend that led to this improvement" })),
         suggested_action: Type.String({ description: "Recommended action to address this" }),
+        route: Type.Optional(Type.Union([
+          Type.Literal("autoresearch"), Type.Literal("manual_review"), Type.Literal("bankr_config"), Type.Literal("signal_tuning"), Type.Literal("infra_fix"),
+        ], { description: "Where to route this improvement for resolution" })),
       }),
       async execute(_toolCallId, params: {
         source: "health_check" | "performance_review" | "manual" | "circuit_breaker";
         category: "risk" | "execution" | "signal" | "infrastructure" | "strategy";
         severity: "low" | "medium" | "high" | "critical";
+        domain?: "crypto" | "polymarket" | "cross_domain" | "system";
+        priority?: number;
         title: string; description: string; suggested_action: string;
+        pattern_description?: string;
+        route?: "autoresearch" | "manual_review" | "bankr_config" | "signal_tuning" | "infra_fix";
       }) {
         try {
           const item = await oversight.captureImprovement(params);
@@ -2007,12 +2019,61 @@ function buildOversightTools(): ToolDefinition[] {
     {
       name: "oversight_summary",
       label: "Oversight Summary",
-      description: "Get a quick overview of oversight status: latest health report, improvement queue counts, and shadow trading stats.",
+      description: "Get a quick overview of oversight status: latest health report, drawdown status, active improvement details, and shadow trading stats.",
       parameters: Type.Object({}),
       async execute() {
         try {
           const summary = await oversight.getOversightSummary();
           return { content: [{ type: "text" as const, text: JSON.stringify(summary) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "oversight_daily_summary",
+      label: "Oversight Daily Summary",
+      description: "Generate and optionally send the daily performance summary via Telegram.",
+      parameters: Type.Object({
+        send_telegram: Type.Optional(Type.Boolean({ description: "If true, also sends the summary via Telegram (default: false)" })),
+      }),
+      async execute(_toolCallId, params: { send_telegram?: boolean }) {
+        try {
+          if (params.send_telegram) {
+            await oversight.sendDailyPerformanceSummary();
+            return { content: [{ type: "text" as const, text: JSON.stringify({ sent: true }) }], details: {} };
+          }
+          const summary = await oversight.generateDailyPerformanceSummary();
+          return { content: [{ type: "text" as const, text: summary }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "oversight_auto_shadow",
+      label: "Oversight Auto Shadow Trade",
+      description: "Automatically track a shadow trade for a thesis that BANKR chose not to execute (e.g., rejected by approval, outside parameters). Deduplicates by thesis+asset.",
+      parameters: Type.Object({
+        thesis_id: Type.String({ description: "Thesis ID to shadow" }),
+        asset: Type.String({ description: "Asset symbol" }),
+        asset_class: Type.Union([Type.Literal("crypto"), Type.Literal("polymarket")], { description: "Asset class" }),
+        source: Type.Union([Type.Literal("crypto_scout"), Type.Literal("polymarket_scout")], { description: "Signal source" }),
+        direction: Type.String({ description: "Trade direction (LONG/SHORT/YES/NO)" }),
+        entry_price: Type.Number({ description: "Entry price at time of shadow" }),
+        reason: Type.String({ description: "Why this is being shadow-tracked instead of executed" }),
+      }),
+      async execute(_toolCallId, params: {
+        thesis_id: string; asset: string;
+        asset_class: "crypto" | "polymarket"; source: "crypto_scout" | "polymarket_scout";
+        direction: string; entry_price: number; reason: string;
+      }) {
+        try {
+          const shadow = await oversight.autoTrackShadowTrade(params);
+          if (shadow) {
+            return { content: [{ type: "text" as const, text: JSON.stringify(shadow) }], details: {} };
+          }
+          return { content: [{ type: "text" as const, text: JSON.stringify({ skipped: true, reason: "Already tracking this thesis/asset" }) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
         }
@@ -7070,6 +7131,9 @@ async function startServer(maxRetries = 5) {
   await tasks.init();
   await alerts.init();
   await telegram.init();
+  oversight.setTelegramNotifier(async (msg: string) => {
+    await telegram.sendMessage(msg);
+  });
   await scheduledJobs.init();
   try {
     const pool = (await import("./src/db.js")).getPool();

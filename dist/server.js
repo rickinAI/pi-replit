@@ -7669,6 +7669,9 @@ async function handleOversightCommand() {
     const healthRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_health_reports'`);
     const queueRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_improvement_queue'`);
     const lastCheckRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_last_health_check'`);
+    const portfolioRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_portfolio_value'`);
+    const peakRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_peak_portfolio'`);
+    const historyRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_trade_history'`);
     let healthStatus = "No health checks run yet";
     let healthIcon = "\u26AA";
     if (healthRes.rows.length > 0 && Array.isArray(healthRes.rows[0].value) && healthRes.rows[0].value.length > 0) {
@@ -7679,22 +7682,49 @@ async function handleOversightCommand() {
     }
     let openImprovements = 0;
     let criticalImprovements = 0;
+    const activeItems = [];
     if (queueRes.rows.length > 0 && Array.isArray(queueRes.rows[0].value)) {
       const open = queueRes.rows[0].value.filter((i) => i.status === "open");
       openImprovements = open.length;
       criticalImprovements = open.filter((i) => i.severity === "critical").length;
+      for (const item of open.slice(0, 5)) {
+        activeItems.push({ severity: item.severity, title: item.title, route: item.route || "manual_review" });
+      }
+    }
+    const portfolio = portfolioRes.rows.length > 0 ? Number(portfolioRes.rows[0].value) : 50;
+    const peak = peakRes.rows.length > 0 ? Number(peakRes.rows[0].value) : 50;
+    const drawdownPct = peak > 0 ? (peak - portfolio) / peak * 100 : 0;
+    let rolling7dPct = 0;
+    if (historyRes.rows.length > 0 && Array.isArray(historyRes.rows[0].value)) {
+      const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1e3;
+      const recent = historyRes.rows[0].value.filter((t) => new Date(t.closed_at).getTime() > sevenDaysAgo);
+      const rolling7d = recent.reduce((s, t) => s + (t.pnl || 0), 0);
+      rolling7dPct = portfolio > 0 ? rolling7d / portfolio * 100 : 0;
     }
     let lastCheck = "never";
     if (lastCheckRes.rows.length > 0 && typeof lastCheckRes.rows[0].value === "number") {
       lastCheck = timeAgo(lastCheckRes.rows[0].value);
     }
+    const ddIcon = drawdownPct > 25 ? "\u{1F534}" : drawdownPct > 15 ? "\u{1F7E1}" : "\u{1F7E2}";
+    const pnlIcon = rolling7dPct < -15 ? "\u{1F534}" : rolling7dPct < -5 ? "\u{1F7E1}" : "\u{1F7E2}";
     const lines = [
       `${mode} *Oversight Status*`,
       "",
       `${healthIcon} *Health:* ${healthStatus}`,
       `\u{1F550} *Last Check:* ${lastCheck}`,
+      "",
+      `*Drawdown:*`,
+      `${ddIcon} Peak DD: ${drawdownPct.toFixed(1)}% ($${portfolio.toFixed(2)} / $${peak.toFixed(2)} peak)`,
+      `${pnlIcon} 7d P&L: ${rolling7dPct >= 0 ? "+" : ""}${rolling7dPct.toFixed(1)}%`,
+      "",
       `\u{1F4CB} *Open Improvements:* ${openImprovements}${criticalImprovements > 0 ? ` (${criticalImprovements} critical)` : ""}`
     ];
+    if (activeItems.length > 0) {
+      const sevIcons = { critical: "\u{1F534}", high: "\u{1F7E0}", medium: "\u{1F7E1}", low: "\u26AA" };
+      for (const item of activeItems) {
+        lines.push(`  ${sevIcons[item.severity] || "\u26AA"} ${item.title} \u2192 ${item.route}`);
+      }
+    }
     return lines.join("\n");
   } catch (err) {
     return `${mode} *Oversight Status*
@@ -8222,6 +8252,7 @@ function getJobSavePath(jobId, dateStr, safeName) {
   if (jobId === "bankr-execute") return `Scheduled Reports/Wealth Engines/BANKR/${dateStr}-Execution.md`;
   if (jobId === "oversight-health") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Health.md`;
   if (jobId === "oversight-weekly") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Weekly-Review.md`;
+  if (jobId === "oversight-daily-summary") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Daily-Summary.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 var jobStatusCache = {};
@@ -9104,12 +9135,28 @@ STEP 6: Compile a weekly report with these sections:
 - Performance: win rate, total P&L, Sharpe ratio, best/worst trades, slippage
 - Source Analysis: crypto_scout vs polymarket_scout signal quality comparison
 - Cross-Domain Exposure: any correlated positions flagged
-- Improvements: open items, resolved items, new items this week
+- Signal Attribution: which signal types contributed to wins vs losses
+- Bull/Bear Thesis Review: for each active thesis, construct bull case and bear case. If bear is stronger, capture improvement.
+- Improvements: open items, resolved items, new items this week, routing summary
 - Shadow Trading: shadow vs live comparison (if shadow trades exist)
 - Recommendations: 3-5 specific action items for next week
 
 Save the full report to the vault. Keep it actionable and data-driven.`,
     schedule: { type: "weekly", hour: 8, minute: 30, daysOfWeek: [0] },
+    enabled: true
+  },
+  {
+    id: "oversight-daily-summary",
+    name: "Oversight Daily Summary",
+    agentId: "oversight",
+    prompt: `Generate and send the daily performance summary.
+
+1. Call oversight_daily_summary with send_telegram=true to generate and send the daily recap.
+2. This covers: portfolio value, drawdown, today's trades, system health, and open issues.
+3. Save a brief copy to the vault.
+
+Keep it quick \u2014 the daily summary is meant to be a 30-second glance at the day's results.`,
+    schedule: { type: "daily", hour: 20, minute: 0 },
     enabled: true
   }
 ];
@@ -11215,6 +11262,19 @@ ${backlinkHeading}${backlinkLine}`);
 
 // src/oversight.ts
 init_db();
+var telegramNotifier = null;
+function setTelegramNotifier(fn) {
+  telegramNotifier = fn;
+}
+async function notifyTelegram(msg) {
+  if (telegramNotifier) {
+    try {
+      await telegramNotifier(msg);
+    } catch (e) {
+      console.error("[oversight] Telegram notification failed:", e instanceof Error ? e.message : e);
+    }
+  }
+}
 var HEALTH_REPORTS_KEY = "oversight_health_reports";
 var IMPROVEMENT_QUEUE_KEY = "oversight_improvement_queue";
 var SHADOW_TRADES_KEY = "oversight_shadow_trades";
@@ -11271,6 +11331,10 @@ async function runHealthCheck() {
   checks.push(dataCheck);
   const jobFailCheck = await checkRecentJobFailures(pool2);
   checks.push(jobFailCheck);
+  const apiCheck = await checkApiFailureRates(pool2);
+  checks.push(apiCheck);
+  const latencyCheck = await checkJobExecutionTrends(pool2);
+  checks.push(latencyCheck);
   const criticalCount = checks.filter((c) => c.status === "critical").length;
   const warnCount = checks.filter((c) => c.status === "warn").length;
   const overall = criticalCount > 0 ? "critical" : warnCount >= 2 ? "degraded" : "healthy";
@@ -11417,10 +11481,11 @@ async function checkCircuitBreakerState(pool2) {
     const rolling7dPct = portfolio > 0 ? rolling7d / portfolio * 100 : 0;
     const drawdownPct = peak > 0 ? (peak - portfolio) / peak * 100 : 0;
     if (rolling7dPct < -15 || drawdownPct > 25) {
+      await enforceCircuitBreaker(rolling7dPct, drawdownPct);
       return {
         name: "Circuit Breaker",
         status: "critical",
-        detail: `Circuit breaker triggered \u2014 7d P&L: ${rolling7dPct.toFixed(1)}%, drawdown: ${drawdownPct.toFixed(1)}%`
+        detail: `Circuit breaker TRIGGERED & ENFORCED \u2014 7d P&L: ${rolling7dPct.toFixed(1)}%, drawdown: ${drawdownPct.toFixed(1)}% \u2014 auto-paused`
       };
     }
     if (rolling7dPct < -10 || drawdownPct > 20) {
@@ -11498,6 +11563,111 @@ async function checkRecentJobFailures(pool2) {
     return { name: "Job Failures", status: "warn", detail: "Could not check job failures" };
   }
 }
+async function enforceCircuitBreaker(rolling7dPct, drawdownPct) {
+  const pool2 = getPool();
+  const alreadyPaused = await getConfigValue("wealth_engines_paused", false);
+  if (!alreadyPaused) {
+    await pool2.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_paused', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(true), Date.now()]
+    );
+    console.log(`[oversight] CIRCUIT BREAKER ENFORCED \u2014 auto-paused all Wealth Engines`);
+  }
+  const alertMsg = [
+    `\u{1F6A8} *CIRCUIT BREAKER TRIGGERED*`,
+    "",
+    `\u26D4 All Wealth Engine agents have been *AUTO-PAUSED*`,
+    `\u{1F4C9} 7-day P&L: ${rolling7dPct.toFixed(1)}%${rolling7dPct < -15 ? " (limit: -15%)" : ""}`,
+    `\u{1F4C9} Peak drawdown: ${drawdownPct.toFixed(1)}%${drawdownPct > 25 ? " (limit: 25%)" : ""}`,
+    "",
+    `Use /resume to manually restart after reviewing positions.`
+  ].join("\n");
+  await notifyTelegram(alertMsg);
+  await captureImprovement({
+    source: "circuit_breaker",
+    category: "risk",
+    severity: "critical",
+    domain: "system",
+    priority: 1,
+    title: `Circuit breaker: 7d ${rolling7dPct.toFixed(1)}%, DD ${drawdownPct.toFixed(1)}%`,
+    description: `Auto-paused due to circuit breaker. Rolling 7d P&L: ${rolling7dPct.toFixed(1)}%, peak drawdown: ${drawdownPct.toFixed(1)}%.`,
+    pattern_description: "Sustained losses exceeding risk thresholds",
+    suggested_action: "Review all open positions, evaluate thesis quality, reduce leverage/position sizing before resuming",
+    route: "manual_review"
+  });
+}
+async function checkApiFailureRates(pool2) {
+  try {
+    const res = await pool2.query(
+      `SELECT value FROM app_config WHERE key = 'wealth_engines_api_errors'`
+    );
+    if (res.rows.length === 0) {
+      return { name: "API Health", status: "ok", detail: "No API error tracking data" };
+    }
+    const errors = res.rows[0].value;
+    const recentErrors = Array.isArray(errors) ? errors.filter((e) => e.timestamp > Date.now() - 6 * 60 * 60 * 1e3) : [];
+    const byService = {};
+    for (const e of recentErrors) {
+      const svc = e.service || "unknown";
+      byService[svc] = (byService[svc] || 0) + 1;
+    }
+    const highFailServices = Object.entries(byService).filter(([, count]) => count >= 5);
+    if (highFailServices.length > 0) {
+      const details = highFailServices.map(([svc, count]) => `${svc}: ${count}`).join(", ");
+      return {
+        name: "API Health",
+        status: highFailServices.some(([, c]) => c >= 10) ? "critical" : "warn",
+        detail: `API failures in last 6h: ${details}`,
+        value: recentErrors.length
+      };
+    }
+    return { name: "API Health", status: "ok", detail: `${recentErrors.length} API errors in last 6h \u2014 OK` };
+  } catch {
+    return { name: "API Health", status: "ok", detail: "API error tracking not available" };
+  }
+}
+async function checkJobExecutionTrends(pool2) {
+  try {
+    const res = await pool2.query(
+      `SELECT job_id, created_at, completed_at FROM job_history
+       WHERE agent_id IN ('scout', 'bankr', 'polymarket-scout')
+       AND created_at > NOW() - INTERVAL '48 hours'
+       AND completed_at IS NOT NULL
+       ORDER BY created_at DESC LIMIT 30`
+    );
+    if (res.rows.length < 3) {
+      return { name: "Job Latency", status: "ok", detail: "Insufficient data for trend analysis" };
+    }
+    const durations = res.rows.map((r) => {
+      const start = new Date(r.created_at).getTime();
+      const end = new Date(r.completed_at).getTime();
+      return (end - start) / 1e3;
+    }).filter((d) => d > 0);
+    if (durations.length === 0) {
+      return { name: "Job Latency", status: "ok", detail: "No valid durations" };
+    }
+    const avgDuration = durations.reduce((a, b) => a + b, 0) / durations.length;
+    const maxDuration = Math.max(...durations);
+    if (maxDuration > 300) {
+      return {
+        name: "Job Latency",
+        status: "warn",
+        detail: `Slow jobs detected \u2014 avg: ${avgDuration.toFixed(0)}s, max: ${maxDuration.toFixed(0)}s`,
+        value: avgDuration,
+        threshold: 120
+      };
+    }
+    return {
+      name: "Job Latency",
+      status: "ok",
+      detail: `Avg job duration: ${avgDuration.toFixed(0)}s, max: ${maxDuration.toFixed(0)}s \u2014 OK`,
+      value: avgDuration
+    };
+  } catch {
+    return { name: "Job Latency", status: "ok", detail: "Could not analyze job trends" };
+  }
+}
 async function runPerformanceReview(periodDays = 7) {
   const now = Date.now();
   const periodStart = now - periodDays * 24 * 60 * 60 * 1e3;
@@ -11551,6 +11721,7 @@ async function runPerformanceReview(periodDays = 7) {
     const srcWins = srcTrades.filter((t) => (t.pnl || 0) > 0);
     sourceBreakdown[src].win_rate = srcTrades.length > 0 ? srcWins.length / srcTrades.length * 100 : 0;
   }
+  const signalAttribution = buildSignalAttribution(periodTrades, totalPnl);
   const exposureAlerts = await detectCrossDomainExposure();
   const review = {
     id: `perf_${now}`,
@@ -11568,6 +11739,7 @@ async function runPerformanceReview(periodDays = 7) {
     thesis_conversion_rate: conversionRate,
     avg_slippage_pct: avgSlippage,
     source_breakdown: sourceBreakdown,
+    signal_attribution: signalAttribution,
     exposure_alerts: exposureAlerts.map((e) => e.detail)
   };
   if (winRate < 40 && periodTrades.length >= 3) {
@@ -11591,6 +11763,31 @@ async function runPerformanceReview(periodDays = 7) {
     });
   }
   return review;
+}
+function buildSignalAttribution(trades, totalPnl) {
+  const bySignal = {};
+  for (const t of trades) {
+    const signalType = t.signal_type || t.source || "unknown";
+    if (!bySignal[signalType]) bySignal[signalType] = [];
+    bySignal[signalType].push(t);
+  }
+  const attrs = [];
+  for (const [signal, signalTrades] of Object.entries(bySignal)) {
+    const wins = signalTrades.filter((t) => (t.pnl || 0) > 0);
+    const losses = signalTrades.filter((t) => (t.pnl || 0) <= 0);
+    const signalPnl = signalTrades.reduce((s, t) => s + (t.pnl || 0), 0);
+    const avgConf = signalTrades.reduce((s, t) => s + (t.confidence || 0), 0) / signalTrades.length;
+    attrs.push({
+      signal_type: signal,
+      trades: signalTrades.length,
+      wins: wins.length,
+      losses: losses.length,
+      total_pnl: signalPnl,
+      avg_confidence: avgConf,
+      contribution_pct: totalPnl !== 0 ? signalPnl / Math.abs(totalPnl) * 100 : 0
+    });
+  }
+  return attrs.sort((a, b) => b.total_pnl - a.total_pnl);
 }
 async function detectCrossDomainExposure() {
   const positions = await getConfigValue("wealth_engines_positions", []);
@@ -11656,16 +11853,40 @@ async function captureImprovement(params) {
   if (isDuplicate) {
     return queue.find((i) => i.title === params.title && i.status === "open");
   }
+  const severityPriority = { critical: 1, high: 2, medium: 3, low: 4 };
+  const routeMap = {
+    signal: "signal_tuning",
+    execution: "bankr_config",
+    infrastructure: "infra_fix",
+    risk: "manual_review",
+    strategy: "autoresearch"
+  };
   const improvement = {
     id: `imp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
     created_at: Date.now(),
-    ...params,
+    source: params.source,
+    category: params.category,
+    severity: params.severity,
+    domain: params.domain || inferDomain(params),
+    priority: params.priority ?? severityPriority[params.severity] ?? 3,
+    title: params.title,
+    description: params.description,
+    pattern_description: params.pattern_description,
+    suggested_action: params.suggested_action,
+    route: params.route || routeMap[params.category] || "manual_review",
     status: "open"
   };
   queue.push(improvement);
   await setConfigValue(IMPROVEMENT_QUEUE_KEY, pruneByAge(queue, MAX_IMPROVEMENTS));
-  console.log(`[oversight] Improvement captured: [${params.severity}] ${params.title}`);
+  console.log(`[oversight] Improvement captured: [${params.severity}] ${params.title} \u2192 route:${improvement.route}`);
   return improvement;
+}
+function inferDomain(params) {
+  const text = `${params.title} ${params.description}`.toLowerCase();
+  if (text.includes("polymarket") || text.includes("pm ")) return "polymarket";
+  if (text.includes("crypto") || text.includes("scout") || text.includes("bnkr") || text.includes("bankr")) return "crypto";
+  if (text.includes("cross") || text.includes("exposure") || text.includes("correlated")) return "cross_domain";
+  return "system";
 }
 async function updateImprovement(id, status, note) {
   const queue = await getConfigValue(IMPROVEMENT_QUEUE_KEY, []);
@@ -11750,12 +11971,79 @@ async function getOversightSummary() {
   const criticalItems = openItems.filter((i) => i.severity === "critical");
   const shadowPerf = await getShadowPerformance();
   const lastCheck = await getConfigValue(LAST_HEALTH_CHECK_KEY, null);
+  const portfolio = await getConfigValue("wealth_engines_portfolio_value", 50);
+  const peak = await getConfigValue("wealth_engines_peak_portfolio", 50);
+  const history = await getConfigValue("wealth_engines_trade_history", []);
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1e3;
+  const recentTrades = history.filter((t) => new Date(t.closed_at).getTime() > sevenDaysAgo);
+  const rolling7d = recentTrades.reduce((s, t) => s + (t.pnl || 0), 0);
+  const rolling7dPct = portfolio > 0 ? rolling7d / portfolio * 100 : 0;
+  const drawdownPct = peak > 0 ? (peak - portfolio) / peak * 100 : 0;
   return {
     health,
-    improvements: { open: openItems.length, total: queue.length, critical: criticalItems.length },
+    drawdown: { portfolio_value: portfolio, peak_value: peak, drawdown_pct: drawdownPct, rolling_7d_pnl_pct: rolling7dPct },
+    improvements: {
+      open: openItems.length,
+      total: queue.length,
+      critical: criticalItems.length,
+      active_items: openItems.slice(0, 10).map((i) => ({
+        id: i.id,
+        severity: i.severity,
+        title: i.title,
+        domain: i.domain || "system",
+        route: i.route || "manual_review",
+        created_at: i.created_at
+      }))
+    },
     shadow: { open: shadowPerf.open_trades, total_pnl: shadowPerf.total_pnl },
     last_check: lastCheck
   };
+}
+async function generateDailyPerformanceSummary() {
+  const review = await runPerformanceReview(1);
+  const health = await getLatestHealthReport();
+  const portfolio = await getConfigValue("wealth_engines_portfolio_value", 50);
+  const peak = await getConfigValue("wealth_engines_peak_portfolio", 50);
+  const drawdownPct = peak > 0 ? (peak - portfolio) / peak * 100 : 0;
+  const queue = await getConfigValue(IMPROVEMENT_QUEUE_KEY, []);
+  const openItems = queue.filter((i) => i.status === "open");
+  const lines = [
+    `\u{1F4CB} *Daily Performance Summary*`,
+    `_${(/* @__PURE__ */ new Date()).toLocaleDateString("en-US", { timeZone: "America/New_York", weekday: "long", month: "short", day: "numeric" })}_`,
+    "",
+    `\u{1F4B0} *Portfolio:* $${portfolio.toFixed(2)} (peak: $${peak.toFixed(2)}, DD: ${drawdownPct.toFixed(1)}%)`,
+    `\u{1F4CA} *Today:* ${review.total_trades} trades, ${review.total_pnl >= 0 ? "+" : ""}$${review.total_pnl.toFixed(2)}`,
+    `\u{1F3AF} *Win Rate:* ${review.win_rate.toFixed(0)}%`
+  ];
+  if (health) {
+    const icons = { healthy: "\u{1F7E2}", degraded: "\u{1F7E1}", critical: "\u{1F534}" };
+    lines.push(`${icons[health.overall_status] || "\u26AA"} *System:* ${health.overall_status}`);
+  }
+  if (openItems.length > 0) {
+    const critical = openItems.filter((i) => i.severity === "critical");
+    lines.push(`\u{1F4CB} *Open Issues:* ${openItems.length}${critical.length > 0 ? ` (${critical.length} critical)` : ""}`);
+  }
+  return lines.join("\n");
+}
+async function sendDailyPerformanceSummary() {
+  const summary = await generateDailyPerformanceSummary();
+  await notifyTelegram(summary);
+  console.log("[oversight] Daily performance summary sent");
+}
+async function autoTrackShadowTrade(params) {
+  const existing = await getShadowTrades("open");
+  const alreadyTracked = existing.some((t) => t.thesis_id === params.thesis_id && t.asset === params.asset);
+  if (alreadyTracked) return null;
+  const shadow = await openShadowTrade({
+    thesis_id: params.thesis_id,
+    asset: params.asset,
+    asset_class: params.asset_class,
+    source: params.source,
+    direction: params.direction,
+    entry_price: params.entry_price
+  });
+  console.log(`[oversight] Auto-shadow: ${params.asset} ${params.direction} @ $${params.entry_price} \u2014 ${params.reason}`);
+  return shadow;
 }
 
 // server.ts
@@ -13573,9 +13861,24 @@ function buildOversightTools() {
           Type.Literal("high"),
           Type.Literal("critical")
         ], { description: "Severity level" }),
+        domain: Type.Optional(Type.Union([
+          Type.Literal("crypto"),
+          Type.Literal("polymarket"),
+          Type.Literal("cross_domain"),
+          Type.Literal("system")
+        ], { description: "Domain this improvement relates to" })),
+        priority: Type.Optional(Type.Number({ description: "Priority (1=critical, 4=low). Auto-derived from severity if omitted." })),
         title: Type.String({ description: "Short title for the improvement" }),
         description: Type.String({ description: "Detailed description of the issue" }),
-        suggested_action: Type.String({ description: "Recommended action to address this" })
+        pattern_description: Type.Optional(Type.String({ description: "Description of the pattern or trend that led to this improvement" })),
+        suggested_action: Type.String({ description: "Recommended action to address this" }),
+        route: Type.Optional(Type.Union([
+          Type.Literal("autoresearch"),
+          Type.Literal("manual_review"),
+          Type.Literal("bankr_config"),
+          Type.Literal("signal_tuning"),
+          Type.Literal("infra_fix")
+        ], { description: "Where to route this improvement for resolution" }))
       }),
       async execute(_toolCallId, params) {
         try {
@@ -13682,12 +13985,57 @@ function buildOversightTools() {
     {
       name: "oversight_summary",
       label: "Oversight Summary",
-      description: "Get a quick overview of oversight status: latest health report, improvement queue counts, and shadow trading stats.",
+      description: "Get a quick overview of oversight status: latest health report, drawdown status, active improvement details, and shadow trading stats.",
       parameters: Type.Object({}),
       async execute() {
         try {
           const summary = await getOversightSummary();
           return { content: [{ type: "text", text: JSON.stringify(summary) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "oversight_daily_summary",
+      label: "Oversight Daily Summary",
+      description: "Generate and optionally send the daily performance summary via Telegram.",
+      parameters: Type.Object({
+        send_telegram: Type.Optional(Type.Boolean({ description: "If true, also sends the summary via Telegram (default: false)" }))
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          if (params.send_telegram) {
+            await sendDailyPerformanceSummary();
+            return { content: [{ type: "text", text: JSON.stringify({ sent: true }) }], details: {} };
+          }
+          const summary = await generateDailyPerformanceSummary();
+          return { content: [{ type: "text", text: summary }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "oversight_auto_shadow",
+      label: "Oversight Auto Shadow Trade",
+      description: "Automatically track a shadow trade for a thesis that BANKR chose not to execute (e.g., rejected by approval, outside parameters). Deduplicates by thesis+asset.",
+      parameters: Type.Object({
+        thesis_id: Type.String({ description: "Thesis ID to shadow" }),
+        asset: Type.String({ description: "Asset symbol" }),
+        asset_class: Type.Union([Type.Literal("crypto"), Type.Literal("polymarket")], { description: "Asset class" }),
+        source: Type.Union([Type.Literal("crypto_scout"), Type.Literal("polymarket_scout")], { description: "Signal source" }),
+        direction: Type.String({ description: "Trade direction (LONG/SHORT/YES/NO)" }),
+        entry_price: Type.Number({ description: "Entry price at time of shadow" }),
+        reason: Type.String({ description: "Why this is being shadow-tracked instead of executed" })
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const shadow = await autoTrackShadowTrade(params);
+          if (shadow) {
+            return { content: [{ type: "text", text: JSON.stringify(shadow) }], details: {} };
+          }
+          return { content: [{ type: "text", text: JSON.stringify({ skipped: true, reason: "Already tracking this thesis/asset" }) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
         }
@@ -18730,6 +19078,9 @@ async function startServer(maxRetries = 5) {
   await init5();
   await init6();
   await init7();
+  setTelegramNotifier(async (msg) => {
+    await sendMessage(msg);
+  });
   await init8();
   try {
     const pool2 = (await Promise.resolve().then(() => (init_db(), db_exports))).getPool();
