@@ -503,7 +503,19 @@ async function monitorPolymarketPosition(pos: Position, closed: TradeRecord[]): 
       if (found) thesis = found;
     }
   } catch {}
-  if (!thesis) return;
+  if (!thesis) {
+    console.warn(`[bankr] Polymarket thesis ${pos.thesis_id} not found — applying conservative stop loss`);
+    const stopLoss = 0.10;
+    const isYesFallback = pos.direction === "YES";
+    if (isYesFallback && pos.current_price <= pos.entry_price - stopLoss) {
+      const record = await closePosition(pos.id, pos.current_price, "pm_stop_loss_no_thesis");
+      if (record) closed.push(record);
+    } else if (!isYesFallback && pos.current_price >= pos.entry_price + stopLoss) {
+      const record = await closePosition(pos.id, pos.current_price, "pm_stop_loss_no_thesis");
+      if (record) closed.push(record);
+    }
+    return;
+  }
 
   const market = await polymarket.getMarketDetails(thesis.market_id);
   if (!market) return;
@@ -571,7 +583,7 @@ async function monitorPolymarketPosition(pos: Position, closed: TradeRecord[]): 
 
   try {
     const activities = await polymarket.getWhaleActivities();
-    const marketActivities = activities.filter(a => a.market_question === pos.asset);
+    const marketActivities = activities.filter(a => a.market_id === thesis.market_id);
     if (marketActivities.length >= 2) {
       const flipped = marketActivities.filter(a =>
         a.activity_type !== "position_exit" && a.direction !== pos.direction
