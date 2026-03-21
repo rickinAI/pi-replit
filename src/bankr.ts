@@ -3,7 +3,6 @@ import { analyzeAsset, checkCooldown, recordSignal, loadCryptoSignalParams, type
 import { getHistoricalOHLCV } from "./coingecko.js";
 import * as polymarket from "./polymarket.js";
 import * as bnkr from "./bnkr.js";
-import * as coinbaseWallet from "./coinbase-wallet.js";
 import type { PolymarketThesis } from "./polymarket-scout.js";
 import { autoTrackShadowTrade, closeShadowTrade, updateShadowPrices, getShadowTrades } from "./oversight.js";
 
@@ -23,7 +22,7 @@ export interface Position {
   atr_value: number;
   atr_stop_price: number;
   opened_at: string;
-  venue: "bnkr" | "coinbase" | "kreo";
+  venue: "bnkr";
   exposure_bucket: string;
   bnkr_order_id?: string;
   fill_quantity?: number;
@@ -80,7 +79,7 @@ export interface RiskCheckResult {
 const PORTFOLIO_VALUE_KEY = "wealth_engines_portfolio_value";
 const PEAK_PORTFOLIO_KEY = "wealth_engines_peak_portfolio";
 const CONSECUTIVE_LOSSES_KEY = "wealth_engines_consecutive_losses";
-const DEFAULT_PORTFOLIO = 50;
+const DEFAULT_PORTFOLIO = 1000;
 
 export async function getPortfolioValue(): Promise<number> {
   const pool = getPool();
@@ -276,16 +275,16 @@ export async function runPreExecutionChecks(params: {
   const mode = await getMode();
   checks.push({ name: "mode_check", passed: true, detail: `Mode: ${mode}${mode === "SHADOW" ? " (shadow trades only)" : ""}` });
 
-  const levOk = params.leverage <= 2;
-  checks.push({ name: "leverage_cap", passed: levOk, detail: `Requested: ${params.leverage}x, Max: 2x` });
+  const levOk = params.leverage <= 5;
+  checks.push({ name: "leverage_cap", passed: levOk, detail: `Requested: ${params.leverage}x, Max: 5x` });
   if (!levOk) allPassed = false;
 
   const portfolio = await getPortfolioValue();
-  const maxRisk = portfolio * 0.02;
+  const maxRisk = portfolio * 0.05;
   const riskDistance = Math.abs(params.entry_price - params.stop_price);
   const riskAmount = params.risk_amount || (riskDistance > 0 ? maxRisk : 0);
   const riskOk = riskAmount <= maxRisk;
-  checks.push({ name: "risk_per_trade", passed: riskOk, detail: `Risk: $${riskAmount.toFixed(2)}, Max: $${maxRisk.toFixed(2)} (2% of $${portfolio.toFixed(2)})` });
+  checks.push({ name: "risk_per_trade", passed: riskOk, detail: `Risk: $${riskAmount.toFixed(2)}, Max: $${maxRisk.toFixed(2)} (5% of $${portfolio.toFixed(2)})` });
   if (!riskOk) allPassed = false;
 
   if (params.leverage > 1) {
@@ -299,23 +298,23 @@ export async function runPreExecutionChecks(params: {
   }
 
   const positions = await getPositions();
-  const posCountOk = positions.length < 5;
-  checks.push({ name: "max_positions", passed: posCountOk, detail: `Open: ${positions.length}/5` });
+  const posCountOk = positions.length < 3;
+  checks.push({ name: "max_positions", passed: posCountOk, detail: `Open: ${positions.length}/3` });
   if (!posCountOk) allPassed = false;
 
   const totalExposure = positions.reduce((sum, p) => sum + (p.size * p.entry_price), 0);
   const newPositionSize = riskDistance > 0 ? riskAmount / riskDistance : 0;
   const newExposure = newPositionSize * params.entry_price;
   const totalAfter = totalExposure + newExposure;
-  const exposureLimit = portfolio * 0.80;
+  const exposureLimit = portfolio * 0.60;
   const exposureOk = totalAfter <= exposureLimit;
-  checks.push({ name: "total_exposure", passed: exposureOk, detail: `After: $${totalAfter.toFixed(2)} / $${exposureLimit.toFixed(2)} (80% of portfolio)` });
+  checks.push({ name: "total_exposure", passed: exposureOk, detail: `After: $${totalAfter.toFixed(2)} / $${exposureLimit.toFixed(2)} (60% of portfolio)` });
   if (!exposureOk) allPassed = false;
 
   const bucket = getExposureBucket(params.asset, params.asset_class);
   const bucketCount = positions.filter(p => p.exposure_bucket === bucket).length;
-  const correlationOk = bucketCount < 2;
-  checks.push({ name: "correlation_limit", passed: correlationOk, detail: `Bucket "${bucket}": ${bucketCount}/2 positions` });
+  const correlationOk = bucketCount < 1;
+  checks.push({ name: "correlation_limit", passed: correlationOk, detail: `Bucket "${bucket}": ${bucketCount}/1 positions` });
   if (!correlationOk) allPassed = false;
 
   const consecutiveLosses = await getConsecutiveLosses();
@@ -371,7 +370,7 @@ export async function openPosition(params: {
   entry_price: number;
   stop_price: number;
   atr_value: number;
-  venue: "bnkr" | "coinbase" | "kreo";
+  venue: "bnkr";
   tx_hash?: string;
   market_id?: string;
 }): Promise<{ position: Position; trade_id: string; bnkr_order_id?: string }> {
@@ -417,7 +416,7 @@ export async function openPosition(params: {
   }
 
   const portfolio = await getPortfolioValue();
-  const maxRisk = portfolio * 0.02;
+  const maxRisk = portfolio * 0.05;
   const riskDistance = Math.abs(params.entry_price - params.stop_price);
   const size = riskDistance > 0 ? maxRisk / riskDistance : 0;
 
@@ -428,7 +427,7 @@ export async function openPosition(params: {
   let fillQuantity: number | undefined;
   const source = params.source || (params.asset_class === "polymarket" ? "polymarket_scout" : "crypto_scout");
 
-  if (params.venue === "bnkr" && bnkr.isConfigured()) {
+  if (bnkr.isConfigured()) {
     if (params.asset_class === "crypto") {
       const order = await bnkr.openCryptoPosition({
         asset: params.asset,
@@ -451,13 +450,6 @@ export async function openPosition(params: {
       bnkrOrderId = order.order_id;
       if (order.entry_odds > 0) params.entry_price = order.entry_odds;
     }
-  } else if (params.venue === "coinbase" && coinbaseWallet.isConfigured()) {
-    const order = await coinbaseWallet.buySpot({
-      asset: params.asset,
-      amount_usd: size * params.entry_price,
-    });
-    if (order.price > 0) params.entry_price = order.price;
-    if (order.quantity > 0) fillQuantity = order.quantity;
   }
 
   const position: Position = {
@@ -513,14 +505,6 @@ export async function closePosition(positionId: string, exitPrice: number, close
       }
     } catch (err) {
       console.error(`[bankr] BNKR close failed for ${pos.bnkr_order_id}:`, err instanceof Error ? err.message : err);
-      return null;
-    }
-  } else if (pos.venue === "coinbase" && coinbaseWallet.isConfigured() && pos.asset_class === "crypto") {
-    try {
-      const actualQty = pos.fill_quantity || pos.size;
-      await coinbaseWallet.sellSpot({ asset: pos.asset, quantity: actualQty });
-    } catch (err) {
-      console.error(`[bankr] Coinbase sell failed for ${pos.asset}:`, err instanceof Error ? err.message : err);
       return null;
     }
   }
@@ -899,7 +883,6 @@ export async function getPortfolioSummary(): Promise<{
   paused: boolean;
   kill_switch: boolean;
   bnkr_configured: boolean;
-  coinbase_configured: boolean;
   positions: Position[];
 }> {
   const [portfolio, peakPortfolio, consecutiveLosses, positions, mode, paused, killSwitch] = await Promise.all([
@@ -928,7 +911,6 @@ export async function getPortfolioSummary(): Promise<{
     paused,
     kill_switch: killSwitch,
     bnkr_configured: bnkr.isConfigured(),
-    coinbase_configured: coinbaseWallet.isConfigured(),
     positions,
   };
 }

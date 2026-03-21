@@ -2227,9 +2227,9 @@ async function runPolymarketResearch(experimentsCount = 15) {
   };
 }
 async function runFullResearch(experimentsPerDomain = 15) {
-  const crypto3 = await runCryptoResearch(experimentsPerDomain);
+  const crypto2 = await runCryptoResearch(experimentsPerDomain);
   const pm = await runPolymarketResearch(experimentsPerDomain);
-  return [crypto3, pm];
+  return [crypto2, pm];
 }
 function formatResearchSummary(summaries) {
   const lines = ["\u{1F52C} *Autoresearch Results*\n"];
@@ -2363,7 +2363,7 @@ __export(telegram_exports, {
   getWebhookSecret: () => getWebhookSecret,
   handleWebhookUpdate: () => handleWebhookUpdate,
   init: () => init6,
-  isConfigured: () => isConfigured8,
+  isConfigured: () => isConfigured7,
   requestTradeApproval: () => requestTradeApproval,
   sendJobCompletionNotification: () => sendJobCompletionNotification,
   sendMessage: () => sendMessage,
@@ -2403,7 +2403,7 @@ async function getMode() {
   }
   return "[BETA]";
 }
-function isConfigured8() {
+function isConfigured7() {
   return BOT_TOKEN.length > 0 && CHAT_ID.length > 0;
 }
 async function tgFetch(method, body) {
@@ -2421,7 +2421,7 @@ async function tgFetch(method, body) {
   return resp.json();
 }
 async function sendMessage(text, parseMode = "Markdown") {
-  if (!isConfigured8()) return null;
+  if (!isConfigured7()) return null;
   try {
     const result = await tgFetch("sendMessage", {
       chat_id: CHAT_ID,
@@ -2436,7 +2436,7 @@ async function sendMessage(text, parseMode = "Markdown") {
   }
 }
 async function sendMessageWithKeyboard(text, keyboard, parseMode = "Markdown") {
-  if (!isConfigured8()) return null;
+  if (!isConfigured7()) return null;
   try {
     const result = await tgFetch("sendMessage", {
       chat_id: CHAT_ID,
@@ -2769,7 +2769,7 @@ Use /resume to deactivate kill switch and resume.`;
 async function handleRiskCommand() {
   const mode = await getMode();
   const pool2 = getPool();
-  let portfolio = 50;
+  let portfolio = 1e3;
   try {
     const pv = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_portfolio_value'`);
     if (pv.rows.length > 0 && typeof pv.rows[0].value === "number") portfolio = pv.rows[0].value;
@@ -2808,9 +2808,9 @@ async function handleRiskCommand() {
     `\u{1F4C9} 7-Day Rolling P&L: ${rolling7d >= 0 ? "+" : ""}$${rolling7d.toFixed(2)} (${rolling7dPct.toFixed(1)}%)`,
     `\u{1F53B} Circuit Breaker: ${rolling7dPct < -15 ? "\u26A0\uFE0F TRIGGERED" : "OK"} (threshold: -15%)`,
     "",
-    `*Positions:* ${positions.length}/5`,
-    `*Exposure Limit:* ${exposurePct.toFixed(0)}%/80%`,
-    `*Buckets:* ${Object.entries(buckets).map(([b, c]) => `${b}: ${c}/2`).join(", ") || "none"}`
+    `*Positions:* ${positions.length}/3`,
+    `*Exposure Limit:* ${exposurePct.toFixed(0)}%/60%`,
+    `*Buckets:* ${Object.entries(buckets).map(([b, c]) => `${b}: ${c}/1`).join(", ") || "none"}`
   ];
   return lines.join("\n");
 }
@@ -2912,8 +2912,8 @@ async function handleOversightCommand() {
         activeItems.push({ severity: item.severity, title: item.title, route: item.route || "manual" });
       }
     }
-    const portfolio = portfolioRes.rows.length > 0 ? Number(portfolioRes.rows[0].value) : 50;
-    const peak = peakRes.rows.length > 0 ? Number(peakRes.rows[0].value) : 50;
+    const portfolio = portfolioRes.rows.length > 0 ? Number(portfolioRes.rows[0].value) : 1e3;
+    const peak = peakRes.rows.length > 0 ? Number(peakRes.rows[0].value) : 1e3;
     const drawdownPct = peak > 0 ? (peak - portfolio) / peak * 100 : 0;
     let rolling7dPct = 0;
     if (historyRes.rows.length > 0 && Array.isArray(historyRes.rows[0].value)) {
@@ -2995,7 +2995,7 @@ No shadow trades recorded yet.`;
 }
 async function handleAlertsCommand() {
   const mode = await getMode();
-  const darkNodeStatus = isConfigured8() ? "\u2705 Connected" : "\u274C Disconnected";
+  const darkNodeStatus = isConfigured7() ? "\u2705 Connected" : "\u274C Disconnected";
   const alertsStatus = isAlertsBotConfigured() ? "\u2705 Connected" : "\u274C Disconnected";
   return [
     `${mode} *Telegram Bots Status*`,
@@ -3035,7 +3035,7 @@ async function handleHelpCommand() {
 }
 async function requestTradeApproval(params) {
   const mode = await getMode();
-  if (!isConfigured8()) {
+  if (!isConfigured7()) {
     console.warn("[telegram] Trade approval requested but Telegram not configured \u2014 auto-skipping");
     return "skip";
   }
@@ -3134,7 +3134,7 @@ _Decision recorded at ${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { t
   console.log(`[telegram] Trade ${decision}: ${pending.asset} ${pending.direction} (thesis: ${pending.thesisId})`);
 }
 async function pollUpdates() {
-  if (!pollingActive || !isConfigured8()) return;
+  if (!pollingActive || !isConfigured7()) return;
   try {
     const result = await tgFetch("getUpdates", {
       offset: lastUpdateId + 1,
@@ -3201,7 +3201,7 @@ async function isJobEnabled(pool2, agentId) {
   return false;
 }
 async function checkDeadManSwitches() {
-  if (!isConfigured8()) return;
+  if (!isConfigured7()) return;
   const pool2 = getPool();
   const mode = await getMode();
   let paused = false;
@@ -3335,7 +3335,7 @@ ${truncated}`);
 }
 async function flushDigestQueue() {
   if (digestQueue.length === 0) return;
-  if (!isConfigured8()) {
+  if (!isConfigured7()) {
     digestQueue.length = 0;
     return;
   }
@@ -3370,7 +3370,7 @@ async function flushDigestQueue() {
   console.log(`[telegram] Digest flushed: ${events.length} events`);
 }
 async function sendJobCompletionNotification(params) {
-  if (!isConfigured8()) return;
+  if (!isConfigured7()) return;
   const mode = await getMode();
   const pool2 = getPool();
   const notifyMode = await getNotificationMode();
@@ -3510,7 +3510,7 @@ _${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New
   await sendMessage(lines.join("\n"));
 }
 async function sendShadowTradeNotification(params) {
-  if (!isConfigured8()) return;
+  if (!isConfigured7()) return;
   const mode = await getMode();
   if (params.type === "open") {
     const lines = [
@@ -3711,7 +3711,7 @@ function getWebhookSecret() {
   return WEBHOOK_SECRET;
 }
 async function handleWebhookUpdate(update) {
-  if (!isConfigured8()) return;
+  if (!isConfigured7()) return;
   if (update.callback_query) {
     const cbq = update.callback_query;
     if (String(cbq.message?.chat?.id) === CHAT_ID) {
@@ -3909,7 +3909,7 @@ ${event.content}`);
     return;
   }
   if (tradingEventTypes.has(event.type) || event.type === "alert" && !personalAlertTypes.has(event.alertType || "")) {
-    if (!isConfigured8()) return;
+    if (!isConfigured7()) return;
     const tradingIcons = {
       scout: "\u{1F50D}",
       bankr: "\u{1F4B0}",
@@ -4187,8 +4187,8 @@ async function checkPauseState(pool2) {
 async function checkCircuitBreakerState(pool2) {
   try {
     const history = await getConfigValue2("wealth_engines_trade_history", []);
-    const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 50);
-    const peak = await getConfigValue2("wealth_engines_peak_portfolio", 50);
+    const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 1e3);
+    const peak = await getConfigValue2("wealth_engines_peak_portfolio", 1e3);
     const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1e3;
     const recentTrades = history.filter((t) => new Date(t.closed_at).getTime() > sevenDaysAgo);
     const rolling7d = recentTrades.reduce((s, t) => s + (t.pnl || 0), 0);
@@ -4441,7 +4441,7 @@ async function runPerformanceReview(periodDays = 7) {
   }
   let maxDrawdownPct = 0;
   if (periodTrades.length > 0) {
-    const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 50);
+    const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 1e3);
     let equity = portfolio;
     let peak = portfolio;
     const sorted = [...periodTrades].sort(
@@ -4557,7 +4557,7 @@ function buildSignalAttribution(trades, totalPnl) {
 }
 async function detectCrossDomainExposure() {
   const positions = await getConfigValue2("wealth_engines_positions", []);
-  const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 50);
+  const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 1e3);
   const alerts = [];
   const cryptoPositions = positions.filter((p) => p.asset_class === "crypto");
   const pmPositions = positions.filter((p) => p.asset_class === "polymarket");
@@ -4927,8 +4927,8 @@ async function getOversightSummary() {
   const criticalItems = openItems.filter((i) => i.severity === "critical");
   const shadowPerf = await getShadowPerformance();
   const lastCheck = await getConfigValue2(LAST_HEALTH_CHECK_KEY, null);
-  const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 50);
-  const peak = await getConfigValue2("wealth_engines_peak_portfolio", 50);
+  const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 1e3);
+  const peak = await getConfigValue2("wealth_engines_peak_portfolio", 1e3);
   const history = await getConfigValue2("wealth_engines_trade_history", []);
   const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1e3;
   const recentTrades = history.filter((t) => new Date(t.closed_at).getTime() > sevenDaysAgo);
@@ -5082,7 +5082,7 @@ async function reviewTheses() {
 }
 async function checkPerAssetLosses() {
   const history = await getConfigValue2("wealth_engines_trade_history", []);
-  const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 50);
+  const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 1e3);
   const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1e3;
   const recent = history.filter((t) => new Date(t.closed_at).getTime() > sevenDaysAgo);
   const byAsset = {};
@@ -5110,8 +5110,8 @@ async function checkPerAssetLosses() {
 async function generateDailyPerformanceSummary() {
   const review = await runPerformanceReview(1);
   const health = await getLatestHealthReport();
-  const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 50);
-  const peak = await getConfigValue2("wealth_engines_peak_portfolio", 50);
+  const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 1e3);
+  const peak = await getConfigValue2("wealth_engines_peak_portfolio", 1e3);
   const drawdownPct = peak > 0 ? (peak - portfolio) / peak * 100 : 0;
   const queue = await getConfigValue2(IMPROVEMENT_QUEUE_KEY, []);
   const openItems = queue.filter((i) => i.status === "open");
@@ -5204,7 +5204,7 @@ import path7 from "path";
 import fs6 from "fs";
 import { execSync, spawn } from "child_process";
 import cookieParser from "cookie-parser";
-import crypto2 from "crypto";
+import crypto from "crypto";
 import {
   createAgentSession,
   AuthStorage,
@@ -8887,134 +8887,11 @@ init_technical_signals();
 init_coingecko();
 init_polymarket();
 init_bnkr();
-
-// src/coinbase-wallet.ts
-var COINBASE_API_KEY = process.env.COINBASE_API_KEY || "";
-var COINBASE_API_SECRET = process.env.COINBASE_API_SECRET || "";
-var COINBASE_BASE_URL = "https://api.coinbase.com/v2";
-function isConfigured7() {
-  return COINBASE_API_KEY.length > 0 && COINBASE_API_SECRET.length > 0;
-}
-async function coinbaseFetch(path8, method = "GET", body) {
-  const url = `${COINBASE_BASE_URL}${path8}`;
-  const timestamp = Math.floor(Date.now() / 1e3).toString();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15e3);
-  try {
-    const opts = {
-      method,
-      headers: {
-        "Content-Type": "application/json",
-        "CB-ACCESS-KEY": COINBASE_API_KEY,
-        "CB-ACCESS-SIGN": await signRequest(timestamp, method, path8, body),
-        "CB-ACCESS-TIMESTAMP": timestamp,
-        "CB-VERSION": "2024-01-01"
-      },
-      signal: controller.signal
-    };
-    if (body) opts.body = JSON.stringify(body);
-    const res = await fetch(url, opts);
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Coinbase API ${path8} failed (${res.status}): ${text}`);
-    }
-    return res.json();
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-async function signRequest(timestamp, method, path8, body) {
-  const message = timestamp + method.toUpperCase() + path8 + (body ? JSON.stringify(body) : "");
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(COINBASE_API_SECRET),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(message));
-  return Array.from(new Uint8Array(signature)).map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-async function buySpot(params) {
-  if (!isConfigured7()) {
-    console.log(`[coinbase] SHADOW: buySpot ${params.asset} $${params.amount_usd}`);
-    return {
-      id: `shadow_buy_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      asset: params.asset,
-      direction: "buy",
-      amount_usd: params.amount_usd,
-      quantity: 0,
-      price: 0,
-      status: "completed"
-    };
-  }
-  const accountId = await findAccountId(params.asset);
-  if (!accountId) throw new Error(`No Coinbase account found for ${params.asset}`);
-  const result = await coinbaseFetch(`/accounts/${accountId}/buys`, "POST", {
-    amount: params.amount_usd.toString(),
-    currency: "USD",
-    commit: true
-  });
-  return {
-    id: result.data?.id || "",
-    asset: params.asset,
-    direction: "buy",
-    amount_usd: params.amount_usd,
-    quantity: parseFloat(result.data?.amount?.amount || "0"),
-    price: parseFloat(result.data?.unit_price?.amount || "0"),
-    status: result.data?.status === "completed" ? "completed" : "pending"
-  };
-}
-async function sellSpot(params) {
-  if (!isConfigured7()) {
-    console.log(`[coinbase] SHADOW: sellSpot ${params.asset} qty=${params.quantity}`);
-    return {
-      id: `shadow_sell_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      asset: params.asset,
-      direction: "sell",
-      amount_usd: 0,
-      quantity: params.quantity,
-      price: 0,
-      status: "completed"
-    };
-  }
-  const accountId = await findAccountId(params.asset);
-  if (!accountId) throw new Error(`No Coinbase account found for ${params.asset}`);
-  const result = await coinbaseFetch(`/accounts/${accountId}/sells`, "POST", {
-    amount: params.quantity.toString(),
-    currency: params.asset.toUpperCase(),
-    commit: true
-  });
-  return {
-    id: result.data?.id || "",
-    asset: params.asset,
-    direction: "sell",
-    amount_usd: parseFloat(result.data?.total?.amount || "0"),
-    quantity: params.quantity,
-    price: parseFloat(result.data?.unit_price?.amount || "0"),
-    status: result.data?.status === "completed" ? "completed" : "pending"
-  };
-}
-async function findAccountId(asset) {
-  try {
-    const result = await coinbaseFetch("/accounts");
-    const accounts = result.data || [];
-    const match = accounts.find(
-      (a) => (a.currency?.code || a.currency)?.toLowerCase() === asset.toLowerCase()
-    );
-    return match?.id || null;
-  } catch {
-    return null;
-  }
-}
-
-// src/bankr.ts
 init_oversight();
 var PORTFOLIO_VALUE_KEY = "wealth_engines_portfolio_value";
 var PEAK_PORTFOLIO_KEY = "wealth_engines_peak_portfolio";
 var CONSECUTIVE_LOSSES_KEY = "wealth_engines_consecutive_losses";
-var DEFAULT_PORTFOLIO = 50;
+var DEFAULT_PORTFOLIO = 1e3;
 async function getPortfolioValue() {
   const pool2 = getPool();
   try {
@@ -9178,15 +9055,15 @@ async function runPreExecutionChecks(params) {
   if (paused) allPassed = false;
   const mode = await getMode2();
   checks.push({ name: "mode_check", passed: true, detail: `Mode: ${mode}${mode === "SHADOW" ? " (shadow trades only)" : ""}` });
-  const levOk = params.leverage <= 2;
-  checks.push({ name: "leverage_cap", passed: levOk, detail: `Requested: ${params.leverage}x, Max: 2x` });
+  const levOk = params.leverage <= 5;
+  checks.push({ name: "leverage_cap", passed: levOk, detail: `Requested: ${params.leverage}x, Max: 5x` });
   if (!levOk) allPassed = false;
   const portfolio = await getPortfolioValue();
-  const maxRisk = portfolio * 0.02;
+  const maxRisk = portfolio * 0.05;
   const riskDistance = Math.abs(params.entry_price - params.stop_price);
   const riskAmount = params.risk_amount || (riskDistance > 0 ? maxRisk : 0);
   const riskOk = riskAmount <= maxRisk;
-  checks.push({ name: "risk_per_trade", passed: riskOk, detail: `Risk: $${riskAmount.toFixed(2)}, Max: $${maxRisk.toFixed(2)} (2% of $${portfolio.toFixed(2)})` });
+  checks.push({ name: "risk_per_trade", passed: riskOk, detail: `Risk: $${riskAmount.toFixed(2)}, Max: $${maxRisk.toFixed(2)} (5% of $${portfolio.toFixed(2)})` });
   if (!riskOk) allPassed = false;
   if (params.leverage > 1) {
     const marginPerUnit = params.entry_price / params.leverage;
@@ -9198,21 +9075,21 @@ async function runPreExecutionChecks(params) {
     checks.push({ name: "margin_buffer", passed: true, detail: "No leverage \u2014 no liquidation risk" });
   }
   const positions = await getPositions();
-  const posCountOk = positions.length < 5;
-  checks.push({ name: "max_positions", passed: posCountOk, detail: `Open: ${positions.length}/5` });
+  const posCountOk = positions.length < 3;
+  checks.push({ name: "max_positions", passed: posCountOk, detail: `Open: ${positions.length}/3` });
   if (!posCountOk) allPassed = false;
   const totalExposure = positions.reduce((sum, p) => sum + p.size * p.entry_price, 0);
   const newPositionSize = riskDistance > 0 ? riskAmount / riskDistance : 0;
   const newExposure = newPositionSize * params.entry_price;
   const totalAfter = totalExposure + newExposure;
-  const exposureLimit = portfolio * 0.8;
+  const exposureLimit = portfolio * 0.6;
   const exposureOk = totalAfter <= exposureLimit;
-  checks.push({ name: "total_exposure", passed: exposureOk, detail: `After: $${totalAfter.toFixed(2)} / $${exposureLimit.toFixed(2)} (80% of portfolio)` });
+  checks.push({ name: "total_exposure", passed: exposureOk, detail: `After: $${totalAfter.toFixed(2)} / $${exposureLimit.toFixed(2)} (60% of portfolio)` });
   if (!exposureOk) allPassed = false;
   const bucket = getExposureBucket(params.asset, params.asset_class);
   const bucketCount = positions.filter((p) => p.exposure_bucket === bucket).length;
-  const correlationOk = bucketCount < 2;
-  checks.push({ name: "correlation_limit", passed: correlationOk, detail: `Bucket "${bucket}": ${bucketCount}/2 positions` });
+  const correlationOk = bucketCount < 1;
+  checks.push({ name: "correlation_limit", passed: correlationOk, detail: `Bucket "${bucket}": ${bucketCount}/1 positions` });
   if (!correlationOk) allPassed = false;
   const consecutiveLosses = await getConsecutiveLosses();
   checks.push({ name: "consecutive_losses", passed: consecutiveLosses < 3, detail: `Consecutive losses: ${consecutiveLosses}/3` });
@@ -9293,7 +9170,7 @@ async function openPosition(params) {
     return { position: shadowPosition, trade_id: shadowTradeId };
   }
   const portfolio = await getPortfolioValue();
-  const maxRisk = portfolio * 0.02;
+  const maxRisk = portfolio * 0.05;
   const riskDistance = Math.abs(params.entry_price - params.stop_price);
   const size = riskDistance > 0 ? maxRisk / riskDistance : 0;
   const posId = `pos_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -9301,7 +9178,7 @@ async function openPosition(params) {
   let bnkrOrderId;
   let fillQuantity;
   const source = params.source || (params.asset_class === "polymarket" ? "polymarket_scout" : "crypto_scout");
-  if (params.venue === "bnkr" && isConfigured6()) {
+  if (isConfigured6()) {
     if (params.asset_class === "crypto") {
       const order = await openCryptoPosition({
         asset: params.asset,
@@ -9324,13 +9201,6 @@ async function openPosition(params) {
       bnkrOrderId = order.order_id;
       if (order.entry_odds > 0) params.entry_price = order.entry_odds;
     }
-  } else if (params.venue === "coinbase" && isConfigured7()) {
-    const order = await buySpot({
-      asset: params.asset,
-      amount_usd: size * params.entry_price
-    });
-    if (order.price > 0) params.entry_price = order.price;
-    if (order.quantity > 0) fillQuantity = order.quantity;
   }
   const position = {
     id: posId,
@@ -9377,14 +9247,6 @@ async function closePosition(positionId, exitPrice, closeReason, txHash) {
       }
     } catch (err) {
       console.error(`[bankr] BNKR close failed for ${pos.bnkr_order_id}:`, err instanceof Error ? err.message : err);
-      return null;
-    }
-  } else if (pos.venue === "coinbase" && isConfigured7() && pos.asset_class === "crypto") {
-    try {
-      const actualQty = pos.fill_quantity || pos.size;
-      await sellSpot({ asset: pos.asset, quantity: actualQty });
-    } catch (err) {
-      console.error(`[bankr] Coinbase sell failed for ${pos.asset}:`, err instanceof Error ? err.message : err);
       return null;
     }
   }
@@ -9732,7 +9594,6 @@ async function getPortfolioSummary() {
     paused,
     kill_switch: killSwitch,
     bnkr_configured: isConfigured6(),
-    coinbase_configured: isConfigured7(),
     positions
   };
 }
@@ -13785,7 +13646,7 @@ function getConfig2() {
   if (!apiKey || !organizationId || !knowledgeBaseId) return null;
   return { apiKey, organizationId, knowledgeBaseId };
 }
-function isConfigured9() {
+function isConfigured8() {
   return getConfig2() !== null;
 }
 async function apiRequest(method, path8, body, retries = MAX_RETRIES2) {
@@ -13981,7 +13842,7 @@ Rules:
       actionItems: Array.isArray(parsed.actionItems) ? parsed.actionItems : [],
       skipReason: parsed.skipReason || void 0
     };
-    if (isConfigured9() && !result.skipReason) {
+    if (isConfigured8() && !result.skipReason) {
       try {
         const retainItems = [];
         const dateStr = (/* @__PURE__ */ new Date()).toISOString();
@@ -14460,7 +14321,7 @@ var USERS = {
   pooja: { password: POOJA_PASSWORD, displayName: "Pooja" },
   darknode: { password: DARKNODE_PASSWORD, displayName: "DarkNode" }
 };
-var SESSION_SECRET = process.env.SESSION_SECRET || crypto2.randomBytes(32).toString("hex");
+var SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path7.dirname(__filename);
 var PROJECT_ROOT = __filename.includes("/dist/") ? path7.resolve(__dirname, "..") : __dirname;
@@ -16198,7 +16059,7 @@ function buildCoinGeckoTools() {
     {
       name: "bankr_open_position",
       label: "BANKR Open Position",
-      description: "Open a new position. Runs risk checks with tiered approval (autonomous/dead_zone/human_required), calculates position size (2% risk), executes via BNKR or Coinbase.",
+      description: "Open a new position. Runs risk checks with tiered approval (autonomous/dead_zone/human_required), calculates position size (5% risk), executes via BNKR only.",
       parameters: Type.Object({
         thesis_id: Type.String(),
         asset: Type.String(),
@@ -16209,7 +16070,7 @@ function buildCoinGeckoTools() {
         entry_price: Type.Number(),
         stop_price: Type.Number(),
         atr_value: Type.Number(),
-        venue: Type.Union([Type.Literal("bnkr"), Type.Literal("coinbase"), Type.Literal("kreo")]),
+        venue: Type.Literal("bnkr"),
         confidence: Type.Optional(Type.Number({ description: "Confidence score 1-5 for tiered approval" })),
         market_id: Type.Optional(Type.String({ description: "Polymarket market ID for BNKR execution" }))
       }),
@@ -16233,7 +16094,7 @@ function buildCoinGeckoTools() {
           }
           if (riskCheck.tier === "human_required") {
             const portfolio = await getPortfolioValue();
-            const riskAmount = portfolio * 0.02;
+            const riskAmount = portfolio * 0.05;
             const approval = await requestTradeApproval({
               thesisId: params.thesis_id,
               asset: params.asset,
@@ -17894,7 +17755,7 @@ function buildMemoryTools() {
         top_k: Type.Optional(Type.Number({ description: "Number of memories to return (default 10, max 25)" }))
       }),
       async execute(_toolCallId, params) {
-        if (!isConfigured9()) {
+        if (!isConfigured8()) {
           return { content: [{ type: "text", text: "Memory recall is not configured. Set VECTORIZE_API_KEY, VECTORIZE_ORG_ID, and VECTORIZE_KB_ID to enable." }], details: {} };
         }
         const topK = Math.min(params.top_k || 10, 25);
@@ -17919,7 +17780,7 @@ ${formatted}` }], details: {} };
       description: "Consolidate and reflect on accumulated memories. Calls the Hindsight knowledge graph reflect operation to surface patterns, recurring themes, and insights across all stored memories. Use this for weekly memory digests or when asked 'what patterns do you see in my activity?'",
       parameters: Type.Object({}),
       async execute() {
-        if (!isConfigured9()) {
+        if (!isConfigured8()) {
           return { content: [{ type: "text", text: "Memory reflect is not configured. Set VECTORIZE_API_KEY, VECTORIZE_ORG_ID, and VECTORIZE_KB_ID to enable." }], details: {} };
         }
         const result = await reflect();
@@ -19254,7 +19115,7 @@ async function buildWealthEnginesDashboardData() {
     daily_pnl: parseFloat(dailyPnl.toFixed(4)),
     weekly_pnl: parseFloat(weeklyPnl.toFixed(4)),
     available_usdc: parseFloat(availableUsdc.toFixed(2)),
-    initial_capital: summary.initial_capital || 50,
+    initial_capital: summary.initial_capital || 1e3,
     total_trades: tradeHistory.length,
     win_rate: parseFloat(winRate.toFixed(1)),
     mode: summary.mode,
@@ -19344,8 +19205,7 @@ async function buildWealthEnginesDashboardData() {
       oversight_last_run: oversightLastRun,
       oversight_healthy: oversightHealthy,
       deadman_healthy: monitorHealthy,
-      bnkr_configured: summary.bnkr_configured,
-      coinbase_configured: summary.coinbase_configured
+      bnkr_configured: summary.bnkr_configured
     }
   };
 }
@@ -20747,7 +20607,7 @@ IMPORTANT: When Rickin says something brief like "test it", "try again", "do it"
       const lastConvoContext = await getLastConversationContext(10);
       const vaultIndex = await getVaultIndex();
       let hindsightContext = null;
-      if (isConfigured9()) {
+      if (isConfigured8()) {
         try {
           const memResult = await recall({ query: "What has Rickin been working on and talking about recently? Important decisions, preferences, and context.", topK: 8 });
           if (memResult.memories.length > 0) {
@@ -21503,7 +21363,7 @@ app.post("/api/v1/chat/completions", async (req, res) => {
       messages: anthropicMessages
     });
     const textContent = response.content.filter((b) => b.type === "text").map((b) => b.text).join("");
-    const completionId = `chatcmpl-${crypto2.randomUUID().replace(/-/g, "").slice(0, 24)}`;
+    const completionId = `chatcmpl-${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
     res.json({
       id: completionId,
       object: "chat.completion",
@@ -21964,6 +21824,27 @@ async function waitForPort(port, maxWaitMs = 3e4) {
 async function runStartupRecovery() {
   const startupTime = Date.now();
   console.log("[recovery] Running startup recovery checks...");
+  try {
+    const migPool = getPool();
+    const portfolioRes = await migPool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_portfolio_value'`);
+    if (portfolioRes.rows.length > 0 && portfolioRes.rows[0].value === 50) {
+      await migPool.query(
+        `UPDATE app_config SET value = $1, updated_at = $2 WHERE key = 'wealth_engines_portfolio_value'`,
+        [JSON.stringify(1e3), Date.now()]
+      );
+      console.log("[recovery] Migrated portfolio value: $50 \u2192 $1,000");
+    }
+    const peakRes = await migPool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_peak_portfolio'`);
+    if (peakRes.rows.length > 0 && peakRes.rows[0].value === 50) {
+      await migPool.query(
+        `UPDATE app_config SET value = $1, updated_at = $2 WHERE key = 'wealth_engines_peak_portfolio'`,
+        [JSON.stringify(1e3), Date.now()]
+      );
+      console.log("[recovery] Migrated peak portfolio: $50 \u2192 $1,000");
+    }
+  } catch (migErr) {
+    console.error("[recovery] Portfolio migration check failed:", migErr instanceof Error ? migErr.message : migErr);
+  }
   let previousLastTick = 0;
   try {
     const pool2 = getPool();

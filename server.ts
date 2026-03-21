@@ -1846,7 +1846,7 @@ function buildCoinGeckoTools(): ToolDefinition[] {
     {
       name: "bankr_open_position",
       label: "BANKR Open Position",
-      description: "Open a new position. Runs risk checks with tiered approval (autonomous/dead_zone/human_required), calculates position size (2% risk), executes via BNKR or Coinbase.",
+      description: "Open a new position. Runs risk checks with tiered approval (autonomous/dead_zone/human_required), calculates position size (5% risk), executes via BNKR only.",
       parameters: Type.Object({
         thesis_id: Type.String(),
         asset: Type.String(),
@@ -1857,7 +1857,7 @@ function buildCoinGeckoTools(): ToolDefinition[] {
         entry_price: Type.Number(),
         stop_price: Type.Number(),
         atr_value: Type.Number(),
-        venue: Type.Union([Type.Literal("bnkr"), Type.Literal("coinbase"), Type.Literal("kreo")]),
+        venue: Type.Literal("bnkr"),
         confidence: Type.Optional(Type.Number({ description: "Confidence score 1-5 for tiered approval" })),
         market_id: Type.Optional(Type.String({ description: "Polymarket market ID for BNKR execution" })),
       }),
@@ -1881,7 +1881,7 @@ function buildCoinGeckoTools(): ToolDefinition[] {
           }
           if (riskCheck.tier === "human_required") {
             const portfolio = await bankr.getPortfolioValue();
-            const riskAmount = portfolio * 0.02;
+            const riskAmount = portfolio * 0.05;
             const approval = await telegram.requestTradeApproval({
               thesisId: params.thesis_id,
               asset: params.asset,
@@ -4937,7 +4937,7 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
     daily_pnl: parseFloat(dailyPnl.toFixed(4)),
     weekly_pnl: parseFloat(weeklyPnl.toFixed(4)),
     available_usdc: parseFloat(availableUsdc.toFixed(2)),
-    initial_capital: summary.initial_capital || 50,
+    initial_capital: summary.initial_capital || 1000,
     total_trades: tradeHistory.length,
     win_rate: parseFloat(winRate.toFixed(1)),
     mode: summary.mode,
@@ -5010,7 +5010,6 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
       oversight_healthy: oversightHealthy,
       deadman_healthy: monitorHealthy,
       bnkr_configured: summary.bnkr_configured,
-      coinbase_configured: summary.coinbase_configured,
     },
   };
 }
@@ -7604,6 +7603,28 @@ async function waitForPort(port: number, maxWaitMs = 30000) {
 async function runStartupRecovery() {
   const startupTime = Date.now();
   console.log("[recovery] Running startup recovery checks...");
+
+  try {
+    const migPool = db.getPool();
+    const portfolioRes = await migPool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_portfolio_value'`);
+    if (portfolioRes.rows.length > 0 && portfolioRes.rows[0].value === 50) {
+      await migPool.query(
+        `UPDATE app_config SET value = $1, updated_at = $2 WHERE key = 'wealth_engines_portfolio_value'`,
+        [JSON.stringify(1000), Date.now()]
+      );
+      console.log("[recovery] Migrated portfolio value: $50 → $1,000");
+    }
+    const peakRes = await migPool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_peak_portfolio'`);
+    if (peakRes.rows.length > 0 && peakRes.rows[0].value === 50) {
+      await migPool.query(
+        `UPDATE app_config SET value = $1, updated_at = $2 WHERE key = 'wealth_engines_peak_portfolio'`,
+        [JSON.stringify(1000), Date.now()]
+      );
+      console.log("[recovery] Migrated peak portfolio: $50 → $1,000");
+    }
+  } catch (migErr) {
+    console.error("[recovery] Portfolio migration check failed:", migErr instanceof Error ? migErr.message : migErr);
+  }
 
   let previousLastTick = 0;
   try {

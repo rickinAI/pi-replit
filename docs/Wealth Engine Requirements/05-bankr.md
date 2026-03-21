@@ -9,10 +9,11 @@ Execute trades based on validated theses from both CRYPTO SCOUT and POLYMARKET S
 | Venue | Asset Class | Type | Why |
 |-------|-------------|------|-----|
 | BNKR (Avantis on Base) | Crypto | Perpetual contracts | Leverage, short capability |
-| Coinbase Wallet | Crypto | Spot | Simple long positions, no leverage |
-| Kreo | Polymarket | Prediction markets | Polymarket execution layer |
+| BNKR (Avantis on Base) | Polymarket | Prediction markets | Polymarket execution layer |
 
-**Excluded:** Hyperliquid (NY compliance), all offshore platforms.
+**Single venue architecture:** All trade execution routes through BNKR. Coinbase is a manual funding-only rail (not used for trade execution).
+
+**Excluded:** Hyperliquid (NY compliance), all offshore platforms, Kreo.
 
 ## Risk Rules
 
@@ -20,18 +21,19 @@ Execute trades based on validated theses from both CRYPTO SCOUT and POLYMARKET S
 
 | Rule | Value | Enforcement |
 |------|-------|-------------|
-| Max risk per trade | 2% of portfolio | Position size = risk amount / (entry - stop) |
-| Max leverage | 2x | Enforced before order submission |
+| Max risk per trade | 5% of portfolio | Position size = risk amount / (entry - stop) |
+| Max leverage | 5x | Enforced before order submission |
 | Margin buffer | 20% above liquidation | Reject trade if buffer insufficient |
-| Max concurrent positions | 5 | Prevent over-diversification with tiny capital |
+| Max concurrent positions | 3 | Concentrated high-conviction portfolio |
 
 ### Portfolio-Level Limits
 
 | Rule | Value | Enforcement |
 |------|-------|-------------|
 | Drawdown circuit breaker | -15% rolling 7-day P&L | Auto-pause via `wealth_engines_paused` |
-| Correlation limit | Max 2 positions in same exposure bucket | Pre-execution check |
-| Total exposure | Max 80% of portfolio deployed | Reserve 20% as buffer |
+| Peak drawdown breaker | -25% from peak portfolio | Kill switch activation |
+| Correlation limit | Max 1 position per exposure bucket | Pre-execution check |
+| Total exposure | Max 60% of portfolio deployed | Reserve 40% as buffer |
 
 ### Exposure Buckets
 
@@ -103,8 +105,8 @@ When `wealth_engines_mode = "SHADOW"`:
 
 ## Done Looks Like
 
-- [ ] BNKR API integration for perp orders (open, close, modify)
-- [ ] Coinbase Wallet integration for spot orders
+- [x] BNKR API integration for perp orders (open, close, modify)
+- [x] BNKR-only venue architecture (Coinbase removed from execution path)
 - [ ] All pre-execution risk checks passing
 - [ ] Telegram approval flow working end-to-end
 - [ ] Position monitor running on 5-min interval (independent timer)

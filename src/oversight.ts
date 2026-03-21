@@ -385,8 +385,8 @@ async function checkPauseState(pool: Pool): Promise<HealthCheck> {
 async function checkCircuitBreakerState(pool: Pool): Promise<HealthCheck> {
   try {
     const history = await getConfigValue<TradeRecord[]>("wealth_engines_trade_history", []);
-    const portfolio = await getConfigValue<number>("wealth_engines_portfolio_value", 50);
-    const peak = await getConfigValue<number>("wealth_engines_peak_portfolio", 50);
+    const portfolio = await getConfigValue<number>("wealth_engines_portfolio_value", 1000);
+    const peak = await getConfigValue<number>("wealth_engines_peak_portfolio", 1000);
 
     const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
     const recentTrades = history.filter(t => new Date(t.closed_at).getTime() > sevenDaysAgo);
@@ -650,7 +650,7 @@ export async function runPerformanceReview(periodDays: number = 7): Promise<Perf
 
   let maxDrawdownPct = 0;
   if (periodTrades.length > 0) {
-    const portfolio = await getConfigValue<number>("wealth_engines_portfolio_value", 50);
+    const portfolio = await getConfigValue<number>("wealth_engines_portfolio_value", 1000);
     let equity = portfolio;
     let peak = portfolio;
     const sorted = [...periodTrades].sort((a, b) =>
@@ -784,7 +784,7 @@ function buildSignalAttribution(trades: TradeRecord[], totalPnl: number): Signal
 
 export async function detectCrossDomainExposure(): Promise<CrossDomainExposure[]> {
   const positions = await getConfigValue<Position[]>("wealth_engines_positions", []);
-  const portfolio = await getConfigValue<number>("wealth_engines_portfolio_value", 50);
+  const portfolio = await getConfigValue<number>("wealth_engines_portfolio_value", 1000);
   const alerts: CrossDomainExposure[] = [];
 
   const cryptoPositions = positions.filter(p => p.asset_class === "crypto");
@@ -1241,8 +1241,8 @@ export async function getOversightSummary(): Promise<{
   const shadowPerf = await getShadowPerformance();
   const lastCheck = await getConfigValue<number | null>(LAST_HEALTH_CHECK_KEY, null);
 
-  const portfolio = await getConfigValue<number>("wealth_engines_portfolio_value", 50);
-  const peak = await getConfigValue<number>("wealth_engines_peak_portfolio", 50);
+  const portfolio = await getConfigValue<number>("wealth_engines_portfolio_value", 1000);
+  const peak = await getConfigValue<number>("wealth_engines_peak_portfolio", 1000);
   const history = await getConfigValue<TradeRecord[]>("wealth_engines_trade_history", []);
   const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
   const recentTrades = history.filter(t => new Date(t.closed_at).getTime() > sevenDaysAgo);
@@ -1422,7 +1422,7 @@ export async function reviewTheses(): Promise<ThesisReview[]> {
 
 export async function checkPerAssetLosses(): Promise<void> {
   const history = await getConfigValue<TradeRecord[]>("wealth_engines_trade_history", []);
-  const portfolio = await getConfigValue<number>("wealth_engines_portfolio_value", 50);
+  const portfolio = await getConfigValue<number>("wealth_engines_portfolio_value", 1000);
   const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
   const recent = history.filter(t => new Date(t.closed_at).getTime() > sevenDaysAgo);
 
@@ -1453,8 +1453,8 @@ export async function checkPerAssetLosses(): Promise<void> {
 export async function generateDailyPerformanceSummary(): Promise<string> {
   const review = await runPerformanceReview(1);
   const health = await getLatestHealthReport();
-  const portfolio = await getConfigValue<number>("wealth_engines_portfolio_value", 50);
-  const peak = await getConfigValue<number>("wealth_engines_peak_portfolio", 50);
+  const portfolio = await getConfigValue<number>("wealth_engines_portfolio_value", 1000);
+  const peak = await getConfigValue<number>("wealth_engines_peak_portfolio", 1000);
   const drawdownPct = peak > 0 ? ((peak - portfolio) / peak * 100) : 0;
   const queue = await getConfigValue<ImprovementRequest[]>(IMPROVEMENT_QUEUE_KEY, []);
   const openItems = queue.filter(i => i.status === "open");

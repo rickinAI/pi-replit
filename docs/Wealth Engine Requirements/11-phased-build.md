@@ -81,8 +81,8 @@ Every phase produces a working, testable system. You can stop after any phase an
 ## Phase 3: BANKR Execution Engine — Task #34
 
 **What gets built:**
-1. BNKR API integration (open/close perp positions)
-2. Coinbase Wallet integration (spot orders)
+1. BNKR API integration (open/close perp positions) — BNKR-only venue
+2. ~~Coinbase Wallet integration~~ (removed — Coinbase is manual funding-only rail)
 3. Pre-execution risk checks (all per-trade + portfolio-level)
 4. Telegram approval flow integration
 5. Position monitor (5-min independent interval)

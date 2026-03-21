@@ -19,7 +19,7 @@ Every component does one thing well. Scouts generate theses. BANKR executes them
 Shadow mode validates the system on paper before real capital is at risk. Every phase has acceptance criteria that must pass before advancing.
 
 ### 5. NY Compliant, No Exceptions
-No Hyperliquid. No offshore platforms. BNKR (Avantis perps on Base) + Coinbase Wallet only. Full tax tracking from day one.
+No Hyperliquid. No offshore platforms. BNKR (Avantis perps on Base) is the single execution venue. Coinbase is a manual funding-only rail. Full tax tracking from day one.
 
 ### 6. Cost-Aware Compute
 Batch analysis (oversight, autoresearch, backtesting) runs on local hardware (Mac Mini + OpenClaw + Ollama). Latency-sensitive operations (scouts, execution, monitoring) run on Replit. Cloud LLMs are used sparingly and only when local model quality is insufficient.
@@ -28,10 +28,13 @@ Batch analysis (oversight, autoresearch, backtesting) runs on local hardware (Ma
 
 | Parameter | Value |
 |-----------|-------|
-| Starting capital | $50 |
-| Max leverage | 2x |
-| Max risk per trade | 2% of portfolio ($1) |
-| Execution venues | BNKR (Avantis perps on Base), Coinbase (spot) |
+| Starting capital | $1,000 |
+| Max leverage | 5x |
+| Max risk per trade | 5% of portfolio ($50) |
+| Max positions | 3 |
+| Total exposure cap | 60% of portfolio |
+| Correlation limit | 1 per bucket |
+| Execution venue | BNKR (Avantis perps on Base) — single venue |
 | Compliance | NY state — no Hyperliquid, no offshore |
 | Drawdown breaker | -15% rolling 7-day P&L → auto-pause |
 | Margin buffer | 20% above liquidation price |

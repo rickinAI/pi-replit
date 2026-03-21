@@ -436,7 +436,7 @@ async function handleRiskCommand(): Promise<string> {
   const mode = await getMode();
   const pool = getPool();
 
-  let portfolio = 50;
+  let portfolio = 1000;
   try {
     const pv = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_portfolio_value'`);
     if (pv.rows.length > 0 && typeof pv.rows[0].value === "number") portfolio = pv.rows[0].value;
@@ -478,9 +478,9 @@ async function handleRiskCommand(): Promise<string> {
     `📉 7-Day Rolling P&L: ${rolling7d >= 0 ? "+" : ""}$${rolling7d.toFixed(2)} (${rolling7dPct.toFixed(1)}%)`,
     `🔻 Circuit Breaker: ${rolling7dPct < -15 ? "⚠️ TRIGGERED" : "OK"} (threshold: -15%)`,
     "",
-    `*Positions:* ${positions.length}/5`,
-    `*Exposure Limit:* ${exposurePct.toFixed(0)}%/80%`,
-    `*Buckets:* ${Object.entries(buckets).map(([b, c]) => `${b}: ${c}/2`).join(", ") || "none"}`,
+    `*Positions:* ${positions.length}/3`,
+    `*Exposure Limit:* ${exposurePct.toFixed(0)}%/60%`,
+    `*Buckets:* ${Object.entries(buckets).map(([b, c]) => `${b}: ${c}/1`).join(", ") || "none"}`,
   ];
   return lines.join("\n");
 }
@@ -590,8 +590,8 @@ async function handleOversightCommand(): Promise<string> {
       }
     }
 
-    const portfolio = portfolioRes.rows.length > 0 ? Number(portfolioRes.rows[0].value) : 50;
-    const peak = peakRes.rows.length > 0 ? Number(peakRes.rows[0].value) : 50;
+    const portfolio = portfolioRes.rows.length > 0 ? Number(portfolioRes.rows[0].value) : 1000;
+    const peak = peakRes.rows.length > 0 ? Number(peakRes.rows[0].value) : 1000;
     const drawdownPct = peak > 0 ? ((peak - portfolio) / peak * 100) : 0;
 
     let rolling7dPct = 0;

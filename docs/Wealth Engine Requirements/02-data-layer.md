@@ -93,7 +93,7 @@ interface Position {
   peak_price: number;           // for trailing stop
   atr_stop_price: number;
   opened_at: string;
-  venue: "bnkr" | "coinbase";
+  venue: "bnkr";
 }
 ```
 

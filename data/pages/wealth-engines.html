@@ -896,7 +896,6 @@ function renderHealth(h){
     {label:'Oversight',val:h.oversight_last_run?timeAgo(h.oversight_last_run):'N/A',c:h.oversight_healthy?'green':'amber'},
     {label:'Dead Man',val:h.deadman_healthy?'Alive':'STALE',c:h.deadman_healthy?'green':'red'},
     {label:'BNKR',val:h.bnkr_configured?'Live':'Shadow',c:h.bnkr_configured?'green':'amber'},
-    {label:'Coinbase',val:h.coinbase_configured?'Live':'N/A',c:h.coinbase_configured?'green':'amber'},
   ];
   var html='';
   items.forEach(function(i){

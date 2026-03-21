@@ -119,9 +119,8 @@ For BNKR/Avantis trades:
 - Cross-reference with on-chain data for audit verification
 - Track gas fees as trading cost (deductible)
 
-For Coinbase trades:
-- Store Coinbase transaction ID
-- Reconcile with Coinbase reporting (1099-DA)
+For manual Coinbase funding (if applicable):
+- Reconcile with Coinbase reporting (1099-DA) for any manual deposits/withdrawals
 
 ## API Endpoints
 
