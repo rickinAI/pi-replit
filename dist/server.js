@@ -6518,7 +6518,8 @@ async function autoTrackShadowTrade(params) {
         if (!stopPrice && thesis.stop_price) stopPrice = thesis.stop_price;
         if (!targetPrice && thesis.exit_price) targetPrice = thesis.exit_price;
       }
-    } catch {
+    } catch (e) {
+      console.warn(`[oversight] Thesis lookup for shadow levels failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
   const shadow = await openShadowTrade({

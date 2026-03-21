@@ -1461,13 +1461,15 @@ export async function autoTrackShadowTrade(params: {
   if (!stopPrice || !targetPrice) {
     try {
       const { getActiveTheses } = await import("./crypto-scout.js");
-      const theses = await getActiveTheses();
-      const thesis = theses.find((t: any) => t.id === params.thesis_id || (t.asset === params.asset && t.direction === params.direction));
+      const theses: Array<{ id: string; asset: string; direction: string; stop_price: number; exit_price: number }> = await getActiveTheses();
+      const thesis = theses.find(t => t.id === params.thesis_id || (t.asset === params.asset && t.direction === params.direction));
       if (thesis) {
         if (!stopPrice && thesis.stop_price) stopPrice = thesis.stop_price;
         if (!targetPrice && thesis.exit_price) targetPrice = thesis.exit_price;
       }
-    } catch {}
+    } catch (e) {
+      console.warn(`[oversight] Thesis lookup for shadow levels failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   const shadow = await openShadowTrade({
