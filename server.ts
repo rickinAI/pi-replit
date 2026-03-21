@@ -38,6 +38,7 @@ import * as coingecko from "./src/coingecko.js";
 import { getHistoricalOHLCV } from "./src/coingecko.js";
 import { analyzeAsset, recordSignal, loadCryptoSignalParams, invalidateCryptoParamsCache } from "./src/technical-signals.js";
 import * as nansen from "./src/nansen.js";
+import * as signalSources from "./src/signal-sources.js";
 import { runBacktest } from "./src/backtest.js";
 import * as cryptoScout from "./src/crypto-scout.js";
 import * as polymarket from "./src/polymarket.js";
@@ -1183,6 +1184,165 @@ function buildStockTools(): ToolDefinition[] {
       async execute(_toolCallId, params) {
         const result = await stocks.getCryptoPrice(params.coin);
         return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+  ];
+}
+
+function buildSignalSourceTools(): ToolDefinition[] {
+  return [
+    {
+      name: "fear_greed_index",
+      label: "Fear & Greed Index",
+      description: "Get the current Crypto Fear & Greed Index (0-100). Returns value, classification (Extreme Fear/Fear/Neutral/Greed/Extreme Greed), regime signal, and previous day comparison. Use for market regime filtering.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const result = await signalSources.getFearGreedIndex();
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "binance_signals",
+      label: "Binance Multi-TF Signals",
+      description: "Get multi-timeframe (1h/4h/1d) technical signals for a crypto pair from Binance. Returns RSI, MACD, SMA crossovers, volume ratios, and composite bull/bear score per timeframe. Use for additional confirmation alongside the Nunchi voting ensemble.",
+      parameters: Type.Object({
+        symbol: Type.String({ description: "Trading pair symbol (e.g. 'BTC', 'BTCUSDT', 'ETH', 'SOL')" }),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        try {
+          const result = await signalSources.getBinanceSignals(params.symbol);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "binance_watchlist_scan",
+      label: "Binance Watchlist Scanner",
+      description: "Scan multiple crypto symbols at once using Binance multi-timeframe analysis. Returns scored signals ranked by strength. Use to quickly screen the watchlist for strongest setups.",
+      parameters: Type.Object({
+        symbols: Type.Array(Type.String(), { description: "Array of symbols to scan (e.g. ['BTC', 'ETH', 'SOL', 'BNKR'])" }),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        try {
+          const result = await signalSources.scanBinanceWatchlist(params.symbols);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "crypto_liquidations",
+      label: "Crypto Liquidations",
+      description: "Get 24h crypto liquidation data. Returns total liquidations, long vs short breakdown, and regime signal (LONG_SQUEEZE, SHORT_SQUEEZE, BALANCED). Use for detecting leverage cascade risk.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const result = await signalSources.getCryptoLiquidations();
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "crypto_sentiment",
+      label: "Crypto Sentiment",
+      description: "Get aggregated social sentiment for a crypto asset. Returns overall sentiment (BULLISH/BEARISH/NEUTRAL), score, and source breakdown. Use for confirming thesis direction.",
+      parameters: Type.Object({
+        query: Type.String({ description: "Crypto asset name or ticker (e.g. 'bitcoin', 'BTC', 'ethereum')" }),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        try {
+          const result = await signalSources.getCryptoSentiment(params.query);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "defillama_tvl",
+      label: "DefiLlama TVL Data",
+      description: "Get DeFi protocol TVL data from DefiLlama. Returns top protocols by TVL, chain TVL breakdown. Optionally filter by specific protocol. Use for identifying DeFi capital flows.",
+      parameters: Type.Object({
+        protocol: Type.Optional(Type.String({ description: "Specific protocol slug (e.g. 'aave', 'uniswap'). Omit for global overview." })),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        try {
+          const result = await signalSources.getDefiLlamaData(params.protocol);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "defillama_yields",
+      label: "DefiLlama Top Yields",
+      description: "Get top DeFi yield pools from DefiLlama. Returns pools sorted by TVL with APY breakdown (base + reward), project, chain. Use for identifying yield opportunities and DeFi momentum.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const result = await signalSources.getDefiLlamaYields();
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "binance_funding_rates",
+      label: "Binance Funding Rates",
+      description: "Get current perpetual futures funding rates from Binance. Returns rates per symbol with signals (OVERLEVERAGED_LONGS/SHORTS/NEUTRAL). Extreme funding rates indicate crowded positioning. Optionally filter by symbols.",
+      parameters: Type.Object({
+        symbols: Type.Optional(Type.Array(Type.String(), { description: "Filter by specific symbols (e.g. ['BTC', 'ETH']). Omit for top 30." })),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        try {
+          const result = await signalSources.getBinanceFundingRates(params.symbols);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "open_interest",
+      label: "Open Interest & Positioning",
+      description: "Get open interest, funding rate, and long/short ratio for a futures pair on Binance. Returns positioning signal (CROWDED_LONG, CROWDED_SHORT, etc). Use for detecting overcrowded trades.",
+      parameters: Type.Object({
+        symbol: Type.String({ description: "Futures pair (e.g. 'BTC', 'BTCUSDT', 'ETH')" }),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        try {
+          const result = await signalSources.getOpenInterestHistory(params.symbol);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "enhanced_coingecko",
+      label: "Enhanced CoinGecko Intelligence",
+      description: "Get enhanced CoinGecko data: trending tokens, top DeFi by mcap/TVL ratio, BTC/ETH dominance breakdown. Use for sector rotation and trend analysis.",
+      parameters: Type.Object({
+        category: Type.Optional(Type.String({ description: "Optional category filter" })),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        try {
+          const result = await signalSources.getEnhancedCoinGeckoData(params.category);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
       },
     },
   ];
@@ -6046,6 +6206,7 @@ const cachedStaticTools: ToolDefinition[] = [
   ...buildTwitterTools(),
   ...buildStockTools(),
   ...buildCoinGeckoTools(),
+  ...buildSignalSourceTools(),
   ...buildMapsTools(),
   ...buildDriveTools(),
   ...buildSheetsTools(),

@@ -23,6 +23,7 @@ export interface SubAgentResult {
 }
 
 const MAX_TOOL_ITERATIONS = 15;
+const WE_AGENT_IDS = new Set(["scout", "bankr", "polymarket-scout", "oversight"]);
 
 function convertToolsToAnthropicFormat(tools: ToolImpl[]): Anthropic.Tool[] {
   return tools.map(t => ({
@@ -131,7 +132,8 @@ export async function runSubAgent(opts: {
     ...(extra || {}),
   });
 
-  for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+  const iterLimit = WE_AGENT_IDS.has(agent.id) ? 30 : MAX_TOOL_ITERATIONS;
+  for (let iteration = 0; iteration < iterLimit; iteration++) {
     const elapsed = Date.now() - startTime;
 
     if (elapsed > timeoutMs) {

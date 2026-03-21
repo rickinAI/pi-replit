@@ -1410,7 +1410,7 @@ export async function autoTrackShadowTrade(params: {
   market_id?: string;
 }): Promise<ShadowTrade | null> {
   const existing = await getShadowTrades("open");
-  const alreadyTracked = existing.some(t => t.thesis_id === params.thesis_id && t.asset === params.asset);
+  const alreadyTracked = existing.some(t => t.asset === params.asset && t.direction === params.direction);
   if (alreadyTracked) return null;
 
   const shadow = await openShadowTrade({
