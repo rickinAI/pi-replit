@@ -18451,14 +18451,15 @@ app.get("/api/wealth-engines/oversight", async (_req, res) => {
 var weDashboardCache = null;
 var WE_DASHBOARD_TTL = 3e4;
 async function buildWealthEnginesDashboardData() {
-  const [summary, tradeHistory, pmTheses, cryptoTheses, oversightData, shadowPerf, researchStatus] = await Promise.all([
+  const [summary, tradeHistory, pmTheses, cryptoTheses, oversightData, shadowPerf, researchStatus, fearGreed] = await Promise.all([
     getPortfolioSummary(),
     getTradeHistory(),
     getActiveTheses2().catch(() => []),
     getActiveTheses().catch(() => []),
     getOversightSummary().catch(() => null),
     getShadowPerformance().catch(() => ({ total_trades: 0, open_trades: 0, closed_trades: 0, total_pnl: 0, win_rate: 0, avg_pnl: 0, trades: [] })),
-    getResearchStatus().catch(() => null)
+    getResearchStatus().catch(() => null),
+    getFearGreedIndex().catch(() => null)
   ]);
   const recentTrades = tradeHistory.slice(-20).reverse();
   const totalRealizedPnl = tradeHistory.reduce((sum, t) => sum + (t.pnl || 0), 0);
@@ -18500,8 +18501,8 @@ async function buildWealthEnginesDashboardData() {
   }
   let agentActivity = [];
   try {
-    const actRes = await pool2.query(`SELECT job_id, created_at, summary FROM job_history ORDER BY created_at DESC LIMIT 15`);
-    agentActivity = actRes.rows.map((r) => ({ job_id: r.job_id, created_at: r.created_at, summary: (r.summary || "").slice(0, 200) }));
+    const actRes = await pool2.query(`SELECT job_id, created_at, summary, status FROM job_history ORDER BY created_at DESC LIMIT 15`);
+    agentActivity = actRes.rows.map((r) => ({ job_id: r.job_id, created_at: r.created_at, summary: (r.summary || "").slice(0, 200), status: r.status || "completed" }));
   } catch {
   }
   const now = Date.now();
@@ -18544,11 +18545,16 @@ async function buildWealthEnginesDashboardData() {
       direction: t.direction,
       confidence: t.confidence,
       entry_price: t.entry_price,
-      stop_loss: t.stop_loss,
-      take_profit: t.take_profit,
-      reasoning: (t.reasoning || "").slice(0, 150),
+      stop_loss: t.stop_price || t.stop_loss,
+      take_profit: t.exit_price || t.take_profit,
+      reasoning: t.reasoning || "",
       created_at: t.created_at,
-      status: t.status
+      status: t.status,
+      vote_count: t.vote_count || null,
+      time_horizon: t.time_horizon || null,
+      sources: t.sources || [],
+      market_regime: t.market_regime || null,
+      technical_score: t.technical_score || null
     })),
     polymarket_theses: pmTheses.slice(0, 10).map((t) => ({
       id: t.id,
@@ -18561,6 +18567,8 @@ async function buildWealthEnginesDashboardData() {
       exit_odds: t.exit_odds,
       volume: t.volume,
       category: t.category,
+      reasoning: t.reasoning || "",
+      sources: t.sources || [],
       created_at: t.created_at,
       expires_at: t.expires_at,
       status: t.status
@@ -18572,7 +18580,8 @@ async function buildWealthEnginesDashboardData() {
       crypto_theses_count: cryptoTheses.length,
       pm_theses_count: pmTheses.length,
       pm_top_thesis: topPmThesis,
-      pm_last_run: pmLastRun
+      pm_last_run: pmLastRun,
+      fear_greed: fearGreed ? { value: fearGreed.value, classification: fearGreed.classification, regime_signal: fearGreed.regime_signal } : null
     },
     oversight: oversightData ? {
       health_status: oversightData.health?.overall_status || "unknown",
@@ -18589,6 +18598,8 @@ async function buildWealthEnginesDashboardData() {
       total_pnl: shadowPerf.total_pnl,
       win_rate: shadowPerf.win_rate,
       avg_pnl: shadowPerf.avg_pnl,
+      best_trade: shadowPerf.trades.length > 0 ? Math.max(...shadowPerf.trades.map((t) => t.hypothetical_pnl || 0)) : 0,
+      worst_trade: shadowPerf.trades.length > 0 ? Math.min(...shadowPerf.trades.map((t) => t.hypothetical_pnl || 0)) : 0,
       trades: shadowPerf.trades.slice(-10).reverse()
     },
     autoresearch: researchStatus ? {
