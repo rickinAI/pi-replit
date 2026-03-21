@@ -1,8 +1,133 @@
+var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
 var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
   get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
 }) : x)(function(x) {
   if (typeof require !== "undefined") return require.apply(this, arguments);
   throw Error('Dynamic require of "' + x + '" is not supported');
+});
+var __esm = (fn, res) => function __init() {
+  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+};
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+
+// src/db.ts
+var db_exports = {};
+__export(db_exports, {
+  getPool: () => getPool,
+  init: () => init2
+});
+import pg from "pg";
+async function init2() {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error("[db] DATABASE_URL not set");
+  }
+  pool = new pg.Pool({ connectionString, max: 10 });
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS conversations (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL DEFAULT 'New conversation',
+      messages JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      synced_at BIGINT
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC)`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT,
+      due_date TEXT,
+      priority TEXT NOT NULL DEFAULT 'medium',
+      completed BOOLEAN NOT NULL DEFAULT false,
+      created_at TEXT NOT NULL,
+      completed_at TEXT,
+      tags JSONB DEFAULT '[]'::jsonb
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_config (
+      key TEXT PRIMARY KEY,
+      value JSONB NOT NULL,
+      updated_at BIGINT NOT NULL DEFAULT 0
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS oauth_tokens (
+      service TEXT PRIMARY KEY,
+      tokens JSONB NOT NULL,
+      updated_at BIGINT NOT NULL DEFAULT 0
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS job_history (
+      id SERIAL PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      job_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'success',
+      summary TEXT,
+      saved_to TEXT,
+      duration_ms INTEGER,
+      agent_id TEXT,
+      model_used TEXT,
+      tokens_input INTEGER,
+      tokens_output INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_job_history_created ON job_history(created_at DESC)`);
+  await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS agent_id TEXT`);
+  await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS model_used TEXT`);
+  await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS tokens_input INTEGER`);
+  await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS tokens_output INTEGER`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS agent_activity (
+      id SERIAL PRIMARY KEY,
+      agent TEXT NOT NULL,
+      task TEXT,
+      conversation_id TEXT,
+      conversation_title TEXT,
+      duration_ms INTEGER,
+      saved_to TEXT,
+      created_at BIGINT NOT NULL
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_agent_activity_created ON agent_activity(created_at DESC)`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS vault_inbox (
+      id SERIAL PRIMARY KEY,
+      url TEXT NOT NULL,
+      title TEXT,
+      file_path TEXT,
+      tags JSONB DEFAULT '[]'::jsonb,
+      summary TEXT,
+      source TEXT DEFAULT 'drop-box',
+      status TEXT NOT NULL DEFAULT 'processing',
+      error TEXT,
+      created_at BIGINT NOT NULL
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_vault_inbox_created ON vault_inbox(created_at DESC)`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_vault_inbox_url ON vault_inbox(url)`);
+  console.log("[db] PostgreSQL initialized (shared pool, 7 tables)");
+  return pool;
+}
+function getPool() {
+  if (!pool) throw new Error("[db] Not initialized \u2014 call init() first");
+  return pool;
+}
+var pool;
+var init_db = __esm({
+  "src/db.ts"() {
+    "use strict";
+    pool = null;
+  }
 });
 
 // server.ts
@@ -441,112 +566,11 @@ function resolvePath(p) {
   return resolved;
 }
 
-// src/db.ts
-import pg from "pg";
-var pool = null;
-async function init2() {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
-    throw new Error("[db] DATABASE_URL not set");
-  }
-  pool = new pg.Pool({ connectionString, max: 10 });
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS conversations (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL DEFAULT 'New conversation',
-      messages JSONB NOT NULL DEFAULT '[]'::jsonb,
-      created_at BIGINT NOT NULL,
-      updated_at BIGINT NOT NULL,
-      synced_at BIGINT
-    )
-  `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC)`);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS tasks (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL,
-      description TEXT,
-      due_date TEXT,
-      priority TEXT NOT NULL DEFAULT 'medium',
-      completed BOOLEAN NOT NULL DEFAULT false,
-      created_at TEXT NOT NULL,
-      completed_at TEXT,
-      tags JSONB DEFAULT '[]'::jsonb
-    )
-  `);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS app_config (
-      key TEXT PRIMARY KEY,
-      value JSONB NOT NULL,
-      updated_at BIGINT NOT NULL DEFAULT 0
-    )
-  `);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS oauth_tokens (
-      service TEXT PRIMARY KEY,
-      tokens JSONB NOT NULL,
-      updated_at BIGINT NOT NULL DEFAULT 0
-    )
-  `);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS job_history (
-      id SERIAL PRIMARY KEY,
-      job_id TEXT NOT NULL,
-      job_name TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'success',
-      summary TEXT,
-      saved_to TEXT,
-      duration_ms INTEGER,
-      agent_id TEXT,
-      model_used TEXT,
-      tokens_input INTEGER,
-      tokens_output INTEGER,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_job_history_created ON job_history(created_at DESC)`);
-  await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS agent_id TEXT`);
-  await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS model_used TEXT`);
-  await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS tokens_input INTEGER`);
-  await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS tokens_output INTEGER`);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS agent_activity (
-      id SERIAL PRIMARY KEY,
-      agent TEXT NOT NULL,
-      task TEXT,
-      conversation_id TEXT,
-      conversation_title TEXT,
-      duration_ms INTEGER,
-      saved_to TEXT,
-      created_at BIGINT NOT NULL
-    )
-  `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_agent_activity_created ON agent_activity(created_at DESC)`);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS vault_inbox (
-      id SERIAL PRIMARY KEY,
-      url TEXT NOT NULL,
-      title TEXT,
-      file_path TEXT,
-      tags JSONB DEFAULT '[]'::jsonb,
-      summary TEXT,
-      source TEXT DEFAULT 'drop-box',
-      status TEXT NOT NULL DEFAULT 'processing',
-      error TEXT,
-      created_at BIGINT NOT NULL
-    )
-  `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_vault_inbox_created ON vault_inbox(created_at DESC)`);
-  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_vault_inbox_url ON vault_inbox(url)`);
-  console.log("[db] PostgreSQL initialized (shared pool, 7 tables)");
-  return pool;
-}
-function getPool() {
-  if (!pool) throw new Error("[db] Not initialized \u2014 call init() first");
-  return pool;
-}
+// server.ts
+init_db();
 
 // src/conversations.ts
+init_db();
 import Anthropic from "@anthropic-ai/sdk";
 async function init3() {
   console.log("[conversations] initialized");
@@ -877,6 +901,7 @@ function rowToConversation(row) {
 }
 
 // src/gmail.ts
+init_db();
 import { google } from "googleapis";
 var SCOPES = [
   "https://www.googleapis.com/auth/gmail.modify",
@@ -1707,6 +1732,7 @@ async function checkConnectionStatus() {
 }
 
 // src/calendar.ts
+init_db();
 import { google as google2 } from "googleapis";
 function getOAuth2Client2() {
   const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -2434,6 +2460,7 @@ function formatResult(result) {
 }
 
 // src/tasks.ts
+init_db();
 async function init5() {
   const existing = await getPool().query(`SELECT count(*) FROM tasks`);
   if (parseInt(existing.rows[0].count) === 0) {
@@ -4385,6 +4412,7 @@ function runBacktest(candles, assetName, config3) {
 }
 
 // src/crypto-scout.ts
+init_db();
 var THESIS_EXPIRY_MS = 72 * 60 * 60 * 1e3;
 function createThesisId(asset) {
   const date = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10).replace(/-/g, "_");
@@ -4486,6 +4514,7 @@ function buildThesis(params) {
 }
 
 // src/polymarket.ts
+init_db();
 var GAMMA_API = "https://gamma-api.polymarket.com";
 var cache = /* @__PURE__ */ new Map();
 var MARKET_TTL = 5 * 60 * 1e3;
@@ -4641,6 +4670,7 @@ async function detectConsensus(activities) {
 }
 
 // src/polymarket-scout.ts
+init_db();
 var PM_THESIS_EXPIRY_MS = 72 * 60 * 60 * 1e3;
 function createPMThesisId(marketSlug) {
   const date = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10).replace(/-/g, "_");
@@ -4719,6 +4749,9 @@ function buildThesis2(params) {
     status: "active"
   };
 }
+
+// src/bankr.ts
+init_db();
 
 // src/bnkr.ts
 var BNKR_API_KEY = process.env.BANKR_API_KEY || "";
@@ -6643,6 +6676,7 @@ ${lines.join("\n\n")}`;
 }
 
 // src/alerts.ts
+init_db();
 import Anthropic2 from "@anthropic-ai/sdk";
 var DEFAULT_CONFIG2 = {
   timezone: "America/New_York",
@@ -7168,6 +7202,7 @@ async function triggerBrief(type) {
 }
 
 // src/telegram.ts
+init_db();
 import { randomBytes } from "crypto";
 var BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 var CHAT_ID = process.env.TELEGRAM_CHAT_ID || "";
@@ -8082,6 +8117,7 @@ ${event.content}`);
 }
 
 // src/scheduled-jobs.ts
+init_db();
 function getJobSavePath(jobId, dateStr, safeName) {
   if (jobId === "moodys-daily-intel") return `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief.md`;
   if (jobId === "moodys-profile-updates") return `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Profile-Updates.md`;
@@ -14519,7 +14555,7 @@ app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(cookieParser(SESSION_SECRET));
 var AUTH_PUBLIC_PATHS = /* @__PURE__ */ new Set(["/login.html", "/login.css", "/api/login", "/health", "/manifest.json", "/baby-manifest.json", "/icons/icon-180.png", "/icons/icon-192.png", "/icons/icon-512.png", "/icons/baby/icon-180.png", "/icons/baby/icon-192.png", "/icons/baby/icon-512.png", "/api/healthcheck"]);
-function authMiddleware(req, res, next) {
+async function authMiddleware(req, res, next) {
   if (!APP_PASSWORD) {
     next();
     return;
@@ -14543,6 +14579,18 @@ function authMiddleware(req, res, next) {
   if (req.path === "/api/telegram/webhook") {
     next();
     return;
+  }
+  if (req.path === "/pages/wealth-engines" || req.path === "/api/wealth-engines/data") {
+    try {
+      const dbMod = await Promise.resolve().then(() => (init_db(), db_exports));
+      const pool2 = dbMod.getPool();
+      const pubRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_public'`);
+      if (pubRes.rows.length > 0 && (pubRes.rows[0].value === true || pubRes.rows[0].value === "true")) {
+        next();
+        return;
+      }
+    } catch {
+    }
   }
   const token = req.signedCookies?.auth;
   if (token && USERS[token]) {
@@ -15163,6 +15211,95 @@ app.get("/api/wealth-engines/polymarket/theses", async (_req, res) => {
   } catch (err) {
     console.error("[wealth-engines] pm theses error:", err);
     res.status(500).json({ error: "Failed to fetch polymarket theses" });
+  }
+});
+var weDashboardCache = null;
+var WE_DASHBOARD_TTL = 3e4;
+async function buildWealthEnginesDashboardData() {
+  const [summary, tradeHistory, theses] = await Promise.all([
+    getPortfolioSummary(),
+    getTradeHistory(),
+    getActiveTheses2().catch(() => [])
+  ]);
+  const recentTrades = tradeHistory.slice(-20).reverse();
+  const totalRealizedPnl = tradeHistory.reduce((sum, t) => sum + (t.pnl || 0), 0);
+  const pool2 = (await Promise.resolve().then(() => (init_db(), db_exports))).getPool();
+  let scoutLastRun = null;
+  let scoutSummary = null;
+  let monitorLastTick = null;
+  let pmLastRun = null;
+  try {
+    const scoutRes = await pool2.query(`SELECT created_at, summary FROM job_history WHERE job_id IN ('scout-micro-scan', 'scout-full-cycle') ORDER BY created_at DESC LIMIT 1`);
+    if (scoutRes.rows.length > 0) {
+      scoutLastRun = scoutRes.rows[0].created_at;
+      const raw = scoutRes.rows[0].summary || "";
+      scoutSummary = raw.length > 300 ? raw.slice(0, 300) + "..." : raw;
+    }
+  } catch {
+  }
+  try {
+    const pmRes = await pool2.query(`SELECT created_at FROM job_history WHERE job_id IN ('polymarket-activity-scan', 'polymarket-full-cycle') ORDER BY created_at DESC LIMIT 1`);
+    if (pmRes.rows.length > 0) pmLastRun = pmRes.rows[0].created_at;
+  } catch {
+  }
+  try {
+    const tickRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'bankr_monitor_last_tick'`);
+    if (tickRes.rows.length > 0) monitorLastTick = new Date(parseInt(String(tickRes.rows[0].value))).toISOString();
+  } catch {
+  }
+  const now = Date.now();
+  const scoutHealthy = scoutLastRun ? now - new Date(scoutLastRun).getTime() < 6 * 60 * 6e4 : false;
+  const monitorHealthy = monitorLastTick ? now - new Date(monitorLastTick).getTime() < 30 * 6e4 : false;
+  const topThesis = theses.length > 0 ? (theses[0].question || theses[0].market_question || "").slice(0, 100) : null;
+  return {
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    portfolio_value: summary.portfolio_value,
+    peak_portfolio_value: summary.peak_portfolio_value,
+    peak_drawdown_pct: summary.peak_drawdown_pct,
+    consecutive_losses: summary.consecutive_losses,
+    total_exposure: summary.total_exposure,
+    unrealized_pnl: summary.unrealized_pnl,
+    total_realized_pnl: totalRealizedPnl,
+    initial_capital: 50,
+    mode: summary.mode,
+    paused: summary.paused,
+    kill_switch: summary.kill_switch,
+    positions: summary.positions,
+    recent_trades: recentTrades,
+    scout: {
+      crypto_last_run: scoutLastRun,
+      crypto_regime: null,
+      crypto_summary: scoutSummary,
+      pm_theses_count: theses.length,
+      pm_top_thesis: topThesis,
+      pm_last_run: pmLastRun
+    },
+    health: {
+      kill_switch: summary.kill_switch,
+      paused: summary.paused,
+      mode: summary.mode,
+      scout_last_run: scoutLastRun,
+      scout_healthy: scoutHealthy,
+      monitor_last_tick: monitorLastTick,
+      monitor_healthy: monitorHealthy,
+      bnkr_configured: summary.bnkr_configured,
+      coinbase_configured: summary.coinbase_configured
+    }
+  };
+}
+app.get("/api/wealth-engines/data", async (req, res) => {
+  try {
+    const forceRefresh = req.query.force === "1";
+    if (!forceRefresh && weDashboardCache && Date.now() - weDashboardCache.ts < WE_DASHBOARD_TTL) {
+      res.json(weDashboardCache.data);
+      return;
+    }
+    const data = await buildWealthEnginesDashboardData();
+    weDashboardCache = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    console.error("[wealth-engines] dashboard data error:", err);
+    res.status(500).json({ error: "Failed to fetch dashboard data" });
   }
 });
 app.get("/api/x-intelligence/data", async (_req, res) => {
@@ -15960,6 +16097,21 @@ app.get("/pages/:slug", async (req, res) => {
     return;
   }
   const isTokenAuth = !!(req.query.user && req.query.token) || !!req.headers.authorization?.startsWith("Bearer ");
+  if (slug === "wealth-engines") {
+    try {
+      let html = fs6.readFileSync(filePath, "utf-8");
+      const data = await buildWealthEnginesDashboardData();
+      const safeJson = JSON.stringify(data).replace(/<\//g, "<\\/");
+      html = html.replace(
+        "var SSR_DATA = null;",
+        `var SSR_DATA = ${safeJson};`
+      );
+      res.type("html").send(html);
+      return;
+    } catch (err) {
+      console.error("[wealth-engines] SSR error:", err);
+    }
+  }
   if (slug === "baby-dashboard" && isTokenAuth && isConnected()) {
     try {
       let html = fs6.readFileSync(filePath, "utf-8");
@@ -16081,7 +16233,7 @@ app.get("/pages/:slug", async (req, res) => {
 });
 app.post("/api/pages/:slug/share", async (req, res) => {
   const slug = req.params.slug.toLowerCase().replace(/[^a-z0-9_-]/g, "");
-  if (!["daily-brief", "baby-dashboard", "x-intelligence"].includes(slug)) {
+  if (!["daily-brief", "baby-dashboard", "x-intelligence", "wealth-engines"].includes(slug)) {
     res.status(400).json({ error: "Sharing not supported for this page" });
     return;
   }
@@ -16201,6 +16353,19 @@ render(SNAPSHOT_DATA);`
         "// snapshot mode - no live fetching"
       );
       html = html.replace(/\(async function loadUser\(\)[\s\S]*?\}\)\(\);/, "// snapshot mode");
+    } else if (slug === "wealth-engines") {
+      try {
+        const weData = await buildWealthEnginesDashboardData();
+        const safeJson = JSON.stringify(weData).replace(/<\//g, "<\\/");
+        html = html.replace(
+          "var SSR_DATA = null;",
+          `var SSR_DATA = ${safeJson};`
+        );
+      } catch (err) {
+        console.error("[share] wealth-engines data error:", err);
+      }
+      html = html.replace(/setInterval\(function\(\)\s*\{\s*fetchData\(\);\s*\}\s*,\s*\d+\);/, "");
+      html = html.replace(/<button[^>]*onclick="fetchData\(true\)"[^>]*>Refresh<\/button>/g, "");
     } else if (slug === "x-intelligence") {
       let xData = xIntelCache?.data || dailyBriefCache?.data?.xIntel;
       if (!xData) {

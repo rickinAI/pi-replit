@@ -85,6 +85,21 @@ Mobile-friendly web UI for the pi coding agent with knowledge base integration, 
   - 7-step daily scan: Zillow → Redfin → cross-reference → deep dive → X/social signals → commute research → Market Overview update
   - Saves to `Scheduled Reports/Real Estate/YYYY-MM-DD-Property-Scan.md`, appends to `Real Estate/Areas/`, saves ⭐ gems to `Real Estate/Favorites/`
   - Auto-archive >30 days to `Archive/Real Estate/`. Agent pre-reads Search Criteria + area files. Timeout: 600s
+- **Wealth Engines Dashboard** (`data/pages/wealth-engines.html`) — Live portfolio dashboard at `/pages/wealth-engines`:
+  - Dark theme matching Daily Brief design system. Mobile-first (480px max-width), Inter font
+  - **Portfolio Overview**: 4-card hero grid — portfolio value + ATH, total P&L (realized + unrealized), drawdown % with color coding, exposure + position count
+  - **Open Positions**: asset, direction badge, entry/current price, leverage, ATR stop, P&L %, source tag
+  - **Recent Trades**: last 20 closed trades with P&L, close reason, leverage, source, time ago
+  - **SCOUT Intelligence**: crypto SCOUT summary + regime, polymarket thesis count + top thesis
+  - **System Health**: 6-indicator grid — kill switch, system status, mode, SCOUT health (6h threshold), monitor health (30min), BNKR connection
+  - Kill switch banner (red) and pause banner (amber) shown when active
+  - Mode badge: BETA (amber), LIVE (green), SHADOW (purple)
+  - API: `GET /api/wealth-engines/data` returns all dashboard data as JSON. 30s server cache; `?force=1` bypasses
+  - SSR data injection on page load (no loading spinner on first paint)
+  - Auto-refresh: polls API every 60 seconds
+  - Public access toggle: DB config key `wealth_engines_public` (default: false). When true, page + API bypass auth middleware. Togglable via Telegram `/public on|off` command
+  - Share snapshot support via `/api/pages/wealth-engines/share` (here.now, 24h expiry)
+  - Collapsible sections with localStorage persistence (`we_collapsed`)
 - **Daily Brief Dashboard** (`data/pages/daily-brief.html`) — Personal daily briefing at `/pages/daily-brief`:
   - Dark, sleek design with blue/navy aesthetic. Single-scroll layout (no tabs). Hero greeting adapts to time of day
   - **Family Cards**: Three horizontal cards — 👨‍💻 Rickin (tasks + emails count), 🤰 Pooja (pregnancy week + days to go), 👧 Reya (school info on weekdays, "No school today!" on weekends, GenAI fallback otherwise). Smart content varies by morning/afternoon/evening

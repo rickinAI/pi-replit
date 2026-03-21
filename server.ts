@@ -3609,13 +3609,24 @@ app.use(cookieParser(SESSION_SECRET));
 
 const AUTH_PUBLIC_PATHS = new Set(["/login.html", "/login.css", "/api/login", "/health", "/manifest.json", "/baby-manifest.json", "/icons/icon-180.png", "/icons/icon-192.png", "/icons/icon-512.png", "/icons/baby/icon-180.png", "/icons/baby/icon-192.png", "/icons/baby/icon-512.png", "/api/healthcheck"]);
 
-function authMiddleware(req: Request, res: Response, next: NextFunction) {
+async function authMiddleware(req: Request, res: Response, next: NextFunction) {
   if (!APP_PASSWORD) { next(); return; }
   if (AUTH_PUBLIC_PATHS.has(req.path)) { next(); return; }
   if (req.path === "/api/config/tunnel-url") { next(); return; }
   if (req.path === "/api/gmail/callback") { next(); return; }
   if (req.path === "/api/gmail/auth") { next(); return; }
   if (req.path === "/api/telegram/webhook") { next(); return; }
+
+  if (req.path === "/pages/wealth-engines" || req.path === "/api/wealth-engines/data") {
+    try {
+      const dbMod = await import("./src/db.js");
+      const pool = dbMod.getPool();
+      const pubRes = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_public'`);
+      if (pubRes.rows.length > 0 && (pubRes.rows[0].value === true || pubRes.rows[0].value === "true")) {
+        next(); return;
+      }
+    } catch {}
+  }
 
   const token = req.signedCookies?.auth;
   if (token && USERS[token]) { (req as any).user = token; next(); return; }
@@ -4232,6 +4243,103 @@ app.get("/api/wealth-engines/polymarket/theses", async (_req: Request, res: Resp
   } catch (err: any) {
     console.error("[wealth-engines] pm theses error:", err);
     res.status(500).json({ error: "Failed to fetch polymarket theses" });
+  }
+});
+
+let weDashboardCache: { data: any; ts: number } | null = null;
+const WE_DASHBOARD_TTL = 30_000;
+
+async function buildWealthEnginesDashboardData(): Promise<any> {
+  const [summary, tradeHistory, theses] = await Promise.all([
+    bankr.getPortfolioSummary(),
+    bankr.getTradeHistory(),
+    polymarketScout.getActiveTheses().catch(() => []),
+  ]);
+
+  const recentTrades = tradeHistory.slice(-20).reverse();
+  const totalRealizedPnl = tradeHistory.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
+
+  const pool = (await import("./src/db.js")).getPool();
+  let scoutLastRun: string | null = null;
+  let scoutSummary: string | null = null;
+  let monitorLastTick: string | null = null;
+  let pmLastRun: string | null = null;
+
+  try {
+    const scoutRes = await pool.query(`SELECT created_at, summary FROM job_history WHERE job_id IN ('scout-micro-scan', 'scout-full-cycle') ORDER BY created_at DESC LIMIT 1`);
+    if (scoutRes.rows.length > 0) {
+      scoutLastRun = scoutRes.rows[0].created_at;
+      const raw = scoutRes.rows[0].summary || "";
+      scoutSummary = raw.length > 300 ? raw.slice(0, 300) + "..." : raw;
+    }
+  } catch {}
+
+  try {
+    const pmRes = await pool.query(`SELECT created_at FROM job_history WHERE job_id IN ('polymarket-activity-scan', 'polymarket-full-cycle') ORDER BY created_at DESC LIMIT 1`);
+    if (pmRes.rows.length > 0) pmLastRun = pmRes.rows[0].created_at;
+  } catch {}
+
+  try {
+    const tickRes = await pool.query(`SELECT value FROM app_config WHERE key = 'bankr_monitor_last_tick'`);
+    if (tickRes.rows.length > 0) monitorLastTick = new Date(parseInt(String(tickRes.rows[0].value))).toISOString();
+  } catch {}
+
+  const now = Date.now();
+  const scoutHealthy = scoutLastRun ? (now - new Date(scoutLastRun).getTime()) < 6 * 60 * 60_000 : false;
+  const monitorHealthy = monitorLastTick ? (now - new Date(monitorLastTick).getTime()) < 30 * 60_000 : false;
+
+  const topThesis = theses.length > 0 ? (theses[0].question || theses[0].market_question || "").slice(0, 100) : null;
+
+  return {
+    timestamp: new Date().toISOString(),
+    portfolio_value: summary.portfolio_value,
+    peak_portfolio_value: summary.peak_portfolio_value,
+    peak_drawdown_pct: summary.peak_drawdown_pct,
+    consecutive_losses: summary.consecutive_losses,
+    total_exposure: summary.total_exposure,
+    unrealized_pnl: summary.unrealized_pnl,
+    total_realized_pnl: totalRealizedPnl,
+    initial_capital: 50,
+    mode: summary.mode,
+    paused: summary.paused,
+    kill_switch: summary.kill_switch,
+    positions: summary.positions,
+    recent_trades: recentTrades,
+    scout: {
+      crypto_last_run: scoutLastRun,
+      crypto_regime: null,
+      crypto_summary: scoutSummary,
+      pm_theses_count: theses.length,
+      pm_top_thesis: topThesis,
+      pm_last_run: pmLastRun,
+    },
+    health: {
+      kill_switch: summary.kill_switch,
+      paused: summary.paused,
+      mode: summary.mode,
+      scout_last_run: scoutLastRun,
+      scout_healthy: scoutHealthy,
+      monitor_last_tick: monitorLastTick,
+      monitor_healthy: monitorHealthy,
+      bnkr_configured: summary.bnkr_configured,
+      coinbase_configured: summary.coinbase_configured,
+    },
+  };
+}
+
+app.get("/api/wealth-engines/data", async (req: Request, res: Response) => {
+  try {
+    const forceRefresh = req.query.force === "1";
+    if (!forceRefresh && weDashboardCache && Date.now() - weDashboardCache.ts < WE_DASHBOARD_TTL) {
+      res.json(weDashboardCache.data);
+      return;
+    }
+    const data = await buildWealthEnginesDashboardData();
+    weDashboardCache = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err: any) {
+    console.error("[wealth-engines] dashboard data error:", err);
+    res.status(500).json({ error: "Failed to fetch dashboard data" });
   }
 });
 
@@ -5029,6 +5137,23 @@ app.get("/pages/:slug", async (req: Request, res: Response) => {
   }
 
   const isTokenAuth = !!(req.query.user && req.query.token) || !!req.headers.authorization?.startsWith("Bearer ");
+
+  if (slug === "wealth-engines") {
+    try {
+      let html = fs.readFileSync(filePath, "utf-8");
+      const data = await buildWealthEnginesDashboardData();
+      const safeJson = JSON.stringify(data).replace(/<\//g, "<\\/");
+      html = html.replace(
+        "var SSR_DATA = null;",
+        `var SSR_DATA = ${safeJson};`
+      );
+      res.type("html").send(html);
+      return;
+    } catch (err) {
+      console.error("[wealth-engines] SSR error:", err);
+    }
+  }
+
   if (slug === "baby-dashboard" && isTokenAuth && gmail.isConnected()) {
     try {
       let html = fs.readFileSync(filePath, "utf-8");
@@ -5139,7 +5264,7 @@ app.get("/pages/:slug", async (req: Request, res: Response) => {
 
 app.post("/api/pages/:slug/share", async (req: Request, res: Response) => {
   const slug = req.params.slug.toLowerCase().replace(/[^a-z0-9_-]/g, "");
-  if (!["daily-brief", "baby-dashboard", "x-intelligence"].includes(slug)) {
+  if (!["daily-brief", "baby-dashboard", "x-intelligence", "wealth-engines"].includes(slug)) {
     res.status(400).json({ error: "Sharing not supported for this page" });
     return;
   }
@@ -5248,6 +5373,19 @@ app.post("/api/pages/:slug/share", async (req: Request, res: Response) => {
       html = html.replace(/fetchLiveData\(\);\s*setInterval\(fetchLiveData,\s*\d+\);/,
         "// snapshot mode - no live fetching");
       html = html.replace(/\(async function loadUser\(\)[\s\S]*?\}\)\(\);/, "// snapshot mode");
+    } else if (slug === "wealth-engines") {
+      try {
+        const weData = await buildWealthEnginesDashboardData();
+        const safeJson = JSON.stringify(weData).replace(/<\//g, "<\\/");
+        html = html.replace(
+          "var SSR_DATA = null;",
+          `var SSR_DATA = ${safeJson};`
+        );
+      } catch (err) {
+        console.error("[share] wealth-engines data error:", err);
+      }
+      html = html.replace(/setInterval\(function\(\)\s*\{\s*fetchData\(\);\s*\}\s*,\s*\d+\);/, "");
+      html = html.replace(/<button[^>]*onclick="fetchData\(true\)"[^>]*>Refresh<\/button>/g, "");
     } else if (slug === "x-intelligence") {
       let xData: any = xIntelCache?.data || dailyBriefCache?.data?.xIntel;
       if (!xData) {
