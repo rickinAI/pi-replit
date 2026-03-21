@@ -5342,20 +5342,16 @@ async function checkApiFailureRates(pool2) {
 async function checkJobExecutionTrends(pool2) {
   try {
     const res = await pool2.query(
-      `SELECT job_id, created_at, completed_at FROM job_history
+      `SELECT job_id, duration_ms FROM job_history
        WHERE agent_id IN ('scout', 'bankr', 'polymarket-scout')
        AND created_at > NOW() - INTERVAL '48 hours'
-       AND completed_at IS NOT NULL
+       AND duration_ms IS NOT NULL AND duration_ms > 0
        ORDER BY created_at DESC LIMIT 30`
     );
     if (res.rows.length < 3) {
       return { name: "Job Latency", status: "ok", detail: "Insufficient data for trend analysis" };
     }
-    const durations = res.rows.map((r) => {
-      const start = new Date(r.created_at || 0).getTime();
-      const end = new Date(r.completed_at || 0).getTime();
-      return (end - start) / 1e3;
-    }).filter((d) => d > 0);
+    const durations = res.rows.map((r) => r.duration_ms / 1e3).filter((d) => d > 0);
     if (durations.length === 0) {
       return { name: "Job Latency", status: "ok", detail: "No valid durations" };
     }
@@ -5443,15 +5439,16 @@ async function runPerformanceReview(periodDays = 7) {
   }
   let maxDrawdownPct = 0;
   if (periodTrades.length > 0) {
-    let peak = 0;
-    let running = 0;
+    const portfolio = await getConfigValue("wealth_engines_portfolio_value", 50);
+    let equity = portfolio;
+    let peak = portfolio;
     const sorted = [...periodTrades].sort(
       (a, b) => new Date(a.closed_at).getTime() - new Date(b.closed_at).getTime()
     );
     for (const t of sorted) {
-      running += t.pnl || 0;
-      if (running > peak) peak = running;
-      const dd = peak > 0 ? (peak - running) / peak * 100 : 0;
+      equity += t.pnl || 0;
+      if (equity > peak) peak = equity;
+      const dd = peak > 0 ? (peak - equity) / peak * 100 : 0;
       if (dd > maxDrawdownPct) maxDrawdownPct = dd;
     }
   }
@@ -5498,6 +5495,10 @@ async function runPerformanceReview(periodDays = 7) {
       recommendation: "Review BNKR execution timing; consider limit orders or smaller position sizes"
     });
   }
+  const PERF_REVIEWS_KEY = "oversight_performance_reviews";
+  const existingReviews = await getConfigValue(PERF_REVIEWS_KEY, []);
+  existingReviews.push(review);
+  await setConfigValue(PERF_REVIEWS_KEY, pruneByAge(existingReviews, MAX_REPORTS));
   return review;
 }
 function buildSignalAttribution(trades, totalPnl) {
