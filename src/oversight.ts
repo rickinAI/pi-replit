@@ -1003,6 +1003,18 @@ export async function openShadowTrade(params: {
   await setConfigValue(SHADOW_TRADES_KEY, pruneByAge(trades, MAX_SHADOW_TRADES));
 
   console.log(`[oversight] Shadow trade opened: ${params.asset} ${params.direction} @ $${params.entry_price}`);
+
+  try {
+    const { sendShadowTradeNotification } = await import("./telegram.js");
+    sendShadowTradeNotification({
+      type: "open",
+      asset: params.asset,
+      direction: params.direction,
+      entryPrice: params.entry_price,
+      source: params.source,
+    }).catch(e => console.warn("[oversight] Shadow open notification failed:", e));
+  } catch {}
+
   return shadow;
 }
 
@@ -1024,6 +1036,20 @@ export async function closeShadowTrade(
 
   await setConfigValue(SHADOW_TRADES_KEY, trades);
   console.log(`[oversight] Shadow trade closed: ${trade.asset} P&L: $${trade.hypothetical_pnl.toFixed(2)}`);
+
+  try {
+    const { sendShadowTradeNotification } = await import("./telegram.js");
+    sendShadowTradeNotification({
+      type: "close",
+      asset: trade.asset,
+      direction: trade.direction,
+      entryPrice: trade.entry_price,
+      exitPrice,
+      pnl: trade.hypothetical_pnl,
+      reason,
+    }).catch(e => console.warn("[oversight] Shadow close notification failed:", e));
+  } catch {}
+
   return trade;
 }
 
@@ -1071,6 +1097,14 @@ export async function refreshShadowTradesFromMarket(): Promise<{
       const multiplier = trade.direction === "LONG" || trade.direction === "YES" ? 1 : -1;
       trade.hypothetical_pnl = (trade.current_price - trade.entry_price) * multiplier;
       closed++;
+      try {
+        const { sendShadowTradeNotification } = await import("./telegram.js");
+        sendShadowTradeNotification({
+          type: "close", asset: trade.asset, direction: trade.direction,
+          entryPrice: trade.entry_price, exitPrice: trade.current_price,
+          pnl: trade.hypothetical_pnl, reason: "expired (168h max age)",
+        }).catch(() => {});
+      } catch {}
       continue;
     }
 
@@ -1107,6 +1141,14 @@ export async function refreshShadowTradesFromMarket(): Promise<{
             trade.exit_price = latestPrice;
             closed++;
             console.log(`[oversight] Shadow stop hit: ${trade.asset} ${trade.direction} @ $${latestPrice} (stop=$${trade.stop_price}) P&L: $${trade.hypothetical_pnl.toFixed(4)}`);
+            try {
+              const { sendShadowTradeNotification } = await import("./telegram.js");
+              sendShadowTradeNotification({
+                type: "close", asset: trade.asset, direction: trade.direction,
+                entryPrice: trade.entry_price, exitPrice: latestPrice,
+                pnl: trade.hypothetical_pnl, reason: `stop hit ($${trade.stop_price})`,
+              }).catch(() => {});
+            } catch {}
             continue;
           }
         }
@@ -1122,6 +1164,14 @@ export async function refreshShadowTradesFromMarket(): Promise<{
             trade.exit_price = latestPrice;
             closed++;
             console.log(`[oversight] Shadow target hit: ${trade.asset} ${trade.direction} @ $${latestPrice} (target=$${trade.target_price}) P&L: $${trade.hypothetical_pnl.toFixed(4)}`);
+            try {
+              const { sendShadowTradeNotification } = await import("./telegram.js");
+              sendShadowTradeNotification({
+                type: "close", asset: trade.asset, direction: trade.direction,
+                entryPrice: trade.entry_price, exitPrice: latestPrice,
+                pnl: trade.hypothetical_pnl, reason: `target hit ($${trade.target_price})`,
+              }).catch(() => {});
+            } catch {}
             continue;
           }
         }

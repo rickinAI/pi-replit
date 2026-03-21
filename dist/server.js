@@ -130,6 +130,1210 @@ var init_db = __esm({
   }
 });
 
+// src/coingecko.ts
+import * as fs2 from "fs";
+import * as path2 from "path";
+function getApiHeaders() {
+  const headers2 = { "User-Agent": "darknode/1.0" };
+  const apiKey = process.env.COINGECKO_API_KEY;
+  if (apiKey) {
+    headers2["x-cg-demo-api-key"] = apiKey;
+  }
+  return headers2;
+}
+async function cgFetch(urlPath) {
+  await rateLimiter.acquire();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS3);
+  try {
+    const url = `${BASE_URL}${urlPath}`;
+    const res = await fetch(url, {
+      headers: getApiHeaders(),
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    if (!res.ok) {
+      throw new Error(`CoinGecko API error ${res.status}: ${res.statusText}`);
+    }
+    return await res.json();
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err.name === "AbortError") throw new Error("CoinGecko request timed out");
+    throw err;
+  }
+}
+function resolveId(input) {
+  const key = input.toLowerCase().trim().replace(/^\$/, "");
+  return CRYPTO_ALIASES2[key] || key;
+}
+function ensureCacheDir() {
+  if (!fs2.existsSync(CACHE_DIR)) {
+    fs2.mkdirSync(CACHE_DIR, { recursive: true });
+  }
+}
+async function getTrending() {
+  const data = await cgFetch("/search/trending");
+  const rawCoins = data.coins?.slice(0, 15) || [];
+  const coins = rawCoins.map((item) => {
+    const c = item.item;
+    return {
+      name: c.name,
+      symbol: c.symbol?.toUpperCase() || "",
+      market_cap_rank: c.market_cap_rank || null,
+      price_usd: c.data?.price ? parseFloat(c.data.price) : null,
+      change_24h_pct: c.data?.price_change_percentage_24h?.usd ?? null
+    };
+  });
+  const rawCats = data.categories?.slice(0, 5) || [];
+  const categories = rawCats.map((cat) => ({
+    name: cat.name,
+    market_cap_change_24h_pct: cat.data?.market_cap_change_percentage_24h ?? null
+  }));
+  return { coins, categories };
+}
+async function getMovers(direction = "gainers", limit = 20) {
+  const data = await cgFetch(`/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=false&price_change_percentage=24h,7d`);
+  if (!Array.isArray(data) || data.length === 0) return { direction, coins: [] };
+  const sorted = [...data].sort((a, b) => {
+    const aChange = a.price_change_percentage_24h ?? 0;
+    const bChange = b.price_change_percentage_24h ?? 0;
+    return direction === "gainers" ? bChange - aChange : aChange - bChange;
+  });
+  const coins = sorted.slice(0, limit).map((coin) => ({
+    name: coin.name,
+    symbol: (coin.symbol || "").toUpperCase(),
+    price_usd: coin.current_price,
+    change_24h_pct: coin.price_change_percentage_24h ?? null,
+    change_7d_pct: coin.price_change_percentage_7d_in_currency ?? null,
+    market_cap: coin.market_cap
+  }));
+  return { direction, coins };
+}
+async function getCategories(limit = 20) {
+  const data = await cgFetch("/coins/categories?order=market_cap_change_percentage_24h_desc");
+  if (!Array.isArray(data) || data.length === 0) return { categories: [] };
+  const categories = data.slice(0, limit).map((cat) => ({
+    name: cat.name,
+    change_24h_pct: cat.market_cap_change_percentage_24h ?? null,
+    market_cap: cat.market_cap ?? null,
+    volume_24h: cat.total_volume ?? null
+  }));
+  return { categories };
+}
+async function getMarketOverview() {
+  const data = await cgFetch("/global");
+  const g = data.data;
+  if (!g) throw new Error("No global market data available");
+  return {
+    total_market_cap_usd: g.total_market_cap?.usd || 0,
+    total_volume_24h_usd: g.total_volume?.usd || 0,
+    btc_dominance_pct: g.market_cap_percentage?.btc || 0,
+    eth_dominance_pct: g.market_cap_percentage?.eth || 0,
+    active_cryptocurrencies: g.active_cryptocurrencies || 0,
+    market_cap_change_24h_pct: g.market_cap_change_percentage_24h_usd ?? 0
+  };
+}
+async function getHistoricalOHLCV(coin, days = 90) {
+  const coinId = resolveId(coin);
+  ensureCacheDir();
+  const cacheFile = path2.join(CACHE_DIR, `${coinId}_${days}d_hourly.json`);
+  if (fs2.existsSync(cacheFile)) {
+    try {
+      const raw = fs2.readFileSync(cacheFile, "utf-8");
+      const cached2 = JSON.parse(raw);
+      const ageMs = Date.now() - cached2.fetchedAt;
+      if (ageMs < 36e5 && cached2.candles.length > 0) {
+        return cached2.candles;
+      }
+    } catch {
+    }
+  }
+  const data = await cgFetch(`/coins/${encodeURIComponent(coinId)}/market_chart?vs_currency=usd&days=${days}`);
+  const prices = data.prices || [];
+  const volumes = data.total_volumes || [];
+  const volumeMap = /* @__PURE__ */ new Map();
+  for (const [ts, vol] of volumes) {
+    const hourKey = Math.floor(ts / 36e5) * 36e5;
+    volumeMap.set(hourKey, vol);
+  }
+  const hourBuckets = /* @__PURE__ */ new Map();
+  for (const [ts, price] of prices) {
+    const hourKey = Math.floor(ts / 36e5) * 36e5;
+    if (!hourBuckets.has(hourKey)) {
+      hourBuckets.set(hourKey, { prices: [], volume: volumeMap.get(hourKey) || 0 });
+    }
+    hourBuckets.get(hourKey).prices.push(price);
+  }
+  const candles = [];
+  const sortedKeys = Array.from(hourBuckets.keys()).sort((a, b) => a - b);
+  for (const hourKey of sortedKeys) {
+    const bucket = hourBuckets.get(hourKey);
+    const p = bucket.prices;
+    candles.push({
+      timestamp: hourKey,
+      open: p[0],
+      high: Math.max(...p),
+      low: Math.min(...p),
+      close: p[p.length - 1],
+      volume: bucket.volume
+    });
+  }
+  const cacheEntry = { fetchedAt: Date.now(), candles };
+  try {
+    fs2.writeFileSync(cacheFile, JSON.stringify(cacheEntry));
+  } catch (err) {
+    console.warn("[coingecko] cache write error:", err);
+  }
+  return candles;
+}
+async function getHistoricalOHLCVFormatted(coin, days = 90) {
+  const candles = await getHistoricalOHLCV(coin, days);
+  if (candles.length === 0) throw new Error(`No historical data found for "${coin}"`);
+  const coinId = resolveId(coin);
+  const last = candles[candles.length - 1];
+  const first = candles[0];
+  const periodReturn = (last.close - first.open) / first.open * 100;
+  const periodHigh = Math.max(...candles.map((c) => c.high));
+  const periodLow = Math.min(...candles.map((c) => c.low));
+  return {
+    coin_id: coinId,
+    days,
+    candle_count: candles.length,
+    period_start: new Date(first.timestamp).toISOString().slice(0, 10),
+    period_end: new Date(last.timestamp).toISOString().slice(0, 10),
+    current_price: last.close,
+    period_high: periodHigh,
+    period_low: periodLow,
+    period_return_pct: parseFloat(periodReturn.toFixed(2))
+  };
+}
+var TIMEOUT_MS3, BASE_URL, CACHE_DIR, CRYPTO_ALIASES2, RateLimiter, rateLimiter;
+var init_coingecko = __esm({
+  "src/coingecko.ts"() {
+    "use strict";
+    TIMEOUT_MS3 = 15e3;
+    BASE_URL = "https://api.coingecko.com/api/v3";
+    CACHE_DIR = path2.join(process.env.HOME || "/tmp", ".cache", "coingecko");
+    CRYPTO_ALIASES2 = {
+      btc: "bitcoin",
+      bitcoin: "bitcoin",
+      eth: "ethereum",
+      ethereum: "ethereum",
+      sol: "solana",
+      solana: "solana",
+      doge: "dogecoin",
+      dogecoin: "dogecoin",
+      ada: "cardano",
+      cardano: "cardano",
+      xrp: "ripple",
+      ripple: "ripple",
+      dot: "polkadot",
+      polkadot: "polkadot",
+      matic: "matic-network",
+      polygon: "matic-network",
+      avax: "avalanche-2",
+      avalanche: "avalanche-2",
+      link: "chainlink",
+      chainlink: "chainlink",
+      bnb: "binancecoin",
+      binancecoin: "binancecoin",
+      ltc: "litecoin",
+      litecoin: "litecoin",
+      shib: "shiba-inu",
+      uni: "uniswap",
+      uniswap: "uniswap",
+      atom: "cosmos",
+      cosmos: "cosmos",
+      near: "near",
+      apt: "aptos",
+      aptos: "aptos",
+      arb: "arbitrum",
+      arbitrum: "arbitrum",
+      op: "optimism",
+      optimism: "optimism",
+      sui: "sui",
+      pepe: "pepe",
+      bnkr: "bankr",
+      bankr: "bankr",
+      virtual: "virtual-protocol",
+      virtuals: "virtual-protocol"
+    };
+    RateLimiter = class {
+      tokens;
+      maxTokens;
+      refillRate;
+      lastRefill;
+      queue = [];
+      processing = false;
+      constructor(maxPerMinute) {
+        this.maxTokens = maxPerMinute;
+        this.tokens = maxPerMinute;
+        this.refillRate = maxPerMinute / 60;
+        this.lastRefill = Date.now();
+      }
+      async acquire() {
+        return new Promise((resolve) => {
+          this.queue.push(resolve);
+          this.processQueue();
+        });
+      }
+      async processQueue() {
+        if (this.processing) return;
+        this.processing = true;
+        while (this.queue.length > 0) {
+          this.refill();
+          if (this.tokens >= 1) {
+            this.tokens -= 1;
+            const next = this.queue.shift();
+            if (next) next();
+          } else {
+            const waitMs = Math.ceil((1 - this.tokens) / this.refillRate * 1e3);
+            await new Promise((r) => setTimeout(r, Math.max(waitMs, 100)));
+          }
+        }
+        this.processing = false;
+      }
+      refill() {
+        const now = Date.now();
+        const elapsed = (now - this.lastRefill) / 1e3;
+        this.tokens = Math.min(this.maxTokens, this.tokens + elapsed * this.refillRate);
+        this.lastRefill = now;
+      }
+    };
+    rateLimiter = new RateLimiter(10);
+  }
+});
+
+// src/technical-signals.ts
+async function loadCryptoSignalParams() {
+  const now = Date.now();
+  if (_dbParamsCache && now - _dbParamsCacheTime < DB_PARAMS_CACHE_TTL) {
+    return _dbParamsCache;
+  }
+  try {
+    const pool2 = getPool();
+    const res = await pool2.query("SELECT value FROM app_config WHERE key = 'crypto_signal_parameters'");
+    if (res.rows.length > 0) {
+      const parsed = typeof res.rows[0].value === "string" ? JSON.parse(res.rows[0].value) : res.rows[0].value;
+      _dbParamsCache = parsed;
+      _dbParamsCacheTime = now;
+      return _dbParamsCache;
+    }
+  } catch {
+  }
+  return {};
+}
+function invalidateCryptoParamsCache() {
+  _dbParamsCache = null;
+  _dbParamsCacheTime = 0;
+}
+function checkCooldown(assetId, cooldownBars = DEFAULT_CONFIG.cooldown_bars) {
+  const entry = cooldownTracker.get(assetId);
+  if (!entry) return { inCooldown: false, detail: "No recent signals" };
+  const cooldownMs = cooldownBars * BAR_INTERVAL_MS;
+  const elapsed = Date.now() - entry.lastSignalTime;
+  if (elapsed < cooldownMs) {
+    const remaining = Math.ceil((cooldownMs - elapsed) / (60 * 1e3));
+    return { inCooldown: true, detail: `Cooldown active (${remaining}min remaining after ${entry.lastSignalType}, ${cooldownBars}-bar)` };
+  }
+  return { inCooldown: false, detail: "Cooldown expired" };
+}
+function recordSignal(assetId, signalType) {
+  cooldownTracker.set(assetId, { lastSignalTime: Date.now(), lastSignalType: signalType });
+}
+function ema(data, period) {
+  if (data.length === 0) return [];
+  const k = 2 / (period + 1);
+  const result = [data[0]];
+  for (let i = 1; i < data.length; i++) {
+    result.push(data[i] * k + result[i - 1] * (1 - k));
+  }
+  return result;
+}
+function clamp(v, min = 0, max = 1) {
+  return Math.max(min, Math.min(max, v));
+}
+function computeEMACrossover(closes, cfg) {
+  const name = "ema_crossover";
+  if (!cfg.enable_ema) {
+    return { name, score: 0, enabled: false, detail: "DISABLED", bull_vote: false, bear_vote: false };
+  }
+  if (closes.length < cfg.ema_slow + 5) {
+    return { name, score: 0, enabled: false, detail: "Insufficient data for EMA", bull_vote: false, bear_vote: false };
+  }
+  const fast = ema(closes, cfg.ema_fast);
+  const slow = ema(closes, cfg.ema_slow);
+  const idx = closes.length - 1;
+  const fastVal = fast[idx];
+  const slowVal = slow[idx];
+  const diff = (fastVal - slowVal) / slowVal;
+  const prevDiff = idx > 0 ? (fast[idx - 1] - slow[idx - 1]) / slow[idx - 1] : diff;
+  const crossingUp = prevDiff <= 0 && diff > 0;
+  let score;
+  if (crossingUp) {
+    score = 0.85;
+  } else if (diff > 0.02) {
+    score = clamp(0.5 + diff * 10, 0.5, 0.9);
+  } else if (diff > 0) {
+    score = clamp(0.4 + diff * 20, 0.3, 0.6);
+  } else if (diff > -0.02) {
+    score = clamp(0.3 + diff * 10, 0.1, 0.4);
+  } else {
+    score = clamp(0.1 + (diff + 0.1) * 5, 0, 0.2);
+  }
+  const bull_vote = fastVal > slowVal;
+  const bear_vote = fastVal < slowVal;
+  const detail = `EMA${cfg.ema_fast}=${fastVal.toFixed(4)} vs EMA${cfg.ema_slow}=${slowVal.toFixed(4)}, diff=${(diff * 100).toFixed(2)}%${crossingUp ? " [CROSS UP]" : ""}`;
+  return { name, score: clamp(score), enabled: true, detail, bull_vote, bear_vote };
+}
+function computeRSI(closes, cfg) {
+  const name = "rsi";
+  if (!cfg.enable_rsi) {
+    return { name, score: 0, enabled: false, detail: "DISABLED", bull_vote: false, bear_vote: false, rsi_value: 50 };
+  }
+  const period = cfg.rsi_period;
+  if (closes.length < period + 2) {
+    return { name, score: 0, enabled: false, detail: "Insufficient data for RSI", bull_vote: false, bear_vote: false, rsi_value: 50 };
+  }
+  const changes = [];
+  for (let i = 1; i < closes.length; i++) {
+    changes.push(closes[i] - closes[i - 1]);
+  }
+  let avgGain = 0;
+  let avgLoss = 0;
+  for (let i = 0; i < period; i++) {
+    if (changes[i] > 0) avgGain += changes[i];
+    else avgLoss += Math.abs(changes[i]);
+  }
+  avgGain /= period;
+  avgLoss /= period;
+  for (let i = period; i < changes.length; i++) {
+    const gain = changes[i] > 0 ? changes[i] : 0;
+    const loss = changes[i] < 0 ? Math.abs(changes[i]) : 0;
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+  }
+  let rsi;
+  if (avgLoss === 0 && avgGain === 0) {
+    rsi = 50;
+  } else if (avgLoss === 0) {
+    rsi = 100;
+  } else {
+    const rs = avgGain / avgLoss;
+    rsi = 100 - 100 / (1 + rs);
+  }
+  let score;
+  if (rsi <= cfg.rsi_oversold) {
+    score = clamp(0.7 + (cfg.rsi_oversold - rsi) / cfg.rsi_oversold * 0.3, 0.7, 1);
+  } else if (rsi >= cfg.rsi_overbought) {
+    score = clamp(0.3 - (rsi - cfg.rsi_overbought) / (100 - cfg.rsi_overbought) * 0.3, 0, 0.3);
+  } else {
+    const mid = (cfg.rsi_oversold + cfg.rsi_overbought) / 2;
+    if (rsi < mid) {
+      score = clamp(0.5 + (mid - rsi) / (mid - cfg.rsi_oversold) * 0.2, 0.5, 0.7);
+    } else {
+      score = clamp(0.5 - (rsi - mid) / (cfg.rsi_overbought - mid) * 0.2, 0.3, 0.5);
+    }
+  }
+  const bull_vote = rsi < 45;
+  const bear_vote = rsi > 55;
+  const detail = `RSI(${period})=${rsi.toFixed(1)} [oversold<${cfg.rsi_oversold}, overbought>${cfg.rsi_overbought}]`;
+  return { name, score: clamp(score), enabled: true, detail, bull_vote, bear_vote, rsi_value: rsi };
+}
+function computeMomentum(closes, cfg) {
+  const name = "momentum";
+  if (!cfg.enable_momentum) {
+    return { name, score: 0, enabled: false, detail: "DISABLED", bull_vote: false, bear_vote: false };
+  }
+  const lookback = cfg.momentum_lookback;
+  if (closes.length < lookback + 1) {
+    return { name, score: 0, enabled: false, detail: "Insufficient data for momentum", bull_vote: false, bear_vote: false };
+  }
+  const current = closes[closes.length - 1];
+  const pastIdx = closes.length - 1 - lookback;
+  const ret = pastIdx >= 0 ? (current - closes[pastIdx]) / closes[pastIdx] : 0;
+  let score;
+  if (ret > 0.05) {
+    score = clamp(0.7 + ret * 3, 0.7, 0.95);
+  } else if (ret > 0.01) {
+    score = clamp(0.5 + ret * 5, 0.5, 0.7);
+  } else if (ret > -0.01) {
+    score = 0.45;
+  } else if (ret > -0.05) {
+    score = clamp(0.3 + (ret + 0.05) * 5, 0.2, 0.4);
+  } else {
+    score = clamp(0.1 + (ret + 0.1) * 2, 0, 0.2);
+  }
+  const threshold = 5e-3;
+  const bull_vote = ret > threshold;
+  const bear_vote = ret < -threshold;
+  const retPct = (ret * 100).toFixed(2);
+  const detail = `Momentum(${lookback}-bar): ${retPct}%`;
+  return { name, score: clamp(score), enabled: true, detail, bull_vote, bear_vote };
+}
+function computeVeryShortMomentum(closes, cfg) {
+  const name = "very_short_momentum";
+  if (!cfg.enable_very_short_momentum) {
+    return { name, score: 0, enabled: false, detail: "DISABLED", bull_vote: false, bear_vote: false };
+  }
+  const lookback = cfg.very_short_momentum_lookback;
+  if (closes.length < lookback + 1) {
+    return { name, score: 0, enabled: false, detail: "Insufficient data for very-short momentum", bull_vote: false, bear_vote: false };
+  }
+  const current = closes[closes.length - 1];
+  const pastIdx = closes.length - 1 - lookback;
+  const ret = pastIdx >= 0 ? (current - closes[pastIdx]) / closes[pastIdx] : 0;
+  let score;
+  if (ret > 0.03) {
+    score = clamp(0.7 + ret * 5, 0.7, 0.95);
+  } else if (ret > 5e-3) {
+    score = clamp(0.5 + ret * 8, 0.5, 0.7);
+  } else if (ret > -5e-3) {
+    score = 0.45;
+  } else if (ret > -0.03) {
+    score = clamp(0.3 + (ret + 0.03) * 8, 0.2, 0.4);
+  } else {
+    score = clamp(0.1 + (ret + 0.06) * 3, 0, 0.2);
+  }
+  const bull_vote = ret > 0;
+  const bear_vote = ret < 0;
+  const retPct = (ret * 100).toFixed(2);
+  const detail = `VeryShort Momentum(${lookback}-bar): ${retPct}%`;
+  return { name, score: clamp(score), enabled: true, detail, bull_vote, bear_vote };
+}
+function computeMACD(closes, cfg) {
+  const name = "macd";
+  if (!cfg.enable_macd) {
+    return { name, score: 0, enabled: false, detail: "DISABLED", bull_vote: false, bear_vote: false };
+  }
+  if (closes.length < cfg.macd_slow + cfg.macd_signal + 5) {
+    return { name, score: 0, enabled: false, detail: "Insufficient data for MACD", bull_vote: false, bear_vote: false };
+  }
+  const fastEMA = ema(closes, cfg.macd_fast);
+  const slowEMA = ema(closes, cfg.macd_slow);
+  const macdLine = [];
+  for (let i = 0; i < closes.length; i++) {
+    macdLine.push(fastEMA[i] - slowEMA[i]);
+  }
+  const signalLine = ema(macdLine, cfg.macd_signal);
+  const idx = closes.length - 1;
+  const histogram = macdLine[idx] - signalLine[idx];
+  const prevHistogram = idx > 0 ? macdLine[idx - 1] - signalLine[idx - 1] : histogram;
+  const crossingUp = prevHistogram <= 0 && histogram > 0;
+  let score;
+  const normHist = histogram / closes[idx];
+  if (crossingUp) {
+    score = 0.8;
+  } else if (normHist > 1e-3) {
+    score = clamp(0.5 + normHist * 200, 0.5, 0.85);
+  } else if (normHist > 0) {
+    score = clamp(0.4 + normHist * 500, 0.35, 0.55);
+  } else {
+    score = clamp(0.3 + normHist * 200, 0.05, 0.35);
+  }
+  const bull_vote = histogram > 0 || crossingUp;
+  const bear_vote = histogram < 0 && !crossingUp;
+  const detail = `MACD(${cfg.macd_fast},${cfg.macd_slow},${cfg.macd_signal}): line=${macdLine[idx].toFixed(4)}, signal=${signalLine[idx].toFixed(4)}, hist=${histogram.toFixed(4)}${crossingUp ? " [CROSS UP]" : ""}`;
+  return { name, score: clamp(score), enabled: true, detail, bull_vote, bear_vote };
+}
+function computeBBWidth(closes, cfg) {
+  const name = "bb_width";
+  if (!cfg.enable_bb) {
+    return { name, score: 0, enabled: false, detail: "DISABLED", bull_vote: false, bear_vote: false };
+  }
+  if (closes.length < cfg.bb_period + 50) {
+    return { name, score: 0, enabled: false, detail: "Insufficient data for BB width", bull_vote: false, bear_vote: false };
+  }
+  const period = cfg.bb_period;
+  const widths = [];
+  for (let i = period - 1; i < closes.length; i++) {
+    let sum = 0;
+    for (let j = i - period + 1; j <= i; j++) sum += closes[j];
+    const mean = sum / period;
+    let variance = 0;
+    for (let j = i - period + 1; j <= i; j++) variance += (closes[j] - mean) ** 2;
+    const std = Math.sqrt(variance / period);
+    widths.push(2 * 2 * std / mean);
+  }
+  const currentWidth = widths[widths.length - 1];
+  const sortedWidths = [...widths].sort((a, b) => a - b);
+  const percentileIdx = Math.floor(sortedWidths.length * (1 - cfg.bb_percentile_threshold / 100));
+  const isCompressed = currentWidth <= sortedWidths[Math.max(0, percentileIdx)];
+  let score;
+  if (isCompressed) {
+    const rank = sortedWidths.indexOf(sortedWidths.find((w) => w >= currentWidth) || currentWidth);
+    const percentile = rank / sortedWidths.length;
+    score = clamp(0.6 + (1 - percentile) * 0.35, 0.6, 0.95);
+  } else {
+    score = clamp(0.3 + (1 - currentWidth / sortedWidths[sortedWidths.length - 1]) * 0.2, 0.2, 0.45);
+  }
+  const bull_vote = isCompressed;
+  const bear_vote = !isCompressed;
+  const pctile = (widths.filter((w) => w <= currentWidth).length / widths.length * 100).toFixed(0);
+  const detail = `BB Width(${period}): ${(currentWidth * 100).toFixed(2)}%, percentile=${pctile}%${isCompressed ? " [COMPRESSED]" : ""}`;
+  return { name, score: clamp(score), enabled: true, detail, bull_vote, bear_vote };
+}
+function computeATR(candles, period = 14) {
+  if (candles.length < period + 1) return 0;
+  const trueRanges = [];
+  for (let i = 1; i < candles.length; i++) {
+    const high = candles[i].high;
+    const low = candles[i].low;
+    const prevClose = candles[i - 1].close;
+    trueRanges.push(Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)));
+  }
+  let atr = 0;
+  for (let i = 0; i < period; i++) {
+    atr += trueRanges[trueRanges.length - period + i];
+  }
+  atr /= period;
+  return atr;
+}
+function classifyRegime(closes, cfg) {
+  if (closes.length < cfg.ema_slow + 10) return "RANGING";
+  const fast = ema(closes, cfg.ema_fast);
+  const slow = ema(closes, cfg.ema_slow);
+  const idx = closes.length - 1;
+  const slopeWindow = Math.min(10, idx);
+  const slopeStart = fast[idx - slopeWindow];
+  const slopeEnd = fast[idx];
+  const slope = (slopeEnd - slopeStart) / slopeStart;
+  const lookback = Math.min(cfg.vol_lookback_bars, closes.length - 1);
+  const returns = [];
+  for (let i = closes.length - lookback; i < closes.length; i++) {
+    returns.push(Math.log(closes[i] / closes[i - 1]));
+  }
+  const mean = returns.reduce((s, r) => s + r, 0) / returns.length;
+  const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / returns.length;
+  const vol = Math.sqrt(variance);
+  const annualizedVol = vol * Math.sqrt(24 * 365);
+  if (annualizedVol > 1.5) return "VOLATILE";
+  if (Math.abs(slope) > 0.01) return "TRENDING";
+  return "RANGING";
+}
+function computeVolAdjustedThreshold(closes, cfg) {
+  const lookback = Math.min(cfg.vol_lookback_bars, closes.length - 1);
+  if (lookback < 5) return cfg.vote_threshold;
+  const returns = [];
+  for (let i = closes.length - lookback; i < closes.length; i++) {
+    if (i > 0) returns.push(Math.abs((closes[i] - closes[i - 1]) / closes[i - 1]));
+  }
+  if (returns.length === 0) return cfg.vote_threshold;
+  const avgAbsReturn = returns.reduce((s, r) => s + r, 0) / returns.length;
+  const annualizedVol = avgAbsReturn * Math.sqrt(24 * 365);
+  if (annualizedVol > 2) return Math.min(cfg.vote_threshold + 1, 6);
+  if (annualizedVol < 0.5) return Math.max(cfg.vote_threshold - 1, 3);
+  return cfg.vote_threshold;
+}
+function computeBTCConfirmation(btcCandles, cfg) {
+  if (btcCandles.length < cfg.momentum_lookback + 1) {
+    return { btc_momentum_bull: false, btc_momentum_bear: false, detail: "Insufficient BTC data" };
+  }
+  const closes = btcCandles.map((c) => c.close);
+  const current = closes[closes.length - 1];
+  const pastIdx = closes.length - 1 - cfg.momentum_lookback;
+  const ret = pastIdx >= 0 ? (current - closes[pastIdx]) / closes[pastIdx] : 0;
+  return {
+    btc_momentum_bull: ret > 0,
+    btc_momentum_bear: ret < -0.01,
+    detail: `BTC momentum(${cfg.momentum_lookback}-bar): ${(ret * 100).toFixed(2)}%`
+  };
+}
+function analyzeAsset(candles, config3, btcCandles, assetId) {
+  const cfg = { ...DEFAULT_CONFIG, ...config3 };
+  const closes = candles.map((c) => c.close);
+  const currentPrice = closes.length > 0 ? closes[closes.length - 1] : 0;
+  if (closes.length < 30) {
+    return {
+      technical_score: 0,
+      regime: "RANGING",
+      atr_value: 0,
+      atr_stop_price: 0,
+      atr_stop_multiplier: cfg.atr_stop_multiplier,
+      current_price: currentPrice,
+      signals: [],
+      votes: { bull_votes: 0, bear_votes: 0, total_signals: 0, vote_summary: "0/0", entry_signal: false, exit_long_signal: false, exit_short_signal: false, rsi_overbought: false, rsi_oversold: false },
+      active_signal_count: 0,
+      data_quality: "insufficient",
+      parameters_validated: false,
+      vol_adjusted_threshold: cfg.vote_threshold,
+      reason: `Only ${closes.length} candles available, need at least 30`
+    };
+  }
+  const rsiResult = computeRSI(closes, cfg);
+  const rsiValue = rsiResult.rsi_value;
+  const signals = [
+    computeEMACrossover(closes, cfg),
+    rsiResult,
+    computeMomentum(closes, cfg),
+    computeVeryShortMomentum(closes, cfg),
+    computeMACD(closes, cfg),
+    computeBBWidth(closes, cfg)
+  ];
+  const activeSignals = signals.filter((s) => s.enabled);
+  const regime = classifyRegime(closes, cfg);
+  const atrValue = computeATR(candles, cfg.atr_period);
+  const atrStopPrice = currentPrice - atrValue * cfg.atr_stop_multiplier;
+  const volAdjustedThreshold = computeVolAdjustedThreshold(closes, cfg);
+  if (activeSignals.length < 2) {
+    return {
+      technical_score: 0,
+      regime,
+      atr_value: atrValue,
+      atr_stop_price: atrStopPrice,
+      atr_stop_multiplier: cfg.atr_stop_multiplier,
+      current_price: currentPrice,
+      signals,
+      votes: { bull_votes: 0, bear_votes: 0, total_signals: 0, vote_summary: "0/0", entry_signal: false, exit_long_signal: false, exit_short_signal: false, rsi_overbought: false, rsi_oversold: false },
+      active_signal_count: activeSignals.length,
+      data_quality: "insufficient",
+      parameters_validated: false,
+      vol_adjusted_threshold: volAdjustedThreshold,
+      reason: "Fewer than 2 active signals with data"
+    };
+  }
+  let bull_votes = 0;
+  let bear_votes = 0;
+  for (const sig of activeSignals) {
+    if (sig.bull_vote) bull_votes++;
+    if (sig.bear_vote) bear_votes++;
+  }
+  const total_signals = activeSignals.length;
+  const rsi_overbought = rsiValue >= cfg.rsi_overbought;
+  const rsi_oversold = rsiValue <= cfg.rsi_oversold;
+  const entry_signal = bull_votes >= volAdjustedThreshold;
+  const exit_long_signal = rsi_overbought;
+  const exit_short_signal = rsi_oversold;
+  const votes = {
+    bull_votes,
+    bear_votes,
+    total_signals,
+    vote_summary: `${bull_votes}/${total_signals}`,
+    entry_signal,
+    exit_long_signal,
+    exit_short_signal,
+    rsi_overbought,
+    rsi_oversold
+  };
+  const SIGNAL_WEIGHTS = {
+    ema_crossover: 0.4,
+    rsi: 0.25,
+    momentum: 0.15,
+    very_short_momentum: 0.05,
+    macd: 0.1,
+    bb_width: 0.03,
+    volatility_regime: 0.02
+  };
+  let weightedSum = 0;
+  let totalWeight = 0;
+  for (const sig of activeSignals) {
+    const w = SIGNAL_WEIGHTS[sig.name] ?? 0.05;
+    weightedSum += sig.score * w;
+    totalWeight += w;
+  }
+  const technicalScore = totalWeight > 0 ? weightedSum / totalWeight : 0;
+  let btcConfirmation;
+  if (btcCandles && btcCandles.length > cfg.momentum_lookback + 1) {
+    const btcResult = computeBTCConfirmation(btcCandles, cfg);
+    btcConfirmation = {
+      ...btcResult,
+      alt_entry_allowed: !btcResult.btc_momentum_bear
+    };
+    if (btcResult.btc_momentum_bear && entry_signal) {
+      votes.entry_signal = false;
+    }
+  }
+  let cooldownResult;
+  if (assetId) {
+    const cd = checkCooldown(assetId, cfg.cooldown_bars);
+    cooldownResult = { in_cooldown: cd.inCooldown, detail: cd.detail };
+    if (cd.inCooldown && votes.entry_signal) {
+      votes.entry_signal = false;
+    }
+  }
+  return {
+    technical_score: parseFloat(technicalScore.toFixed(3)),
+    regime,
+    atr_value: parseFloat(atrValue.toFixed(6)),
+    atr_stop_price: parseFloat(atrStopPrice.toFixed(6)),
+    atr_stop_multiplier: cfg.atr_stop_multiplier,
+    current_price: currentPrice,
+    signals,
+    votes,
+    active_signal_count: activeSignals.length,
+    data_quality: "sufficient",
+    parameters_validated: false,
+    vol_adjusted_threshold: volAdjustedThreshold,
+    btc_confirmation: btcConfirmation,
+    cooldown: cooldownResult
+  };
+}
+var DEFAULT_CONFIG, _dbParamsCache, _dbParamsCacheTime, DB_PARAMS_CACHE_TTL, cooldownTracker, BAR_INTERVAL_MS;
+var init_technical_signals = __esm({
+  "src/technical-signals.ts"() {
+    "use strict";
+    init_db();
+    DEFAULT_CONFIG = {
+      ema_fast: 7,
+      ema_slow: 26,
+      rsi_period: 8,
+      rsi_overbought: 69,
+      rsi_oversold: 31,
+      momentum_lookback: 12,
+      very_short_momentum_lookback: 6,
+      macd_fast: 14,
+      macd_slow: 23,
+      macd_signal: 9,
+      bb_period: 7,
+      bb_percentile_threshold: 90,
+      vol_lookback_bars: 24,
+      atr_period: 14,
+      atr_stop_multiplier: 5.5,
+      vote_threshold: 4,
+      cooldown_bars: 2,
+      enable_ema: true,
+      enable_rsi: true,
+      enable_momentum: true,
+      enable_very_short_momentum: true,
+      enable_macd: true,
+      enable_bb: true,
+      enable_volatility_regime: true
+    };
+    _dbParamsCache = null;
+    _dbParamsCacheTime = 0;
+    DB_PARAMS_CACHE_TTL = 3e5;
+    cooldownTracker = /* @__PURE__ */ new Map();
+    BAR_INTERVAL_MS = 60 * 60 * 1e3;
+  }
+});
+
+// src/signal-sources.ts
+var signal_sources_exports = {};
+__export(signal_sources_exports, {
+  getBinanceFundingRates: () => getBinanceFundingRates,
+  getBinanceSignals: () => getBinanceSignals,
+  getCryptoLiquidations: () => getCryptoLiquidations,
+  getCryptoSentiment: () => getCryptoSentiment,
+  getDefiLlamaData: () => getDefiLlamaData,
+  getDefiLlamaYields: () => getDefiLlamaYields,
+  getEnhancedCoinGeckoData: () => getEnhancedCoinGeckoData,
+  getFearGreedIndex: () => getFearGreedIndex,
+  getOpenInterestHistory: () => getOpenInterestHistory,
+  scanBinanceWatchlist: () => scanBinanceWatchlist
+});
+function cached(key, ttlMs, fn) {
+  const entry = CACHE.get(key);
+  if (entry && Date.now() - entry.ts < ttlMs) return Promise.resolve(entry.data);
+  return fn().then((data) => {
+    if (CACHE.size >= CACHE_MAX_SIZE) {
+      const oldest = [...CACHE.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
+      if (oldest) CACHE.delete(oldest[0]);
+    }
+    CACHE.set(key, { data, ts: Date.now() });
+    return data;
+  });
+}
+async function fetchJSON(url, timeoutMs = 15e3) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: { "User-Agent": "DarkNode/1.0", "Accept": "application/json" }
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function getFearGreedIndex() {
+  return cached("fear_greed", CACHE_TTL2, async () => {
+    const data = await fetchJSON("https://api.alternative.me/fng/?limit=2&format=json");
+    const entries = data?.data || [];
+    const current = entries[0];
+    const prev = entries[1] || null;
+    const val = parseInt(current?.value || "50");
+    let classification = current?.value_classification || "Neutral";
+    let regime;
+    if (val <= 25) regime = "EXTREME_FEAR";
+    else if (val <= 40) regime = "FEAR";
+    else if (val <= 60) regime = "NEUTRAL";
+    else if (val <= 75) regime = "GREED";
+    else regime = "EXTREME_GREED";
+    return {
+      value: val,
+      classification,
+      timestamp: new Date(parseInt(current?.timestamp || "0") * 1e3).toISOString(),
+      previous: prev ? {
+        value: parseInt(prev.value),
+        classification: prev.value_classification
+      } : null,
+      regime_signal: regime
+    };
+  });
+}
+async function getBinanceSignals(symbol = "BTCUSDT") {
+  const sym = symbol.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const pair = sym.endsWith("USDT") ? sym : sym + "USDT";
+  return cached(`binance_signal_${pair}`, CACHE_TTL2, async () => {
+    const [ticker, klines1h, klines4h, klines1d] = await Promise.all([
+      fetchJSON(`https://api.binance.us/api/v3/ticker/24hr?symbol=${pair}`),
+      fetchJSON(`https://api.binance.us/api/v3/klines?symbol=${pair}&interval=1h&limit=50`),
+      fetchJSON(`https://api.binance.us/api/v3/klines?symbol=${pair}&interval=4h&limit=50`),
+      fetchJSON(`https://api.binance.us/api/v3/klines?symbol=${pair}&interval=1d&limit=30`)
+    ]);
+    const price = parseFloat(ticker.lastPrice);
+    const vol24h = parseFloat(ticker.quoteVolume);
+    const priceChange = parseFloat(ticker.priceChangePercent);
+    const analyze = (klines, tf) => {
+      if (!klines || klines.length < 14) return { timeframe: tf, error: "insufficient data" };
+      const closes = klines.map((k) => parseFloat(k[4]));
+      const highs = klines.map((k) => parseFloat(k[2]));
+      const lows = klines.map((k) => parseFloat(k[3]));
+      const volumes = klines.map((k) => parseFloat(k[5]));
+      const rsi = calcRSI(closes, 14);
+      const sma20 = closes.slice(-20).reduce((s, v) => s + v, 0) / Math.min(20, closes.length);
+      const sma50 = closes.length >= 50 ? closes.slice(-50).reduce((s, v) => s + v, 0) / 50 : sma20;
+      const ema12 = calcEMA(closes, 12);
+      const ema26 = calcEMA(closes, 26);
+      const macd = ema12 - ema26;
+      const atr = calcATR(highs, lows, closes, 14);
+      const avgVol = volumes.slice(-20).reduce((s, v) => s + v, 0) / Math.min(20, volumes.length);
+      const volRatio = volumes[volumes.length - 1] / (avgVol || 1);
+      const lastClose = closes[closes.length - 1];
+      let bullVotes = 0, bearVotes = 0;
+      if (lastClose > sma20) bullVotes++;
+      else bearVotes++;
+      if (sma20 > sma50) bullVotes++;
+      else bearVotes++;
+      if (macd > 0) bullVotes++;
+      else bearVotes++;
+      if (rsi > 50 && rsi < 70) bullVotes++;
+      else if (rsi < 50 && rsi > 30) bearVotes++;
+      if (volRatio > 1.2) bullVotes++;
+      const signal = bullVotes >= 4 ? "BULLISH" : bearVotes >= 4 ? "BEARISH" : "NEUTRAL";
+      return {
+        timeframe: tf,
+        signal,
+        bull_votes: bullVotes,
+        bear_votes: bearVotes,
+        rsi: round(rsi),
+        macd: round(macd),
+        sma20: round(sma20),
+        sma50: round(sma50),
+        atr: round(atr),
+        volume_ratio: round(volRatio),
+        price_vs_sma20: round((lastClose - sma20) / sma20 * 100) + "%"
+      };
+    };
+    const tf1h = analyze(klines1h, "1h");
+    const tf4h = analyze(klines4h, "4h");
+    const tf1d = analyze(klines1d, "1d");
+    const signals = [tf1h, tf4h, tf1d].filter((t) => !("error" in t));
+    const bullCount = signals.filter((s) => s.signal === "BULLISH").length;
+    const bearCount = signals.filter((s) => s.signal === "BEARISH").length;
+    const composite = bullCount >= 2 ? "BULLISH" : bearCount >= 2 ? "BEARISH" : "NEUTRAL";
+    const score = (bullCount - bearCount + 3) / 6;
+    return {
+      symbol: pair,
+      timeframes: { "1h": tf1h, "4h": tf4h, "1d": tf1d },
+      composite_signal: composite,
+      composite_score: round(score),
+      price,
+      volume_24h: vol24h
+    };
+  });
+}
+async function scanBinanceWatchlist(symbols) {
+  const syms = symbols.map((s) => {
+    const upper = s.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    return upper.endsWith("USDT") ? upper : upper + "USDT";
+  });
+  const results = await Promise.allSettled(
+    syms.map((s) => getBinanceSignals(s))
+  );
+  const parsed = results.filter((r) => r.status === "fulfilled").map((r) => r.value);
+  const sorted = [...parsed].sort((a, b) => b.composite_score - a.composite_score);
+  return {
+    scanned: syms.length,
+    results: parsed,
+    top_signals: sorted.filter((s) => s.composite_signal !== "NEUTRAL").slice(0, 10)
+  };
+}
+async function getCryptoLiquidations() {
+  return cached("liquidations", CACHE_TTL2, async () => {
+    try {
+      const data = await fetchJSON("https://api.coinglass.com/api/pro/v1/futures/liquidation_chart?symbol=BTC&range=1");
+      if (data?.data) {
+        const totalLong = data.data.longVolUsd || 0;
+        const totalShort = data.data.shortVolUsd || 0;
+        const total = totalLong + totalShort;
+        const longPct = total > 0 ? totalLong / total * 100 : 50;
+        return {
+          total_24h_usd: total,
+          long_liquidations: totalLong,
+          short_liquidations: totalShort,
+          long_pct: round(longPct),
+          largest_single: null,
+          regime_signal: longPct > 65 ? "LONG_SQUEEZE" : longPct < 35 ? "SHORT_SQUEEZE" : "BALANCED",
+          source: "coinglass"
+        };
+      }
+    } catch {
+    }
+    try {
+      const btcTicker = await fetchJSON("https://api.binance.us/api/v3/ticker/24hr?symbol=BTCUSDT");
+      const vol = parseFloat(btcTicker?.quoteVolume || "0");
+      const priceChange = parseFloat(btcTicker?.priceChangePercent || "0");
+      const estimatedLiq = vol * 0.015;
+      const longPct = priceChange < -3 ? 70 : priceChange > 3 ? 30 : 50 + priceChange * -5;
+      return {
+        total_24h_usd: round(estimatedLiq),
+        long_liquidations: round(estimatedLiq * (longPct / 100)),
+        short_liquidations: round(estimatedLiq * ((100 - longPct) / 100)),
+        long_pct: round(longPct),
+        largest_single: null,
+        regime_signal: longPct > 65 ? "LONG_SQUEEZE_RISK" : longPct < 35 ? "SHORT_SQUEEZE_RISK" : "BALANCED",
+        source: "binance_us_estimated"
+      };
+    } catch (err) {
+      return {
+        total_24h_usd: 0,
+        long_liquidations: 0,
+        short_liquidations: 0,
+        long_pct: 50,
+        largest_single: null,
+        regime_signal: "UNAVAILABLE",
+        source: "error"
+      };
+    }
+  });
+}
+async function getCryptoSentiment(query = "bitcoin") {
+  return cached(`sentiment_${query}`, CACHE_TTL2, async () => {
+    try {
+      const [lunarData, newsData] = await Promise.allSettled([
+        fetchJSON(`https://api.lunarcrush.com/v2?data=assets&symbol=${encodeURIComponent(query)}&interval=1d&data_points=1`),
+        fetchJSON(`https://cryptopanic.com/api/free/v1/posts/?auth_token=free&currencies=${encodeURIComponent(query)}&filter=bullish`)
+      ]);
+      let score = 50;
+      const sources = [];
+      const keywords = [];
+      if (lunarData.status === "fulfilled" && lunarData.value?.data?.[0]) {
+        const asset = lunarData.value.data[0];
+        score = asset.galaxy_score || asset.alt_rank || 50;
+        sources.push({
+          source: "lunarcrush",
+          sentiment: score > 60 ? "bullish" : score < 40 ? "bearish" : "neutral",
+          mentions: asset.social_volume_24h || 0
+        });
+      }
+      if (newsData.status === "fulfilled" && newsData.value?.results) {
+        const results = newsData.value.results;
+        const bullish = results.filter((r) => r.kind === "news").length;
+        sources.push({
+          source: "cryptopanic",
+          sentiment: bullish > 5 ? "bullish" : "neutral",
+          mentions: results.length
+        });
+      }
+      const overall = score > 60 ? "BULLISH" : score < 40 ? "BEARISH" : "NEUTRAL";
+      return { query, overall_sentiment: overall, score, sources, trending_keywords: keywords };
+    } catch {
+      return { query, overall_sentiment: "UNAVAILABLE", score: 50, sources: [], trending_keywords: [] };
+    }
+  });
+}
+async function getDefiLlamaData(protocol) {
+  return cached(`defillama_${protocol || "global"}`, CACHE_TTL2 * 2, async () => {
+    if (protocol) {
+      const data = await fetchJSON(`https://api.llama.fi/protocol/${protocol}`);
+      return {
+        total_tvl: data?.tvl?.[data.tvl.length - 1]?.totalLiquidityUSD || 0,
+        tvl_change_24h: 0,
+        top_protocols: [{
+          name: data?.name || protocol,
+          tvl: data?.tvl?.[data.tvl.length - 1]?.totalLiquidityUSD || 0,
+          change_1d: 0,
+          category: data?.category || "unknown",
+          chain: (data?.chains || []).join(", ")
+        }],
+        chain_tvl: []
+      };
+    }
+    const [protocols, chains] = await Promise.all([
+      fetchJSON("https://api.llama.fi/protocols"),
+      fetchJSON("https://api.llama.fi/v2/chains")
+    ]);
+    const topProtos = (protocols || []).sort((a, b) => (b.tvl || 0) - (a.tvl || 0)).slice(0, 15).map((p) => ({
+      name: p.name,
+      tvl: p.tvl || 0,
+      change_1d: p.change_1d || 0,
+      category: p.category || "unknown",
+      chain: (p.chains || []).slice(0, 3).join(", ")
+    }));
+    const chainTvl = (chains || []).sort((a, b) => (b.tvl || 0) - (a.tvl || 0)).slice(0, 10).map((c) => ({ name: c.name, tvl: c.tvl || 0 }));
+    const totalTvl = topProtos.reduce((s, p) => s + p.tvl, 0);
+    return {
+      total_tvl: totalTvl,
+      tvl_change_24h: 0,
+      top_protocols: topProtos,
+      chain_tvl: chainTvl
+    };
+  });
+}
+async function getDefiLlamaYields() {
+  return cached("defillama_yields", CACHE_TTL2 * 3, async () => {
+    const data = await fetchJSON("https://yields.llama.fi/pools");
+    const pools = (data?.data || []).filter((p) => p.tvlUsd > 1e6 && p.apy > 0 && p.apy < 200).sort((a, b) => b.tvlUsd - a.tvlUsd).slice(0, 20).map((p) => ({
+      pool: p.symbol || p.pool,
+      project: p.project,
+      chain: p.chain,
+      tvl: round(p.tvlUsd),
+      apy: round(p.apy),
+      apy_base: round(p.apyBase || 0),
+      apy_reward: round(p.apyReward || 0),
+      il_risk: p.ilRisk || "unknown"
+    }));
+    return { top_pools: pools, count: pools.length };
+  });
+}
+async function getBinanceFundingRates(symbols) {
+  const cacheKey = symbols && symbols.length > 0 ? `funding_rates_${symbols.map((s) => s.toUpperCase()).sort().join("_")}` : "funding_rates";
+  return cached(cacheKey, CACHE_TTL2, async () => {
+    const targetSymbols = symbols && symbols.length > 0 ? symbols.map((s) => s.toUpperCase().replace(/[^A-Z0-9]/g, "")) : ["BTC", "ETH", "SOL", "DOGE", "AVAX", "LINK", "ADA", "DOT", "MATIC", "UNI"];
+    const tickers = await Promise.allSettled(
+      targetSymbols.map(
+        (s) => fetchJSON(`https://api.binance.us/api/v3/ticker/24hr?symbol=${s}USDT`)
+      )
+    );
+    const rates = tickers.map((r, i) => {
+      if (r.status !== "fulfilled" || r.value?.code) return null;
+      const t = r.value;
+      const priceChange = parseFloat(t.priceChangePercent || "0");
+      const estimatedFunding = priceChange > 5 ? 0.05 : priceChange < -5 ? -0.05 : priceChange * 0.01;
+      return {
+        symbol: targetSymbols[i] + "USDT",
+        funding_rate: round(estimatedFunding, 4),
+        next_funding_time: new Date(Date.now() + 8 * 36e5).toISOString(),
+        mark_price: round(parseFloat(t.lastPrice || "0")),
+        signal: estimatedFunding > 0.03 ? "OVERLEVERAGED_LONGS" : estimatedFunding < -0.03 ? "OVERLEVERAGED_SHORTS" : "NEUTRAL"
+      };
+    }).filter((r) => r !== null);
+    const avgRate = rates.length > 0 ? rates.reduce((s, r) => s + r.funding_rate, 0) / rates.length : 0;
+    const extreme = rates.filter((r) => Math.abs(r.funding_rate) > 0.03);
+    return { rates, average_rate: round(avgRate, 4), extreme_funding: extreme, source: "binance_us_spot_estimated" };
+  });
+}
+async function getOpenInterestHistory(symbol = "BTCUSDT") {
+  const sym = symbol.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const pair = sym.endsWith("USDT") ? sym : sym + "USDT";
+  return cached(`oi_${pair}`, CACHE_TTL2, async () => {
+    const ticker = await fetchJSON(`https://api.binance.us/api/v3/ticker/24hr?symbol=${pair}`);
+    if (ticker?.code) throw new Error(ticker.msg || "Binance US error");
+    const price = parseFloat(ticker.lastPrice || "0");
+    const vol24h = parseFloat(ticker.quoteVolume || "0");
+    const priceChange = parseFloat(ticker.priceChangePercent || "0");
+    const estimatedOI = vol24h * 0.3;
+    const estimatedFunding = priceChange > 5 ? 0.05 : priceChange < -5 ? -0.05 : priceChange * 8e-3;
+    const ratio = priceChange > 0 ? 1 + priceChange / 20 : 1 / (1 + Math.abs(priceChange) / 20);
+    let signal = "NEUTRAL";
+    if (priceChange > 5 && ratio > 1.3) signal = "CROWDED_LONG";
+    else if (priceChange < -5 && ratio < 0.75) signal = "CROWDED_SHORT";
+    else if (priceChange > 3) signal = "LONGS_INCREASING";
+    else if (priceChange < -3) signal = "SHORTS_INCREASING";
+    return {
+      symbol: pair,
+      current_oi: round(estimatedOI),
+      oi_change_5m: 0,
+      funding_rate: round(estimatedFunding, 4),
+      long_short_ratio: round(ratio, 3),
+      signal,
+      source: "binance_us_spot_estimated"
+    };
+  });
+}
+async function getEnhancedCoinGeckoData(category) {
+  return cached(`cg_enhanced_${category || "all"}`, CACHE_TTL2 * 2, async () => {
+    const [trending, global] = await Promise.all([
+      fetchJSON("https://api.coingecko.com/api/v3/search/trending"),
+      fetchJSON("https://api.coingecko.com/api/v3/global")
+    ]);
+    const trendingTokens = (trending?.coins || []).slice(0, 10).map((c) => ({
+      name: c.item?.name || "",
+      symbol: c.item?.symbol || "",
+      rank: c.item?.score || 0,
+      price_btc: c.item?.price_btc || 0,
+      market_cap_rank: c.item?.market_cap_rank || 999
+    }));
+    const globalData = global?.data || {};
+    const btcDom = globalData.market_cap_percentage?.btc || 0;
+    const ethDom = globalData.market_cap_percentage?.eth || 0;
+    let topDefi = [];
+    try {
+      const defiData = await fetchJSON("https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&category=decentralized-finance-defi&order=market_cap_desc&per_page=10&sparkline=false");
+      topDefi = (defiData || []).map((d) => ({
+        name: d.name,
+        symbol: d.symbol,
+        tvl: d.total_value_locked || 0,
+        mcap_tvl_ratio: d.total_value_locked ? round(d.market_cap / d.total_value_locked, 2) : 0
+      }));
+    } catch {
+    }
+    return {
+      trending_tokens: trendingTokens,
+      top_defi: topDefi,
+      market_dominance: { btc: round(btcDom), eth: round(ethDom), others: round(100 - btcDom - ethDom) }
+    };
+  });
+}
+function calcRSI(closes, period) {
+  if (closes.length < period + 1) return 50;
+  let gains = 0, losses = 0;
+  for (let i = closes.length - period; i < closes.length; i++) {
+    const delta = closes[i] - closes[i - 1];
+    if (delta > 0) gains += delta;
+    else losses -= delta;
+  }
+  const avgGain = gains / period;
+  const avgLoss = losses / period;
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return 100 - 100 / (1 + rs);
+}
+function calcEMA(data, period) {
+  if (data.length < period) return data[data.length - 1] || 0;
+  const k = 2 / (period + 1);
+  let ema2 = data.slice(0, period).reduce((s, v) => s + v, 0) / period;
+  for (let i = period; i < data.length; i++) {
+    ema2 = data[i] * k + ema2 * (1 - k);
+  }
+  return ema2;
+}
+function calcATR(highs, lows, closes, period) {
+  if (highs.length < period + 1) return 0;
+  const trs = [];
+  for (let i = 1; i < highs.length; i++) {
+    const tr = Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1]));
+    trs.push(tr);
+  }
+  return trs.slice(-period).reduce((s, v) => s + v, 0) / period;
+}
+function round(n, decimals = 2) {
+  const f = Math.pow(10, decimals);
+  return Math.round(n * f) / f;
+}
+var CACHE, CACHE_TTL2, CACHE_MAX_SIZE;
+var init_signal_sources = __esm({
+  "src/signal-sources.ts"() {
+    "use strict";
+    CACHE = /* @__PURE__ */ new Map();
+    CACHE_TTL2 = 5 * 60 * 1e3;
+    CACHE_MAX_SIZE = 200;
+  }
+});
+
 // src/crypto-scout.ts
 var crypto_scout_exports = {};
 __export(crypto_scout_exports, {
@@ -288,6 +1492,2075 @@ var init_crypto_scout = __esm({
     "use strict";
     init_db();
     THESIS_EXPIRY_MS = 72 * 60 * 60 * 1e3;
+  }
+});
+
+// src/autoresearch.ts
+async function getConfigValue(key, fallback) {
+  try {
+    const pool2 = getPool();
+    const res = await pool2.query("SELECT value FROM app_config WHERE key = $1", [key]);
+    if (res.rows.length > 0) {
+      const parsed = typeof res.rows[0].value === "string" ? JSON.parse(res.rows[0].value) : res.rows[0].value;
+      return parsed;
+    }
+    return fallback;
+  } catch {
+    return fallback;
+  }
+}
+async function setConfigValue(key, value) {
+  const pool2 = getPool();
+  const json = JSON.stringify(value);
+  await pool2.query(
+    `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+     ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = $3`,
+    [key, json, (/* @__PURE__ */ new Date()).toISOString()]
+  );
+}
+function clampToRange(value, def) {
+  const clamped = Math.max(def.min, Math.min(def.max, value));
+  if (def.type === "int") return Math.round(clamped);
+  return Math.round(clamped / def.step) * def.step;
+}
+function checkDrift(oldVal, newVal, maxDriftPct) {
+  if (oldVal === 0) return Math.abs(newVal) <= 1;
+  return Math.abs((newVal - oldVal) / oldVal) * 100 <= maxDriftPct;
+}
+function mutateParams(current, paramSpace, count = 2) {
+  const mutated = { ...current };
+  const changed = {};
+  const numericParams = paramSpace.filter((p) => current[p.name] !== void 0);
+  if (numericParams.length === 0) return { mutated, changed };
+  const numToMutate = Math.min(count, numericParams.length);
+  const shuffled = [...numericParams].sort(() => Math.random() - 0.5);
+  const selected = shuffled.slice(0, numToMutate);
+  for (const param of selected) {
+    const oldVal = current[param.name];
+    const direction = Math.random() > 0.5 ? 1 : -1;
+    const steps = Math.ceil(Math.random() * 3);
+    let newVal = oldVal + direction * steps * param.step;
+    newVal = clampToRange(newVal, param);
+    if (!checkDrift(oldVal, newVal, MAX_DRIFT_PCT)) {
+      const maxChange = Math.abs(oldVal * MAX_DRIFT_PCT / 100);
+      newVal = clampToRange(oldVal + direction * Math.min(steps * param.step, maxChange), param);
+    }
+    if (newVal !== oldVal) {
+      mutated[param.name] = newVal;
+      changed[param.name] = { old: oldVal, new: newVal };
+    }
+  }
+  return { mutated, changed };
+}
+function generateHypothesis(changed, domain) {
+  const parts = [];
+  for (const [name, { old: o, new: n }] of Object.entries(changed)) {
+    const dir = n > o ? "increasing" : "decreasing";
+    parts.push(`${dir} ${name} from ${o} to ${n}`);
+  }
+  return `${domain} parameter mutation: ${parts.join(", ")}`;
+}
+function runCryptoBacktest(candles, params) {
+  if (candles.length < 50) {
+    return { score: 0, trades: 0, wins: 0, losses: 0, total_pnl: 0, max_drawdown_pct: 0, sharpe: 0, win_rate: 0, details: {} };
+  }
+  const trades = [];
+  let inPosition = false;
+  let entryBar = 0;
+  let entryPrice = 0;
+  let stopPrice = 0;
+  let cooldownUntil = 0;
+  const WINDOW = 50;
+  for (let i = WINDOW; i < candles.length; i++) {
+    const windowCandles = candles.slice(Math.max(0, i - 200), i + 1);
+    if (windowCandles.length < 30) continue;
+    const result = analyzeAsset(windowCandles, params);
+    const currentPrice = candles[i].close;
+    if (inPosition) {
+      const hitStop = currentPrice <= stopPrice;
+      const exitSignal = result.votes.exit_long_signal || result.votes.rsi_overbought;
+      const heldTooLong = i - entryBar > 72;
+      if (hitStop || exitSignal || heldTooLong) {
+        const pnl = currentPrice - entryPrice;
+        const pnl_pct = pnl / entryPrice * 100;
+        trades.push({ entry_bar: entryBar, exit_bar: i, entry_price: entryPrice, exit_price: currentPrice, direction: "LONG", pnl, pnl_pct });
+        inPosition = false;
+        cooldownUntil = i + (params.cooldown_bars || 2);
+      }
+    } else if (i >= cooldownUntil) {
+      if (result.votes.entry_signal && result.technical_score > 0.5) {
+        inPosition = true;
+        entryBar = i;
+        entryPrice = currentPrice;
+        stopPrice = result.atr_stop_price;
+      }
+    }
+  }
+  if (inPosition) {
+    const finalPrice = candles[candles.length - 1].close;
+    const pnl = finalPrice - entryPrice;
+    trades.push({ entry_bar: entryBar, exit_bar: candles.length - 1, entry_price: entryPrice, exit_price: finalPrice, direction: "LONG", pnl, pnl_pct: pnl / entryPrice * 100 });
+  }
+  return scoreCryptoResult(trades);
+}
+function scoreCryptoResult(trades) {
+  if (trades.length === 0) {
+    return { score: 0, trades: 0, wins: 0, losses: 0, total_pnl: 0, max_drawdown_pct: 0, sharpe: 0, win_rate: 0, details: {} };
+  }
+  const wins = trades.filter((t) => t.pnl > 0);
+  const losses = trades.filter((t) => t.pnl <= 0);
+  const totalPnl = trades.reduce((s, t) => s + t.pnl_pct, 0);
+  const winRate = wins.length / trades.length;
+  const returns = trades.map((t) => t.pnl_pct);
+  const avgReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
+  const variance = returns.reduce((s, r) => s + (r - avgReturn) ** 2, 0) / returns.length;
+  const stdDev = Math.sqrt(variance);
+  const sharpe = stdDev > 0 ? avgReturn / stdDev * Math.sqrt(252 / Math.max(1, trades.length)) : 0;
+  let peak = 0;
+  let equity = 0;
+  let maxDD = 0;
+  for (const t of trades) {
+    equity += t.pnl_pct;
+    if (equity > peak) peak = equity;
+    const dd = peak > 0 ? (peak - equity) / peak * 100 : equity < 0 ? Math.abs(equity) : 0;
+    if (dd > maxDD) maxDD = dd;
+  }
+  const tradeCountFactor = Math.min(trades.length / 10, 1.5);
+  const drawdownPenalty = maxDD * 0.02;
+  const avgHoldBars = trades.reduce((s, t) => s + (t.exit_bar - t.entry_bar), 0) / trades.length;
+  const turnoverPenalty = avgHoldBars < 3 ? 0.3 : 0;
+  const score = Math.max(0, sharpe * Math.sqrt(tradeCountFactor) - drawdownPenalty - turnoverPenalty);
+  return {
+    score,
+    trades: trades.length,
+    wins: wins.length,
+    losses: losses.length,
+    total_pnl: totalPnl,
+    max_drawdown_pct: maxDD,
+    sharpe,
+    win_rate: winRate,
+    details: {
+      avg_return_pct: avgReturn,
+      std_dev: stdDev,
+      avg_hold_bars: avgHoldBars,
+      trade_count_factor: tradeCountFactor,
+      drawdown_penalty: drawdownPenalty,
+      turnover_penalty: turnoverPenalty
+    }
+  };
+}
+function runPolymarketBacktest(markets, params) {
+  if (markets.length === 0) {
+    return { score: 0, trades: 0, wins: 0, losses: 0, total_pnl: 0, max_drawdown_pct: 0, win_rate: 0, details: {} };
+  }
+  const trades = [];
+  for (const m of markets) {
+    if (m.avg_whale_score < params.min_wallet_score) continue;
+    if (m.whale_count < params.min_whale_consensus) continue;
+    if (m.entry_odds < params.min_odds || m.entry_odds > params.max_odds) continue;
+    if (m.volume < params.min_volume) continue;
+    const categoryKey = `category_weight_${m.category.toLowerCase()}`;
+    const categoryWeight = typeof params[categoryKey] === "number" ? params[categoryKey] : params.category_weight_other;
+    if (categoryWeight < 0.5) continue;
+    let sizePct;
+    if (m.avg_whale_score >= 0.8) sizePct = params.tier3_size_pct;
+    else if (m.avg_whale_score >= 0.65) sizePct = params.tier2_size_pct;
+    else sizePct = params.tier1_size_pct;
+    const won = m.resolution_odds >= 0.95;
+    const exitOdds = won ? 1 : Math.max(0, m.entry_odds - params.exit_odds_threshold);
+    const pnlPerUnit = won ? 1 - m.entry_odds : exitOdds - m.entry_odds;
+    const pnl_pct = pnlPerUnit * sizePct * categoryWeight;
+    trades.push({ pnl_pct, won });
+  }
+  if (trades.length === 0) {
+    return { score: 0, trades: 0, wins: 0, losses: 0, total_pnl: 0, max_drawdown_pct: 0, win_rate: 0, details: {} };
+  }
+  const wins = trades.filter((t) => t.won);
+  const totalPnl = trades.reduce((s, t) => s + t.pnl_pct, 0);
+  const winRate = wins.length / trades.length;
+  let peak = 0;
+  let equity = 0;
+  let maxDD = 0;
+  for (const t of trades) {
+    equity += t.pnl_pct;
+    if (equity > peak) peak = equity;
+    const dd = peak > 0 ? (peak - equity) / peak * 100 : equity < 0 ? Math.abs(equity) : 0;
+    if (dd > maxDD) maxDD = dd;
+  }
+  const roiScore = Math.min(totalPnl / 10, 2);
+  const winRateScore = winRate * 1.5;
+  const drawdownPenalty = maxDD * 0.015;
+  const score = Math.max(0, roiScore + winRateScore - drawdownPenalty);
+  return {
+    score,
+    trades: trades.length,
+    wins: wins.length,
+    losses: trades.length - wins.length,
+    total_pnl: totalPnl,
+    max_drawdown_pct: maxDD,
+    win_rate: winRate,
+    details: {
+      roi_score: roiScore,
+      win_rate_score: winRateScore,
+      drawdown_penalty: drawdownPenalty
+    }
+  };
+}
+async function getCryptoParams() {
+  return getConfigValue(DB_KEYS.cryptoParams, DEFAULT_CRYPTO_PARAMS);
+}
+async function getPolymarketParams() {
+  return getConfigValue(DB_KEYS.polymarketParams, DEFAULT_POLYMARKET_PARAMS);
+}
+async function getExperimentLog() {
+  return getConfigValue(DB_KEYS.experimentLog, []);
+}
+async function appendExperiment(exp) {
+  const log = await getExperimentLog();
+  log.push(exp);
+  if (log.length > MAX_EXPERIMENTS_LOG) log.splice(0, log.length - MAX_EXPERIMENTS_LOG);
+  await setConfigValue(DB_KEYS.experimentLog, log);
+}
+async function pushParamHistory(domain, params) {
+  const key = domain === "crypto" ? DB_KEYS.cryptoHistory : DB_KEYS.polymarketHistory;
+  const history = await getConfigValue(key, []);
+  history.push(params);
+  if (history.length > MAX_PARAM_HISTORY) history.splice(0, history.length - MAX_PARAM_HISTORY);
+  await setConfigValue(key, history);
+}
+async function getParamHistory(domain) {
+  const key = domain === "crypto" ? DB_KEYS.cryptoHistory : DB_KEYS.polymarketHistory;
+  return getConfigValue(key, []);
+}
+async function rollbackParams(domain) {
+  const history = await getParamHistory(domain);
+  if (history.length === 0) {
+    return { success: false, message: `No parameter history available for ${domain} rollback` };
+  }
+  const previous = history[history.length - 1];
+  if (domain === "crypto") {
+    await setConfigValue(DB_KEYS.cryptoParams, previous);
+    invalidateCryptoParamsCache();
+  } else {
+    await setConfigValue(DB_KEYS.polymarketParams, previous);
+  }
+  const updatedHistory = history.slice(0, -1);
+  const key = domain === "crypto" ? DB_KEYS.cryptoHistory : DB_KEYS.polymarketHistory;
+  await setConfigValue(key, updatedHistory);
+  return { success: true, message: `Rolled back ${domain} parameters to previous set (${history.length - 1} remaining in history)` };
+}
+async function buildPMSimMarkets() {
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(
+      `SELECT value FROM app_config WHERE key = 'wealth_engines_trade_history'`
+    );
+    if (res.rows.length === 0) return [];
+    const trades = typeof res.rows[0].value === "string" ? JSON.parse(res.rows[0].value) : res.rows[0].value;
+    const pmTrades = trades.filter(
+      (t) => t.asset_class === "polymarket" && t.closed_at
+    );
+    const markets = pmTrades.map((t) => ({
+      market_id: t.market_id || "unknown",
+      question: t.asset || "Unknown Market",
+      outcome: t.direction === "YES" || t.direction === "NO" ? t.direction : "YES",
+      entry_odds: t.entry_price || 0.5,
+      resolution_odds: (t.pnl || 0) > 0 ? 1 : 0,
+      whale_count: 2,
+      avg_whale_score: 0.7,
+      volume: 1e5,
+      category: "other"
+    }));
+    if (markets.length < 5) {
+      const synthetic = generateSyntheticPMMarkets(20);
+      return [...markets, ...synthetic];
+    }
+    return markets;
+  } catch {
+    return generateSyntheticPMMarkets(20);
+  }
+}
+function generateSyntheticPMMarkets(count) {
+  const categories = ["politics", "crypto", "sports", "other"];
+  const markets = [];
+  for (let i = 0; i < count; i++) {
+    const odds = 0.2 + Math.random() * 0.6;
+    const won = Math.random() > 1 - odds;
+    markets.push({
+      market_id: `synthetic_${i}`,
+      question: `Synthetic market ${i}`,
+      outcome: "YES",
+      entry_odds: odds,
+      resolution_odds: won ? 1 : 0,
+      whale_count: 1 + Math.floor(Math.random() * 4),
+      avg_whale_score: 0.4 + Math.random() * 0.5,
+      volume: 2e4 + Math.random() * 2e5,
+      category: categories[Math.floor(Math.random() * categories.length)]
+    });
+  }
+  return markets;
+}
+async function runCryptoResearch(experimentsCount = 15) {
+  const start = Date.now();
+  const currentParams = await getCryptoParams();
+  const currentRecord = currentParams;
+  let candles;
+  try {
+    candles = await getHistoricalOHLCV("bitcoin", 90);
+  } catch {
+    try {
+      candles = await getHistoricalOHLCV("ethereum", 90);
+    } catch {
+      return {
+        domain: "crypto",
+        experiments_run: 0,
+        improvements_found: 0,
+        best_delta: 0,
+        score_before: 0,
+        score_after: 0,
+        parameters_changed: [],
+        duration_ms: Date.now() - start
+      };
+    }
+  }
+  const baseline = runCryptoBacktest(candles, currentParams);
+  let bestScore = baseline.score;
+  let bestParams = { ...currentRecord };
+  let improvements = 0;
+  const allChanged = [];
+  for (let i = 0; i < experimentsCount; i++) {
+    const muteCount = 1 + Math.floor(Math.random() * 3);
+    const { mutated, changed } = mutateParams(bestParams, CRYPTO_PARAM_SPACE, muteCount);
+    if (Object.keys(changed).length === 0) continue;
+    const hypothesis = generateHypothesis(changed, "crypto");
+    const result = runCryptoBacktest(candles, mutated);
+    const delta = result.score - bestScore;
+    const deltaPct = bestScore > 0 ? delta / bestScore * 100 : result.score > 0 ? 100 : 0;
+    const experiment = {
+      experiment_id: `crypto_${Date.now()}_${i}`,
+      domain: "crypto",
+      parameters_changed: changed,
+      hypothesis,
+      old_score: bestScore,
+      new_score: result.score,
+      delta,
+      delta_pct: deltaPct,
+      outcome: deltaPct >= MIN_IMPROVEMENT_PCT ? "kept" : "reverted",
+      timestamp: Date.now(),
+      details: result.details
+    };
+    await appendExperiment(experiment);
+    if (deltaPct >= MIN_IMPROVEMENT_PCT) {
+      bestScore = result.score;
+      bestParams = { ...mutated };
+      improvements++;
+      allChanged.push(...Object.keys(changed));
+    }
+  }
+  if (improvements > 0) {
+    await pushParamHistory("crypto", currentRecord);
+    await setConfigValue(DB_KEYS.cryptoParams, bestParams);
+    invalidateCryptoParamsCache();
+  }
+  return {
+    domain: "crypto",
+    experiments_run: experimentsCount,
+    improvements_found: improvements,
+    best_delta: bestScore - baseline.score,
+    score_before: baseline.score,
+    score_after: bestScore,
+    parameters_changed: [...new Set(allChanged)],
+    duration_ms: Date.now() - start
+  };
+}
+async function runPolymarketResearch(experimentsCount = 15) {
+  const start = Date.now();
+  const currentParams = await getPolymarketParams();
+  const currentRecord = currentParams;
+  const markets = await buildPMSimMarkets();
+  if (markets.length === 0) {
+    return {
+      domain: "polymarket",
+      experiments_run: 0,
+      improvements_found: 0,
+      best_delta: 0,
+      score_before: 0,
+      score_after: 0,
+      parameters_changed: [],
+      duration_ms: Date.now() - start
+    };
+  }
+  const baseline = runPolymarketBacktest(markets, currentParams);
+  let bestScore = baseline.score;
+  let bestParams = { ...currentRecord };
+  let improvements = 0;
+  const allChanged = [];
+  for (let i = 0; i < experimentsCount; i++) {
+    const muteCount = 1 + Math.floor(Math.random() * 3);
+    const { mutated, changed } = mutateParams(bestParams, POLYMARKET_PARAM_SPACE, muteCount);
+    if (Object.keys(changed).length === 0) continue;
+    const hypothesis = generateHypothesis(changed, "polymarket");
+    const result = runPolymarketBacktest(markets, mutated);
+    const delta = result.score - bestScore;
+    const deltaPct = bestScore > 0 ? delta / bestScore * 100 : result.score > 0 ? 100 : 0;
+    const experiment = {
+      experiment_id: `pm_${Date.now()}_${i}`,
+      domain: "polymarket",
+      parameters_changed: changed,
+      hypothesis,
+      old_score: bestScore,
+      new_score: result.score,
+      delta,
+      delta_pct: deltaPct,
+      outcome: deltaPct >= MIN_IMPROVEMENT_PCT ? "kept" : "reverted",
+      timestamp: Date.now(),
+      details: result.details
+    };
+    await appendExperiment(experiment);
+    if (deltaPct >= MIN_IMPROVEMENT_PCT) {
+      bestScore = result.score;
+      bestParams = { ...mutated };
+      improvements++;
+      allChanged.push(...Object.keys(changed));
+    }
+  }
+  if (improvements > 0) {
+    await pushParamHistory("polymarket", currentRecord);
+    await setConfigValue(DB_KEYS.polymarketParams, bestParams);
+  }
+  return {
+    domain: "polymarket",
+    experiments_run: experimentsCount,
+    improvements_found: improvements,
+    best_delta: bestScore - baseline.score,
+    score_before: baseline.score,
+    score_after: bestScore,
+    parameters_changed: [...new Set(allChanged)],
+    duration_ms: Date.now() - start
+  };
+}
+async function runFullResearch(experimentsPerDomain = 15) {
+  const crypto3 = await runCryptoResearch(experimentsPerDomain);
+  const pm = await runPolymarketResearch(experimentsPerDomain);
+  return [crypto3, pm];
+}
+function formatResearchSummary(summaries) {
+  const lines = ["\u{1F52C} *Autoresearch Results*\n"];
+  for (const s of summaries) {
+    const domain = s.domain === "crypto" ? "\u{1F4CA} Crypto Signals" : "\u{1F3AF} Polymarket";
+    lines.push(`*${domain}*`);
+    lines.push(`  Experiments: ${s.experiments_run}`);
+    lines.push(`  Improvements: ${s.improvements_found}`);
+    lines.push(`  Score: ${s.score_before.toFixed(3)} \u2192 ${s.score_after.toFixed(3)} (${s.best_delta >= 0 ? "+" : ""}${s.best_delta.toFixed(3)})`);
+    if (s.parameters_changed.length > 0) {
+      lines.push(`  Changed: ${s.parameters_changed.join(", ")}`);
+    }
+    lines.push(`  Duration: ${(s.duration_ms / 1e3).toFixed(1)}s`);
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+async function getResearchStatus() {
+  const [cryptoParams, pmParams, log, cryptoHist, pmHist] = await Promise.all([
+    getCryptoParams(),
+    getPolymarketParams(),
+    getExperimentLog(),
+    getParamHistory("crypto"),
+    getParamHistory("polymarket")
+  ]);
+  return {
+    crypto_params: cryptoParams,
+    polymarket_params: pmParams,
+    recent_experiments: log.slice(-20),
+    crypto_history_count: cryptoHist.length,
+    polymarket_history_count: pmHist.length
+  };
+}
+var DB_KEYS, MAX_EXPERIMENTS_LOG, MAX_PARAM_HISTORY, MIN_IMPROVEMENT_PCT, MAX_DRIFT_PCT, CRYPTO_PARAM_SPACE, POLYMARKET_PARAM_SPACE, DEFAULT_CRYPTO_PARAMS, DEFAULT_POLYMARKET_PARAMS;
+var init_autoresearch = __esm({
+  "src/autoresearch.ts"() {
+    "use strict";
+    init_db();
+    init_technical_signals();
+    init_coingecko();
+    DB_KEYS = {
+      cryptoParams: "crypto_signal_parameters",
+      polymarketParams: "polymarket_scout_parameters",
+      experimentLog: "autoresearch_experiment_log",
+      cryptoHistory: "autoresearch_crypto_history",
+      polymarketHistory: "autoresearch_polymarket_history"
+    };
+    MAX_EXPERIMENTS_LOG = 500;
+    MAX_PARAM_HISTORY = 5;
+    MIN_IMPROVEMENT_PCT = 0.5;
+    MAX_DRIFT_PCT = 30;
+    CRYPTO_PARAM_SPACE = [
+      { name: "ema_fast", min: 3, max: 15, step: 1, type: "int" },
+      { name: "ema_slow", min: 15, max: 50, step: 1, type: "int" },
+      { name: "rsi_period", min: 5, max: 21, step: 1, type: "int" },
+      { name: "rsi_overbought", min: 60, max: 80, step: 1, type: "int" },
+      { name: "rsi_oversold", min: 20, max: 40, step: 1, type: "int" },
+      { name: "momentum_lookback", min: 5, max: 30, step: 1, type: "int" },
+      { name: "very_short_momentum_lookback", min: 2, max: 12, step: 1, type: "int" },
+      { name: "macd_fast", min: 8, max: 20, step: 1, type: "int" },
+      { name: "macd_slow", min: 18, max: 35, step: 1, type: "int" },
+      { name: "macd_signal", min: 5, max: 15, step: 1, type: "int" },
+      { name: "bb_period", min: 5, max: 25, step: 1, type: "int" },
+      { name: "bb_percentile_threshold", min: 70, max: 98, step: 1, type: "int" },
+      { name: "vol_lookback_bars", min: 10, max: 50, step: 2, type: "int" },
+      { name: "atr_period", min: 7, max: 28, step: 1, type: "int" },
+      { name: "atr_stop_multiplier", min: 2, max: 8, step: 0.5, type: "float" },
+      { name: "vote_threshold", min: 2, max: 6, step: 1, type: "int" },
+      { name: "cooldown_bars", min: 1, max: 5, step: 1, type: "int" }
+    ];
+    POLYMARKET_PARAM_SPACE = [
+      { name: "min_wallet_score", min: 0.3, max: 0.9, step: 0.05, type: "float" },
+      { name: "min_whale_consensus", min: 1, max: 5, step: 1, type: "int" },
+      { name: "min_odds", min: 0.05, max: 0.3, step: 0.05, type: "float" },
+      { name: "max_odds", min: 0.7, max: 0.95, step: 0.05, type: "float" },
+      { name: "min_volume", min: 1e4, max: 1e5, step: 1e4, type: "int" },
+      { name: "exit_odds_threshold", min: 0.05, max: 0.25, step: 0.05, type: "float" },
+      { name: "stale_position_hours", min: 24, max: 168, step: 24, type: "int" },
+      { name: "conviction_lookback_days", min: 7, max: 90, step: 7, type: "int" },
+      { name: "tier1_size_pct", min: 1, max: 5, step: 0.5, type: "float" },
+      { name: "tier2_size_pct", min: 2, max: 8, step: 0.5, type: "float" },
+      { name: "tier3_size_pct", min: 3, max: 12, step: 0.5, type: "float" },
+      { name: "category_weight_politics", min: 0.5, max: 2, step: 0.1, type: "float" },
+      { name: "category_weight_crypto", min: 0.5, max: 2, step: 0.1, type: "float" },
+      { name: "category_weight_sports", min: 0.5, max: 2, step: 0.1, type: "float" },
+      { name: "category_weight_other", min: 0.5, max: 2, step: 0.1, type: "float" }
+    ];
+    DEFAULT_CRYPTO_PARAMS = {
+      ema_fast: 7,
+      ema_slow: 26,
+      rsi_period: 8,
+      rsi_overbought: 69,
+      rsi_oversold: 31,
+      momentum_lookback: 12,
+      very_short_momentum_lookback: 6,
+      macd_fast: 14,
+      macd_slow: 23,
+      macd_signal: 9,
+      bb_period: 7,
+      bb_percentile_threshold: 90,
+      vol_lookback_bars: 24,
+      atr_period: 14,
+      atr_stop_multiplier: 5.5,
+      vote_threshold: 4,
+      cooldown_bars: 2
+    };
+    DEFAULT_POLYMARKET_PARAMS = {
+      min_wallet_score: 0.6,
+      min_whale_consensus: 2,
+      min_odds: 0.15,
+      max_odds: 0.85,
+      min_volume: 5e4,
+      exit_odds_threshold: 0.1,
+      stale_position_hours: 72,
+      conviction_lookback_days: 30,
+      tier1_size_pct: 2,
+      tier2_size_pct: 3,
+      tier3_size_pct: 5,
+      category_weight_politics: 1,
+      category_weight_crypto: 1.2,
+      category_weight_sports: 0.8,
+      category_weight_other: 0.9
+    };
+  }
+});
+
+// src/telegram.ts
+var telegram_exports = {};
+__export(telegram_exports, {
+  forwardAlertToTelegram: () => forwardAlertToTelegram,
+  getWebhookSecret: () => getWebhookSecret,
+  handleWebhookUpdate: () => handleWebhookUpdate,
+  init: () => init6,
+  isConfigured: () => isConfigured8,
+  requestTradeApproval: () => requestTradeApproval,
+  sendJobCompletionNotification: () => sendJobCompletionNotification,
+  sendMessage: () => sendMessage,
+  sendMessageWithKeyboard: () => sendMessageWithKeyboard,
+  sendMissionControlDigest: () => sendMissionControlDigest,
+  sendScoutBrief: () => sendScoutBrief,
+  sendShadowTradeNotification: () => sendShadowTradeNotification,
+  sendTradeAlert: () => sendTradeAlert,
+  stop: () => stop
+});
+import { randomBytes } from "crypto";
+function isAlertsBotConfigured() {
+  return ALERTS_BOT_TOKEN.length > 0 && ALERTS_CHAT_ID.length > 0;
+}
+async function sendAlertsBotMessage(text, parseMode = "Markdown") {
+  if (!isAlertsBotConfigured()) return;
+  try {
+    const resp = await fetch(`${ALERTS_API_BASE}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: ALERTS_CHAT_ID, text, parse_mode: parseMode })
+    });
+    if (!resp.ok) {
+      const body = await resp.text();
+      console.error(`[telegram-alerts] sendMessage failed (${resp.status}): ${body}`);
+    }
+  } catch (err) {
+    console.error("[telegram-alerts] sendMessage failed:", err instanceof Error ? err.message : err);
+  }
+}
+async function getMode() {
+  try {
+    const pool2 = getPool();
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_mode'`);
+    if (res.rows.length > 0 && res.rows[0].value === "LIVE") return "[LIVE]";
+  } catch {
+  }
+  return "[BETA]";
+}
+function isConfigured8() {
+  return BOT_TOKEN.length > 0 && CHAT_ID.length > 0;
+}
+async function tgFetch(method, body) {
+  const url = `${API_BASE2}/${method}`;
+  const opts = {
+    method: "POST",
+    headers: { "Content-Type": "application/json" }
+  };
+  if (body) opts.body = JSON.stringify(body);
+  const resp = await fetch(url, opts);
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Telegram API ${method} failed (${resp.status}): ${text}`);
+  }
+  return resp.json();
+}
+async function sendMessage(text, parseMode = "Markdown") {
+  if (!isConfigured8()) return null;
+  try {
+    const result = await tgFetch("sendMessage", {
+      chat_id: CHAT_ID,
+      text,
+      parse_mode: parseMode,
+      disable_web_page_preview: true
+    });
+    return result.result?.message_id || null;
+  } catch (err) {
+    console.error("[telegram] sendMessage failed:", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+async function sendMessageWithKeyboard(text, keyboard, parseMode = "Markdown") {
+  if (!isConfigured8()) return null;
+  try {
+    const result = await tgFetch("sendMessage", {
+      chat_id: CHAT_ID,
+      text,
+      parse_mode: parseMode,
+      disable_web_page_preview: true,
+      reply_markup: { inline_keyboard: keyboard }
+    });
+    return result.result?.message_id || null;
+  } catch (err) {
+    console.error("[telegram] sendMessageWithKeyboard failed:", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+async function answerCallbackQuery(callbackQueryId, text) {
+  try {
+    await tgFetch("answerCallbackQuery", {
+      callback_query_id: callbackQueryId,
+      text: text || "Received"
+    });
+  } catch (err) {
+    console.error("[telegram] answerCallbackQuery failed:", err instanceof Error ? err.message : err);
+  }
+}
+async function editMessage(messageId, text, parseMode = "Markdown") {
+  try {
+    await tgFetch("editMessageText", {
+      chat_id: CHAT_ID,
+      message_id: messageId,
+      text,
+      parse_mode: parseMode
+    });
+  } catch (err) {
+    console.error("[telegram] editMessage failed:", err instanceof Error ? err.message : err);
+  }
+}
+function registerCommand(name, handler) {
+  commands[name.toLowerCase()] = handler;
+}
+async function handleStatusCommand() {
+  const mode = await getMode();
+  const pool2 = getPool();
+  let killSwitchActive = false;
+  try {
+    const ks = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_kill_switch'`);
+    killSwitchActive = ks.rows.length > 0 && ks.rows[0].value === true;
+  } catch {
+  }
+  let pauseActive = false;
+  try {
+    const pa = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_paused'`);
+    pauseActive = pa.rows.length > 0 && pa.rows[0].value === true;
+  } catch {
+  }
+  let scoutLastRun = "never";
+  let bankrLastRun = "never";
+  let pmLastRun = "never";
+  try {
+    const sr = await pool2.query(`SELECT created_at FROM job_history WHERE agent_id = 'scout' ORDER BY created_at DESC LIMIT 1`);
+    if (sr.rows.length > 0) scoutLastRun = timeAgo(new Date(sr.rows[0].created_at).getTime());
+  } catch {
+  }
+  try {
+    const br = await pool2.query(`SELECT created_at FROM job_history WHERE agent_id = 'bankr' ORDER BY created_at DESC LIMIT 1`);
+    if (br.rows.length > 0) bankrLastRun = timeAgo(new Date(br.rows[0].created_at).getTime());
+  } catch {
+  }
+  try {
+    const pr = await pool2.query(`SELECT created_at FROM job_history WHERE job_id IN ('polymarket-activity-scan','polymarket-full-cycle') ORDER BY created_at DESC LIMIT 1`);
+    if (pr.rows.length > 0) pmLastRun = timeAgo(new Date(pr.rows[0].created_at).getTime());
+  } catch {
+  }
+  let healthLine = "";
+  try {
+    const healthRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_health_reports'`);
+    if (healthRes.rows.length > 0 && Array.isArray(healthRes.rows[0].value) && healthRes.rows[0].value.length > 0) {
+      const latest = healthRes.rows[0].value[healthRes.rows[0].value.length - 1];
+      const icons = { healthy: "\u{1F7E2}", degraded: "\u{1F7E1}", critical: "\u{1F534}" };
+      healthLine = `${icons[latest.overall_status] || "\u26AA"} Oversight: ${latest.overall_status}`;
+    }
+  } catch {
+  }
+  let fgLine = "";
+  try {
+    const { getFearGreedIndex: getFearGreedIndex2 } = await Promise.resolve().then(() => (init_signal_sources(), signal_sources_exports));
+    const fg = await getFearGreedIndex2();
+    fgLine = `\u{1F631} Fear & Greed: ${fg.value} (${fg.classification})`;
+  } catch {
+  }
+  let shadowLine = "";
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_shadow_trades'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+      const trades = res.rows[0].value;
+      const open = trades.filter((t) => t.status === "open");
+      const closed = trades.filter((t) => t.status === "closed");
+      const totalPnl = closed.reduce((s, t) => s + (t.hypothetical_pnl || 0), 0) + open.reduce((s, t) => s + (t.hypothetical_pnl || 0), 0);
+      const pnlStr = totalPnl >= 0 ? `+$${totalPnl.toFixed(2)}` : `-$${Math.abs(totalPnl).toFixed(2)}`;
+      shadowLine = `\u{1F47B} Shadow: ${open.length} open, ${closed.length} closed | P&L: ${pnlStr}`;
+    }
+  } catch {
+  }
+  const notifyMode = await getNotificationMode();
+  const lines = [
+    `${mode} *DarkNode Status*`,
+    "",
+    `\u{1F534} Kill Switch: ${killSwitchActive ? "ACTIVE" : "OFF"}`,
+    `\u23F8 Paused: ${pauseActive ? "YES" : "NO"}`
+  ];
+  if (fgLine) lines.push(fgLine);
+  lines.push(`\u{1F50D} SCOUT: ${scoutLastRun}`);
+  lines.push(`\u{1F3B0} PM SCOUT: ${pmLastRun}`);
+  lines.push(`\u{1F4B0} BANKR: ${bankrLastRun}`);
+  if (healthLine) lines.push(healthLine);
+  if (shadowLine) lines.push(shadowLine);
+  lines.push(`\u{1F514} Notifications: ${notifyMode}`);
+  lines.push("");
+  lines.push(`_${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`);
+  return lines.join("\n");
+}
+async function handlePortfolioCommand() {
+  const mode = await getMode();
+  const pool2 = getPool();
+  let positions = [];
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_positions'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+      positions = res.rows[0].value;
+    }
+  } catch {
+  }
+  if (positions.length === 0) {
+    return `${mode} *Portfolio*
+
+No open positions.
+
+_Use /trades to see recent trade history._`;
+  }
+  const lines = [`${mode} *Portfolio*`, ""];
+  let totalPnl = 0;
+  for (const pos of positions) {
+    const pnl = pos.unrealized_pnl || 0;
+    totalPnl += pnl;
+    const pnlStr = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
+    const arrow = pnl >= 0 ? "\u{1F7E2}" : "\u{1F534}";
+    lines.push(`${arrow} *${pos.asset}* ${pos.direction} ${pos.leverage || "1x"}`);
+    lines.push(`   Entry: $${pos.entry_price} | P&L: ${pnlStr}`);
+  }
+  lines.push("");
+  const totalStr = totalPnl >= 0 ? `+$${totalPnl.toFixed(2)}` : `-$${Math.abs(totalPnl).toFixed(2)}`;
+  lines.push(`*Total P&L:* ${totalStr}`);
+  return lines.join("\n");
+}
+async function handleIntelCommand() {
+  const mode = await getMode();
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scout_latest_brief'`);
+    if (res.rows.length > 0 && res.rows[0].value) {
+      const brief = res.rows[0].value;
+      const summary = typeof brief === "string" ? brief : brief.summary || JSON.stringify(brief);
+      const truncated = summary.length > 3e3 ? summary.slice(0, 3e3) + "\n\n_(truncated)_" : summary;
+      return `${mode} *Latest SCOUT Intel*
+
+${truncated}`;
+    }
+  } catch {
+  }
+  return `${mode} *Latest SCOUT Intel*
+
+No SCOUT brief available yet. SCOUT agent has not run.`;
+}
+async function handlePauseCommand() {
+  const mode = await getMode();
+  const pool2 = getPool();
+  try {
+    await pool2.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_paused', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(true), Date.now()]
+    );
+    console.log("[telegram] Wealth Engines PAUSED via Telegram");
+    return `${mode} \u23F8 *System PAUSED*
+
+All Wealth Engine jobs will halt within 60 seconds.
+Use /resume to restart.`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `${mode} \u274C Failed to pause: ${msg}`;
+  }
+}
+async function handleResumeCommand() {
+  const mode = await getMode();
+  const pool2 = getPool();
+  try {
+    await pool2.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_paused', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(false), Date.now()]
+    );
+    await pool2.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_kill_switch', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(false), Date.now()]
+    );
+    console.log("[telegram] Wealth Engines RESUMED + kill switch deactivated via Telegram");
+    return `${mode} \u25B6\uFE0F *System RESUMED*
+
+All Wealth Engine jobs are active. Kill switch deactivated.`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `${mode} \u274C Failed to resume: ${msg}`;
+  }
+}
+async function handleScoutCommand() {
+  const mode = await getMode();
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scout_active_theses'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value) && res.rows[0].value.length > 0) {
+      const theses = res.rows[0].value;
+      const now = Date.now();
+      const active = theses.filter((t) => !t.expires_at || t.expires_at > now);
+      if (active.length === 0) {
+        return `${mode} *Active SCOUT Theses*
+
+All theses have expired. Waiting for next SCOUT cycle.`;
+      }
+      const lines = [`${mode} *Active SCOUT Theses* (${active.length})`, ""];
+      for (const t of active.slice(0, 10)) {
+        const conf = t.confidence || "?";
+        const dir = t.direction || "?";
+        const vc = t.vote_count ?? t.votes;
+        const votes = vc != null ? typeof vc === "string" && vc.includes("/") ? vc : `${vc}/6` : "?";
+        const score = t.technical_score != null ? t.technical_score.toFixed(2) : "?";
+        const regime = t.market_regime || t.regime || "?";
+        const nansenFlow = t.nansen_flow_direction || t.nansen_flow || "";
+        const target = t.exit_price || t.target_price || "?";
+        const age = t.created_at ? `${Math.floor((now - t.created_at) / 36e5)}h ago` : "";
+        lines.push(`\u2022 *${t.asset}* \u2014 ${dir} ${conf}`);
+        lines.push(`  Votes: ${votes} | Score: ${score} | ${regime}`);
+        if (t.entry_price) lines.push(`  Entry: $${t.entry_price} | Stop: $${t.stop_price || "?"} | Target: $${target}`);
+        if (nansenFlow) lines.push(`  Nansen: ${nansenFlow}`);
+        if (age) lines.push(`  _${age}_`);
+        lines.push("");
+      }
+      return lines.join("\n");
+    }
+  } catch {
+  }
+  return `${mode} *Active SCOUT Theses*
+
+No active theses. SCOUT has not generated any yet.`;
+}
+async function handleTradesCommand(args) {
+  const mode = await getMode();
+  const pool2 = getPool();
+  const limit = Math.min(Math.max(parseInt(args) || 5, 1), 20);
+  try {
+    const res = await pool2.query(
+      `SELECT value FROM app_config WHERE key = 'wealth_engines_trade_history'`
+    );
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value) && res.rows[0].value.length > 0) {
+      const trades = res.rows[0].value.slice(-limit).reverse();
+      const lines = [`${mode} *Recent Trades* (last ${trades.length})`, ""];
+      for (const t of trades) {
+        const pnl = t.pnl || 0;
+        const pnlStr = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
+        const icon = pnl >= 0 ? "\u{1F7E2}" : "\u{1F534}";
+        const date = t.closed_at ? new Date(t.closed_at).toLocaleDateString("en-US", { timeZone: "America/New_York" }) : "open";
+        lines.push(`${icon} *${t.asset}* ${t.direction} ${t.leverage || "1x"} \u2014 ${pnlStr} (${date})`);
+      }
+      return lines.join("\n");
+    }
+  } catch {
+  }
+  return `${mode} *Recent Trades*
+
+No trade history yet.`;
+}
+async function handlePublicCommand(args) {
+  const mode = await getMode();
+  const pool2 = getPool();
+  const val = args.trim().toLowerCase();
+  if (val !== "on" && val !== "off") {
+    try {
+      const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_public'`);
+      const isPublic = res.rows.length > 0 && res.rows[0].value === true;
+      return `${mode} Dashboard is currently *${isPublic ? "PUBLIC" : "PRIVATE"}*.
+
+Usage: /public on | /public off`;
+    } catch {
+      return `${mode} Dashboard is currently *PRIVATE*.
+
+Usage: /public on | /public off`;
+    }
+  }
+  const newVal = val === "on";
+  try {
+    await pool2.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_public', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(newVal), Date.now()]
+    );
+    return `${mode} Dashboard is now *${newVal ? "PUBLIC" : "PRIVATE"}*.`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `${mode} \u274C Failed to update: ${msg}`;
+  }
+}
+async function handleKillCommand() {
+  const mode = await getMode();
+  const pool2 = getPool();
+  try {
+    await pool2.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_kill_switch', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(true), Date.now()]
+    );
+    console.log("[telegram] KILL SWITCH ACTIVATED via Telegram");
+    return `${mode} \u{1F6A8} *KILL SWITCH ACTIVATED*
+
+All positions will be closed on the next monitor tick (within 5 minutes).
+Use /resume to deactivate kill switch and resume.`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `${mode} \u274C Kill switch failed: ${msg}`;
+  }
+}
+async function handleRiskCommand() {
+  const mode = await getMode();
+  const pool2 = getPool();
+  let portfolio = 50;
+  try {
+    const pv = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_portfolio_value'`);
+    if (pv.rows.length > 0 && typeof pv.rows[0].value === "number") portfolio = pv.rows[0].value;
+  } catch {
+  }
+  let positions = [];
+  try {
+    const pos = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_positions'`);
+    if (pos.rows.length > 0 && Array.isArray(pos.rows[0].value)) positions = pos.rows[0].value;
+  } catch {
+  }
+  let history = [];
+  try {
+    const hist = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_trade_history'`);
+    if (hist.rows.length > 0 && Array.isArray(hist.rows[0].value)) history = hist.rows[0].value;
+  } catch {
+  }
+  const totalExposure = positions.reduce((s, p) => s + (p.size || 0) * (p.entry_price || 0), 0);
+  const unrealizedPnl = positions.reduce((s, p) => s + (p.unrealized_pnl || 0), 0);
+  const exposurePct = portfolio > 0 ? totalExposure / portfolio * 100 : 0;
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1e3;
+  const recentTrades = history.filter((t) => new Date(t.closed_at).getTime() > sevenDaysAgo);
+  const rolling7d = recentTrades.reduce((s, t) => s + (t.pnl || 0), 0);
+  const rolling7dPct = portfolio > 0 ? rolling7d / portfolio * 100 : 0;
+  const buckets = {};
+  for (const p of positions) {
+    const b = p.exposure_bucket || "general";
+    buckets[b] = (buckets[b] || 0) + 1;
+  }
+  const lines = [
+    `${mode} *Risk Dashboard*`,
+    "",
+    `\u{1F4B0} Portfolio: $${portfolio.toFixed(2)}`,
+    `\u{1F4CA} Exposure: $${totalExposure.toFixed(2)} (${exposurePct.toFixed(0)}% of portfolio)`,
+    `\u{1F4C8} Unrealized P&L: ${unrealizedPnl >= 0 ? "+" : ""}$${unrealizedPnl.toFixed(2)}`,
+    `\u{1F4C9} 7-Day Rolling P&L: ${rolling7d >= 0 ? "+" : ""}$${rolling7d.toFixed(2)} (${rolling7dPct.toFixed(1)}%)`,
+    `\u{1F53B} Circuit Breaker: ${rolling7dPct < -15 ? "\u26A0\uFE0F TRIGGERED" : "OK"} (threshold: -15%)`,
+    "",
+    `*Positions:* ${positions.length}/5`,
+    `*Exposure Limit:* ${exposurePct.toFixed(0)}%/80%`,
+    `*Buckets:* ${Object.entries(buckets).map(([b, c]) => `${b}: ${c}/2`).join(", ") || "none"}`
+  ];
+  return lines.join("\n");
+}
+async function handlePolymarketCommand() {
+  const mode = await getMode();
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'polymarket_scout_active_theses'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value) && res.rows[0].value.length > 0) {
+      const theses = res.rows[0].value;
+      const now = Date.now();
+      const active = theses.filter((t) => t.status === "active" && (!t.expires_at || t.expires_at > now));
+      if (active.length === 0) {
+        return `${mode} *Polymarket Theses*
+
+No active theses. Waiting for next scan.`;
+      }
+      const lines = [`${mode} *Polymarket Theses* (${active.length})`, ""];
+      for (const t of active.slice(0, 8)) {
+        const dir = t.direction === "YES" ? "\u2705 YES" : "\u274C NO";
+        const age = Math.floor((now - t.created_at) / 36e5);
+        const conf = { HIGH: "\u{1F7E2}", MEDIUM: "\u{1F7E1}", LOW: "\u{1F534}" }[t.confidence] || "\u26AA";
+        lines.push(`${conf} *${(t.asset || "").slice(0, 60)}*`);
+        lines.push(`  ${dir} | Odds: ${((t.current_odds || 0) * 100).toFixed(0)}% | Whales: ${t.whale_consensus || 0}`);
+        lines.push(`  Score: ${(t.whale_avg_score || 0).toFixed(2)} | _${age}h ago_`);
+        lines.push("");
+      }
+      return lines.join("\n");
+    }
+  } catch {
+  }
+  return `${mode} *Polymarket Theses*
+
+No active theses. Polymarket SCOUT has not generated any yet.`;
+}
+async function handleTaxCommand() {
+  const mode = await getMode();
+  const pool2 = getPool();
+  let history = [];
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_trade_history'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) history = res.rows[0].value;
+  } catch {
+  }
+  const year = (/* @__PURE__ */ new Date()).getFullYear();
+  const yearStart = new Date(year, 0, 1).getTime();
+  const yearTrades = history.filter((t) => new Date(t.closed_at).getTime() >= yearStart);
+  let gains = 0, losses = 0, washAdj = 0;
+  for (const t of yearTrades) {
+    if ((t.pnl || 0) >= 0) gains += t.pnl;
+    else losses += t.pnl;
+    if (t.tax_lot?.wash_sale_flagged) washAdj += t.tax_lot.wash_sale_disallowed || 0;
+  }
+  const net = gains + losses + washAdj;
+  const fedTax = Math.max(0, net) * 0.24;
+  const nyTax = Math.max(0, net) * 0.0685;
+  const lines = [
+    `${mode} *${year} Tax Summary*`,
+    "",
+    `\u{1F4CA} Total Trades: ${yearTrades.length}`,
+    `\u{1F7E2} Gains: +$${gains.toFixed(2)}`,
+    `\u{1F534} Losses: -$${Math.abs(losses).toFixed(2)}`,
+    `\u26A0\uFE0F Wash Sale Adj: $${washAdj.toFixed(2)}`,
+    `\u{1F4B5} Net Taxable: $${net.toFixed(2)}`,
+    "",
+    `*Estimated Tax:*`,
+    `  Federal (24%): $${fedTax.toFixed(2)}`,
+    `  NY State (6.85%): $${nyTax.toFixed(2)}`,
+    `  Total: $${(fedTax + nyTax).toFixed(2)}`
+  ];
+  return lines.join("\n");
+}
+async function handleOversightCommand() {
+  const mode = await getMode();
+  const pool2 = getPool();
+  try {
+    const healthRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_health_reports'`);
+    const queueRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_improvement_queue'`);
+    const lastCheckRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_last_health_check'`);
+    const portfolioRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_portfolio_value'`);
+    const peakRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_peak_portfolio'`);
+    const historyRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_trade_history'`);
+    let healthStatus = "No health checks run yet";
+    let healthIcon = "\u26AA";
+    if (healthRes.rows.length > 0 && Array.isArray(healthRes.rows[0].value) && healthRes.rows[0].value.length > 0) {
+      const latest = healthRes.rows[0].value[healthRes.rows[0].value.length - 1];
+      const icons = { healthy: "\u{1F7E2}", degraded: "\u{1F7E1}", critical: "\u{1F534}" };
+      healthIcon = icons[latest.overall_status] || "\u26AA";
+      healthStatus = latest.summary || latest.overall_status;
+    }
+    let openImprovements = 0;
+    let criticalImprovements = 0;
+    const activeItems = [];
+    if (queueRes.rows.length > 0 && Array.isArray(queueRes.rows[0].value)) {
+      const open = queueRes.rows[0].value.filter((i) => i.status === "open");
+      openImprovements = open.length;
+      criticalImprovements = open.filter((i) => i.severity === "critical").length;
+      for (const item of open.slice(0, 5)) {
+        activeItems.push({ severity: item.severity, title: item.title, route: item.route || "manual" });
+      }
+    }
+    const portfolio = portfolioRes.rows.length > 0 ? Number(portfolioRes.rows[0].value) : 50;
+    const peak = peakRes.rows.length > 0 ? Number(peakRes.rows[0].value) : 50;
+    const drawdownPct = peak > 0 ? (peak - portfolio) / peak * 100 : 0;
+    let rolling7dPct = 0;
+    if (historyRes.rows.length > 0 && Array.isArray(historyRes.rows[0].value)) {
+      const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1e3;
+      const recent = historyRes.rows[0].value.filter((t) => new Date(t.closed_at).getTime() > sevenDaysAgo);
+      const rolling7d = recent.reduce((s, t) => s + (t.pnl || 0), 0);
+      rolling7dPct = portfolio > 0 ? rolling7d / portfolio * 100 : 0;
+    }
+    let lastCheck = "never";
+    if (lastCheckRes.rows.length > 0 && typeof lastCheckRes.rows[0].value === "number") {
+      lastCheck = timeAgo(lastCheckRes.rows[0].value);
+    }
+    const ddIcon = drawdownPct > 25 ? "\u{1F534}" : drawdownPct > 15 ? "\u{1F7E1}" : "\u{1F7E2}";
+    const pnlIcon = rolling7dPct < -15 ? "\u{1F534}" : rolling7dPct < -5 ? "\u{1F7E1}" : "\u{1F7E2}";
+    const lines = [
+      `${mode} *Oversight Status*`,
+      "",
+      `${healthIcon} *Health:* ${healthStatus}`,
+      `\u{1F550} *Last Check:* ${lastCheck}`,
+      "",
+      `*Drawdown:*`,
+      `${ddIcon} Peak DD: ${drawdownPct.toFixed(1)}% ($${portfolio.toFixed(2)} / $${peak.toFixed(2)} peak)`,
+      `${pnlIcon} 7d P&L: ${rolling7dPct >= 0 ? "+" : ""}${rolling7dPct.toFixed(1)}%`,
+      "",
+      `\u{1F4CB} *Open Improvements:* ${openImprovements}${criticalImprovements > 0 ? ` (${criticalImprovements} critical)` : ""}`
+    ];
+    if (activeItems.length > 0) {
+      const sevIcons = { critical: "\u{1F534}", high: "\u{1F7E0}", medium: "\u{1F7E1}", low: "\u26AA" };
+      for (const item of activeItems) {
+        lines.push(`  ${sevIcons[item.severity] || "\u26AA"} ${item.title} \u2192 ${item.route}`);
+      }
+    }
+    return lines.join("\n");
+  } catch (err) {
+    return `${mode} *Oversight Status*
+
+\u274C Failed to fetch: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+async function handleShadowCommand() {
+  const mode = await getMode();
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_shadow_trades'`);
+    if (res.rows.length === 0 || !Array.isArray(res.rows[0].value) || res.rows[0].value.length === 0) {
+      return `${mode} *Shadow Trading*
+
+No shadow trades recorded yet.`;
+    }
+    const trades = res.rows[0].value;
+    const openTrades = trades.filter((t) => t.status === "open");
+    const closedTrades = trades.filter((t) => t.status === "closed");
+    const totalPnl = closedTrades.reduce((s, t) => s + (t.hypothetical_pnl || 0), 0);
+    const openPnl = openTrades.reduce((s, t) => s + (t.hypothetical_pnl || 0), 0);
+    const wins = closedTrades.filter((t) => (t.hypothetical_pnl || 0) > 0);
+    const winRate = closedTrades.length > 0 ? wins.length / closedTrades.length * 100 : 0;
+    const lines = [
+      `${mode} *Shadow Trading*`,
+      "",
+      `\u{1F4CA} *Total:* ${trades.length} trades (${openTrades.length} open, ${closedTrades.length} closed)`,
+      `\u{1F4B0} *Closed P&L:* ${totalPnl >= 0 ? "+" : ""}$${totalPnl.toFixed(2)}`,
+      `\u{1F4C8} *Open P&L:* ${openPnl >= 0 ? "+" : ""}$${openPnl.toFixed(2)}`,
+      `\u{1F3AF} *Win Rate:* ${winRate.toFixed(0)}%`
+    ];
+    if (openTrades.length > 0) {
+      lines.push("");
+      lines.push("*Open Positions:*");
+      for (const t of openTrades.slice(0, 5)) {
+        const pnlStr = t.hypothetical_pnl >= 0 ? `+$${t.hypothetical_pnl.toFixed(2)}` : `-$${Math.abs(t.hypothetical_pnl).toFixed(2)}`;
+        lines.push(`  \u2022 ${t.asset} ${t.direction} \u2014 ${pnlStr}`);
+      }
+    }
+    return lines.join("\n");
+  } catch (err) {
+    return `${mode} *Shadow Trading*
+
+\u274C Failed to fetch: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+async function handleAlertsCommand() {
+  const mode = await getMode();
+  const darkNodeStatus = isConfigured8() ? "\u2705 Connected" : "\u274C Disconnected";
+  const alertsStatus = isAlertsBotConfigured() ? "\u2705 Connected" : "\u274C Disconnected";
+  return [
+    `${mode} *Telegram Bots Status*`,
+    "",
+    `\u{1F916} *DarkNode* (trading): ${darkNodeStatus}`,
+    "  \u2192 Scout signals, BANKR execution, oversight, shadow trades, job failures",
+    "",
+    `\u{1F4CB} *Mission Control* (personal + status): ${alertsStatus}`,
+    "  \u2192 Daily briefs, calendar, email, stock watchlist, task alerts",
+    "  \u2192 DarkNode status digest (every 4h)"
+  ].join("\n");
+}
+async function handleHelpCommand() {
+  const mode = await getMode();
+  return [
+    `${mode} *DarkNode Commands*`,
+    "",
+    "/status \u2014 System health & mode",
+    "/portfolio \u2014 Open positions & P&L",
+    "/intel \u2014 Latest SCOUT brief",
+    "/scout \u2014 Active crypto theses",
+    "/polymarket \u2014 Active PM theses",
+    "/trades [n] \u2014 Last N trades (default 5)",
+    "/risk \u2014 Risk dashboard",
+    "/oversight \u2014 Oversight agent status",
+    "/shadow \u2014 Shadow trading stats",
+    "/tax \u2014 YTD tax summary",
+    "/kill \u2014 Emergency kill switch",
+    "/pause \u2014 Halt all Wealth Engine jobs",
+    "/resume \u2014 Resume Wealth Engine jobs",
+    "/public on|off \u2014 Toggle dashboard access",
+    "/alerts \u2014 Bot connection status",
+    "/notify [smart|immediate] \u2014 Notification mode",
+    "/research [crypto|polymarket|status] \u2014 Autoresearch",
+    "/help \u2014 This message"
+  ].join("\n");
+}
+async function requestTradeApproval(params) {
+  const mode = await getMode();
+  if (!isConfigured8()) {
+    console.warn("[telegram] Trade approval requested but Telegram not configured \u2014 auto-skipping");
+    return "skip";
+  }
+  const text = [
+    `${mode} \u{1F514} *Trade Approval Required*`,
+    "",
+    `*Asset:* ${params.asset}`,
+    `*Direction:* ${params.direction}`,
+    `*Leverage:* ${params.leverage}`,
+    `*Entry:* $${params.entryPrice}`,
+    `*Stop Loss:* $${params.stopLoss}`,
+    `*Take Profit:* $${params.takeProfit}`,
+    `*Risk:* $${params.riskAmount}`,
+    "",
+    `*Reason:* ${params.reason}`,
+    "",
+    `_Thesis: ${params.thesisId}_`
+  ].join("\n");
+  const approvalId = `approval_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const keyboard = [
+    [
+      { text: "\u2705 Approve", callback_data: `trade_approve:${approvalId}` },
+      { text: "\u23ED Skip", callback_data: `trade_skip:${approvalId}` },
+      { text: "\u23F8 Hold", callback_data: `trade_hold:${approvalId}` }
+    ]
+  ];
+  return new Promise(async (resolve) => {
+    const msgId = await sendMessageWithKeyboard(text, keyboard);
+    pendingApprovals.set(approvalId, {
+      thesisId: params.thesisId,
+      asset: params.asset,
+      direction: params.direction,
+      leverage: params.leverage,
+      messageId: msgId || 0,
+      createdAt: Date.now(),
+      resolve
+    });
+    setTimeout(() => {
+      if (pendingApprovals.has(approvalId)) {
+        pendingApprovals.delete(approvalId);
+        resolve("skip");
+        if (msgId) {
+          editMessage(msgId, `${text}
+
+\u23F0 _Expired \u2014 auto-skipped after 30 minutes_`);
+        }
+      }
+    }, 30 * 60 * 1e3);
+  });
+}
+async function handleCallbackQuery(callbackQueryId, data) {
+  const [action, approvalId] = data.split(":");
+  if (!action?.startsWith("trade_")) {
+    await answerCallbackQuery(callbackQueryId, "Unknown action");
+    return;
+  }
+  const pending = pendingApprovals.get(approvalId);
+  if (!pending) {
+    await answerCallbackQuery(callbackQueryId, "This approval has expired");
+    return;
+  }
+  const decision = action.replace("trade_", "");
+  pendingApprovals.delete(approvalId);
+  const pool2 = getPool();
+  try {
+    await pool2.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [
+        `trade_decision_${approvalId}`,
+        JSON.stringify({ decision, thesisId: pending.thesisId, asset: pending.asset, decidedAt: (/* @__PURE__ */ new Date()).toISOString() }),
+        Date.now()
+      ]
+    );
+  } catch (err) {
+    console.error("[telegram] Failed to record trade decision:", err);
+  }
+  const decisionLabels = {
+    approve: "\u2705 APPROVED",
+    skip: "\u23ED SKIPPED",
+    hold: "\u23F8 ON HOLD"
+  };
+  const mode = await getMode();
+  if (pending.messageId) {
+    await editMessage(
+      pending.messageId,
+      `${mode} *Trade ${decisionLabels[decision]}*
+
+*${pending.asset}* ${pending.direction} ${pending.leverage}
+
+_Decision recorded at ${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`
+    );
+  }
+  await answerCallbackQuery(callbackQueryId, decisionLabels[decision]);
+  pending.resolve(decision);
+  console.log(`[telegram] Trade ${decision}: ${pending.asset} ${pending.direction} (thesis: ${pending.thesisId})`);
+}
+async function pollUpdates() {
+  if (!pollingActive || !isConfigured8()) return;
+  try {
+    const result = await tgFetch("getUpdates", {
+      offset: lastUpdateId + 1,
+      timeout: 30,
+      allowed_updates: ["message", "callback_query"]
+    });
+    const updates = result.result || [];
+    for (const update of updates) {
+      lastUpdateId = Math.max(lastUpdateId, update.update_id);
+      if (update.callback_query) {
+        const cbq = update.callback_query;
+        if (String(cbq.message?.chat?.id) === CHAT_ID) {
+          await handleCallbackQuery(cbq.id, cbq.data || "");
+        }
+        continue;
+      }
+      if (update.message?.text && String(update.message.chat.id) === CHAT_ID) {
+        const text = update.message.text.trim();
+        if (text.startsWith("/")) {
+          const parts = text.split(/\s+/);
+          const cmd = parts[0].toLowerCase().replace(/@\w+/, "").replace("/", "");
+          const args = parts.slice(1).join(" ");
+          const handler = commands[cmd];
+          if (handler) {
+            try {
+              const response = await handler(args);
+              await sendMessage(response);
+            } catch (err) {
+              console.error(`[telegram] Command /${cmd} failed:`, err);
+              await sendMessage(`\u274C Command failed: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    if (err instanceof Error && !err.message.includes("ETIMEDOUT")) {
+      console.error("[telegram] Poll error:", err.message);
+    }
+  }
+  if (pollingActive) {
+    pollingTimeout = setTimeout(() => pollUpdates(), 1e3);
+  }
+}
+function timeAgo(timestamp) {
+  const diff = Date.now() - timestamp;
+  const minutes = Math.floor(diff / 6e4);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+async function isJobEnabled(pool2, agentId) {
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scheduled_jobs'`);
+    if (res.rows.length > 0 && res.rows[0].value?.jobs) {
+      const jobs = res.rows[0].value.jobs;
+      return jobs.some((j) => j.agentId === agentId && j.enabled);
+    }
+  } catch {
+  }
+  return false;
+}
+async function checkDeadManSwitches() {
+  if (!isConfigured8()) return;
+  const pool2 = getPool();
+  const mode = await getMode();
+  let paused = false;
+  try {
+    const pa = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_paused'`);
+    paused = pa.rows.length > 0 && pa.rows[0].value === true;
+  } catch {
+  }
+  if (paused) return;
+  const scoutEnabled = await isJobEnabled(pool2, "scout");
+  if (scoutEnabled) {
+    try {
+      const scoutRes = await pool2.query(
+        `SELECT created_at FROM job_history WHERE agent_id = 'scout' ORDER BY created_at DESC LIMIT 1`
+      );
+      if (scoutRes.rows.length > 0) {
+        const lastRun = new Date(scoutRes.rows[0].created_at).getTime();
+        const hoursSince = (Date.now() - lastRun) / (3600 * 1e3);
+        if (hoursSince > 6) {
+          const lastAlert = lastDeadManAlert["scout"] || 0;
+          if (Date.now() - lastAlert > 4 * 3600 * 1e3) {
+            lastDeadManAlert["scout"] = Date.now();
+            await sendMessage(
+              `${mode} \u26A0\uFE0F *Dead Man's Switch: SCOUT*
+
+SCOUT has not run in ${Math.floor(hoursSince)}h (threshold: 6h).
+Last run: ${timeAgo(lastRun)}
+
+Check scheduled jobs or run manually.`
+            );
+          }
+        } else {
+          delete lastDeadManAlert["scout"];
+        }
+      }
+    } catch (err) {
+      console.error("[telegram] Dead man switch SCOUT check failed:", err);
+    }
+  } else {
+    delete lastDeadManAlert["scout"];
+  }
+  try {
+    const monitorRes = await pool2.query(
+      `SELECT value FROM app_config WHERE key = 'bankr_monitor_last_tick'`
+    );
+    if (monitorRes.rows.length > 0) {
+      const lastTick = typeof monitorRes.rows[0].value === "number" ? monitorRes.rows[0].value : parseInt(String(monitorRes.rows[0].value));
+      const minsSince = (Date.now() - lastTick) / (60 * 1e3);
+      if (minsSince > 30) {
+        const lastAlert = lastDeadManAlert["bankr-monitor"] || 0;
+        if (Date.now() - lastAlert > 60 * 60 * 1e3) {
+          lastDeadManAlert["bankr-monitor"] = Date.now();
+          await sendMessage(
+            `${mode} \u26A0\uFE0F *Dead Man's Switch: BANKR Monitor*
+
+Position monitor has not ticked in ${Math.floor(minsSince)} min (threshold: 30 min).
+Last tick: ${timeAgo(lastTick)}
+
+The server may have restarted or crashed.`
+          );
+        }
+      } else {
+        delete lastDeadManAlert["bankr-monitor"];
+      }
+    }
+  } catch (err) {
+    console.error("[telegram] Dead man switch BANKR monitor check failed:", err);
+  }
+  const bankrEnabled = await isJobEnabled(pool2, "bankr");
+  if (bankrEnabled) {
+    try {
+      const bankrRes = await pool2.query(
+        `SELECT created_at FROM job_history WHERE agent_id = 'bankr' ORDER BY created_at DESC LIMIT 1`
+      );
+      if (bankrRes.rows.length > 0) {
+        const lastRun = new Date(bankrRes.rows[0].created_at).getTime();
+        const hoursSince = (Date.now() - lastRun) / (3600 * 1e3);
+        if (hoursSince > 8) {
+          const lastAlert = lastDeadManAlert["bankr"] || 0;
+          if (Date.now() - lastAlert > 4 * 3600 * 1e3) {
+            lastDeadManAlert["bankr"] = Date.now();
+            await sendMessage(
+              `${mode} \u26A0\uFE0F *Dead Man's Switch: BANKR*
+
+BANKR agent has not run in ${Math.floor(hoursSince)}h (threshold: 8h).
+Last run: ${timeAgo(lastRun)}
+
+Check scheduled jobs or run manually.`
+            );
+          }
+        } else {
+          delete lastDeadManAlert["bankr"];
+        }
+      }
+    } catch (err) {
+      console.error("[telegram] Dead man switch BANKR check failed:", err);
+    }
+  } else {
+    delete lastDeadManAlert["bankr"];
+  }
+}
+async function sendTradeAlert(params) {
+  const mode = await getMode();
+  const icons = {
+    executed: "\u{1F4C8}",
+    stopped: "\u{1F6D1}",
+    emergency: "\u{1F6A8}",
+    closed: "\u2705"
+  };
+  const icon = icons[params.type] || "\u{1F4CA}";
+  const lines = [`${mode} ${icon} *Trade ${params.type.toUpperCase()}*`, ""];
+  lines.push(`*Asset:* ${params.asset}`);
+  if (params.direction) lines.push(`*Direction:* ${params.direction}`);
+  if (params.leverage) lines.push(`*Leverage:* ${params.leverage}`);
+  if (params.entryPrice) lines.push(`*Entry:* $${params.entryPrice}`);
+  if (params.exitPrice) lines.push(`*Exit:* $${params.exitPrice}`);
+  if (params.pnl != null) {
+    const pnlStr = params.pnl >= 0 ? `+$${params.pnl.toFixed(2)}` : `-$${Math.abs(params.pnl).toFixed(2)}`;
+    lines.push(`*P&L:* ${pnlStr}`);
+  }
+  if (params.reason) lines.push(`
+_${params.reason}_`);
+  await sendMessage(lines.join("\n"));
+}
+async function sendScoutBrief(brief) {
+  const mode = await getMode();
+  const truncated = brief.length > 3500 ? brief.slice(0, 3500) + "\n\n_(truncated)_" : brief;
+  await sendMessage(`${mode} \u{1F50D} *SCOUT Morning Brief*
+
+${truncated}`);
+}
+async function sendJobCompletionNotification(params) {
+  if (!isConfigured8()) return;
+  const mode = await getMode();
+  const pool2 = getPool();
+  const notifyMode = await getNotificationMode();
+  const weJobIds = /* @__PURE__ */ new Set([
+    "scout-micro-scan",
+    "scout-full-cycle",
+    "polymarket-activity-scan",
+    "polymarket-full-cycle",
+    "bankr-execute",
+    "oversight-health",
+    "oversight-weekly",
+    "oversight-daily-summary",
+    "oversight-shadow-refresh",
+    "autoresearch-weekly"
+  ]);
+  if (!weJobIds.has(params.jobId)) return;
+  if (params.status === "error") {
+    const errSnippet = params.summary.slice(0, 300);
+    await sendMessage(`${mode} \u274C *Job Failed: ${params.jobName}*
+
+\`${errSnippet}\`
+
+_${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`);
+    return;
+  }
+  if (notifyMode === "smart") {
+    if (params.jobId === "scout-micro-scan") {
+      try {
+        const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scout_active_theses'`);
+        if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+          const active = res.rows[0].value.filter((t) => !t.expires_at || t.expires_at > Date.now());
+          const fingerprint = active.map((t) => `${t.asset}:${t.direction}:${t.confidence || "?"}`).sort().join("|");
+          const hash = `micro_${fingerprint}`;
+          if (hash === lastScoutNotifyHash) return;
+          lastScoutNotifyHash = hash;
+        }
+      } catch {
+      }
+    }
+    if (params.jobId === "polymarket-activity-scan") {
+      try {
+        const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'polymarket_scout_active_theses'`);
+        if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+          const active = res.rows[0].value.filter((t) => t.status === "active");
+          const fingerprint = active.map((t) => `${(t.asset || "").slice(0, 30)}:${t.direction}:${t.confidence || "?"}`).sort().join("|");
+          const hash = `pm_${fingerprint}`;
+          if (hash === lastPmNotifyHash) return;
+          lastPmNotifyHash = hash;
+        }
+      } catch {
+      }
+    }
+  }
+  const durationStr = params.durationMs ? ` (${Math.round(params.durationMs / 1e3)}s)` : "";
+  const statusIcon = params.status === "partial" ? "\u26A0\uFE0F" : "\u2705";
+  const icons = {
+    "scout-micro-scan": "\u{1F50D}",
+    "scout-full-cycle": "\u{1F50D}",
+    "polymarket-activity-scan": "\u{1F3B0}",
+    "polymarket-full-cycle": "\u{1F3B0}",
+    "bankr-execute": "\u{1F4B0}",
+    "oversight-health": "\u{1F6E1}\uFE0F",
+    "oversight-weekly": "\u{1F6E1}\uFE0F",
+    "oversight-daily-summary": "\u{1F4CA}",
+    "oversight-shadow-refresh": "\u{1F47B}",
+    "autoresearch-weekly": "\u{1F52C}"
+  };
+  const icon = icons[params.jobId] || "\u2699\uFE0F";
+  let detail = "";
+  try {
+    if (params.jobId.startsWith("scout-")) {
+      const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scout_active_theses'`);
+      if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+        const active = res.rows[0].value.filter((t) => !t.expires_at || t.expires_at > Date.now());
+        detail = `Active theses: ${active.length}`;
+        if (active.length > 0) {
+          detail += "\n" + active.slice(0, 3).map((t) => `  \u2022 ${t.asset} ${t.direction} (${t.confidence || "?"})`).join("\n");
+        }
+      }
+    } else if (params.jobId.startsWith("polymarket-")) {
+      const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'polymarket_scout_active_theses'`);
+      if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+        const active = res.rows[0].value.filter((t) => t.status === "active");
+        detail = `Active PM theses: ${active.length}`;
+      }
+    } else if (params.jobId === "bankr-execute") {
+      detail = params.summary.slice(0, 200);
+    } else if (params.jobId === "oversight-health") {
+      const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_health_reports'`);
+      if (res.rows.length > 0 && Array.isArray(res.rows[0].value) && res.rows[0].value.length > 0) {
+        const latest = res.rows[0].value[res.rows[0].value.length - 1];
+        detail = `Status: ${latest.overall_status}`;
+      }
+    }
+  } catch {
+  }
+  const lines = [
+    `${mode} ${icon} *${params.jobName}* ${statusIcon}${durationStr}`
+  ];
+  if (detail) lines.push(detail);
+  lines.push(`_${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`);
+  await sendMessage(lines.join("\n"));
+}
+async function sendShadowTradeNotification(params) {
+  if (!isConfigured8()) return;
+  const mode = await getMode();
+  if (params.type === "open") {
+    const lines = [
+      `${mode} \u{1F47B} *Shadow Trade Opened*`,
+      "",
+      `*Asset:* ${params.asset}`,
+      `*Direction:* ${params.direction}`,
+      `*Entry:* $${params.entryPrice.toFixed(4)}`
+    ];
+    if (params.source) lines.push(`*Source:* ${params.source}`);
+    await sendMessage(lines.join("\n"));
+  } else {
+    const pnlStr = params.pnl != null ? params.pnl >= 0 ? `+$${params.pnl.toFixed(2)}` : `-$${Math.abs(params.pnl).toFixed(2)}` : "N/A";
+    const pnlIcon = (params.pnl ?? 0) >= 0 ? "\u{1F7E2}" : "\u{1F534}";
+    const lines = [
+      `${mode} \u{1F47B} *Shadow Trade Closed* ${pnlIcon}`,
+      "",
+      `*Asset:* ${params.asset}`,
+      `*Direction:* ${params.direction}`,
+      `*Entry:* $${params.entryPrice.toFixed(4)}`
+    ];
+    if (params.exitPrice != null) lines.push(`*Exit:* $${params.exitPrice.toFixed(4)}`);
+    lines.push(`*P&L:* ${pnlStr}`);
+    if (params.reason) lines.push(`_${params.reason}_`);
+    await sendMessage(lines.join("\n"));
+  }
+}
+async function getNotificationMode() {
+  try {
+    const pool2 = getPool();
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'we_notification_mode'`);
+    if (res.rows.length > 0 && res.rows[0].value === "immediate") return "immediate";
+  } catch {
+  }
+  return "smart";
+}
+async function handleNotifyCommand(args) {
+  const mode = await getMode();
+  const pool2 = getPool();
+  const val = args.trim().toLowerCase();
+  if (val !== "smart" && val !== "immediate") {
+    const current = await getNotificationMode();
+    return [
+      `${mode} *Notification Mode:* ${current}`,
+      "",
+      `*smart* \u2014 Only notify on material changes (new thesis, regime shift, P&L change)`,
+      `*immediate* \u2014 Notify on every job completion`,
+      "",
+      `Usage: /notify smart | /notify immediate`
+    ].join("\n");
+  }
+  try {
+    await pool2.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('we_notification_mode', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(val), Date.now()]
+    );
+    return `${mode} \u2705 Notification mode set to *${val}*`;
+  } catch (err) {
+    return `${mode} \u274C Failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+async function sendMissionControlDigest() {
+  if (!isAlertsBotConfigured()) return;
+  const mode = await getMode();
+  const pool2 = getPool();
+  let fgValue = "?";
+  let fgClass = "";
+  try {
+    const { getFearGreedIndex: getFearGreedIndex2 } = await Promise.resolve().then(() => (init_signal_sources(), signal_sources_exports));
+    const fg = await getFearGreedIndex2();
+    fgValue = String(fg.value);
+    fgClass = fg.classification;
+  } catch {
+  }
+  let thesisCount = 0;
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scout_active_theses'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+      thesisCount = res.rows[0].value.filter((t) => !t.expires_at || t.expires_at > Date.now()).length;
+    }
+  } catch {
+  }
+  let pmThesisCount = 0;
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'polymarket_scout_active_theses'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+      pmThesisCount = res.rows[0].value.filter((t) => t.status === "active").length;
+    }
+  } catch {
+  }
+  let shadowPnl = 0;
+  let shadowOpen = 0;
+  let shadowClosed = 0;
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_shadow_trades'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+      const trades = res.rows[0].value;
+      const open = trades.filter((t) => t.status === "open");
+      const closed = trades.filter((t) => t.status === "closed");
+      shadowOpen = open.length;
+      shadowClosed = closed.length;
+      shadowPnl = closed.reduce((s, t) => s + (t.hypothetical_pnl || 0), 0) + open.reduce((s, t) => s + (t.hypothetical_pnl || 0), 0);
+    }
+  } catch {
+  }
+  let healthStatus = "unknown";
+  let healthIcon = "\u26AA";
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_health_reports'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value) && res.rows[0].value.length > 0) {
+      const latest = res.rows[0].value[res.rows[0].value.length - 1];
+      healthStatus = latest.overall_status || "unknown";
+      healthIcon = { healthy: "\u{1F7E2}", degraded: "\u{1F7E1}", critical: "\u{1F534}" }[healthStatus] || "\u26AA";
+    }
+  } catch {
+  }
+  let scoutLastRun = "never";
+  let bankrLastRun = "never";
+  try {
+    const sr = await pool2.query(`SELECT created_at FROM job_history WHERE agent_id = 'scout' ORDER BY created_at DESC LIMIT 1`);
+    if (sr.rows.length > 0) scoutLastRun = timeAgo(new Date(sr.rows[0].created_at).getTime());
+  } catch {
+  }
+  try {
+    const br = await pool2.query(`SELECT created_at FROM job_history WHERE agent_id = 'bankr' ORDER BY created_at DESC LIMIT 1`);
+    if (br.rows.length > 0) bankrLastRun = timeAgo(new Date(br.rows[0].created_at).getTime());
+  } catch {
+  }
+  const pnlStr = shadowPnl >= 0 ? `+$${shadowPnl.toFixed(2)}` : `-$${Math.abs(shadowPnl).toFixed(2)}`;
+  const lines = [
+    `${mode} \u{1F4CA} *DarkNode Status Digest*`,
+    "",
+    `\u{1F631} *Fear & Greed:* ${fgValue} (${fgClass})`,
+    `${healthIcon} *System:* ${healthStatus}`,
+    "",
+    `\u{1F50D} *Crypto Theses:* ${thesisCount} active`,
+    `\u{1F3B0} *PM Theses:* ${pmThesisCount} active`,
+    `\u{1F47B} *Shadow Trades:* ${shadowOpen} open, ${shadowClosed} closed`,
+    `\u{1F4B0} *Shadow P&L:* ${pnlStr}`,
+    "",
+    `\u{1F50D} SCOUT: ${scoutLastRun}`,
+    `\u{1F4B0} BANKR: ${bankrLastRun}`,
+    "",
+    `_${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`
+  ];
+  await sendAlertsBotMessage(lines.join("\n"));
+  console.log("[telegram] Mission Control digest sent");
+}
+async function registerWebhook() {
+  const domain = process.env.REPLIT_DEV_DOMAIN || process.env.REPLIT_DOMAINS?.split(",")[0];
+  if (!domain) {
+    console.warn("[telegram] No domain available for webhook \u2014 falling back to long-polling");
+    return false;
+  }
+  const webhookUrl = `https://${domain}/api/telegram/webhook`;
+  try {
+    const result = await tgFetch("setWebhook", {
+      url: webhookUrl,
+      allowed_updates: ["message", "callback_query"],
+      secret_token: WEBHOOK_SECRET
+    });
+    if (result.ok) {
+      console.log(`[telegram] Webhook registered: ${webhookUrl}`);
+      return true;
+    }
+    console.warn("[telegram] Webhook registration failed:", result.description);
+    return false;
+  } catch (err) {
+    console.warn("[telegram] Webhook registration failed:", err instanceof Error ? err.message : err);
+    return false;
+  }
+}
+async function deleteWebhook() {
+  try {
+    await tgFetch("deleteWebhook");
+  } catch {
+  }
+}
+function getWebhookSecret() {
+  return WEBHOOK_SECRET;
+}
+async function handleWebhookUpdate(update) {
+  if (!isConfigured8()) return;
+  if (update.callback_query) {
+    const cbq = update.callback_query;
+    if (String(cbq.message?.chat?.id) === CHAT_ID) {
+      await handleCallbackQuery(cbq.id, cbq.data || "");
+    }
+    return;
+  }
+  if (update.message?.text && String(update.message.chat.id) === CHAT_ID) {
+    const text = update.message.text.trim();
+    if (text.startsWith("/")) {
+      const parts = text.split(/\s+/);
+      const cmd = parts[0].toLowerCase().replace(/@\w+/, "").replace("/", "");
+      const args = parts.slice(1).join(" ");
+      const handler = commands[cmd];
+      if (handler) {
+        try {
+          const response = await handler(args);
+          await sendMessage(response);
+        } catch (err) {
+          console.error(`[telegram] Command /${cmd} failed:`, err);
+          await sendMessage(`\u274C Command failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
+  }
+}
+async function handleResearchCommand(args) {
+  const mode = await getMode();
+  const parts = args.trim().toLowerCase().split(/\s+/);
+  if (parts[0] === "rollback") {
+    const domain = parts[1] === "polymarket" ? "polymarket" : "crypto";
+    const result = await rollbackParams(domain);
+    return `${mode} ${result.success ? "\u2705" : "\u274C"} ${result.message}`;
+  }
+  if (parts[0] === "status") {
+    const status = await getResearchStatus();
+    const lines = [
+      `${mode} \u{1F52C} *Autoresearch Status*`,
+      "",
+      `*Crypto Parameters:*`,
+      ...Object.entries(status.crypto_params).slice(0, 8).map(([k, v]) => `  ${k}: ${v}`),
+      `  ... (${Object.keys(status.crypto_params).length} total)`,
+      "",
+      `*Polymarket Parameters:*`,
+      ...Object.entries(status.polymarket_params).slice(0, 8).map(([k, v]) => `  ${k}: ${v}`),
+      `  ... (${Object.keys(status.polymarket_params).length} total)`,
+      "",
+      `*History:* ${status.crypto_history_count} crypto, ${status.polymarket_history_count} polymarket rollback sets`,
+      `*Recent Experiments:* ${status.recent_experiments.length} logged`
+    ];
+    if (status.recent_experiments.length > 0) {
+      const last3 = status.recent_experiments.slice(-3);
+      lines.push("");
+      for (const e of last3) {
+        lines.push(`  ${e.domain}: ${e.outcome} (${e.delta_pct.toFixed(1)}%) \u2014 ${Object.keys(e.parameters_changed).join(", ")}`);
+      }
+    }
+    return lines.join("\n");
+  }
+  await sendMessage(`${mode} \u{1F52C} Starting autoresearch...`);
+  let summaries;
+  if (parts[0] === "crypto") {
+    summaries = [await runCryptoResearch()];
+  } else if (parts[0] === "polymarket") {
+    summaries = [await runPolymarketResearch()];
+  } else {
+    summaries = await runFullResearch();
+  }
+  return formatResearchSummary(summaries);
+}
+async function init6() {
+  if (!BOT_TOKEN) {
+    console.warn("[telegram] TELEGRAM_BOT_TOKEN not set \u2014 Telegram bot disabled");
+    return;
+  }
+  if (!CHAT_ID) {
+    console.warn("[telegram] TELEGRAM_CHAT_ID not set \u2014 Telegram bot disabled");
+    return;
+  }
+  registerCommand("status", async () => handleStatusCommand());
+  registerCommand("portfolio", async () => handlePortfolioCommand());
+  registerCommand("intel", async () => handleIntelCommand());
+  registerCommand("pause", async () => handlePauseCommand());
+  registerCommand("resume", async () => handleResumeCommand());
+  registerCommand("scout", async () => handleScoutCommand());
+  registerCommand("trades", async (args) => handleTradesCommand(args));
+  registerCommand("public", async (args) => handlePublicCommand(args));
+  registerCommand("kill", async () => handleKillCommand());
+  registerCommand("risk", async () => handleRiskCommand());
+  registerCommand("polymarket", async () => handlePolymarketCommand());
+  registerCommand("tax", async () => handleTaxCommand());
+  registerCommand("oversight", async () => handleOversightCommand());
+  registerCommand("shadow", async () => handleShadowCommand());
+  registerCommand("research", async (args) => handleResearchCommand(args));
+  registerCommand("alerts", async () => handleAlertsCommand());
+  registerCommand("notify", async (args) => handleNotifyCommand(args));
+  registerCommand("help", async () => handleHelpCommand());
+  try {
+    const me = await tgFetch("getMe");
+    console.log(`[telegram] Bot connected: @${me.result?.username || "unknown"}`);
+  } catch (err) {
+    console.error("[telegram] Failed to connect:", err instanceof Error ? err.message : err);
+    return;
+  }
+  if (isAlertsBotConfigured()) {
+    try {
+      const alertsMe = await fetch(`${ALERTS_API_BASE}/getMe`, { method: "POST", headers: { "Content-Type": "application/json" } });
+      if (!alertsMe.ok) {
+        console.warn(`[telegram-alerts] Alerts bot getMe failed (${alertsMe.status}) \u2014 check TELEGRAM_ALERTS_BOT_TOKEN`);
+      } else {
+        const alertsData = await alertsMe.json();
+        if (alertsData.ok && alertsData.result?.username) {
+          console.log(`[telegram-alerts] Alerts bot connected: @${alertsData.result.username}`);
+        } else {
+          console.warn("[telegram-alerts] Alerts bot responded but identity unknown \u2014 check token");
+        }
+      }
+    } catch (err) {
+      console.warn("[telegram-alerts] Failed to connect alerts bot:", err instanceof Error ? err.message : err);
+    }
+  } else {
+    console.warn("[telegram-alerts] TELEGRAM_ALERTS_BOT_TOKEN not set \u2014 personal alerts bot disabled");
+  }
+  webhookMode = await registerWebhook();
+  if (!webhookMode) {
+    await deleteWebhook();
+    pollingActive = true;
+    pollUpdates();
+    console.log("[telegram] initialized (long-polling fallback, dead man switches hourly)");
+  } else {
+    console.log("[telegram] initialized (webhook mode, dead man switches hourly)");
+  }
+  deadManInterval = setInterval(() => {
+    checkDeadManSwitches().catch((err) => console.error("[telegram] Dead man check error:", err));
+  }, 60 * 60 * 1e3);
+  if (isAlertsBotConfigured()) {
+    missionControlDigestInterval = setInterval(() => {
+      sendMissionControlDigest().catch((err) => console.error("[telegram] Mission Control digest error:", err));
+    }, 4 * 60 * 60 * 1e3);
+    console.log("[telegram] Mission Control status digest enabled (every 4h)");
+  }
+}
+function stop() {
+  pollingActive = false;
+  if (pollingTimeout) {
+    clearTimeout(pollingTimeout);
+    pollingTimeout = null;
+  }
+  if (deadManInterval) {
+    clearInterval(deadManInterval);
+    deadManInterval = null;
+  }
+  if (missionControlDigestInterval) {
+    clearInterval(missionControlDigestInterval);
+    missionControlDigestInterval = null;
+  }
+  console.log("[telegram] stopped");
+}
+async function forwardAlertToTelegram(event) {
+  const mode = await getMode();
+  const personalAlertTypes = /* @__PURE__ */ new Set(["calendar", "stock", "task", "email"]);
+  const tradingEventTypes = /* @__PURE__ */ new Set(["scout", "bankr", "oversight", "autoresearch", "circuit_breaker"]);
+  if (event.type === "brief") {
+    if (!isAlertsBotConfigured()) return;
+    const briefLabel = event.briefType ? event.briefType.charAt(0).toUpperCase() + event.briefType.slice(1) : "Daily";
+    const truncated = event.content.length > 3500 ? event.content.slice(0, 3500) + "\n\n_(truncated)_" : event.content;
+    await sendAlertsBotMessage(`${mode} \u{1F4CB} *${briefLabel} Brief*
+
+${truncated}`);
+    return;
+  }
+  if (event.type === "alert" && personalAlertTypes.has(event.alertType || "")) {
+    if (!isAlertsBotConfigured()) return;
+    const icons = {
+      calendar: "\u{1F4C5}",
+      stock: "\u{1F4CA}",
+      task: "\u2705",
+      email: "\u{1F4E7}"
+    };
+    const icon = icons[event.alertType || ""] || "\u{1F514}";
+    await sendAlertsBotMessage(`${mode} ${icon} *${event.title || "Alert"}*
+
+${event.content}`);
+    return;
+  }
+  if (tradingEventTypes.has(event.type) || event.type === "alert" && !personalAlertTypes.has(event.alertType || "")) {
+    if (!isConfigured8()) return;
+    const tradingIcons = {
+      scout: "\u{1F50D}",
+      bankr: "\u{1F4B0}",
+      oversight: "\u{1F6E1}\uFE0F",
+      autoresearch: "\u{1F52C}",
+      circuit_breaker: "\u{1F6A8}"
+    };
+    const icon = tradingIcons[event.type] || "\u{1F514}";
+    await sendMessage(`${mode} ${icon} *${event.title || "Alert"}*
+
+${event.content}`);
+  }
+}
+var BOT_TOKEN, CHAT_ID, API_BASE2, ALERTS_BOT_TOKEN, ALERTS_CHAT_ID, ALERTS_API_BASE, WEBHOOK_SECRET, pollingActive, pollingTimeout, lastUpdateId, deadManInterval, lastDeadManAlert, commands, pendingApprovals, lastScoutNotifyHash, lastPmNotifyHash, missionControlDigestInterval, webhookMode;
+var init_telegram = __esm({
+  "src/telegram.ts"() {
+    "use strict";
+    init_db();
+    init_autoresearch();
+    BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
+    CHAT_ID = process.env.TELEGRAM_CHAT_ID || "";
+    API_BASE2 = `https://api.telegram.org/bot${BOT_TOKEN}`;
+    ALERTS_BOT_TOKEN = process.env.TELEGRAM_ALERTS_BOT_TOKEN || "";
+    ALERTS_CHAT_ID = process.env.TELEGRAM_ALERTS_CHAT_ID || process.env.TELEGRAM_CHAT_ID || "";
+    ALERTS_API_BASE = `https://api.telegram.org/bot${ALERTS_BOT_TOKEN}`;
+    WEBHOOK_SECRET = randomBytes(32).toString("hex");
+    pollingActive = false;
+    pollingTimeout = null;
+    lastUpdateId = 0;
+    deadManInterval = null;
+    lastDeadManAlert = {};
+    commands = {};
+    pendingApprovals = /* @__PURE__ */ new Map();
+    lastScoutNotifyHash = "";
+    lastPmNotifyHash = "";
+    missionControlDigestInterval = null;
+    webhookMode = false;
   }
 });
 
@@ -3478,770 +6751,10 @@ async function getCryptoPrice(coin) {
   }
 }
 
-// src/coingecko.ts
-import * as fs2 from "fs";
-import * as path2 from "path";
-var TIMEOUT_MS3 = 15e3;
-var BASE_URL = "https://api.coingecko.com/api/v3";
-var CACHE_DIR = path2.join(process.env.HOME || "/tmp", ".cache", "coingecko");
-var CRYPTO_ALIASES2 = {
-  btc: "bitcoin",
-  bitcoin: "bitcoin",
-  eth: "ethereum",
-  ethereum: "ethereum",
-  sol: "solana",
-  solana: "solana",
-  doge: "dogecoin",
-  dogecoin: "dogecoin",
-  ada: "cardano",
-  cardano: "cardano",
-  xrp: "ripple",
-  ripple: "ripple",
-  dot: "polkadot",
-  polkadot: "polkadot",
-  matic: "matic-network",
-  polygon: "matic-network",
-  avax: "avalanche-2",
-  avalanche: "avalanche-2",
-  link: "chainlink",
-  chainlink: "chainlink",
-  bnb: "binancecoin",
-  binancecoin: "binancecoin",
-  ltc: "litecoin",
-  litecoin: "litecoin",
-  shib: "shiba-inu",
-  uni: "uniswap",
-  uniswap: "uniswap",
-  atom: "cosmos",
-  cosmos: "cosmos",
-  near: "near",
-  apt: "aptos",
-  aptos: "aptos",
-  arb: "arbitrum",
-  arbitrum: "arbitrum",
-  op: "optimism",
-  optimism: "optimism",
-  sui: "sui",
-  pepe: "pepe",
-  bnkr: "bankr",
-  bankr: "bankr",
-  virtual: "virtual-protocol",
-  virtuals: "virtual-protocol"
-};
-var RateLimiter = class {
-  tokens;
-  maxTokens;
-  refillRate;
-  lastRefill;
-  queue = [];
-  processing = false;
-  constructor(maxPerMinute) {
-    this.maxTokens = maxPerMinute;
-    this.tokens = maxPerMinute;
-    this.refillRate = maxPerMinute / 60;
-    this.lastRefill = Date.now();
-  }
-  async acquire() {
-    return new Promise((resolve) => {
-      this.queue.push(resolve);
-      this.processQueue();
-    });
-  }
-  async processQueue() {
-    if (this.processing) return;
-    this.processing = true;
-    while (this.queue.length > 0) {
-      this.refill();
-      if (this.tokens >= 1) {
-        this.tokens -= 1;
-        const next = this.queue.shift();
-        if (next) next();
-      } else {
-        const waitMs = Math.ceil((1 - this.tokens) / this.refillRate * 1e3);
-        await new Promise((r) => setTimeout(r, Math.max(waitMs, 100)));
-      }
-    }
-    this.processing = false;
-  }
-  refill() {
-    const now = Date.now();
-    const elapsed = (now - this.lastRefill) / 1e3;
-    this.tokens = Math.min(this.maxTokens, this.tokens + elapsed * this.refillRate);
-    this.lastRefill = now;
-  }
-};
-var rateLimiter = new RateLimiter(10);
-function getApiHeaders() {
-  const headers2 = { "User-Agent": "darknode/1.0" };
-  const apiKey = process.env.COINGECKO_API_KEY;
-  if (apiKey) {
-    headers2["x-cg-demo-api-key"] = apiKey;
-  }
-  return headers2;
-}
-async function cgFetch(urlPath) {
-  await rateLimiter.acquire();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS3);
-  try {
-    const url = `${BASE_URL}${urlPath}`;
-    const res = await fetch(url, {
-      headers: getApiHeaders(),
-      signal: controller.signal
-    });
-    clearTimeout(timeout);
-    if (!res.ok) {
-      throw new Error(`CoinGecko API error ${res.status}: ${res.statusText}`);
-    }
-    return await res.json();
-  } catch (err) {
-    clearTimeout(timeout);
-    if (err.name === "AbortError") throw new Error("CoinGecko request timed out");
-    throw err;
-  }
-}
-function resolveId(input) {
-  const key = input.toLowerCase().trim().replace(/^\$/, "");
-  return CRYPTO_ALIASES2[key] || key;
-}
-function ensureCacheDir() {
-  if (!fs2.existsSync(CACHE_DIR)) {
-    fs2.mkdirSync(CACHE_DIR, { recursive: true });
-  }
-}
-async function getTrending() {
-  const data = await cgFetch("/search/trending");
-  const rawCoins = data.coins?.slice(0, 15) || [];
-  const coins = rawCoins.map((item) => {
-    const c = item.item;
-    return {
-      name: c.name,
-      symbol: c.symbol?.toUpperCase() || "",
-      market_cap_rank: c.market_cap_rank || null,
-      price_usd: c.data?.price ? parseFloat(c.data.price) : null,
-      change_24h_pct: c.data?.price_change_percentage_24h?.usd ?? null
-    };
-  });
-  const rawCats = data.categories?.slice(0, 5) || [];
-  const categories = rawCats.map((cat) => ({
-    name: cat.name,
-    market_cap_change_24h_pct: cat.data?.market_cap_change_percentage_24h ?? null
-  }));
-  return { coins, categories };
-}
-async function getMovers(direction = "gainers", limit = 20) {
-  const data = await cgFetch(`/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=false&price_change_percentage=24h,7d`);
-  if (!Array.isArray(data) || data.length === 0) return { direction, coins: [] };
-  const sorted = [...data].sort((a, b) => {
-    const aChange = a.price_change_percentage_24h ?? 0;
-    const bChange = b.price_change_percentage_24h ?? 0;
-    return direction === "gainers" ? bChange - aChange : aChange - bChange;
-  });
-  const coins = sorted.slice(0, limit).map((coin) => ({
-    name: coin.name,
-    symbol: (coin.symbol || "").toUpperCase(),
-    price_usd: coin.current_price,
-    change_24h_pct: coin.price_change_percentage_24h ?? null,
-    change_7d_pct: coin.price_change_percentage_7d_in_currency ?? null,
-    market_cap: coin.market_cap
-  }));
-  return { direction, coins };
-}
-async function getCategories(limit = 20) {
-  const data = await cgFetch("/coins/categories?order=market_cap_change_percentage_24h_desc");
-  if (!Array.isArray(data) || data.length === 0) return { categories: [] };
-  const categories = data.slice(0, limit).map((cat) => ({
-    name: cat.name,
-    change_24h_pct: cat.market_cap_change_percentage_24h ?? null,
-    market_cap: cat.market_cap ?? null,
-    volume_24h: cat.total_volume ?? null
-  }));
-  return { categories };
-}
-async function getMarketOverview() {
-  const data = await cgFetch("/global");
-  const g = data.data;
-  if (!g) throw new Error("No global market data available");
-  return {
-    total_market_cap_usd: g.total_market_cap?.usd || 0,
-    total_volume_24h_usd: g.total_volume?.usd || 0,
-    btc_dominance_pct: g.market_cap_percentage?.btc || 0,
-    eth_dominance_pct: g.market_cap_percentage?.eth || 0,
-    active_cryptocurrencies: g.active_cryptocurrencies || 0,
-    market_cap_change_24h_pct: g.market_cap_change_percentage_24h_usd ?? 0
-  };
-}
-async function getHistoricalOHLCV(coin, days = 90) {
-  const coinId = resolveId(coin);
-  ensureCacheDir();
-  const cacheFile = path2.join(CACHE_DIR, `${coinId}_${days}d_hourly.json`);
-  if (fs2.existsSync(cacheFile)) {
-    try {
-      const raw = fs2.readFileSync(cacheFile, "utf-8");
-      const cached2 = JSON.parse(raw);
-      const ageMs = Date.now() - cached2.fetchedAt;
-      if (ageMs < 36e5 && cached2.candles.length > 0) {
-        return cached2.candles;
-      }
-    } catch {
-    }
-  }
-  const data = await cgFetch(`/coins/${encodeURIComponent(coinId)}/market_chart?vs_currency=usd&days=${days}`);
-  const prices = data.prices || [];
-  const volumes = data.total_volumes || [];
-  const volumeMap = /* @__PURE__ */ new Map();
-  for (const [ts, vol] of volumes) {
-    const hourKey = Math.floor(ts / 36e5) * 36e5;
-    volumeMap.set(hourKey, vol);
-  }
-  const hourBuckets = /* @__PURE__ */ new Map();
-  for (const [ts, price] of prices) {
-    const hourKey = Math.floor(ts / 36e5) * 36e5;
-    if (!hourBuckets.has(hourKey)) {
-      hourBuckets.set(hourKey, { prices: [], volume: volumeMap.get(hourKey) || 0 });
-    }
-    hourBuckets.get(hourKey).prices.push(price);
-  }
-  const candles = [];
-  const sortedKeys = Array.from(hourBuckets.keys()).sort((a, b) => a - b);
-  for (const hourKey of sortedKeys) {
-    const bucket = hourBuckets.get(hourKey);
-    const p = bucket.prices;
-    candles.push({
-      timestamp: hourKey,
-      open: p[0],
-      high: Math.max(...p),
-      low: Math.min(...p),
-      close: p[p.length - 1],
-      volume: bucket.volume
-    });
-  }
-  const cacheEntry = { fetchedAt: Date.now(), candles };
-  try {
-    fs2.writeFileSync(cacheFile, JSON.stringify(cacheEntry));
-  } catch (err) {
-    console.warn("[coingecko] cache write error:", err);
-  }
-  return candles;
-}
-async function getHistoricalOHLCVFormatted(coin, days = 90) {
-  const candles = await getHistoricalOHLCV(coin, days);
-  if (candles.length === 0) throw new Error(`No historical data found for "${coin}"`);
-  const coinId = resolveId(coin);
-  const last = candles[candles.length - 1];
-  const first = candles[0];
-  const periodReturn = (last.close - first.open) / first.open * 100;
-  const periodHigh = Math.max(...candles.map((c) => c.high));
-  const periodLow = Math.min(...candles.map((c) => c.low));
-  return {
-    coin_id: coinId,
-    days,
-    candle_count: candles.length,
-    period_start: new Date(first.timestamp).toISOString().slice(0, 10),
-    period_end: new Date(last.timestamp).toISOString().slice(0, 10),
-    current_price: last.close,
-    period_high: periodHigh,
-    period_low: periodLow,
-    period_return_pct: parseFloat(periodReturn.toFixed(2))
-  };
-}
-
-// src/technical-signals.ts
-init_db();
-var DEFAULT_CONFIG = {
-  ema_fast: 7,
-  ema_slow: 26,
-  rsi_period: 8,
-  rsi_overbought: 69,
-  rsi_oversold: 31,
-  momentum_lookback: 12,
-  very_short_momentum_lookback: 6,
-  macd_fast: 14,
-  macd_slow: 23,
-  macd_signal: 9,
-  bb_period: 7,
-  bb_percentile_threshold: 90,
-  vol_lookback_bars: 24,
-  atr_period: 14,
-  atr_stop_multiplier: 5.5,
-  vote_threshold: 4,
-  cooldown_bars: 2,
-  enable_ema: true,
-  enable_rsi: true,
-  enable_momentum: true,
-  enable_very_short_momentum: true,
-  enable_macd: true,
-  enable_bb: true,
-  enable_volatility_regime: true
-};
-var _dbParamsCache = null;
-var _dbParamsCacheTime = 0;
-var DB_PARAMS_CACHE_TTL = 3e5;
-async function loadCryptoSignalParams() {
-  const now = Date.now();
-  if (_dbParamsCache && now - _dbParamsCacheTime < DB_PARAMS_CACHE_TTL) {
-    return _dbParamsCache;
-  }
-  try {
-    const pool2 = getPool();
-    const res = await pool2.query("SELECT value FROM app_config WHERE key = 'crypto_signal_parameters'");
-    if (res.rows.length > 0) {
-      const parsed = typeof res.rows[0].value === "string" ? JSON.parse(res.rows[0].value) : res.rows[0].value;
-      _dbParamsCache = parsed;
-      _dbParamsCacheTime = now;
-      return _dbParamsCache;
-    }
-  } catch {
-  }
-  return {};
-}
-function invalidateCryptoParamsCache() {
-  _dbParamsCache = null;
-  _dbParamsCacheTime = 0;
-}
-var cooldownTracker = /* @__PURE__ */ new Map();
-var BAR_INTERVAL_MS = 60 * 60 * 1e3;
-function checkCooldown(assetId, cooldownBars = DEFAULT_CONFIG.cooldown_bars) {
-  const entry = cooldownTracker.get(assetId);
-  if (!entry) return { inCooldown: false, detail: "No recent signals" };
-  const cooldownMs = cooldownBars * BAR_INTERVAL_MS;
-  const elapsed = Date.now() - entry.lastSignalTime;
-  if (elapsed < cooldownMs) {
-    const remaining = Math.ceil((cooldownMs - elapsed) / (60 * 1e3));
-    return { inCooldown: true, detail: `Cooldown active (${remaining}min remaining after ${entry.lastSignalType}, ${cooldownBars}-bar)` };
-  }
-  return { inCooldown: false, detail: "Cooldown expired" };
-}
-function recordSignal(assetId, signalType) {
-  cooldownTracker.set(assetId, { lastSignalTime: Date.now(), lastSignalType: signalType });
-}
-function ema(data, period) {
-  if (data.length === 0) return [];
-  const k = 2 / (period + 1);
-  const result = [data[0]];
-  for (let i = 1; i < data.length; i++) {
-    result.push(data[i] * k + result[i - 1] * (1 - k));
-  }
-  return result;
-}
-function clamp(v, min = 0, max = 1) {
-  return Math.max(min, Math.min(max, v));
-}
-function computeEMACrossover(closes, cfg) {
-  const name = "ema_crossover";
-  if (!cfg.enable_ema) {
-    return { name, score: 0, enabled: false, detail: "DISABLED", bull_vote: false, bear_vote: false };
-  }
-  if (closes.length < cfg.ema_slow + 5) {
-    return { name, score: 0, enabled: false, detail: "Insufficient data for EMA", bull_vote: false, bear_vote: false };
-  }
-  const fast = ema(closes, cfg.ema_fast);
-  const slow = ema(closes, cfg.ema_slow);
-  const idx = closes.length - 1;
-  const fastVal = fast[idx];
-  const slowVal = slow[idx];
-  const diff = (fastVal - slowVal) / slowVal;
-  const prevDiff = idx > 0 ? (fast[idx - 1] - slow[idx - 1]) / slow[idx - 1] : diff;
-  const crossingUp = prevDiff <= 0 && diff > 0;
-  let score;
-  if (crossingUp) {
-    score = 0.85;
-  } else if (diff > 0.02) {
-    score = clamp(0.5 + diff * 10, 0.5, 0.9);
-  } else if (diff > 0) {
-    score = clamp(0.4 + diff * 20, 0.3, 0.6);
-  } else if (diff > -0.02) {
-    score = clamp(0.3 + diff * 10, 0.1, 0.4);
-  } else {
-    score = clamp(0.1 + (diff + 0.1) * 5, 0, 0.2);
-  }
-  const bull_vote = fastVal > slowVal;
-  const bear_vote = fastVal < slowVal;
-  const detail = `EMA${cfg.ema_fast}=${fastVal.toFixed(4)} vs EMA${cfg.ema_slow}=${slowVal.toFixed(4)}, diff=${(diff * 100).toFixed(2)}%${crossingUp ? " [CROSS UP]" : ""}`;
-  return { name, score: clamp(score), enabled: true, detail, bull_vote, bear_vote };
-}
-function computeRSI(closes, cfg) {
-  const name = "rsi";
-  if (!cfg.enable_rsi) {
-    return { name, score: 0, enabled: false, detail: "DISABLED", bull_vote: false, bear_vote: false, rsi_value: 50 };
-  }
-  const period = cfg.rsi_period;
-  if (closes.length < period + 2) {
-    return { name, score: 0, enabled: false, detail: "Insufficient data for RSI", bull_vote: false, bear_vote: false, rsi_value: 50 };
-  }
-  const changes = [];
-  for (let i = 1; i < closes.length; i++) {
-    changes.push(closes[i] - closes[i - 1]);
-  }
-  let avgGain = 0;
-  let avgLoss = 0;
-  for (let i = 0; i < period; i++) {
-    if (changes[i] > 0) avgGain += changes[i];
-    else avgLoss += Math.abs(changes[i]);
-  }
-  avgGain /= period;
-  avgLoss /= period;
-  for (let i = period; i < changes.length; i++) {
-    const gain = changes[i] > 0 ? changes[i] : 0;
-    const loss = changes[i] < 0 ? Math.abs(changes[i]) : 0;
-    avgGain = (avgGain * (period - 1) + gain) / period;
-    avgLoss = (avgLoss * (period - 1) + loss) / period;
-  }
-  let rsi;
-  if (avgLoss === 0 && avgGain === 0) {
-    rsi = 50;
-  } else if (avgLoss === 0) {
-    rsi = 100;
-  } else {
-    const rs = avgGain / avgLoss;
-    rsi = 100 - 100 / (1 + rs);
-  }
-  let score;
-  if (rsi <= cfg.rsi_oversold) {
-    score = clamp(0.7 + (cfg.rsi_oversold - rsi) / cfg.rsi_oversold * 0.3, 0.7, 1);
-  } else if (rsi >= cfg.rsi_overbought) {
-    score = clamp(0.3 - (rsi - cfg.rsi_overbought) / (100 - cfg.rsi_overbought) * 0.3, 0, 0.3);
-  } else {
-    const mid = (cfg.rsi_oversold + cfg.rsi_overbought) / 2;
-    if (rsi < mid) {
-      score = clamp(0.5 + (mid - rsi) / (mid - cfg.rsi_oversold) * 0.2, 0.5, 0.7);
-    } else {
-      score = clamp(0.5 - (rsi - mid) / (cfg.rsi_overbought - mid) * 0.2, 0.3, 0.5);
-    }
-  }
-  const bull_vote = rsi < 45;
-  const bear_vote = rsi > 55;
-  const detail = `RSI(${period})=${rsi.toFixed(1)} [oversold<${cfg.rsi_oversold}, overbought>${cfg.rsi_overbought}]`;
-  return { name, score: clamp(score), enabled: true, detail, bull_vote, bear_vote, rsi_value: rsi };
-}
-function computeMomentum(closes, cfg) {
-  const name = "momentum";
-  if (!cfg.enable_momentum) {
-    return { name, score: 0, enabled: false, detail: "DISABLED", bull_vote: false, bear_vote: false };
-  }
-  const lookback = cfg.momentum_lookback;
-  if (closes.length < lookback + 1) {
-    return { name, score: 0, enabled: false, detail: "Insufficient data for momentum", bull_vote: false, bear_vote: false };
-  }
-  const current = closes[closes.length - 1];
-  const pastIdx = closes.length - 1 - lookback;
-  const ret = pastIdx >= 0 ? (current - closes[pastIdx]) / closes[pastIdx] : 0;
-  let score;
-  if (ret > 0.05) {
-    score = clamp(0.7 + ret * 3, 0.7, 0.95);
-  } else if (ret > 0.01) {
-    score = clamp(0.5 + ret * 5, 0.5, 0.7);
-  } else if (ret > -0.01) {
-    score = 0.45;
-  } else if (ret > -0.05) {
-    score = clamp(0.3 + (ret + 0.05) * 5, 0.2, 0.4);
-  } else {
-    score = clamp(0.1 + (ret + 0.1) * 2, 0, 0.2);
-  }
-  const threshold = 5e-3;
-  const bull_vote = ret > threshold;
-  const bear_vote = ret < -threshold;
-  const retPct = (ret * 100).toFixed(2);
-  const detail = `Momentum(${lookback}-bar): ${retPct}%`;
-  return { name, score: clamp(score), enabled: true, detail, bull_vote, bear_vote };
-}
-function computeVeryShortMomentum(closes, cfg) {
-  const name = "very_short_momentum";
-  if (!cfg.enable_very_short_momentum) {
-    return { name, score: 0, enabled: false, detail: "DISABLED", bull_vote: false, bear_vote: false };
-  }
-  const lookback = cfg.very_short_momentum_lookback;
-  if (closes.length < lookback + 1) {
-    return { name, score: 0, enabled: false, detail: "Insufficient data for very-short momentum", bull_vote: false, bear_vote: false };
-  }
-  const current = closes[closes.length - 1];
-  const pastIdx = closes.length - 1 - lookback;
-  const ret = pastIdx >= 0 ? (current - closes[pastIdx]) / closes[pastIdx] : 0;
-  let score;
-  if (ret > 0.03) {
-    score = clamp(0.7 + ret * 5, 0.7, 0.95);
-  } else if (ret > 5e-3) {
-    score = clamp(0.5 + ret * 8, 0.5, 0.7);
-  } else if (ret > -5e-3) {
-    score = 0.45;
-  } else if (ret > -0.03) {
-    score = clamp(0.3 + (ret + 0.03) * 8, 0.2, 0.4);
-  } else {
-    score = clamp(0.1 + (ret + 0.06) * 3, 0, 0.2);
-  }
-  const bull_vote = ret > 0;
-  const bear_vote = ret < 0;
-  const retPct = (ret * 100).toFixed(2);
-  const detail = `VeryShort Momentum(${lookback}-bar): ${retPct}%`;
-  return { name, score: clamp(score), enabled: true, detail, bull_vote, bear_vote };
-}
-function computeMACD(closes, cfg) {
-  const name = "macd";
-  if (!cfg.enable_macd) {
-    return { name, score: 0, enabled: false, detail: "DISABLED", bull_vote: false, bear_vote: false };
-  }
-  if (closes.length < cfg.macd_slow + cfg.macd_signal + 5) {
-    return { name, score: 0, enabled: false, detail: "Insufficient data for MACD", bull_vote: false, bear_vote: false };
-  }
-  const fastEMA = ema(closes, cfg.macd_fast);
-  const slowEMA = ema(closes, cfg.macd_slow);
-  const macdLine = [];
-  for (let i = 0; i < closes.length; i++) {
-    macdLine.push(fastEMA[i] - slowEMA[i]);
-  }
-  const signalLine = ema(macdLine, cfg.macd_signal);
-  const idx = closes.length - 1;
-  const histogram = macdLine[idx] - signalLine[idx];
-  const prevHistogram = idx > 0 ? macdLine[idx - 1] - signalLine[idx - 1] : histogram;
-  const crossingUp = prevHistogram <= 0 && histogram > 0;
-  let score;
-  const normHist = histogram / closes[idx];
-  if (crossingUp) {
-    score = 0.8;
-  } else if (normHist > 1e-3) {
-    score = clamp(0.5 + normHist * 200, 0.5, 0.85);
-  } else if (normHist > 0) {
-    score = clamp(0.4 + normHist * 500, 0.35, 0.55);
-  } else {
-    score = clamp(0.3 + normHist * 200, 0.05, 0.35);
-  }
-  const bull_vote = histogram > 0 || crossingUp;
-  const bear_vote = histogram < 0 && !crossingUp;
-  const detail = `MACD(${cfg.macd_fast},${cfg.macd_slow},${cfg.macd_signal}): line=${macdLine[idx].toFixed(4)}, signal=${signalLine[idx].toFixed(4)}, hist=${histogram.toFixed(4)}${crossingUp ? " [CROSS UP]" : ""}`;
-  return { name, score: clamp(score), enabled: true, detail, bull_vote, bear_vote };
-}
-function computeBBWidth(closes, cfg) {
-  const name = "bb_width";
-  if (!cfg.enable_bb) {
-    return { name, score: 0, enabled: false, detail: "DISABLED", bull_vote: false, bear_vote: false };
-  }
-  if (closes.length < cfg.bb_period + 50) {
-    return { name, score: 0, enabled: false, detail: "Insufficient data for BB width", bull_vote: false, bear_vote: false };
-  }
-  const period = cfg.bb_period;
-  const widths = [];
-  for (let i = period - 1; i < closes.length; i++) {
-    let sum = 0;
-    for (let j = i - period + 1; j <= i; j++) sum += closes[j];
-    const mean = sum / period;
-    let variance = 0;
-    for (let j = i - period + 1; j <= i; j++) variance += (closes[j] - mean) ** 2;
-    const std = Math.sqrt(variance / period);
-    widths.push(2 * 2 * std / mean);
-  }
-  const currentWidth = widths[widths.length - 1];
-  const sortedWidths = [...widths].sort((a, b) => a - b);
-  const percentileIdx = Math.floor(sortedWidths.length * (1 - cfg.bb_percentile_threshold / 100));
-  const isCompressed = currentWidth <= sortedWidths[Math.max(0, percentileIdx)];
-  let score;
-  if (isCompressed) {
-    const rank = sortedWidths.indexOf(sortedWidths.find((w) => w >= currentWidth) || currentWidth);
-    const percentile = rank / sortedWidths.length;
-    score = clamp(0.6 + (1 - percentile) * 0.35, 0.6, 0.95);
-  } else {
-    score = clamp(0.3 + (1 - currentWidth / sortedWidths[sortedWidths.length - 1]) * 0.2, 0.2, 0.45);
-  }
-  const bull_vote = isCompressed;
-  const bear_vote = !isCompressed;
-  const pctile = (widths.filter((w) => w <= currentWidth).length / widths.length * 100).toFixed(0);
-  const detail = `BB Width(${period}): ${(currentWidth * 100).toFixed(2)}%, percentile=${pctile}%${isCompressed ? " [COMPRESSED]" : ""}`;
-  return { name, score: clamp(score), enabled: true, detail, bull_vote, bear_vote };
-}
-function computeATR(candles, period = 14) {
-  if (candles.length < period + 1) return 0;
-  const trueRanges = [];
-  for (let i = 1; i < candles.length; i++) {
-    const high = candles[i].high;
-    const low = candles[i].low;
-    const prevClose = candles[i - 1].close;
-    trueRanges.push(Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)));
-  }
-  let atr = 0;
-  for (let i = 0; i < period; i++) {
-    atr += trueRanges[trueRanges.length - period + i];
-  }
-  atr /= period;
-  return atr;
-}
-function classifyRegime(closes, cfg) {
-  if (closes.length < cfg.ema_slow + 10) return "RANGING";
-  const fast = ema(closes, cfg.ema_fast);
-  const slow = ema(closes, cfg.ema_slow);
-  const idx = closes.length - 1;
-  const slopeWindow = Math.min(10, idx);
-  const slopeStart = fast[idx - slopeWindow];
-  const slopeEnd = fast[idx];
-  const slope = (slopeEnd - slopeStart) / slopeStart;
-  const lookback = Math.min(cfg.vol_lookback_bars, closes.length - 1);
-  const returns = [];
-  for (let i = closes.length - lookback; i < closes.length; i++) {
-    returns.push(Math.log(closes[i] / closes[i - 1]));
-  }
-  const mean = returns.reduce((s, r) => s + r, 0) / returns.length;
-  const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / returns.length;
-  const vol = Math.sqrt(variance);
-  const annualizedVol = vol * Math.sqrt(24 * 365);
-  if (annualizedVol > 1.5) return "VOLATILE";
-  if (Math.abs(slope) > 0.01) return "TRENDING";
-  return "RANGING";
-}
-function computeVolAdjustedThreshold(closes, cfg) {
-  const lookback = Math.min(cfg.vol_lookback_bars, closes.length - 1);
-  if (lookback < 5) return cfg.vote_threshold;
-  const returns = [];
-  for (let i = closes.length - lookback; i < closes.length; i++) {
-    if (i > 0) returns.push(Math.abs((closes[i] - closes[i - 1]) / closes[i - 1]));
-  }
-  if (returns.length === 0) return cfg.vote_threshold;
-  const avgAbsReturn = returns.reduce((s, r) => s + r, 0) / returns.length;
-  const annualizedVol = avgAbsReturn * Math.sqrt(24 * 365);
-  if (annualizedVol > 2) return Math.min(cfg.vote_threshold + 1, 6);
-  if (annualizedVol < 0.5) return Math.max(cfg.vote_threshold - 1, 3);
-  return cfg.vote_threshold;
-}
-function computeBTCConfirmation(btcCandles, cfg) {
-  if (btcCandles.length < cfg.momentum_lookback + 1) {
-    return { btc_momentum_bull: false, btc_momentum_bear: false, detail: "Insufficient BTC data" };
-  }
-  const closes = btcCandles.map((c) => c.close);
-  const current = closes[closes.length - 1];
-  const pastIdx = closes.length - 1 - cfg.momentum_lookback;
-  const ret = pastIdx >= 0 ? (current - closes[pastIdx]) / closes[pastIdx] : 0;
-  return {
-    btc_momentum_bull: ret > 0,
-    btc_momentum_bear: ret < -0.01,
-    detail: `BTC momentum(${cfg.momentum_lookback}-bar): ${(ret * 100).toFixed(2)}%`
-  };
-}
-function analyzeAsset(candles, config3, btcCandles, assetId) {
-  const cfg = { ...DEFAULT_CONFIG, ...config3 };
-  const closes = candles.map((c) => c.close);
-  const currentPrice = closes.length > 0 ? closes[closes.length - 1] : 0;
-  if (closes.length < 30) {
-    return {
-      technical_score: 0,
-      regime: "RANGING",
-      atr_value: 0,
-      atr_stop_price: 0,
-      atr_stop_multiplier: cfg.atr_stop_multiplier,
-      current_price: currentPrice,
-      signals: [],
-      votes: { bull_votes: 0, bear_votes: 0, total_signals: 0, vote_summary: "0/0", entry_signal: false, exit_long_signal: false, exit_short_signal: false, rsi_overbought: false, rsi_oversold: false },
-      active_signal_count: 0,
-      data_quality: "insufficient",
-      parameters_validated: false,
-      vol_adjusted_threshold: cfg.vote_threshold,
-      reason: `Only ${closes.length} candles available, need at least 30`
-    };
-  }
-  const rsiResult = computeRSI(closes, cfg);
-  const rsiValue = rsiResult.rsi_value;
-  const signals = [
-    computeEMACrossover(closes, cfg),
-    rsiResult,
-    computeMomentum(closes, cfg),
-    computeVeryShortMomentum(closes, cfg),
-    computeMACD(closes, cfg),
-    computeBBWidth(closes, cfg)
-  ];
-  const activeSignals = signals.filter((s) => s.enabled);
-  const regime = classifyRegime(closes, cfg);
-  const atrValue = computeATR(candles, cfg.atr_period);
-  const atrStopPrice = currentPrice - atrValue * cfg.atr_stop_multiplier;
-  const volAdjustedThreshold = computeVolAdjustedThreshold(closes, cfg);
-  if (activeSignals.length < 2) {
-    return {
-      technical_score: 0,
-      regime,
-      atr_value: atrValue,
-      atr_stop_price: atrStopPrice,
-      atr_stop_multiplier: cfg.atr_stop_multiplier,
-      current_price: currentPrice,
-      signals,
-      votes: { bull_votes: 0, bear_votes: 0, total_signals: 0, vote_summary: "0/0", entry_signal: false, exit_long_signal: false, exit_short_signal: false, rsi_overbought: false, rsi_oversold: false },
-      active_signal_count: activeSignals.length,
-      data_quality: "insufficient",
-      parameters_validated: false,
-      vol_adjusted_threshold: volAdjustedThreshold,
-      reason: "Fewer than 2 active signals with data"
-    };
-  }
-  let bull_votes = 0;
-  let bear_votes = 0;
-  for (const sig of activeSignals) {
-    if (sig.bull_vote) bull_votes++;
-    if (sig.bear_vote) bear_votes++;
-  }
-  const total_signals = activeSignals.length;
-  const rsi_overbought = rsiValue >= cfg.rsi_overbought;
-  const rsi_oversold = rsiValue <= cfg.rsi_oversold;
-  const entry_signal = bull_votes >= volAdjustedThreshold;
-  const exit_long_signal = rsi_overbought;
-  const exit_short_signal = rsi_oversold;
-  const votes = {
-    bull_votes,
-    bear_votes,
-    total_signals,
-    vote_summary: `${bull_votes}/${total_signals}`,
-    entry_signal,
-    exit_long_signal,
-    exit_short_signal,
-    rsi_overbought,
-    rsi_oversold
-  };
-  const SIGNAL_WEIGHTS = {
-    ema_crossover: 0.4,
-    rsi: 0.25,
-    momentum: 0.15,
-    very_short_momentum: 0.05,
-    macd: 0.1,
-    bb_width: 0.03,
-    volatility_regime: 0.02
-  };
-  let weightedSum = 0;
-  let totalWeight = 0;
-  for (const sig of activeSignals) {
-    const w = SIGNAL_WEIGHTS[sig.name] ?? 0.05;
-    weightedSum += sig.score * w;
-    totalWeight += w;
-  }
-  const technicalScore = totalWeight > 0 ? weightedSum / totalWeight : 0;
-  let btcConfirmation;
-  if (btcCandles && btcCandles.length > cfg.momentum_lookback + 1) {
-    const btcResult = computeBTCConfirmation(btcCandles, cfg);
-    btcConfirmation = {
-      ...btcResult,
-      alt_entry_allowed: !btcResult.btc_momentum_bear
-    };
-    if (btcResult.btc_momentum_bear && entry_signal) {
-      votes.entry_signal = false;
-    }
-  }
-  let cooldownResult;
-  if (assetId) {
-    const cd = checkCooldown(assetId, cfg.cooldown_bars);
-    cooldownResult = { in_cooldown: cd.inCooldown, detail: cd.detail };
-    if (cd.inCooldown && votes.entry_signal) {
-      votes.entry_signal = false;
-    }
-  }
-  return {
-    technical_score: parseFloat(technicalScore.toFixed(3)),
-    regime,
-    atr_value: parseFloat(atrValue.toFixed(6)),
-    atr_stop_price: parseFloat(atrStopPrice.toFixed(6)),
-    atr_stop_multiplier: cfg.atr_stop_multiplier,
-    current_price: currentPrice,
-    signals,
-    votes,
-    active_signal_count: activeSignals.length,
-    data_quality: "sufficient",
-    parameters_validated: false,
-    vol_adjusted_threshold: volAdjustedThreshold,
-    btc_confirmation: btcConfirmation,
-    cooldown: cooldownResult
-  };
-}
+// server.ts
+init_coingecko();
+init_coingecko();
+init_technical_signals();
 
 // src/nansen.ts
 import * as fs3 from "fs";
@@ -4420,415 +6933,11 @@ async function getHotContracts(chain = "ethereum", limit = 10) {
   }
 }
 
-// src/signal-sources.ts
-var CACHE = /* @__PURE__ */ new Map();
-var CACHE_TTL2 = 5 * 60 * 1e3;
-var CACHE_MAX_SIZE = 200;
-function cached(key, ttlMs, fn) {
-  const entry = CACHE.get(key);
-  if (entry && Date.now() - entry.ts < ttlMs) return Promise.resolve(entry.data);
-  return fn().then((data) => {
-    if (CACHE.size >= CACHE_MAX_SIZE) {
-      const oldest = [...CACHE.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
-      if (oldest) CACHE.delete(oldest[0]);
-    }
-    CACHE.set(key, { data, ts: Date.now() });
-    return data;
-  });
-}
-async function fetchJSON(url, timeoutMs = 15e3) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: { "User-Agent": "DarkNode/1.0", "Accept": "application/json" }
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-    return await res.json();
-  } finally {
-    clearTimeout(timer);
-  }
-}
-async function getFearGreedIndex() {
-  return cached("fear_greed", CACHE_TTL2, async () => {
-    const data = await fetchJSON("https://api.alternative.me/fng/?limit=2&format=json");
-    const entries = data?.data || [];
-    const current = entries[0];
-    const prev = entries[1] || null;
-    const val = parseInt(current?.value || "50");
-    let classification = current?.value_classification || "Neutral";
-    let regime;
-    if (val <= 25) regime = "EXTREME_FEAR";
-    else if (val <= 40) regime = "FEAR";
-    else if (val <= 60) regime = "NEUTRAL";
-    else if (val <= 75) regime = "GREED";
-    else regime = "EXTREME_GREED";
-    return {
-      value: val,
-      classification,
-      timestamp: new Date(parseInt(current?.timestamp || "0") * 1e3).toISOString(),
-      previous: prev ? {
-        value: parseInt(prev.value),
-        classification: prev.value_classification
-      } : null,
-      regime_signal: regime
-    };
-  });
-}
-async function getBinanceSignals(symbol = "BTCUSDT") {
-  const sym = symbol.toUpperCase().replace(/[^A-Z0-9]/g, "");
-  const pair = sym.endsWith("USDT") ? sym : sym + "USDT";
-  return cached(`binance_signal_${pair}`, CACHE_TTL2, async () => {
-    const [ticker, klines1h, klines4h, klines1d] = await Promise.all([
-      fetchJSON(`https://api.binance.us/api/v3/ticker/24hr?symbol=${pair}`),
-      fetchJSON(`https://api.binance.us/api/v3/klines?symbol=${pair}&interval=1h&limit=50`),
-      fetchJSON(`https://api.binance.us/api/v3/klines?symbol=${pair}&interval=4h&limit=50`),
-      fetchJSON(`https://api.binance.us/api/v3/klines?symbol=${pair}&interval=1d&limit=30`)
-    ]);
-    const price = parseFloat(ticker.lastPrice);
-    const vol24h = parseFloat(ticker.quoteVolume);
-    const priceChange = parseFloat(ticker.priceChangePercent);
-    const analyze = (klines, tf) => {
-      if (!klines || klines.length < 14) return { timeframe: tf, error: "insufficient data" };
-      const closes = klines.map((k) => parseFloat(k[4]));
-      const highs = klines.map((k) => parseFloat(k[2]));
-      const lows = klines.map((k) => parseFloat(k[3]));
-      const volumes = klines.map((k) => parseFloat(k[5]));
-      const rsi = calcRSI(closes, 14);
-      const sma20 = closes.slice(-20).reduce((s, v) => s + v, 0) / Math.min(20, closes.length);
-      const sma50 = closes.length >= 50 ? closes.slice(-50).reduce((s, v) => s + v, 0) / 50 : sma20;
-      const ema12 = calcEMA(closes, 12);
-      const ema26 = calcEMA(closes, 26);
-      const macd = ema12 - ema26;
-      const atr = calcATR(highs, lows, closes, 14);
-      const avgVol = volumes.slice(-20).reduce((s, v) => s + v, 0) / Math.min(20, volumes.length);
-      const volRatio = volumes[volumes.length - 1] / (avgVol || 1);
-      const lastClose = closes[closes.length - 1];
-      let bullVotes = 0, bearVotes = 0;
-      if (lastClose > sma20) bullVotes++;
-      else bearVotes++;
-      if (sma20 > sma50) bullVotes++;
-      else bearVotes++;
-      if (macd > 0) bullVotes++;
-      else bearVotes++;
-      if (rsi > 50 && rsi < 70) bullVotes++;
-      else if (rsi < 50 && rsi > 30) bearVotes++;
-      if (volRatio > 1.2) bullVotes++;
-      const signal = bullVotes >= 4 ? "BULLISH" : bearVotes >= 4 ? "BEARISH" : "NEUTRAL";
-      return {
-        timeframe: tf,
-        signal,
-        bull_votes: bullVotes,
-        bear_votes: bearVotes,
-        rsi: round(rsi),
-        macd: round(macd),
-        sma20: round(sma20),
-        sma50: round(sma50),
-        atr: round(atr),
-        volume_ratio: round(volRatio),
-        price_vs_sma20: round((lastClose - sma20) / sma20 * 100) + "%"
-      };
-    };
-    const tf1h = analyze(klines1h, "1h");
-    const tf4h = analyze(klines4h, "4h");
-    const tf1d = analyze(klines1d, "1d");
-    const signals = [tf1h, tf4h, tf1d].filter((t) => !("error" in t));
-    const bullCount = signals.filter((s) => s.signal === "BULLISH").length;
-    const bearCount = signals.filter((s) => s.signal === "BEARISH").length;
-    const composite = bullCount >= 2 ? "BULLISH" : bearCount >= 2 ? "BEARISH" : "NEUTRAL";
-    const score = (bullCount - bearCount + 3) / 6;
-    return {
-      symbol: pair,
-      timeframes: { "1h": tf1h, "4h": tf4h, "1d": tf1d },
-      composite_signal: composite,
-      composite_score: round(score),
-      price,
-      volume_24h: vol24h
-    };
-  });
-}
-async function scanBinanceWatchlist(symbols) {
-  const syms = symbols.map((s) => {
-    const upper = s.toUpperCase().replace(/[^A-Z0-9]/g, "");
-    return upper.endsWith("USDT") ? upper : upper + "USDT";
-  });
-  const results = await Promise.allSettled(
-    syms.map((s) => getBinanceSignals(s))
-  );
-  const parsed = results.filter((r) => r.status === "fulfilled").map((r) => r.value);
-  const sorted = [...parsed].sort((a, b) => b.composite_score - a.composite_score);
-  return {
-    scanned: syms.length,
-    results: parsed,
-    top_signals: sorted.filter((s) => s.composite_signal !== "NEUTRAL").slice(0, 10)
-  };
-}
-async function getCryptoLiquidations() {
-  return cached("liquidations", CACHE_TTL2, async () => {
-    try {
-      const data = await fetchJSON("https://api.coinglass.com/api/pro/v1/futures/liquidation_chart?symbol=BTC&range=1");
-      if (data?.data) {
-        const totalLong = data.data.longVolUsd || 0;
-        const totalShort = data.data.shortVolUsd || 0;
-        const total = totalLong + totalShort;
-        const longPct = total > 0 ? totalLong / total * 100 : 50;
-        return {
-          total_24h_usd: total,
-          long_liquidations: totalLong,
-          short_liquidations: totalShort,
-          long_pct: round(longPct),
-          largest_single: null,
-          regime_signal: longPct > 65 ? "LONG_SQUEEZE" : longPct < 35 ? "SHORT_SQUEEZE" : "BALANCED",
-          source: "coinglass"
-        };
-      }
-    } catch {
-    }
-    try {
-      const btcTicker = await fetchJSON("https://api.binance.us/api/v3/ticker/24hr?symbol=BTCUSDT");
-      const vol = parseFloat(btcTicker?.quoteVolume || "0");
-      const priceChange = parseFloat(btcTicker?.priceChangePercent || "0");
-      const estimatedLiq = vol * 0.015;
-      const longPct = priceChange < -3 ? 70 : priceChange > 3 ? 30 : 50 + priceChange * -5;
-      return {
-        total_24h_usd: round(estimatedLiq),
-        long_liquidations: round(estimatedLiq * (longPct / 100)),
-        short_liquidations: round(estimatedLiq * ((100 - longPct) / 100)),
-        long_pct: round(longPct),
-        largest_single: null,
-        regime_signal: longPct > 65 ? "LONG_SQUEEZE_RISK" : longPct < 35 ? "SHORT_SQUEEZE_RISK" : "BALANCED",
-        source: "binance_us_estimated"
-      };
-    } catch (err) {
-      return {
-        total_24h_usd: 0,
-        long_liquidations: 0,
-        short_liquidations: 0,
-        long_pct: 50,
-        largest_single: null,
-        regime_signal: "UNAVAILABLE",
-        source: "error"
-      };
-    }
-  });
-}
-async function getCryptoSentiment(query = "bitcoin") {
-  return cached(`sentiment_${query}`, CACHE_TTL2, async () => {
-    try {
-      const [lunarData, newsData] = await Promise.allSettled([
-        fetchJSON(`https://api.lunarcrush.com/v2?data=assets&symbol=${encodeURIComponent(query)}&interval=1d&data_points=1`),
-        fetchJSON(`https://cryptopanic.com/api/free/v1/posts/?auth_token=free&currencies=${encodeURIComponent(query)}&filter=bullish`)
-      ]);
-      let score = 50;
-      const sources = [];
-      const keywords = [];
-      if (lunarData.status === "fulfilled" && lunarData.value?.data?.[0]) {
-        const asset = lunarData.value.data[0];
-        score = asset.galaxy_score || asset.alt_rank || 50;
-        sources.push({
-          source: "lunarcrush",
-          sentiment: score > 60 ? "bullish" : score < 40 ? "bearish" : "neutral",
-          mentions: asset.social_volume_24h || 0
-        });
-      }
-      if (newsData.status === "fulfilled" && newsData.value?.results) {
-        const results = newsData.value.results;
-        const bullish = results.filter((r) => r.kind === "news").length;
-        sources.push({
-          source: "cryptopanic",
-          sentiment: bullish > 5 ? "bullish" : "neutral",
-          mentions: results.length
-        });
-      }
-      const overall = score > 60 ? "BULLISH" : score < 40 ? "BEARISH" : "NEUTRAL";
-      return { query, overall_sentiment: overall, score, sources, trending_keywords: keywords };
-    } catch {
-      return { query, overall_sentiment: "UNAVAILABLE", score: 50, sources: [], trending_keywords: [] };
-    }
-  });
-}
-async function getDefiLlamaData(protocol) {
-  return cached(`defillama_${protocol || "global"}`, CACHE_TTL2 * 2, async () => {
-    if (protocol) {
-      const data = await fetchJSON(`https://api.llama.fi/protocol/${protocol}`);
-      return {
-        total_tvl: data?.tvl?.[data.tvl.length - 1]?.totalLiquidityUSD || 0,
-        tvl_change_24h: 0,
-        top_protocols: [{
-          name: data?.name || protocol,
-          tvl: data?.tvl?.[data.tvl.length - 1]?.totalLiquidityUSD || 0,
-          change_1d: 0,
-          category: data?.category || "unknown",
-          chain: (data?.chains || []).join(", ")
-        }],
-        chain_tvl: []
-      };
-    }
-    const [protocols, chains] = await Promise.all([
-      fetchJSON("https://api.llama.fi/protocols"),
-      fetchJSON("https://api.llama.fi/v2/chains")
-    ]);
-    const topProtos = (protocols || []).sort((a, b) => (b.tvl || 0) - (a.tvl || 0)).slice(0, 15).map((p) => ({
-      name: p.name,
-      tvl: p.tvl || 0,
-      change_1d: p.change_1d || 0,
-      category: p.category || "unknown",
-      chain: (p.chains || []).slice(0, 3).join(", ")
-    }));
-    const chainTvl = (chains || []).sort((a, b) => (b.tvl || 0) - (a.tvl || 0)).slice(0, 10).map((c) => ({ name: c.name, tvl: c.tvl || 0 }));
-    const totalTvl = topProtos.reduce((s, p) => s + p.tvl, 0);
-    return {
-      total_tvl: totalTvl,
-      tvl_change_24h: 0,
-      top_protocols: topProtos,
-      chain_tvl: chainTvl
-    };
-  });
-}
-async function getDefiLlamaYields() {
-  return cached("defillama_yields", CACHE_TTL2 * 3, async () => {
-    const data = await fetchJSON("https://yields.llama.fi/pools");
-    const pools = (data?.data || []).filter((p) => p.tvlUsd > 1e6 && p.apy > 0 && p.apy < 200).sort((a, b) => b.tvlUsd - a.tvlUsd).slice(0, 20).map((p) => ({
-      pool: p.symbol || p.pool,
-      project: p.project,
-      chain: p.chain,
-      tvl: round(p.tvlUsd),
-      apy: round(p.apy),
-      apy_base: round(p.apyBase || 0),
-      apy_reward: round(p.apyReward || 0),
-      il_risk: p.ilRisk || "unknown"
-    }));
-    return { top_pools: pools, count: pools.length };
-  });
-}
-async function getBinanceFundingRates(symbols) {
-  const cacheKey = symbols && symbols.length > 0 ? `funding_rates_${symbols.map((s) => s.toUpperCase()).sort().join("_")}` : "funding_rates";
-  return cached(cacheKey, CACHE_TTL2, async () => {
-    const targetSymbols = symbols && symbols.length > 0 ? symbols.map((s) => s.toUpperCase().replace(/[^A-Z0-9]/g, "")) : ["BTC", "ETH", "SOL", "DOGE", "AVAX", "LINK", "ADA", "DOT", "MATIC", "UNI"];
-    const tickers = await Promise.allSettled(
-      targetSymbols.map(
-        (s) => fetchJSON(`https://api.binance.us/api/v3/ticker/24hr?symbol=${s}USDT`)
-      )
-    );
-    const rates = tickers.map((r, i) => {
-      if (r.status !== "fulfilled" || r.value?.code) return null;
-      const t = r.value;
-      const priceChange = parseFloat(t.priceChangePercent || "0");
-      const estimatedFunding = priceChange > 5 ? 0.05 : priceChange < -5 ? -0.05 : priceChange * 0.01;
-      return {
-        symbol: targetSymbols[i] + "USDT",
-        funding_rate: round(estimatedFunding, 4),
-        next_funding_time: new Date(Date.now() + 8 * 36e5).toISOString(),
-        mark_price: round(parseFloat(t.lastPrice || "0")),
-        signal: estimatedFunding > 0.03 ? "OVERLEVERAGED_LONGS" : estimatedFunding < -0.03 ? "OVERLEVERAGED_SHORTS" : "NEUTRAL"
-      };
-    }).filter((r) => r !== null);
-    const avgRate = rates.length > 0 ? rates.reduce((s, r) => s + r.funding_rate, 0) / rates.length : 0;
-    const extreme = rates.filter((r) => Math.abs(r.funding_rate) > 0.03);
-    return { rates, average_rate: round(avgRate, 4), extreme_funding: extreme, source: "binance_us_spot_estimated" };
-  });
-}
-async function getOpenInterestHistory(symbol = "BTCUSDT") {
-  const sym = symbol.toUpperCase().replace(/[^A-Z0-9]/g, "");
-  const pair = sym.endsWith("USDT") ? sym : sym + "USDT";
-  return cached(`oi_${pair}`, CACHE_TTL2, async () => {
-    const ticker = await fetchJSON(`https://api.binance.us/api/v3/ticker/24hr?symbol=${pair}`);
-    if (ticker?.code) throw new Error(ticker.msg || "Binance US error");
-    const price = parseFloat(ticker.lastPrice || "0");
-    const vol24h = parseFloat(ticker.quoteVolume || "0");
-    const priceChange = parseFloat(ticker.priceChangePercent || "0");
-    const estimatedOI = vol24h * 0.3;
-    const estimatedFunding = priceChange > 5 ? 0.05 : priceChange < -5 ? -0.05 : priceChange * 8e-3;
-    const ratio = priceChange > 0 ? 1 + priceChange / 20 : 1 / (1 + Math.abs(priceChange) / 20);
-    let signal = "NEUTRAL";
-    if (priceChange > 5 && ratio > 1.3) signal = "CROWDED_LONG";
-    else if (priceChange < -5 && ratio < 0.75) signal = "CROWDED_SHORT";
-    else if (priceChange > 3) signal = "LONGS_INCREASING";
-    else if (priceChange < -3) signal = "SHORTS_INCREASING";
-    return {
-      symbol: pair,
-      current_oi: round(estimatedOI),
-      oi_change_5m: 0,
-      funding_rate: round(estimatedFunding, 4),
-      long_short_ratio: round(ratio, 3),
-      signal,
-      source: "binance_us_spot_estimated"
-    };
-  });
-}
-async function getEnhancedCoinGeckoData(category) {
-  return cached(`cg_enhanced_${category || "all"}`, CACHE_TTL2 * 2, async () => {
-    const [trending, global] = await Promise.all([
-      fetchJSON("https://api.coingecko.com/api/v3/search/trending"),
-      fetchJSON("https://api.coingecko.com/api/v3/global")
-    ]);
-    const trendingTokens = (trending?.coins || []).slice(0, 10).map((c) => ({
-      name: c.item?.name || "",
-      symbol: c.item?.symbol || "",
-      rank: c.item?.score || 0,
-      price_btc: c.item?.price_btc || 0,
-      market_cap_rank: c.item?.market_cap_rank || 999
-    }));
-    const globalData = global?.data || {};
-    const btcDom = globalData.market_cap_percentage?.btc || 0;
-    const ethDom = globalData.market_cap_percentage?.eth || 0;
-    let topDefi = [];
-    try {
-      const defiData = await fetchJSON("https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&category=decentralized-finance-defi&order=market_cap_desc&per_page=10&sparkline=false");
-      topDefi = (defiData || []).map((d) => ({
-        name: d.name,
-        symbol: d.symbol,
-        tvl: d.total_value_locked || 0,
-        mcap_tvl_ratio: d.total_value_locked ? round(d.market_cap / d.total_value_locked, 2) : 0
-      }));
-    } catch {
-    }
-    return {
-      trending_tokens: trendingTokens,
-      top_defi: topDefi,
-      market_dominance: { btc: round(btcDom), eth: round(ethDom), others: round(100 - btcDom - ethDom) }
-    };
-  });
-}
-function calcRSI(closes, period) {
-  if (closes.length < period + 1) return 50;
-  let gains = 0, losses = 0;
-  for (let i = closes.length - period; i < closes.length; i++) {
-    const delta = closes[i] - closes[i - 1];
-    if (delta > 0) gains += delta;
-    else losses -= delta;
-  }
-  const avgGain = gains / period;
-  const avgLoss = losses / period;
-  if (avgLoss === 0) return 100;
-  const rs = avgGain / avgLoss;
-  return 100 - 100 / (1 + rs);
-}
-function calcEMA(data, period) {
-  if (data.length < period) return data[data.length - 1] || 0;
-  const k = 2 / (period + 1);
-  let ema2 = data.slice(0, period).reduce((s, v) => s + v, 0) / period;
-  for (let i = period; i < data.length; i++) {
-    ema2 = data[i] * k + ema2 * (1 - k);
-  }
-  return ema2;
-}
-function calcATR(highs, lows, closes, period) {
-  if (highs.length < period + 1) return 0;
-  const trs = [];
-  for (let i = 1; i < highs.length; i++) {
-    const tr = Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1]));
-    trs.push(tr);
-  }
-  return trs.slice(-period).reduce((s, v) => s + v, 0) / period;
-}
-function round(n, decimals = 2) {
-  const f = Math.pow(10, decimals);
-  return Math.round(n * f) / f;
-}
+// server.ts
+init_signal_sources();
 
 // src/backtest.ts
+init_technical_signals();
 var DEFAULT_BACKTEST_CONFIG = {
   ema_fast: 7,
   ema_slow: 26,
@@ -5298,6 +7407,8 @@ async function meetsThesisThresholds(params) {
 
 // src/bankr.ts
 init_db();
+init_technical_signals();
+init_coingecko();
 
 // src/bnkr.ts
 var BNKR_API_KEY = process.env.BANKR_API_KEY || "";
@@ -5513,6 +7624,7 @@ async function findAccountId(asset) {
 
 // src/oversight.ts
 init_db();
+init_coingecko();
 var telegramNotifier = null;
 function setTelegramNotifier(fn) {
   telegramNotifier = fn;
@@ -5534,7 +7646,7 @@ var MAX_REPORTS = 200;
 var MAX_IMPROVEMENTS = 100;
 var MAX_SHADOW_TRADES = 200;
 var THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1e3;
-async function getConfigValue(key, fallback) {
+async function getConfigValue2(key, fallback) {
   const pool2 = getPool();
   try {
     const res = await pool2.query(`SELECT value FROM app_config WHERE key = $1`, [key]);
@@ -5544,7 +7656,7 @@ async function getConfigValue(key, fallback) {
   }
   return fallback;
 }
-async function setConfigValue(key, value) {
+async function setConfigValue2(key, value) {
   const pool2 = getPool();
   await pool2.query(
     `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
@@ -5602,10 +7714,10 @@ async function runHealthCheck() {
     overall_status: overall,
     summary: `${overall.toUpperCase()}: ${summaryParts.join(", ")} (${checks.length} checks)`
   };
-  const existing = await getConfigValue(HEALTH_REPORTS_KEY, []);
+  const existing = await getConfigValue2(HEALTH_REPORTS_KEY, []);
   existing.push(report);
-  await setConfigValue(HEALTH_REPORTS_KEY, pruneByAge(existing, MAX_REPORTS));
-  await setConfigValue(LAST_HEALTH_CHECK_KEY, now);
+  await setConfigValue2(HEALTH_REPORTS_KEY, pruneByAge(existing, MAX_REPORTS));
+  await setConfigValue2(LAST_HEALTH_CHECK_KEY, now);
   if (criticalCount > 0 || warnCount >= 2) {
     const issues = checks.filter((c) => c.status !== "ok");
     const alertLines = issues.map((i) => `\u2022 ${i.name}: ${i.detail}`).join("\n");
@@ -5730,9 +7842,9 @@ async function checkPauseState(pool2) {
 }
 async function checkCircuitBreakerState(pool2) {
   try {
-    const history = await getConfigValue("wealth_engines_trade_history", []);
-    const portfolio = await getConfigValue("wealth_engines_portfolio_value", 50);
-    const peak = await getConfigValue("wealth_engines_peak_portfolio", 50);
+    const history = await getConfigValue2("wealth_engines_trade_history", []);
+    const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 50);
+    const peak = await getConfigValue2("wealth_engines_peak_portfolio", 50);
     const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1e3;
     const recentTrades = history.filter((t) => new Date(t.closed_at).getTime() > sevenDaysAgo);
     const rolling7d = recentTrades.reduce((s, t) => s + (t.pnl || 0), 0);
@@ -5823,7 +7935,7 @@ async function checkRecentJobFailures(pool2) {
 }
 async function enforceCircuitBreaker(rolling7dPct, drawdownPct) {
   const pool2 = getPool();
-  const alreadyPaused = await getConfigValue("wealth_engines_paused", false);
+  const alreadyPaused = await getConfigValue2("wealth_engines_paused", false);
   if (!alreadyPaused) {
     await pool2.query(
       `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_paused', $1, $2)
@@ -5925,7 +8037,7 @@ async function checkJobExecutionTrends(pool2) {
 async function runPerformanceReview(periodDays = 7) {
   const now = Date.now();
   const periodStart = now - periodDays * 24 * 60 * 60 * 1e3;
-  const history = await getConfigValue("wealth_engines_trade_history", []);
+  const history = await getConfigValue2("wealth_engines_trade_history", []);
   const periodTrades = history.filter((t) => new Date(t.closed_at).getTime() > periodStart);
   const wins = periodTrades.filter((t) => (t.pnl || 0) > 0);
   const winRate = periodTrades.length > 0 ? wins.length / periodTrades.length * 100 : 0;
@@ -5951,8 +8063,8 @@ async function runPerformanceReview(periodDays = 7) {
     return (close - open) / (3600 * 1e3);
   });
   const avgHoldTime = holdTimes.length > 0 ? holdTimes.reduce((a, b) => a + b, 0) / holdTimes.length : 0;
-  const cryptoTheses = await getConfigValue("scout_active_theses", []);
-  const pmTheses = await getConfigValue("polymarket_scout_active_theses", []);
+  const cryptoTheses = await getConfigValue2("scout_active_theses", []);
+  const pmTheses = await getConfigValue2("polymarket_scout_active_theses", []);
   const totalTheses = cryptoTheses.length + pmTheses.length;
   const tradedThesisIds = new Set(periodTrades.map((t) => t.thesis_id));
   const allThesisIds = /* @__PURE__ */ new Set([
@@ -5985,7 +8097,7 @@ async function runPerformanceReview(periodDays = 7) {
   }
   let maxDrawdownPct = 0;
   if (periodTrades.length > 0) {
-    const portfolio = await getConfigValue("wealth_engines_portfolio_value", 50);
+    const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 50);
     let equity = portfolio;
     let peak = portfolio;
     const sorted = [...periodTrades].sort(
@@ -6042,9 +8154,9 @@ async function runPerformanceReview(periodDays = 7) {
     });
   }
   const PERF_REVIEWS_KEY = "oversight_performance_reviews";
-  const existingReviews = await getConfigValue(PERF_REVIEWS_KEY, []);
+  const existingReviews = await getConfigValue2(PERF_REVIEWS_KEY, []);
   existingReviews.push(review);
-  await setConfigValue(PERF_REVIEWS_KEY, pruneByAge(existingReviews, MAX_REPORTS));
+  await setConfigValue2(PERF_REVIEWS_KEY, pruneByAge(existingReviews, MAX_REPORTS));
   return review;
 }
 function buildSignalAttribution(trades, totalPnl) {
@@ -6100,8 +8212,8 @@ function buildSignalAttribution(trades, totalPnl) {
   return attrs.sort((a, b) => b.total_pnl - a.total_pnl);
 }
 async function detectCrossDomainExposure() {
-  const positions = await getConfigValue("wealth_engines_positions", []);
-  const portfolio = await getConfigValue("wealth_engines_portfolio_value", 50);
+  const positions = await getConfigValue2("wealth_engines_positions", []);
+  const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 50);
   const alerts = [];
   const cryptoPositions = positions.filter((p) => p.asset_class === "crypto");
   const pmPositions = positions.filter((p) => p.asset_class === "polymarket");
@@ -6191,7 +8303,7 @@ async function detectCrossDomainExposure() {
   return alerts;
 }
 async function captureImprovement(params) {
-  const queue = await getConfigValue(IMPROVEMENT_QUEUE_KEY, []);
+  const queue = await getConfigValue2(IMPROVEMENT_QUEUE_KEY, []);
   const isDuplicate = queue.some(
     (i) => i.title === params.title && i.status === "open" && Date.now() - i.created_at < 24 * 60 * 60 * 1e3
   );
@@ -6222,7 +8334,7 @@ async function captureImprovement(params) {
     status: "open"
   };
   queue.push(improvement);
-  await setConfigValue(IMPROVEMENT_QUEUE_KEY, pruneByAge(queue, MAX_IMPROVEMENTS));
+  await setConfigValue2(IMPROVEMENT_QUEUE_KEY, pruneByAge(queue, MAX_IMPROVEMENTS));
   console.log(`[oversight] Improvement captured: [${params.severity}] ${params.title} \u2192 route:${improvement.route}`);
   return improvement;
 }
@@ -6234,7 +8346,7 @@ function inferDomain(params) {
   return "system";
 }
 async function updateImprovement(id, status, note) {
-  const queue = await getConfigValue(IMPROVEMENT_QUEUE_KEY, []);
+  const queue = await getConfigValue2(IMPROVEMENT_QUEUE_KEY, []);
   const idx = queue.findIndex((i) => i.id === id);
   if (idx === -1) return null;
   queue[idx].status = status;
@@ -6242,11 +8354,11 @@ async function updateImprovement(id, status, note) {
     queue[idx].resolved_at = Date.now();
     if (note) queue[idx].resolution_note = note;
   }
-  await setConfigValue(IMPROVEMENT_QUEUE_KEY, queue);
+  await setConfigValue2(IMPROVEMENT_QUEUE_KEY, queue);
   return queue[idx];
 }
 async function getImprovementQueue() {
-  return getConfigValue(IMPROVEMENT_QUEUE_KEY, []);
+  return getConfigValue2(IMPROVEMENT_QUEUE_KEY, []);
 }
 async function openShadowTrade(params) {
   const shadow = {
@@ -6265,14 +8377,25 @@ async function openShadowTrade(params) {
     stop_price: params.stop_price,
     target_price: params.target_price
   };
-  const trades = await getConfigValue(SHADOW_TRADES_KEY, []);
+  const trades = await getConfigValue2(SHADOW_TRADES_KEY, []);
   trades.push(shadow);
-  await setConfigValue(SHADOW_TRADES_KEY, pruneByAge(trades, MAX_SHADOW_TRADES));
+  await setConfigValue2(SHADOW_TRADES_KEY, pruneByAge(trades, MAX_SHADOW_TRADES));
   console.log(`[oversight] Shadow trade opened: ${params.asset} ${params.direction} @ $${params.entry_price}`);
+  try {
+    const { sendShadowTradeNotification: sendShadowTradeNotification2 } = await Promise.resolve().then(() => (init_telegram(), telegram_exports));
+    sendShadowTradeNotification2({
+      type: "open",
+      asset: params.asset,
+      direction: params.direction,
+      entryPrice: params.entry_price,
+      source: params.source
+    }).catch((e) => console.warn("[oversight] Shadow open notification failed:", e));
+  } catch {
+  }
   return shadow;
 }
 async function closeShadowTrade(id, exitPrice, reason) {
-  const trades = await getConfigValue(SHADOW_TRADES_KEY, []);
+  const trades = await getConfigValue2(SHADOW_TRADES_KEY, []);
   const idx = trades.findIndex((t) => t.id === id);
   if (idx === -1) return null;
   const trade = trades[idx];
@@ -6282,12 +8405,25 @@ async function closeShadowTrade(id, exitPrice, reason) {
   trade.close_reason = reason;
   const multiplier = trade.direction === "LONG" || trade.direction === "YES" ? 1 : -1;
   trade.hypothetical_pnl = (exitPrice - trade.entry_price) * multiplier;
-  await setConfigValue(SHADOW_TRADES_KEY, trades);
+  await setConfigValue2(SHADOW_TRADES_KEY, trades);
   console.log(`[oversight] Shadow trade closed: ${trade.asset} P&L: $${trade.hypothetical_pnl.toFixed(2)}`);
+  try {
+    const { sendShadowTradeNotification: sendShadowTradeNotification2 } = await Promise.resolve().then(() => (init_telegram(), telegram_exports));
+    sendShadowTradeNotification2({
+      type: "close",
+      asset: trade.asset,
+      direction: trade.direction,
+      entryPrice: trade.entry_price,
+      exitPrice,
+      pnl: trade.hypothetical_pnl,
+      reason
+    }).catch((e) => console.warn("[oversight] Shadow close notification failed:", e));
+  } catch {
+  }
   return trade;
 }
 async function updateShadowPrices(priceUpdates) {
-  const trades = await getConfigValue(SHADOW_TRADES_KEY, []);
+  const trades = await getConfigValue2(SHADOW_TRADES_KEY, []);
   const openTrades = trades.filter((t) => t.status === "open");
   for (const trade of openTrades) {
     const newPrice = priceUpdates[trade.asset];
@@ -6297,12 +8433,12 @@ async function updateShadowPrices(priceUpdates) {
       trade.hypothetical_pnl = (newPrice - trade.entry_price) * multiplier;
     }
   }
-  await setConfigValue(SHADOW_TRADES_KEY, trades);
+  await setConfigValue2(SHADOW_TRADES_KEY, trades);
   return openTrades;
 }
 var SHADOW_MAX_AGE_HOURS = 168;
 async function refreshShadowTradesFromMarket() {
-  const trades = await getConfigValue(SHADOW_TRADES_KEY, []);
+  const trades = await getConfigValue2(SHADOW_TRADES_KEY, []);
   const openTrades = trades.filter((t) => t.status === "open");
   let updated = 0;
   let closed = 0;
@@ -6318,6 +8454,20 @@ async function refreshShadowTradesFromMarket() {
       const multiplier = trade.direction === "LONG" || trade.direction === "YES" ? 1 : -1;
       trade.hypothetical_pnl = (trade.current_price - trade.entry_price) * multiplier;
       closed++;
+      try {
+        const { sendShadowTradeNotification: sendShadowTradeNotification2 } = await Promise.resolve().then(() => (init_telegram(), telegram_exports));
+        sendShadowTradeNotification2({
+          type: "close",
+          asset: trade.asset,
+          direction: trade.direction,
+          entryPrice: trade.entry_price,
+          exitPrice: trade.current_price,
+          pnl: trade.hypothetical_pnl,
+          reason: "expired (168h max age)"
+        }).catch(() => {
+        });
+      } catch {
+      }
       continue;
     }
     try {
@@ -6349,6 +8499,20 @@ async function refreshShadowTradesFromMarket() {
             trade.exit_price = latestPrice;
             closed++;
             console.log(`[oversight] Shadow stop hit: ${trade.asset} ${trade.direction} @ $${latestPrice} (stop=$${trade.stop_price}) P&L: $${trade.hypothetical_pnl.toFixed(4)}`);
+            try {
+              const { sendShadowTradeNotification: sendShadowTradeNotification2 } = await Promise.resolve().then(() => (init_telegram(), telegram_exports));
+              sendShadowTradeNotification2({
+                type: "close",
+                asset: trade.asset,
+                direction: trade.direction,
+                entryPrice: trade.entry_price,
+                exitPrice: latestPrice,
+                pnl: trade.hypothetical_pnl,
+                reason: `stop hit ($${trade.stop_price})`
+              }).catch(() => {
+              });
+            } catch {
+            }
             continue;
           }
         }
@@ -6361,6 +8525,20 @@ async function refreshShadowTradesFromMarket() {
             trade.exit_price = latestPrice;
             closed++;
             console.log(`[oversight] Shadow target hit: ${trade.asset} ${trade.direction} @ $${latestPrice} (target=$${trade.target_price}) P&L: $${trade.hypothetical_pnl.toFixed(4)}`);
+            try {
+              const { sendShadowTradeNotification: sendShadowTradeNotification2 } = await Promise.resolve().then(() => (init_telegram(), telegram_exports));
+              sendShadowTradeNotification2({
+                type: "close",
+                asset: trade.asset,
+                direction: trade.direction,
+                entryPrice: trade.entry_price,
+                exitPrice: latestPrice,
+                pnl: trade.hypothetical_pnl,
+                reason: `target hit ($${trade.target_price})`
+              }).catch(() => {
+              });
+            } catch {
+            }
             continue;
           }
         }
@@ -6369,17 +8547,17 @@ async function refreshShadowTradesFromMarket() {
       errors.push(`${trade.asset}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
-  await setConfigValue(SHADOW_TRADES_KEY, trades);
+  await setConfigValue2(SHADOW_TRADES_KEY, trades);
   console.log(`[oversight] Shadow refresh: ${updated} updated, ${closed} expired, ${errors.length} errors`);
   return { updated, closed, errors };
 }
 async function getShadowTrades(statusFilter) {
-  const trades = await getConfigValue(SHADOW_TRADES_KEY, []);
+  const trades = await getConfigValue2(SHADOW_TRADES_KEY, []);
   if (statusFilter) return trades.filter((t) => t.status === statusFilter);
   return trades;
 }
 async function getShadowPerformance() {
-  const trades = await getConfigValue(SHADOW_TRADES_KEY, []);
+  const trades = await getConfigValue2(SHADOW_TRADES_KEY, []);
   const closed = trades.filter((t) => t.status === "closed");
   const open = trades.filter((t) => t.status === "open");
   const wins = closed.filter((t) => t.hypothetical_pnl > 0);
@@ -6396,19 +8574,19 @@ async function getShadowPerformance() {
   };
 }
 async function getLatestHealthReport() {
-  const reports = await getConfigValue(HEALTH_REPORTS_KEY, []);
+  const reports = await getConfigValue2(HEALTH_REPORTS_KEY, []);
   return reports.length > 0 ? reports[reports.length - 1] : null;
 }
 async function getOversightSummary() {
   const health = await getLatestHealthReport();
-  const queue = await getConfigValue(IMPROVEMENT_QUEUE_KEY, []);
+  const queue = await getConfigValue2(IMPROVEMENT_QUEUE_KEY, []);
   const openItems = queue.filter((i) => i.status === "open");
   const criticalItems = openItems.filter((i) => i.severity === "critical");
   const shadowPerf = await getShadowPerformance();
-  const lastCheck = await getConfigValue(LAST_HEALTH_CHECK_KEY, null);
-  const portfolio = await getConfigValue("wealth_engines_portfolio_value", 50);
-  const peak = await getConfigValue("wealth_engines_peak_portfolio", 50);
-  const history = await getConfigValue("wealth_engines_trade_history", []);
+  const lastCheck = await getConfigValue2(LAST_HEALTH_CHECK_KEY, null);
+  const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 50);
+  const peak = await getConfigValue2("wealth_engines_peak_portfolio", 50);
+  const history = await getConfigValue2("wealth_engines_trade_history", []);
   const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1e3;
   const recentTrades = history.filter((t) => new Date(t.closed_at).getTime() > sevenDaysAgo);
   const rolling7d = recentTrades.reduce((s, t) => s + (t.pnl || 0), 0);
@@ -6435,9 +8613,9 @@ async function getOversightSummary() {
   };
 }
 async function reviewTheses() {
-  const cryptoTheses = await getConfigValue("scout_active_theses", []);
-  const pmTheses = await getConfigValue("polymarket_scout_active_theses", []);
-  const history = await getConfigValue("wealth_engines_trade_history", []);
+  const cryptoTheses = await getConfigValue2("scout_active_theses", []);
+  const pmTheses = await getConfigValue2("polymarket_scout_active_theses", []);
+  const history = await getConfigValue2("wealth_engines_trade_history", []);
   const reviews = [];
   const allTheses = [
     ...cryptoTheses.filter((t) => t.status === "active").map((t) => ({ ...t, _source: "crypto_scout" })),
@@ -6499,8 +8677,8 @@ async function reviewTheses() {
   return reviews;
 }
 async function checkPerAssetLosses() {
-  const history = await getConfigValue("wealth_engines_trade_history", []);
-  const portfolio = await getConfigValue("wealth_engines_portfolio_value", 50);
+  const history = await getConfigValue2("wealth_engines_trade_history", []);
+  const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 50);
   const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1e3;
   const recent = history.filter((t) => new Date(t.closed_at).getTime() > sevenDaysAgo);
   const byAsset = {};
@@ -6528,10 +8706,10 @@ async function checkPerAssetLosses() {
 async function generateDailyPerformanceSummary() {
   const review = await runPerformanceReview(1);
   const health = await getLatestHealthReport();
-  const portfolio = await getConfigValue("wealth_engines_portfolio_value", 50);
-  const peak = await getConfigValue("wealth_engines_peak_portfolio", 50);
+  const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 50);
+  const peak = await getConfigValue2("wealth_engines_peak_portfolio", 50);
   const drawdownPct = peak > 0 ? (peak - portfolio) / peak * 100 : 0;
-  const queue = await getConfigValue(IMPROVEMENT_QUEUE_KEY, []);
+  const queue = await getConfigValue2(IMPROVEMENT_QUEUE_KEY, []);
   const openItems = queue.filter((i) => i.status === "open");
   const lines = [
     `\u{1F4CB} *Daily Performance Summary*`,
@@ -6730,7 +8908,7 @@ async function isPaused() {
     return false;
   }
 }
-async function getMode() {
+async function getMode2() {
   const pool2 = getPool();
   try {
     const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_mode'`);
@@ -6760,7 +8938,7 @@ async function runPreExecutionChecks(params) {
   const paused = await isPaused();
   checks.push({ name: "pause_state", passed: !paused, detail: paused ? "System is PAUSED" : "System active" });
   if (paused) allPassed = false;
-  const mode = await getMode();
+  const mode = await getMode2();
   checks.push({ name: "mode_check", passed: true, detail: `Mode: ${mode}${mode === "SHADOW" ? " (shadow trades only)" : ""}` });
   const levOk = params.leverage <= 2;
   checks.push({ name: "leverage_cap", passed: levOk, detail: `Requested: ${params.leverage}x, Max: 2x` });
@@ -6836,7 +9014,7 @@ async function runPreExecutionChecks(params) {
   return { passed: allPassed, tier, checks, rejection_reason: rejectionReason };
 }
 async function openPosition(params) {
-  const mode = await getMode();
+  const mode = await getMode2();
   if (mode === "SHADOW") {
     const source2 = params.source === "polymarket_scout" ? "polymarket_scout" : "crypto_scout";
     try {
@@ -7297,7 +9475,7 @@ async function getPortfolioSummary() {
     getPeakPortfolioValue(),
     getConsecutiveLosses(),
     getPositions(),
-    getMode(),
+    getMode2(),
     isPaused(),
     isKillSwitchActive()
   ]);
@@ -8423,7 +10601,7 @@ var initialAlertCheckDone = false;
 var briefRunning = false;
 var alertRunning = false;
 var lastDedupeReset = "";
-async function init6() {
+async function init7() {
   const existing = await getPool().query(`SELECT value FROM app_config WHERE key = 'alerts'`);
   if (existing.rows.length === 0) {
     try {
@@ -8911,1737 +11089,12 @@ async function triggerBrief(type) {
   return event;
 }
 
-// src/telegram.ts
-init_db();
-
-// src/autoresearch.ts
-init_db();
-var DB_KEYS = {
-  cryptoParams: "crypto_signal_parameters",
-  polymarketParams: "polymarket_scout_parameters",
-  experimentLog: "autoresearch_experiment_log",
-  cryptoHistory: "autoresearch_crypto_history",
-  polymarketHistory: "autoresearch_polymarket_history"
-};
-var MAX_EXPERIMENTS_LOG = 500;
-var MAX_PARAM_HISTORY = 5;
-var MIN_IMPROVEMENT_PCT = 0.5;
-var MAX_DRIFT_PCT = 30;
-async function getConfigValue2(key, fallback) {
-  try {
-    const pool2 = getPool();
-    const res = await pool2.query("SELECT value FROM app_config WHERE key = $1", [key]);
-    if (res.rows.length > 0) {
-      const parsed = typeof res.rows[0].value === "string" ? JSON.parse(res.rows[0].value) : res.rows[0].value;
-      return parsed;
-    }
-    return fallback;
-  } catch {
-    return fallback;
-  }
-}
-async function setConfigValue2(key, value) {
-  const pool2 = getPool();
-  const json = JSON.stringify(value);
-  await pool2.query(
-    `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
-     ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = $3`,
-    [key, json, (/* @__PURE__ */ new Date()).toISOString()]
-  );
-}
-var CRYPTO_PARAM_SPACE = [
-  { name: "ema_fast", min: 3, max: 15, step: 1, type: "int" },
-  { name: "ema_slow", min: 15, max: 50, step: 1, type: "int" },
-  { name: "rsi_period", min: 5, max: 21, step: 1, type: "int" },
-  { name: "rsi_overbought", min: 60, max: 80, step: 1, type: "int" },
-  { name: "rsi_oversold", min: 20, max: 40, step: 1, type: "int" },
-  { name: "momentum_lookback", min: 5, max: 30, step: 1, type: "int" },
-  { name: "very_short_momentum_lookback", min: 2, max: 12, step: 1, type: "int" },
-  { name: "macd_fast", min: 8, max: 20, step: 1, type: "int" },
-  { name: "macd_slow", min: 18, max: 35, step: 1, type: "int" },
-  { name: "macd_signal", min: 5, max: 15, step: 1, type: "int" },
-  { name: "bb_period", min: 5, max: 25, step: 1, type: "int" },
-  { name: "bb_percentile_threshold", min: 70, max: 98, step: 1, type: "int" },
-  { name: "vol_lookback_bars", min: 10, max: 50, step: 2, type: "int" },
-  { name: "atr_period", min: 7, max: 28, step: 1, type: "int" },
-  { name: "atr_stop_multiplier", min: 2, max: 8, step: 0.5, type: "float" },
-  { name: "vote_threshold", min: 2, max: 6, step: 1, type: "int" },
-  { name: "cooldown_bars", min: 1, max: 5, step: 1, type: "int" }
-];
-var POLYMARKET_PARAM_SPACE = [
-  { name: "min_wallet_score", min: 0.3, max: 0.9, step: 0.05, type: "float" },
-  { name: "min_whale_consensus", min: 1, max: 5, step: 1, type: "int" },
-  { name: "min_odds", min: 0.05, max: 0.3, step: 0.05, type: "float" },
-  { name: "max_odds", min: 0.7, max: 0.95, step: 0.05, type: "float" },
-  { name: "min_volume", min: 1e4, max: 1e5, step: 1e4, type: "int" },
-  { name: "exit_odds_threshold", min: 0.05, max: 0.25, step: 0.05, type: "float" },
-  { name: "stale_position_hours", min: 24, max: 168, step: 24, type: "int" },
-  { name: "conviction_lookback_days", min: 7, max: 90, step: 7, type: "int" },
-  { name: "tier1_size_pct", min: 1, max: 5, step: 0.5, type: "float" },
-  { name: "tier2_size_pct", min: 2, max: 8, step: 0.5, type: "float" },
-  { name: "tier3_size_pct", min: 3, max: 12, step: 0.5, type: "float" },
-  { name: "category_weight_politics", min: 0.5, max: 2, step: 0.1, type: "float" },
-  { name: "category_weight_crypto", min: 0.5, max: 2, step: 0.1, type: "float" },
-  { name: "category_weight_sports", min: 0.5, max: 2, step: 0.1, type: "float" },
-  { name: "category_weight_other", min: 0.5, max: 2, step: 0.1, type: "float" }
-];
-var DEFAULT_CRYPTO_PARAMS = {
-  ema_fast: 7,
-  ema_slow: 26,
-  rsi_period: 8,
-  rsi_overbought: 69,
-  rsi_oversold: 31,
-  momentum_lookback: 12,
-  very_short_momentum_lookback: 6,
-  macd_fast: 14,
-  macd_slow: 23,
-  macd_signal: 9,
-  bb_period: 7,
-  bb_percentile_threshold: 90,
-  vol_lookback_bars: 24,
-  atr_period: 14,
-  atr_stop_multiplier: 5.5,
-  vote_threshold: 4,
-  cooldown_bars: 2
-};
-var DEFAULT_POLYMARKET_PARAMS = {
-  min_wallet_score: 0.6,
-  min_whale_consensus: 2,
-  min_odds: 0.15,
-  max_odds: 0.85,
-  min_volume: 5e4,
-  exit_odds_threshold: 0.1,
-  stale_position_hours: 72,
-  conviction_lookback_days: 30,
-  tier1_size_pct: 2,
-  tier2_size_pct: 3,
-  tier3_size_pct: 5,
-  category_weight_politics: 1,
-  category_weight_crypto: 1.2,
-  category_weight_sports: 0.8,
-  category_weight_other: 0.9
-};
-function clampToRange(value, def) {
-  const clamped = Math.max(def.min, Math.min(def.max, value));
-  if (def.type === "int") return Math.round(clamped);
-  return Math.round(clamped / def.step) * def.step;
-}
-function checkDrift(oldVal, newVal, maxDriftPct) {
-  if (oldVal === 0) return Math.abs(newVal) <= 1;
-  return Math.abs((newVal - oldVal) / oldVal) * 100 <= maxDriftPct;
-}
-function mutateParams(current, paramSpace, count = 2) {
-  const mutated = { ...current };
-  const changed = {};
-  const numericParams = paramSpace.filter((p) => current[p.name] !== void 0);
-  if (numericParams.length === 0) return { mutated, changed };
-  const numToMutate = Math.min(count, numericParams.length);
-  const shuffled = [...numericParams].sort(() => Math.random() - 0.5);
-  const selected = shuffled.slice(0, numToMutate);
-  for (const param of selected) {
-    const oldVal = current[param.name];
-    const direction = Math.random() > 0.5 ? 1 : -1;
-    const steps = Math.ceil(Math.random() * 3);
-    let newVal = oldVal + direction * steps * param.step;
-    newVal = clampToRange(newVal, param);
-    if (!checkDrift(oldVal, newVal, MAX_DRIFT_PCT)) {
-      const maxChange = Math.abs(oldVal * MAX_DRIFT_PCT / 100);
-      newVal = clampToRange(oldVal + direction * Math.min(steps * param.step, maxChange), param);
-    }
-    if (newVal !== oldVal) {
-      mutated[param.name] = newVal;
-      changed[param.name] = { old: oldVal, new: newVal };
-    }
-  }
-  return { mutated, changed };
-}
-function generateHypothesis(changed, domain) {
-  const parts = [];
-  for (const [name, { old: o, new: n }] of Object.entries(changed)) {
-    const dir = n > o ? "increasing" : "decreasing";
-    parts.push(`${dir} ${name} from ${o} to ${n}`);
-  }
-  return `${domain} parameter mutation: ${parts.join(", ")}`;
-}
-function runCryptoBacktest(candles, params) {
-  if (candles.length < 50) {
-    return { score: 0, trades: 0, wins: 0, losses: 0, total_pnl: 0, max_drawdown_pct: 0, sharpe: 0, win_rate: 0, details: {} };
-  }
-  const trades = [];
-  let inPosition = false;
-  let entryBar = 0;
-  let entryPrice = 0;
-  let stopPrice = 0;
-  let cooldownUntil = 0;
-  const WINDOW = 50;
-  for (let i = WINDOW; i < candles.length; i++) {
-    const windowCandles = candles.slice(Math.max(0, i - 200), i + 1);
-    if (windowCandles.length < 30) continue;
-    const result = analyzeAsset(windowCandles, params);
-    const currentPrice = candles[i].close;
-    if (inPosition) {
-      const hitStop = currentPrice <= stopPrice;
-      const exitSignal = result.votes.exit_long_signal || result.votes.rsi_overbought;
-      const heldTooLong = i - entryBar > 72;
-      if (hitStop || exitSignal || heldTooLong) {
-        const pnl = currentPrice - entryPrice;
-        const pnl_pct = pnl / entryPrice * 100;
-        trades.push({ entry_bar: entryBar, exit_bar: i, entry_price: entryPrice, exit_price: currentPrice, direction: "LONG", pnl, pnl_pct });
-        inPosition = false;
-        cooldownUntil = i + (params.cooldown_bars || 2);
-      }
-    } else if (i >= cooldownUntil) {
-      if (result.votes.entry_signal && result.technical_score > 0.5) {
-        inPosition = true;
-        entryBar = i;
-        entryPrice = currentPrice;
-        stopPrice = result.atr_stop_price;
-      }
-    }
-  }
-  if (inPosition) {
-    const finalPrice = candles[candles.length - 1].close;
-    const pnl = finalPrice - entryPrice;
-    trades.push({ entry_bar: entryBar, exit_bar: candles.length - 1, entry_price: entryPrice, exit_price: finalPrice, direction: "LONG", pnl, pnl_pct: pnl / entryPrice * 100 });
-  }
-  return scoreCryptoResult(trades);
-}
-function scoreCryptoResult(trades) {
-  if (trades.length === 0) {
-    return { score: 0, trades: 0, wins: 0, losses: 0, total_pnl: 0, max_drawdown_pct: 0, sharpe: 0, win_rate: 0, details: {} };
-  }
-  const wins = trades.filter((t) => t.pnl > 0);
-  const losses = trades.filter((t) => t.pnl <= 0);
-  const totalPnl = trades.reduce((s, t) => s + t.pnl_pct, 0);
-  const winRate = wins.length / trades.length;
-  const returns = trades.map((t) => t.pnl_pct);
-  const avgReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
-  const variance = returns.reduce((s, r) => s + (r - avgReturn) ** 2, 0) / returns.length;
-  const stdDev = Math.sqrt(variance);
-  const sharpe = stdDev > 0 ? avgReturn / stdDev * Math.sqrt(252 / Math.max(1, trades.length)) : 0;
-  let peak = 0;
-  let equity = 0;
-  let maxDD = 0;
-  for (const t of trades) {
-    equity += t.pnl_pct;
-    if (equity > peak) peak = equity;
-    const dd = peak > 0 ? (peak - equity) / peak * 100 : equity < 0 ? Math.abs(equity) : 0;
-    if (dd > maxDD) maxDD = dd;
-  }
-  const tradeCountFactor = Math.min(trades.length / 10, 1.5);
-  const drawdownPenalty = maxDD * 0.02;
-  const avgHoldBars = trades.reduce((s, t) => s + (t.exit_bar - t.entry_bar), 0) / trades.length;
-  const turnoverPenalty = avgHoldBars < 3 ? 0.3 : 0;
-  const score = Math.max(0, sharpe * Math.sqrt(tradeCountFactor) - drawdownPenalty - turnoverPenalty);
-  return {
-    score,
-    trades: trades.length,
-    wins: wins.length,
-    losses: losses.length,
-    total_pnl: totalPnl,
-    max_drawdown_pct: maxDD,
-    sharpe,
-    win_rate: winRate,
-    details: {
-      avg_return_pct: avgReturn,
-      std_dev: stdDev,
-      avg_hold_bars: avgHoldBars,
-      trade_count_factor: tradeCountFactor,
-      drawdown_penalty: drawdownPenalty,
-      turnover_penalty: turnoverPenalty
-    }
-  };
-}
-function runPolymarketBacktest(markets, params) {
-  if (markets.length === 0) {
-    return { score: 0, trades: 0, wins: 0, losses: 0, total_pnl: 0, max_drawdown_pct: 0, win_rate: 0, details: {} };
-  }
-  const trades = [];
-  for (const m of markets) {
-    if (m.avg_whale_score < params.min_wallet_score) continue;
-    if (m.whale_count < params.min_whale_consensus) continue;
-    if (m.entry_odds < params.min_odds || m.entry_odds > params.max_odds) continue;
-    if (m.volume < params.min_volume) continue;
-    const categoryKey = `category_weight_${m.category.toLowerCase()}`;
-    const categoryWeight = typeof params[categoryKey] === "number" ? params[categoryKey] : params.category_weight_other;
-    if (categoryWeight < 0.5) continue;
-    let sizePct;
-    if (m.avg_whale_score >= 0.8) sizePct = params.tier3_size_pct;
-    else if (m.avg_whale_score >= 0.65) sizePct = params.tier2_size_pct;
-    else sizePct = params.tier1_size_pct;
-    const won = m.resolution_odds >= 0.95;
-    const exitOdds = won ? 1 : Math.max(0, m.entry_odds - params.exit_odds_threshold);
-    const pnlPerUnit = won ? 1 - m.entry_odds : exitOdds - m.entry_odds;
-    const pnl_pct = pnlPerUnit * sizePct * categoryWeight;
-    trades.push({ pnl_pct, won });
-  }
-  if (trades.length === 0) {
-    return { score: 0, trades: 0, wins: 0, losses: 0, total_pnl: 0, max_drawdown_pct: 0, win_rate: 0, details: {} };
-  }
-  const wins = trades.filter((t) => t.won);
-  const totalPnl = trades.reduce((s, t) => s + t.pnl_pct, 0);
-  const winRate = wins.length / trades.length;
-  let peak = 0;
-  let equity = 0;
-  let maxDD = 0;
-  for (const t of trades) {
-    equity += t.pnl_pct;
-    if (equity > peak) peak = equity;
-    const dd = peak > 0 ? (peak - equity) / peak * 100 : equity < 0 ? Math.abs(equity) : 0;
-    if (dd > maxDD) maxDD = dd;
-  }
-  const roiScore = Math.min(totalPnl / 10, 2);
-  const winRateScore = winRate * 1.5;
-  const drawdownPenalty = maxDD * 0.015;
-  const score = Math.max(0, roiScore + winRateScore - drawdownPenalty);
-  return {
-    score,
-    trades: trades.length,
-    wins: wins.length,
-    losses: trades.length - wins.length,
-    total_pnl: totalPnl,
-    max_drawdown_pct: maxDD,
-    win_rate: winRate,
-    details: {
-      roi_score: roiScore,
-      win_rate_score: winRateScore,
-      drawdown_penalty: drawdownPenalty
-    }
-  };
-}
-async function getCryptoParams() {
-  return getConfigValue2(DB_KEYS.cryptoParams, DEFAULT_CRYPTO_PARAMS);
-}
-async function getPolymarketParams() {
-  return getConfigValue2(DB_KEYS.polymarketParams, DEFAULT_POLYMARKET_PARAMS);
-}
-async function getExperimentLog() {
-  return getConfigValue2(DB_KEYS.experimentLog, []);
-}
-async function appendExperiment(exp) {
-  const log = await getExperimentLog();
-  log.push(exp);
-  if (log.length > MAX_EXPERIMENTS_LOG) log.splice(0, log.length - MAX_EXPERIMENTS_LOG);
-  await setConfigValue2(DB_KEYS.experimentLog, log);
-}
-async function pushParamHistory(domain, params) {
-  const key = domain === "crypto" ? DB_KEYS.cryptoHistory : DB_KEYS.polymarketHistory;
-  const history = await getConfigValue2(key, []);
-  history.push(params);
-  if (history.length > MAX_PARAM_HISTORY) history.splice(0, history.length - MAX_PARAM_HISTORY);
-  await setConfigValue2(key, history);
-}
-async function getParamHistory(domain) {
-  const key = domain === "crypto" ? DB_KEYS.cryptoHistory : DB_KEYS.polymarketHistory;
-  return getConfigValue2(key, []);
-}
-async function rollbackParams(domain) {
-  const history = await getParamHistory(domain);
-  if (history.length === 0) {
-    return { success: false, message: `No parameter history available for ${domain} rollback` };
-  }
-  const previous = history[history.length - 1];
-  if (domain === "crypto") {
-    await setConfigValue2(DB_KEYS.cryptoParams, previous);
-    invalidateCryptoParamsCache();
-  } else {
-    await setConfigValue2(DB_KEYS.polymarketParams, previous);
-  }
-  const updatedHistory = history.slice(0, -1);
-  const key = domain === "crypto" ? DB_KEYS.cryptoHistory : DB_KEYS.polymarketHistory;
-  await setConfigValue2(key, updatedHistory);
-  return { success: true, message: `Rolled back ${domain} parameters to previous set (${history.length - 1} remaining in history)` };
-}
-async function buildPMSimMarkets() {
-  const pool2 = getPool();
-  try {
-    const res = await pool2.query(
-      `SELECT value FROM app_config WHERE key = 'wealth_engines_trade_history'`
-    );
-    if (res.rows.length === 0) return [];
-    const trades = typeof res.rows[0].value === "string" ? JSON.parse(res.rows[0].value) : res.rows[0].value;
-    const pmTrades = trades.filter(
-      (t) => t.asset_class === "polymarket" && t.closed_at
-    );
-    const markets = pmTrades.map((t) => ({
-      market_id: t.market_id || "unknown",
-      question: t.asset || "Unknown Market",
-      outcome: t.direction === "YES" || t.direction === "NO" ? t.direction : "YES",
-      entry_odds: t.entry_price || 0.5,
-      resolution_odds: (t.pnl || 0) > 0 ? 1 : 0,
-      whale_count: 2,
-      avg_whale_score: 0.7,
-      volume: 1e5,
-      category: "other"
-    }));
-    if (markets.length < 5) {
-      const synthetic = generateSyntheticPMMarkets(20);
-      return [...markets, ...synthetic];
-    }
-    return markets;
-  } catch {
-    return generateSyntheticPMMarkets(20);
-  }
-}
-function generateSyntheticPMMarkets(count) {
-  const categories = ["politics", "crypto", "sports", "other"];
-  const markets = [];
-  for (let i = 0; i < count; i++) {
-    const odds = 0.2 + Math.random() * 0.6;
-    const won = Math.random() > 1 - odds;
-    markets.push({
-      market_id: `synthetic_${i}`,
-      question: `Synthetic market ${i}`,
-      outcome: "YES",
-      entry_odds: odds,
-      resolution_odds: won ? 1 : 0,
-      whale_count: 1 + Math.floor(Math.random() * 4),
-      avg_whale_score: 0.4 + Math.random() * 0.5,
-      volume: 2e4 + Math.random() * 2e5,
-      category: categories[Math.floor(Math.random() * categories.length)]
-    });
-  }
-  return markets;
-}
-async function runCryptoResearch(experimentsCount = 15) {
-  const start = Date.now();
-  const currentParams = await getCryptoParams();
-  const currentRecord = currentParams;
-  let candles;
-  try {
-    candles = await getHistoricalOHLCV("bitcoin", 90);
-  } catch {
-    try {
-      candles = await getHistoricalOHLCV("ethereum", 90);
-    } catch {
-      return {
-        domain: "crypto",
-        experiments_run: 0,
-        improvements_found: 0,
-        best_delta: 0,
-        score_before: 0,
-        score_after: 0,
-        parameters_changed: [],
-        duration_ms: Date.now() - start
-      };
-    }
-  }
-  const baseline = runCryptoBacktest(candles, currentParams);
-  let bestScore = baseline.score;
-  let bestParams = { ...currentRecord };
-  let improvements = 0;
-  const allChanged = [];
-  for (let i = 0; i < experimentsCount; i++) {
-    const muteCount = 1 + Math.floor(Math.random() * 3);
-    const { mutated, changed } = mutateParams(bestParams, CRYPTO_PARAM_SPACE, muteCount);
-    if (Object.keys(changed).length === 0) continue;
-    const hypothesis = generateHypothesis(changed, "crypto");
-    const result = runCryptoBacktest(candles, mutated);
-    const delta = result.score - bestScore;
-    const deltaPct = bestScore > 0 ? delta / bestScore * 100 : result.score > 0 ? 100 : 0;
-    const experiment = {
-      experiment_id: `crypto_${Date.now()}_${i}`,
-      domain: "crypto",
-      parameters_changed: changed,
-      hypothesis,
-      old_score: bestScore,
-      new_score: result.score,
-      delta,
-      delta_pct: deltaPct,
-      outcome: deltaPct >= MIN_IMPROVEMENT_PCT ? "kept" : "reverted",
-      timestamp: Date.now(),
-      details: result.details
-    };
-    await appendExperiment(experiment);
-    if (deltaPct >= MIN_IMPROVEMENT_PCT) {
-      bestScore = result.score;
-      bestParams = { ...mutated };
-      improvements++;
-      allChanged.push(...Object.keys(changed));
-    }
-  }
-  if (improvements > 0) {
-    await pushParamHistory("crypto", currentRecord);
-    await setConfigValue2(DB_KEYS.cryptoParams, bestParams);
-    invalidateCryptoParamsCache();
-  }
-  return {
-    domain: "crypto",
-    experiments_run: experimentsCount,
-    improvements_found: improvements,
-    best_delta: bestScore - baseline.score,
-    score_before: baseline.score,
-    score_after: bestScore,
-    parameters_changed: [...new Set(allChanged)],
-    duration_ms: Date.now() - start
-  };
-}
-async function runPolymarketResearch(experimentsCount = 15) {
-  const start = Date.now();
-  const currentParams = await getPolymarketParams();
-  const currentRecord = currentParams;
-  const markets = await buildPMSimMarkets();
-  if (markets.length === 0) {
-    return {
-      domain: "polymarket",
-      experiments_run: 0,
-      improvements_found: 0,
-      best_delta: 0,
-      score_before: 0,
-      score_after: 0,
-      parameters_changed: [],
-      duration_ms: Date.now() - start
-    };
-  }
-  const baseline = runPolymarketBacktest(markets, currentParams);
-  let bestScore = baseline.score;
-  let bestParams = { ...currentRecord };
-  let improvements = 0;
-  const allChanged = [];
-  for (let i = 0; i < experimentsCount; i++) {
-    const muteCount = 1 + Math.floor(Math.random() * 3);
-    const { mutated, changed } = mutateParams(bestParams, POLYMARKET_PARAM_SPACE, muteCount);
-    if (Object.keys(changed).length === 0) continue;
-    const hypothesis = generateHypothesis(changed, "polymarket");
-    const result = runPolymarketBacktest(markets, mutated);
-    const delta = result.score - bestScore;
-    const deltaPct = bestScore > 0 ? delta / bestScore * 100 : result.score > 0 ? 100 : 0;
-    const experiment = {
-      experiment_id: `pm_${Date.now()}_${i}`,
-      domain: "polymarket",
-      parameters_changed: changed,
-      hypothesis,
-      old_score: bestScore,
-      new_score: result.score,
-      delta,
-      delta_pct: deltaPct,
-      outcome: deltaPct >= MIN_IMPROVEMENT_PCT ? "kept" : "reverted",
-      timestamp: Date.now(),
-      details: result.details
-    };
-    await appendExperiment(experiment);
-    if (deltaPct >= MIN_IMPROVEMENT_PCT) {
-      bestScore = result.score;
-      bestParams = { ...mutated };
-      improvements++;
-      allChanged.push(...Object.keys(changed));
-    }
-  }
-  if (improvements > 0) {
-    await pushParamHistory("polymarket", currentRecord);
-    await setConfigValue2(DB_KEYS.polymarketParams, bestParams);
-  }
-  return {
-    domain: "polymarket",
-    experiments_run: experimentsCount,
-    improvements_found: improvements,
-    best_delta: bestScore - baseline.score,
-    score_before: baseline.score,
-    score_after: bestScore,
-    parameters_changed: [...new Set(allChanged)],
-    duration_ms: Date.now() - start
-  };
-}
-async function runFullResearch(experimentsPerDomain = 15) {
-  const crypto3 = await runCryptoResearch(experimentsPerDomain);
-  const pm = await runPolymarketResearch(experimentsPerDomain);
-  return [crypto3, pm];
-}
-function formatResearchSummary(summaries) {
-  const lines = ["\u{1F52C} *Autoresearch Results*\n"];
-  for (const s of summaries) {
-    const domain = s.domain === "crypto" ? "\u{1F4CA} Crypto Signals" : "\u{1F3AF} Polymarket";
-    lines.push(`*${domain}*`);
-    lines.push(`  Experiments: ${s.experiments_run}`);
-    lines.push(`  Improvements: ${s.improvements_found}`);
-    lines.push(`  Score: ${s.score_before.toFixed(3)} \u2192 ${s.score_after.toFixed(3)} (${s.best_delta >= 0 ? "+" : ""}${s.best_delta.toFixed(3)})`);
-    if (s.parameters_changed.length > 0) {
-      lines.push(`  Changed: ${s.parameters_changed.join(", ")}`);
-    }
-    lines.push(`  Duration: ${(s.duration_ms / 1e3).toFixed(1)}s`);
-    lines.push("");
-  }
-  return lines.join("\n");
-}
-async function getResearchStatus() {
-  const [cryptoParams, pmParams, log, cryptoHist, pmHist] = await Promise.all([
-    getCryptoParams(),
-    getPolymarketParams(),
-    getExperimentLog(),
-    getParamHistory("crypto"),
-    getParamHistory("polymarket")
-  ]);
-  return {
-    crypto_params: cryptoParams,
-    polymarket_params: pmParams,
-    recent_experiments: log.slice(-20),
-    crypto_history_count: cryptoHist.length,
-    polymarket_history_count: pmHist.length
-  };
-}
-
-// src/telegram.ts
-import { randomBytes } from "crypto";
-var BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
-var CHAT_ID = process.env.TELEGRAM_CHAT_ID || "";
-var API_BASE2 = `https://api.telegram.org/bot${BOT_TOKEN}`;
-var ALERTS_BOT_TOKEN = process.env.TELEGRAM_ALERTS_BOT_TOKEN || "";
-var ALERTS_CHAT_ID = process.env.TELEGRAM_ALERTS_CHAT_ID || process.env.TELEGRAM_CHAT_ID || "";
-var ALERTS_API_BASE = `https://api.telegram.org/bot${ALERTS_BOT_TOKEN}`;
-function isAlertsBotConfigured() {
-  return ALERTS_BOT_TOKEN.length > 0 && ALERTS_CHAT_ID.length > 0;
-}
-async function sendAlertsBotMessage(text, parseMode = "Markdown") {
-  if (!isAlertsBotConfigured()) return;
-  try {
-    const resp = await fetch(`${ALERTS_API_BASE}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: ALERTS_CHAT_ID, text, parse_mode: parseMode })
-    });
-    if (!resp.ok) {
-      const body = await resp.text();
-      console.error(`[telegram-alerts] sendMessage failed (${resp.status}): ${body}`);
-    }
-  } catch (err) {
-    console.error("[telegram-alerts] sendMessage failed:", err instanceof Error ? err.message : err);
-  }
-}
-var WEBHOOK_SECRET = randomBytes(32).toString("hex");
-var pollingActive = false;
-var pollingTimeout = null;
-var lastUpdateId = 0;
-var deadManInterval = null;
-var lastDeadManAlert = {};
-var commands = {};
-var pendingApprovals = /* @__PURE__ */ new Map();
-async function getMode2() {
-  try {
-    const pool2 = getPool();
-    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_mode'`);
-    if (res.rows.length > 0 && res.rows[0].value === "LIVE") return "[LIVE]";
-  } catch {
-  }
-  return "[BETA]";
-}
-function isConfigured8() {
-  return BOT_TOKEN.length > 0 && CHAT_ID.length > 0;
-}
-async function tgFetch(method, body) {
-  const url = `${API_BASE2}/${method}`;
-  const opts = {
-    method: "POST",
-    headers: { "Content-Type": "application/json" }
-  };
-  if (body) opts.body = JSON.stringify(body);
-  const resp = await fetch(url, opts);
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`Telegram API ${method} failed (${resp.status}): ${text}`);
-  }
-  return resp.json();
-}
-async function sendMessage(text, parseMode = "Markdown") {
-  if (!isConfigured8()) return null;
-  try {
-    const result = await tgFetch("sendMessage", {
-      chat_id: CHAT_ID,
-      text,
-      parse_mode: parseMode,
-      disable_web_page_preview: true
-    });
-    return result.result?.message_id || null;
-  } catch (err) {
-    console.error("[telegram] sendMessage failed:", err instanceof Error ? err.message : err);
-    return null;
-  }
-}
-async function sendMessageWithKeyboard(text, keyboard, parseMode = "Markdown") {
-  if (!isConfigured8()) return null;
-  try {
-    const result = await tgFetch("sendMessage", {
-      chat_id: CHAT_ID,
-      text,
-      parse_mode: parseMode,
-      disable_web_page_preview: true,
-      reply_markup: { inline_keyboard: keyboard }
-    });
-    return result.result?.message_id || null;
-  } catch (err) {
-    console.error("[telegram] sendMessageWithKeyboard failed:", err instanceof Error ? err.message : err);
-    return null;
-  }
-}
-async function answerCallbackQuery(callbackQueryId, text) {
-  try {
-    await tgFetch("answerCallbackQuery", {
-      callback_query_id: callbackQueryId,
-      text: text || "Received"
-    });
-  } catch (err) {
-    console.error("[telegram] answerCallbackQuery failed:", err instanceof Error ? err.message : err);
-  }
-}
-async function editMessage(messageId, text, parseMode = "Markdown") {
-  try {
-    await tgFetch("editMessageText", {
-      chat_id: CHAT_ID,
-      message_id: messageId,
-      text,
-      parse_mode: parseMode
-    });
-  } catch (err) {
-    console.error("[telegram] editMessage failed:", err instanceof Error ? err.message : err);
-  }
-}
-function registerCommand(name, handler) {
-  commands[name.toLowerCase()] = handler;
-}
-async function handleStatusCommand() {
-  const mode = await getMode2();
-  const pool2 = getPool();
-  let killSwitchActive = false;
-  try {
-    const ks = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_kill_switch'`);
-    killSwitchActive = ks.rows.length > 0 && ks.rows[0].value === true;
-  } catch {
-  }
-  let pauseActive = false;
-  try {
-    const pa = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_paused'`);
-    pauseActive = pa.rows.length > 0 && pa.rows[0].value === true;
-  } catch {
-  }
-  let scoutLastRun = "never";
-  let bankrLastRun = "never";
-  try {
-    const sr = await pool2.query(`SELECT created_at FROM job_history WHERE agent_id = 'scout' ORDER BY created_at DESC LIMIT 1`);
-    if (sr.rows.length > 0) scoutLastRun = timeAgo(new Date(sr.rows[0].created_at).getTime());
-  } catch {
-  }
-  try {
-    const br = await pool2.query(`SELECT created_at FROM job_history WHERE agent_id = 'bankr' ORDER BY created_at DESC LIMIT 1`);
-    if (br.rows.length > 0) bankrLastRun = timeAgo(new Date(br.rows[0].created_at).getTime());
-  } catch {
-  }
-  let healthLine = "";
-  try {
-    const healthRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_health_reports'`);
-    if (healthRes.rows.length > 0 && Array.isArray(healthRes.rows[0].value) && healthRes.rows[0].value.length > 0) {
-      const latest = healthRes.rows[0].value[healthRes.rows[0].value.length - 1];
-      const icons = { healthy: "\u{1F7E2}", degraded: "\u{1F7E1}", critical: "\u{1F534}" };
-      healthLine = `${icons[latest.overall_status] || "\u26AA"} Oversight: ${latest.overall_status}`;
-    }
-  } catch {
-  }
-  const lines = [
-    `${mode} *DarkNode Status*`,
-    "",
-    `\u{1F534} Kill Switch: ${killSwitchActive ? "ACTIVE" : "OFF"}`,
-    `\u23F8 Paused: ${pauseActive ? "YES" : "NO"}`,
-    `\u{1F50D} SCOUT last run: ${scoutLastRun}`,
-    `\u{1F4B0} BANKR last run: ${bankrLastRun}`
-  ];
-  if (healthLine) lines.push(healthLine);
-  lines.push("");
-  lines.push(`_${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`);
-  return lines.join("\n");
-}
-async function handlePortfolioCommand() {
-  const mode = await getMode2();
-  const pool2 = getPool();
-  let positions = [];
-  try {
-    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_positions'`);
-    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
-      positions = res.rows[0].value;
-    }
-  } catch {
-  }
-  if (positions.length === 0) {
-    return `${mode} *Portfolio*
-
-No open positions.
-
-_Use /trades to see recent trade history._`;
-  }
-  const lines = [`${mode} *Portfolio*`, ""];
-  let totalPnl = 0;
-  for (const pos of positions) {
-    const pnl = pos.unrealized_pnl || 0;
-    totalPnl += pnl;
-    const pnlStr = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
-    const arrow = pnl >= 0 ? "\u{1F7E2}" : "\u{1F534}";
-    lines.push(`${arrow} *${pos.asset}* ${pos.direction} ${pos.leverage || "1x"}`);
-    lines.push(`   Entry: $${pos.entry_price} | P&L: ${pnlStr}`);
-  }
-  lines.push("");
-  const totalStr = totalPnl >= 0 ? `+$${totalPnl.toFixed(2)}` : `-$${Math.abs(totalPnl).toFixed(2)}`;
-  lines.push(`*Total P&L:* ${totalStr}`);
-  return lines.join("\n");
-}
-async function handleIntelCommand() {
-  const mode = await getMode2();
-  const pool2 = getPool();
-  try {
-    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scout_latest_brief'`);
-    if (res.rows.length > 0 && res.rows[0].value) {
-      const brief = res.rows[0].value;
-      const summary = typeof brief === "string" ? brief : brief.summary || JSON.stringify(brief);
-      const truncated = summary.length > 3e3 ? summary.slice(0, 3e3) + "\n\n_(truncated)_" : summary;
-      return `${mode} *Latest SCOUT Intel*
-
-${truncated}`;
-    }
-  } catch {
-  }
-  return `${mode} *Latest SCOUT Intel*
-
-No SCOUT brief available yet. SCOUT agent has not run.`;
-}
-async function handlePauseCommand() {
-  const mode = await getMode2();
-  const pool2 = getPool();
-  try {
-    await pool2.query(
-      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_paused', $1, $2)
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
-      [JSON.stringify(true), Date.now()]
-    );
-    console.log("[telegram] Wealth Engines PAUSED via Telegram");
-    return `${mode} \u23F8 *System PAUSED*
-
-All Wealth Engine jobs will halt within 60 seconds.
-Use /resume to restart.`;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return `${mode} \u274C Failed to pause: ${msg}`;
-  }
-}
-async function handleResumeCommand() {
-  const mode = await getMode2();
-  const pool2 = getPool();
-  try {
-    await pool2.query(
-      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_paused', $1, $2)
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
-      [JSON.stringify(false), Date.now()]
-    );
-    await pool2.query(
-      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_kill_switch', $1, $2)
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
-      [JSON.stringify(false), Date.now()]
-    );
-    console.log("[telegram] Wealth Engines RESUMED + kill switch deactivated via Telegram");
-    return `${mode} \u25B6\uFE0F *System RESUMED*
-
-All Wealth Engine jobs are active. Kill switch deactivated.`;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return `${mode} \u274C Failed to resume: ${msg}`;
-  }
-}
-async function handleScoutCommand() {
-  const mode = await getMode2();
-  const pool2 = getPool();
-  try {
-    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scout_active_theses'`);
-    if (res.rows.length > 0 && Array.isArray(res.rows[0].value) && res.rows[0].value.length > 0) {
-      const theses = res.rows[0].value;
-      const now = Date.now();
-      const active = theses.filter((t) => !t.expires_at || t.expires_at > now);
-      if (active.length === 0) {
-        return `${mode} *Active SCOUT Theses*
-
-All theses have expired. Waiting for next SCOUT cycle.`;
-      }
-      const lines = [`${mode} *Active SCOUT Theses* (${active.length})`, ""];
-      for (const t of active.slice(0, 10)) {
-        const conf = t.confidence || "?";
-        const dir = t.direction || "?";
-        const vc = t.vote_count ?? t.votes;
-        const votes = vc != null ? typeof vc === "string" && vc.includes("/") ? vc : `${vc}/6` : "?";
-        const score = t.technical_score != null ? t.technical_score.toFixed(2) : "?";
-        const regime = t.market_regime || t.regime || "?";
-        const nansenFlow = t.nansen_flow_direction || t.nansen_flow || "";
-        const target = t.exit_price || t.target_price || "?";
-        const age = t.created_at ? `${Math.floor((now - t.created_at) / 36e5)}h ago` : "";
-        lines.push(`\u2022 *${t.asset}* \u2014 ${dir} ${conf}`);
-        lines.push(`  Votes: ${votes} | Score: ${score} | ${regime}`);
-        if (t.entry_price) lines.push(`  Entry: $${t.entry_price} | Stop: $${t.stop_price || "?"} | Target: $${target}`);
-        if (nansenFlow) lines.push(`  Nansen: ${nansenFlow}`);
-        if (age) lines.push(`  _${age}_`);
-        lines.push("");
-      }
-      return lines.join("\n");
-    }
-  } catch {
-  }
-  return `${mode} *Active SCOUT Theses*
-
-No active theses. SCOUT has not generated any yet.`;
-}
-async function handleTradesCommand(args) {
-  const mode = await getMode2();
-  const pool2 = getPool();
-  const limit = Math.min(Math.max(parseInt(args) || 5, 1), 20);
-  try {
-    const res = await pool2.query(
-      `SELECT value FROM app_config WHERE key = 'wealth_engines_trade_history'`
-    );
-    if (res.rows.length > 0 && Array.isArray(res.rows[0].value) && res.rows[0].value.length > 0) {
-      const trades = res.rows[0].value.slice(-limit).reverse();
-      const lines = [`${mode} *Recent Trades* (last ${trades.length})`, ""];
-      for (const t of trades) {
-        const pnl = t.pnl || 0;
-        const pnlStr = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
-        const icon = pnl >= 0 ? "\u{1F7E2}" : "\u{1F534}";
-        const date = t.closed_at ? new Date(t.closed_at).toLocaleDateString("en-US", { timeZone: "America/New_York" }) : "open";
-        lines.push(`${icon} *${t.asset}* ${t.direction} ${t.leverage || "1x"} \u2014 ${pnlStr} (${date})`);
-      }
-      return lines.join("\n");
-    }
-  } catch {
-  }
-  return `${mode} *Recent Trades*
-
-No trade history yet.`;
-}
-async function handlePublicCommand(args) {
-  const mode = await getMode2();
-  const pool2 = getPool();
-  const val = args.trim().toLowerCase();
-  if (val !== "on" && val !== "off") {
-    try {
-      const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_public'`);
-      const isPublic = res.rows.length > 0 && res.rows[0].value === true;
-      return `${mode} Dashboard is currently *${isPublic ? "PUBLIC" : "PRIVATE"}*.
-
-Usage: /public on | /public off`;
-    } catch {
-      return `${mode} Dashboard is currently *PRIVATE*.
-
-Usage: /public on | /public off`;
-    }
-  }
-  const newVal = val === "on";
-  try {
-    await pool2.query(
-      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_public', $1, $2)
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
-      [JSON.stringify(newVal), Date.now()]
-    );
-    return `${mode} Dashboard is now *${newVal ? "PUBLIC" : "PRIVATE"}*.`;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return `${mode} \u274C Failed to update: ${msg}`;
-  }
-}
-async function handleKillCommand() {
-  const mode = await getMode2();
-  const pool2 = getPool();
-  try {
-    await pool2.query(
-      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_kill_switch', $1, $2)
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
-      [JSON.stringify(true), Date.now()]
-    );
-    console.log("[telegram] KILL SWITCH ACTIVATED via Telegram");
-    return `${mode} \u{1F6A8} *KILL SWITCH ACTIVATED*
-
-All positions will be closed on the next monitor tick (within 5 minutes).
-Use /resume to deactivate kill switch and resume.`;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return `${mode} \u274C Kill switch failed: ${msg}`;
-  }
-}
-async function handleRiskCommand() {
-  const mode = await getMode2();
-  const pool2 = getPool();
-  let portfolio = 50;
-  try {
-    const pv = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_portfolio_value'`);
-    if (pv.rows.length > 0 && typeof pv.rows[0].value === "number") portfolio = pv.rows[0].value;
-  } catch {
-  }
-  let positions = [];
-  try {
-    const pos = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_positions'`);
-    if (pos.rows.length > 0 && Array.isArray(pos.rows[0].value)) positions = pos.rows[0].value;
-  } catch {
-  }
-  let history = [];
-  try {
-    const hist = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_trade_history'`);
-    if (hist.rows.length > 0 && Array.isArray(hist.rows[0].value)) history = hist.rows[0].value;
-  } catch {
-  }
-  const totalExposure = positions.reduce((s, p) => s + (p.size || 0) * (p.entry_price || 0), 0);
-  const unrealizedPnl = positions.reduce((s, p) => s + (p.unrealized_pnl || 0), 0);
-  const exposurePct = portfolio > 0 ? totalExposure / portfolio * 100 : 0;
-  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1e3;
-  const recentTrades = history.filter((t) => new Date(t.closed_at).getTime() > sevenDaysAgo);
-  const rolling7d = recentTrades.reduce((s, t) => s + (t.pnl || 0), 0);
-  const rolling7dPct = portfolio > 0 ? rolling7d / portfolio * 100 : 0;
-  const buckets = {};
-  for (const p of positions) {
-    const b = p.exposure_bucket || "general";
-    buckets[b] = (buckets[b] || 0) + 1;
-  }
-  const lines = [
-    `${mode} *Risk Dashboard*`,
-    "",
-    `\u{1F4B0} Portfolio: $${portfolio.toFixed(2)}`,
-    `\u{1F4CA} Exposure: $${totalExposure.toFixed(2)} (${exposurePct.toFixed(0)}% of portfolio)`,
-    `\u{1F4C8} Unrealized P&L: ${unrealizedPnl >= 0 ? "+" : ""}$${unrealizedPnl.toFixed(2)}`,
-    `\u{1F4C9} 7-Day Rolling P&L: ${rolling7d >= 0 ? "+" : ""}$${rolling7d.toFixed(2)} (${rolling7dPct.toFixed(1)}%)`,
-    `\u{1F53B} Circuit Breaker: ${rolling7dPct < -15 ? "\u26A0\uFE0F TRIGGERED" : "OK"} (threshold: -15%)`,
-    "",
-    `*Positions:* ${positions.length}/5`,
-    `*Exposure Limit:* ${exposurePct.toFixed(0)}%/80%`,
-    `*Buckets:* ${Object.entries(buckets).map(([b, c]) => `${b}: ${c}/2`).join(", ") || "none"}`
-  ];
-  return lines.join("\n");
-}
-async function handlePolymarketCommand() {
-  const mode = await getMode2();
-  const pool2 = getPool();
-  try {
-    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'polymarket_scout_active_theses'`);
-    if (res.rows.length > 0 && Array.isArray(res.rows[0].value) && res.rows[0].value.length > 0) {
-      const theses = res.rows[0].value;
-      const now = Date.now();
-      const active = theses.filter((t) => t.status === "active" && (!t.expires_at || t.expires_at > now));
-      if (active.length === 0) {
-        return `${mode} *Polymarket Theses*
-
-No active theses. Waiting for next scan.`;
-      }
-      const lines = [`${mode} *Polymarket Theses* (${active.length})`, ""];
-      for (const t of active.slice(0, 8)) {
-        const dir = t.direction === "YES" ? "\u2705 YES" : "\u274C NO";
-        const age = Math.floor((now - t.created_at) / 36e5);
-        const conf = { HIGH: "\u{1F7E2}", MEDIUM: "\u{1F7E1}", LOW: "\u{1F534}" }[t.confidence] || "\u26AA";
-        lines.push(`${conf} *${(t.asset || "").slice(0, 60)}*`);
-        lines.push(`  ${dir} | Odds: ${((t.current_odds || 0) * 100).toFixed(0)}% | Whales: ${t.whale_consensus || 0}`);
-        lines.push(`  Score: ${(t.whale_avg_score || 0).toFixed(2)} | _${age}h ago_`);
-        lines.push("");
-      }
-      return lines.join("\n");
-    }
-  } catch {
-  }
-  return `${mode} *Polymarket Theses*
-
-No active theses. Polymarket SCOUT has not generated any yet.`;
-}
-async function handleTaxCommand() {
-  const mode = await getMode2();
-  const pool2 = getPool();
-  let history = [];
-  try {
-    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_trade_history'`);
-    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) history = res.rows[0].value;
-  } catch {
-  }
-  const year = (/* @__PURE__ */ new Date()).getFullYear();
-  const yearStart = new Date(year, 0, 1).getTime();
-  const yearTrades = history.filter((t) => new Date(t.closed_at).getTime() >= yearStart);
-  let gains = 0, losses = 0, washAdj = 0;
-  for (const t of yearTrades) {
-    if ((t.pnl || 0) >= 0) gains += t.pnl;
-    else losses += t.pnl;
-    if (t.tax_lot?.wash_sale_flagged) washAdj += t.tax_lot.wash_sale_disallowed || 0;
-  }
-  const net = gains + losses + washAdj;
-  const fedTax = Math.max(0, net) * 0.24;
-  const nyTax = Math.max(0, net) * 0.0685;
-  const lines = [
-    `${mode} *${year} Tax Summary*`,
-    "",
-    `\u{1F4CA} Total Trades: ${yearTrades.length}`,
-    `\u{1F7E2} Gains: +$${gains.toFixed(2)}`,
-    `\u{1F534} Losses: -$${Math.abs(losses).toFixed(2)}`,
-    `\u26A0\uFE0F Wash Sale Adj: $${washAdj.toFixed(2)}`,
-    `\u{1F4B5} Net Taxable: $${net.toFixed(2)}`,
-    "",
-    `*Estimated Tax:*`,
-    `  Federal (24%): $${fedTax.toFixed(2)}`,
-    `  NY State (6.85%): $${nyTax.toFixed(2)}`,
-    `  Total: $${(fedTax + nyTax).toFixed(2)}`
-  ];
-  return lines.join("\n");
-}
-async function handleOversightCommand() {
-  const mode = await getMode2();
-  const pool2 = getPool();
-  try {
-    const healthRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_health_reports'`);
-    const queueRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_improvement_queue'`);
-    const lastCheckRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_last_health_check'`);
-    const portfolioRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_portfolio_value'`);
-    const peakRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_peak_portfolio'`);
-    const historyRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_trade_history'`);
-    let healthStatus = "No health checks run yet";
-    let healthIcon = "\u26AA";
-    if (healthRes.rows.length > 0 && Array.isArray(healthRes.rows[0].value) && healthRes.rows[0].value.length > 0) {
-      const latest = healthRes.rows[0].value[healthRes.rows[0].value.length - 1];
-      const icons = { healthy: "\u{1F7E2}", degraded: "\u{1F7E1}", critical: "\u{1F534}" };
-      healthIcon = icons[latest.overall_status] || "\u26AA";
-      healthStatus = latest.summary || latest.overall_status;
-    }
-    let openImprovements = 0;
-    let criticalImprovements = 0;
-    const activeItems = [];
-    if (queueRes.rows.length > 0 && Array.isArray(queueRes.rows[0].value)) {
-      const open = queueRes.rows[0].value.filter((i) => i.status === "open");
-      openImprovements = open.length;
-      criticalImprovements = open.filter((i) => i.severity === "critical").length;
-      for (const item of open.slice(0, 5)) {
-        activeItems.push({ severity: item.severity, title: item.title, route: item.route || "manual" });
-      }
-    }
-    const portfolio = portfolioRes.rows.length > 0 ? Number(portfolioRes.rows[0].value) : 50;
-    const peak = peakRes.rows.length > 0 ? Number(peakRes.rows[0].value) : 50;
-    const drawdownPct = peak > 0 ? (peak - portfolio) / peak * 100 : 0;
-    let rolling7dPct = 0;
-    if (historyRes.rows.length > 0 && Array.isArray(historyRes.rows[0].value)) {
-      const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1e3;
-      const recent = historyRes.rows[0].value.filter((t) => new Date(t.closed_at).getTime() > sevenDaysAgo);
-      const rolling7d = recent.reduce((s, t) => s + (t.pnl || 0), 0);
-      rolling7dPct = portfolio > 0 ? rolling7d / portfolio * 100 : 0;
-    }
-    let lastCheck = "never";
-    if (lastCheckRes.rows.length > 0 && typeof lastCheckRes.rows[0].value === "number") {
-      lastCheck = timeAgo(lastCheckRes.rows[0].value);
-    }
-    const ddIcon = drawdownPct > 25 ? "\u{1F534}" : drawdownPct > 15 ? "\u{1F7E1}" : "\u{1F7E2}";
-    const pnlIcon = rolling7dPct < -15 ? "\u{1F534}" : rolling7dPct < -5 ? "\u{1F7E1}" : "\u{1F7E2}";
-    const lines = [
-      `${mode} *Oversight Status*`,
-      "",
-      `${healthIcon} *Health:* ${healthStatus}`,
-      `\u{1F550} *Last Check:* ${lastCheck}`,
-      "",
-      `*Drawdown:*`,
-      `${ddIcon} Peak DD: ${drawdownPct.toFixed(1)}% ($${portfolio.toFixed(2)} / $${peak.toFixed(2)} peak)`,
-      `${pnlIcon} 7d P&L: ${rolling7dPct >= 0 ? "+" : ""}${rolling7dPct.toFixed(1)}%`,
-      "",
-      `\u{1F4CB} *Open Improvements:* ${openImprovements}${criticalImprovements > 0 ? ` (${criticalImprovements} critical)` : ""}`
-    ];
-    if (activeItems.length > 0) {
-      const sevIcons = { critical: "\u{1F534}", high: "\u{1F7E0}", medium: "\u{1F7E1}", low: "\u26AA" };
-      for (const item of activeItems) {
-        lines.push(`  ${sevIcons[item.severity] || "\u26AA"} ${item.title} \u2192 ${item.route}`);
-      }
-    }
-    return lines.join("\n");
-  } catch (err) {
-    return `${mode} *Oversight Status*
-
-\u274C Failed to fetch: ${err instanceof Error ? err.message : String(err)}`;
-  }
-}
-async function handleShadowCommand() {
-  const mode = await getMode2();
-  const pool2 = getPool();
-  try {
-    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_shadow_trades'`);
-    if (res.rows.length === 0 || !Array.isArray(res.rows[0].value) || res.rows[0].value.length === 0) {
-      return `${mode} *Shadow Trading*
-
-No shadow trades recorded yet.`;
-    }
-    const trades = res.rows[0].value;
-    const openTrades = trades.filter((t) => t.status === "open");
-    const closedTrades = trades.filter((t) => t.status === "closed");
-    const totalPnl = closedTrades.reduce((s, t) => s + (t.hypothetical_pnl || 0), 0);
-    const openPnl = openTrades.reduce((s, t) => s + (t.hypothetical_pnl || 0), 0);
-    const wins = closedTrades.filter((t) => (t.hypothetical_pnl || 0) > 0);
-    const winRate = closedTrades.length > 0 ? wins.length / closedTrades.length * 100 : 0;
-    const lines = [
-      `${mode} *Shadow Trading*`,
-      "",
-      `\u{1F4CA} *Total:* ${trades.length} trades (${openTrades.length} open, ${closedTrades.length} closed)`,
-      `\u{1F4B0} *Closed P&L:* ${totalPnl >= 0 ? "+" : ""}$${totalPnl.toFixed(2)}`,
-      `\u{1F4C8} *Open P&L:* ${openPnl >= 0 ? "+" : ""}$${openPnl.toFixed(2)}`,
-      `\u{1F3AF} *Win Rate:* ${winRate.toFixed(0)}%`
-    ];
-    if (openTrades.length > 0) {
-      lines.push("");
-      lines.push("*Open Positions:*");
-      for (const t of openTrades.slice(0, 5)) {
-        const pnlStr = t.hypothetical_pnl >= 0 ? `+$${t.hypothetical_pnl.toFixed(2)}` : `-$${Math.abs(t.hypothetical_pnl).toFixed(2)}`;
-        lines.push(`  \u2022 ${t.asset} ${t.direction} \u2014 ${pnlStr}`);
-      }
-    }
-    return lines.join("\n");
-  } catch (err) {
-    return `${mode} *Shadow Trading*
-
-\u274C Failed to fetch: ${err instanceof Error ? err.message : String(err)}`;
-  }
-}
-async function handleAlertsCommand() {
-  const mode = await getMode2();
-  const darkNodeStatus = isConfigured8() ? "\u2705 Connected" : "\u274C Disconnected";
-  const alertsStatus = isAlertsBotConfigured() ? "\u2705 Connected" : "\u274C Disconnected";
-  return [
-    `${mode} *Telegram Bots Status*`,
-    "",
-    `\u{1F916} *DarkNode* (trading): ${darkNodeStatus}`,
-    "  \u2192 Scout signals, BANKR execution, oversight, circuit breakers, autoresearch, trade approvals",
-    "",
-    `\u{1F4CB} *Mission Control* (personal): ${alertsStatus}`,
-    "  \u2192 Daily briefs, calendar, email, stock watchlist, task alerts"
-  ].join("\n");
-}
-async function handleHelpCommand() {
-  const mode = await getMode2();
-  return [
-    `${mode} *DarkNode Commands*`,
-    "",
-    "/status \u2014 System health & mode",
-    "/portfolio \u2014 Open positions & P&L",
-    "/intel \u2014 Latest SCOUT brief",
-    "/scout \u2014 Active crypto theses",
-    "/polymarket \u2014 Active PM theses",
-    "/trades [n] \u2014 Last N trades (default 5)",
-    "/risk \u2014 Risk dashboard",
-    "/oversight \u2014 Oversight agent status",
-    "/shadow \u2014 Shadow trading stats",
-    "/tax \u2014 YTD tax summary",
-    "/kill \u2014 Emergency kill switch",
-    "/pause \u2014 Halt all Wealth Engine jobs",
-    "/resume \u2014 Resume Wealth Engine jobs",
-    "/public on|off \u2014 Toggle dashboard access",
-    "/alerts \u2014 Bot connection status",
-    "/research [crypto|polymarket|status] \u2014 Autoresearch",
-    "/help \u2014 This message"
-  ].join("\n");
-}
-async function requestTradeApproval(params) {
-  const mode = await getMode2();
-  if (!isConfigured8()) {
-    console.warn("[telegram] Trade approval requested but Telegram not configured \u2014 auto-skipping");
-    return "skip";
-  }
-  const text = [
-    `${mode} \u{1F514} *Trade Approval Required*`,
-    "",
-    `*Asset:* ${params.asset}`,
-    `*Direction:* ${params.direction}`,
-    `*Leverage:* ${params.leverage}`,
-    `*Entry:* $${params.entryPrice}`,
-    `*Stop Loss:* $${params.stopLoss}`,
-    `*Take Profit:* $${params.takeProfit}`,
-    `*Risk:* $${params.riskAmount}`,
-    "",
-    `*Reason:* ${params.reason}`,
-    "",
-    `_Thesis: ${params.thesisId}_`
-  ].join("\n");
-  const approvalId = `approval_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const keyboard = [
-    [
-      { text: "\u2705 Approve", callback_data: `trade_approve:${approvalId}` },
-      { text: "\u23ED Skip", callback_data: `trade_skip:${approvalId}` },
-      { text: "\u23F8 Hold", callback_data: `trade_hold:${approvalId}` }
-    ]
-  ];
-  return new Promise(async (resolve) => {
-    const msgId = await sendMessageWithKeyboard(text, keyboard);
-    pendingApprovals.set(approvalId, {
-      thesisId: params.thesisId,
-      asset: params.asset,
-      direction: params.direction,
-      leverage: params.leverage,
-      messageId: msgId || 0,
-      createdAt: Date.now(),
-      resolve
-    });
-    setTimeout(() => {
-      if (pendingApprovals.has(approvalId)) {
-        pendingApprovals.delete(approvalId);
-        resolve("skip");
-        if (msgId) {
-          editMessage(msgId, `${text}
-
-\u23F0 _Expired \u2014 auto-skipped after 30 minutes_`);
-        }
-      }
-    }, 30 * 60 * 1e3);
-  });
-}
-async function handleCallbackQuery(callbackQueryId, data) {
-  const [action, approvalId] = data.split(":");
-  if (!action?.startsWith("trade_")) {
-    await answerCallbackQuery(callbackQueryId, "Unknown action");
-    return;
-  }
-  const pending = pendingApprovals.get(approvalId);
-  if (!pending) {
-    await answerCallbackQuery(callbackQueryId, "This approval has expired");
-    return;
-  }
-  const decision = action.replace("trade_", "");
-  pendingApprovals.delete(approvalId);
-  const pool2 = getPool();
-  try {
-    await pool2.query(
-      `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
-      [
-        `trade_decision_${approvalId}`,
-        JSON.stringify({ decision, thesisId: pending.thesisId, asset: pending.asset, decidedAt: (/* @__PURE__ */ new Date()).toISOString() }),
-        Date.now()
-      ]
-    );
-  } catch (err) {
-    console.error("[telegram] Failed to record trade decision:", err);
-  }
-  const decisionLabels = {
-    approve: "\u2705 APPROVED",
-    skip: "\u23ED SKIPPED",
-    hold: "\u23F8 ON HOLD"
-  };
-  const mode = await getMode2();
-  if (pending.messageId) {
-    await editMessage(
-      pending.messageId,
-      `${mode} *Trade ${decisionLabels[decision]}*
-
-*${pending.asset}* ${pending.direction} ${pending.leverage}
-
-_Decision recorded at ${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`
-    );
-  }
-  await answerCallbackQuery(callbackQueryId, decisionLabels[decision]);
-  pending.resolve(decision);
-  console.log(`[telegram] Trade ${decision}: ${pending.asset} ${pending.direction} (thesis: ${pending.thesisId})`);
-}
-async function pollUpdates() {
-  if (!pollingActive || !isConfigured8()) return;
-  try {
-    const result = await tgFetch("getUpdates", {
-      offset: lastUpdateId + 1,
-      timeout: 30,
-      allowed_updates: ["message", "callback_query"]
-    });
-    const updates = result.result || [];
-    for (const update of updates) {
-      lastUpdateId = Math.max(lastUpdateId, update.update_id);
-      if (update.callback_query) {
-        const cbq = update.callback_query;
-        if (String(cbq.message?.chat?.id) === CHAT_ID) {
-          await handleCallbackQuery(cbq.id, cbq.data || "");
-        }
-        continue;
-      }
-      if (update.message?.text && String(update.message.chat.id) === CHAT_ID) {
-        const text = update.message.text.trim();
-        if (text.startsWith("/")) {
-          const parts = text.split(/\s+/);
-          const cmd = parts[0].toLowerCase().replace(/@\w+/, "").replace("/", "");
-          const args = parts.slice(1).join(" ");
-          const handler = commands[cmd];
-          if (handler) {
-            try {
-              const response = await handler(args);
-              await sendMessage(response);
-            } catch (err) {
-              console.error(`[telegram] Command /${cmd} failed:`, err);
-              await sendMessage(`\u274C Command failed: ${err instanceof Error ? err.message : String(err)}`);
-            }
-          }
-        }
-      }
-    }
-  } catch (err) {
-    if (err instanceof Error && !err.message.includes("ETIMEDOUT")) {
-      console.error("[telegram] Poll error:", err.message);
-    }
-  }
-  if (pollingActive) {
-    pollingTimeout = setTimeout(() => pollUpdates(), 1e3);
-  }
-}
-function timeAgo(timestamp) {
-  const diff = Date.now() - timestamp;
-  const minutes = Math.floor(diff / 6e4);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
-async function isJobEnabled(pool2, agentId) {
-  try {
-    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scheduled_jobs'`);
-    if (res.rows.length > 0 && res.rows[0].value?.jobs) {
-      const jobs = res.rows[0].value.jobs;
-      return jobs.some((j) => j.agentId === agentId && j.enabled);
-    }
-  } catch {
-  }
-  return false;
-}
-async function checkDeadManSwitches() {
-  if (!isConfigured8()) return;
-  const pool2 = getPool();
-  const mode = await getMode2();
-  let paused = false;
-  try {
-    const pa = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_paused'`);
-    paused = pa.rows.length > 0 && pa.rows[0].value === true;
-  } catch {
-  }
-  if (paused) return;
-  const scoutEnabled = await isJobEnabled(pool2, "scout");
-  if (scoutEnabled) {
-    try {
-      const scoutRes = await pool2.query(
-        `SELECT created_at FROM job_history WHERE agent_id = 'scout' ORDER BY created_at DESC LIMIT 1`
-      );
-      if (scoutRes.rows.length > 0) {
-        const lastRun = new Date(scoutRes.rows[0].created_at).getTime();
-        const hoursSince = (Date.now() - lastRun) / (3600 * 1e3);
-        if (hoursSince > 6) {
-          const lastAlert = lastDeadManAlert["scout"] || 0;
-          if (Date.now() - lastAlert > 4 * 3600 * 1e3) {
-            lastDeadManAlert["scout"] = Date.now();
-            await sendMessage(
-              `${mode} \u26A0\uFE0F *Dead Man's Switch: SCOUT*
-
-SCOUT has not run in ${Math.floor(hoursSince)}h (threshold: 6h).
-Last run: ${timeAgo(lastRun)}
-
-Check scheduled jobs or run manually.`
-            );
-          }
-        } else {
-          delete lastDeadManAlert["scout"];
-        }
-      }
-    } catch (err) {
-      console.error("[telegram] Dead man switch SCOUT check failed:", err);
-    }
-  } else {
-    delete lastDeadManAlert["scout"];
-  }
-  try {
-    const monitorRes = await pool2.query(
-      `SELECT value FROM app_config WHERE key = 'bankr_monitor_last_tick'`
-    );
-    if (monitorRes.rows.length > 0) {
-      const lastTick = typeof monitorRes.rows[0].value === "number" ? monitorRes.rows[0].value : parseInt(String(monitorRes.rows[0].value));
-      const minsSince = (Date.now() - lastTick) / (60 * 1e3);
-      if (minsSince > 30) {
-        const lastAlert = lastDeadManAlert["bankr-monitor"] || 0;
-        if (Date.now() - lastAlert > 60 * 60 * 1e3) {
-          lastDeadManAlert["bankr-monitor"] = Date.now();
-          await sendMessage(
-            `${mode} \u26A0\uFE0F *Dead Man's Switch: BANKR Monitor*
-
-Position monitor has not ticked in ${Math.floor(minsSince)} min (threshold: 30 min).
-Last tick: ${timeAgo(lastTick)}
-
-The server may have restarted or crashed.`
-          );
-        }
-      } else {
-        delete lastDeadManAlert["bankr-monitor"];
-      }
-    }
-  } catch (err) {
-    console.error("[telegram] Dead man switch BANKR monitor check failed:", err);
-  }
-  const bankrEnabled = await isJobEnabled(pool2, "bankr");
-  if (bankrEnabled) {
-    try {
-      const bankrRes = await pool2.query(
-        `SELECT created_at FROM job_history WHERE agent_id = 'bankr' ORDER BY created_at DESC LIMIT 1`
-      );
-      if (bankrRes.rows.length > 0) {
-        const lastRun = new Date(bankrRes.rows[0].created_at).getTime();
-        const hoursSince = (Date.now() - lastRun) / (3600 * 1e3);
-        if (hoursSince > 8) {
-          const lastAlert = lastDeadManAlert["bankr"] || 0;
-          if (Date.now() - lastAlert > 4 * 3600 * 1e3) {
-            lastDeadManAlert["bankr"] = Date.now();
-            await sendMessage(
-              `${mode} \u26A0\uFE0F *Dead Man's Switch: BANKR*
-
-BANKR agent has not run in ${Math.floor(hoursSince)}h (threshold: 8h).
-Last run: ${timeAgo(lastRun)}
-
-Check scheduled jobs or run manually.`
-            );
-          }
-        } else {
-          delete lastDeadManAlert["bankr"];
-        }
-      }
-    } catch (err) {
-      console.error("[telegram] Dead man switch BANKR check failed:", err);
-    }
-  } else {
-    delete lastDeadManAlert["bankr"];
-  }
-}
-async function sendTradeAlert(params) {
-  const mode = await getMode2();
-  const icons = {
-    executed: "\u{1F4C8}",
-    stopped: "\u{1F6D1}",
-    emergency: "\u{1F6A8}",
-    closed: "\u2705"
-  };
-  const icon = icons[params.type] || "\u{1F4CA}";
-  const lines = [`${mode} ${icon} *Trade ${params.type.toUpperCase()}*`, ""];
-  lines.push(`*Asset:* ${params.asset}`);
-  if (params.direction) lines.push(`*Direction:* ${params.direction}`);
-  if (params.leverage) lines.push(`*Leverage:* ${params.leverage}`);
-  if (params.entryPrice) lines.push(`*Entry:* $${params.entryPrice}`);
-  if (params.exitPrice) lines.push(`*Exit:* $${params.exitPrice}`);
-  if (params.pnl != null) {
-    const pnlStr = params.pnl >= 0 ? `+$${params.pnl.toFixed(2)}` : `-$${Math.abs(params.pnl).toFixed(2)}`;
-    lines.push(`*P&L:* ${pnlStr}`);
-  }
-  if (params.reason) lines.push(`
-_${params.reason}_`);
-  await sendMessage(lines.join("\n"));
-}
-var webhookMode = false;
-async function registerWebhook() {
-  const domain = process.env.REPLIT_DEV_DOMAIN || process.env.REPLIT_DOMAINS?.split(",")[0];
-  if (!domain) {
-    console.warn("[telegram] No domain available for webhook \u2014 falling back to long-polling");
-    return false;
-  }
-  const webhookUrl = `https://${domain}/api/telegram/webhook`;
-  try {
-    const result = await tgFetch("setWebhook", {
-      url: webhookUrl,
-      allowed_updates: ["message", "callback_query"],
-      secret_token: WEBHOOK_SECRET
-    });
-    if (result.ok) {
-      console.log(`[telegram] Webhook registered: ${webhookUrl}`);
-      return true;
-    }
-    console.warn("[telegram] Webhook registration failed:", result.description);
-    return false;
-  } catch (err) {
-    console.warn("[telegram] Webhook registration failed:", err instanceof Error ? err.message : err);
-    return false;
-  }
-}
-async function deleteWebhook() {
-  try {
-    await tgFetch("deleteWebhook");
-  } catch {
-  }
-}
-function getWebhookSecret() {
-  return WEBHOOK_SECRET;
-}
-async function handleWebhookUpdate(update) {
-  if (!isConfigured8()) return;
-  if (update.callback_query) {
-    const cbq = update.callback_query;
-    if (String(cbq.message?.chat?.id) === CHAT_ID) {
-      await handleCallbackQuery(cbq.id, cbq.data || "");
-    }
-    return;
-  }
-  if (update.message?.text && String(update.message.chat.id) === CHAT_ID) {
-    const text = update.message.text.trim();
-    if (text.startsWith("/")) {
-      const parts = text.split(/\s+/);
-      const cmd = parts[0].toLowerCase().replace(/@\w+/, "").replace("/", "");
-      const args = parts.slice(1).join(" ");
-      const handler = commands[cmd];
-      if (handler) {
-        try {
-          const response = await handler(args);
-          await sendMessage(response);
-        } catch (err) {
-          console.error(`[telegram] Command /${cmd} failed:`, err);
-          await sendMessage(`\u274C Command failed: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-    }
-  }
-}
-async function handleResearchCommand(args) {
-  const mode = await getMode2();
-  const parts = args.trim().toLowerCase().split(/\s+/);
-  if (parts[0] === "rollback") {
-    const domain = parts[1] === "polymarket" ? "polymarket" : "crypto";
-    const result = await rollbackParams(domain);
-    return `${mode} ${result.success ? "\u2705" : "\u274C"} ${result.message}`;
-  }
-  if (parts[0] === "status") {
-    const status = await getResearchStatus();
-    const lines = [
-      `${mode} \u{1F52C} *Autoresearch Status*`,
-      "",
-      `*Crypto Parameters:*`,
-      ...Object.entries(status.crypto_params).slice(0, 8).map(([k, v]) => `  ${k}: ${v}`),
-      `  ... (${Object.keys(status.crypto_params).length} total)`,
-      "",
-      `*Polymarket Parameters:*`,
-      ...Object.entries(status.polymarket_params).slice(0, 8).map(([k, v]) => `  ${k}: ${v}`),
-      `  ... (${Object.keys(status.polymarket_params).length} total)`,
-      "",
-      `*History:* ${status.crypto_history_count} crypto, ${status.polymarket_history_count} polymarket rollback sets`,
-      `*Recent Experiments:* ${status.recent_experiments.length} logged`
-    ];
-    if (status.recent_experiments.length > 0) {
-      const last3 = status.recent_experiments.slice(-3);
-      lines.push("");
-      for (const e of last3) {
-        lines.push(`  ${e.domain}: ${e.outcome} (${e.delta_pct.toFixed(1)}%) \u2014 ${Object.keys(e.parameters_changed).join(", ")}`);
-      }
-    }
-    return lines.join("\n");
-  }
-  await sendMessage(`${mode} \u{1F52C} Starting autoresearch...`);
-  let summaries;
-  if (parts[0] === "crypto") {
-    summaries = [await runCryptoResearch()];
-  } else if (parts[0] === "polymarket") {
-    summaries = [await runPolymarketResearch()];
-  } else {
-    summaries = await runFullResearch();
-  }
-  return formatResearchSummary(summaries);
-}
-async function init7() {
-  if (!BOT_TOKEN) {
-    console.warn("[telegram] TELEGRAM_BOT_TOKEN not set \u2014 Telegram bot disabled");
-    return;
-  }
-  if (!CHAT_ID) {
-    console.warn("[telegram] TELEGRAM_CHAT_ID not set \u2014 Telegram bot disabled");
-    return;
-  }
-  registerCommand("status", async () => handleStatusCommand());
-  registerCommand("portfolio", async () => handlePortfolioCommand());
-  registerCommand("intel", async () => handleIntelCommand());
-  registerCommand("pause", async () => handlePauseCommand());
-  registerCommand("resume", async () => handleResumeCommand());
-  registerCommand("scout", async () => handleScoutCommand());
-  registerCommand("trades", async (args) => handleTradesCommand(args));
-  registerCommand("public", async (args) => handlePublicCommand(args));
-  registerCommand("kill", async () => handleKillCommand());
-  registerCommand("risk", async () => handleRiskCommand());
-  registerCommand("polymarket", async () => handlePolymarketCommand());
-  registerCommand("tax", async () => handleTaxCommand());
-  registerCommand("oversight", async () => handleOversightCommand());
-  registerCommand("shadow", async () => handleShadowCommand());
-  registerCommand("research", async (args) => handleResearchCommand(args));
-  registerCommand("alerts", async () => handleAlertsCommand());
-  registerCommand("help", async () => handleHelpCommand());
-  try {
-    const me = await tgFetch("getMe");
-    console.log(`[telegram] Bot connected: @${me.result?.username || "unknown"}`);
-  } catch (err) {
-    console.error("[telegram] Failed to connect:", err instanceof Error ? err.message : err);
-    return;
-  }
-  if (isAlertsBotConfigured()) {
-    try {
-      const alertsMe = await fetch(`${ALERTS_API_BASE}/getMe`, { method: "POST", headers: { "Content-Type": "application/json" } });
-      if (!alertsMe.ok) {
-        console.warn(`[telegram-alerts] Alerts bot getMe failed (${alertsMe.status}) \u2014 check TELEGRAM_ALERTS_BOT_TOKEN`);
-      } else {
-        const alertsData = await alertsMe.json();
-        if (alertsData.ok && alertsData.result?.username) {
-          console.log(`[telegram-alerts] Alerts bot connected: @${alertsData.result.username}`);
-        } else {
-          console.warn("[telegram-alerts] Alerts bot responded but identity unknown \u2014 check token");
-        }
-      }
-    } catch (err) {
-      console.warn("[telegram-alerts] Failed to connect alerts bot:", err instanceof Error ? err.message : err);
-    }
-  } else {
-    console.warn("[telegram-alerts] TELEGRAM_ALERTS_BOT_TOKEN not set \u2014 personal alerts bot disabled");
-  }
-  webhookMode = await registerWebhook();
-  if (!webhookMode) {
-    await deleteWebhook();
-    pollingActive = true;
-    pollUpdates();
-    console.log("[telegram] initialized (long-polling fallback, dead man switches hourly)");
-  } else {
-    console.log("[telegram] initialized (webhook mode, dead man switches hourly)");
-  }
-  deadManInterval = setInterval(() => {
-    checkDeadManSwitches().catch((err) => console.error("[telegram] Dead man check error:", err));
-  }, 60 * 60 * 1e3);
-}
-function stop() {
-  pollingActive = false;
-  if (pollingTimeout) {
-    clearTimeout(pollingTimeout);
-    pollingTimeout = null;
-  }
-  if (deadManInterval) {
-    clearInterval(deadManInterval);
-    deadManInterval = null;
-  }
-  console.log("[telegram] stopped");
-}
-async function forwardAlertToTelegram(event) {
-  const mode = await getMode2();
-  const personalAlertTypes = /* @__PURE__ */ new Set(["calendar", "stock", "task", "email"]);
-  const tradingEventTypes = /* @__PURE__ */ new Set(["scout", "bankr", "oversight", "autoresearch", "circuit_breaker"]);
-  if (event.type === "brief") {
-    if (!isAlertsBotConfigured()) return;
-    const briefLabel = event.briefType ? event.briefType.charAt(0).toUpperCase() + event.briefType.slice(1) : "Daily";
-    const truncated = event.content.length > 3500 ? event.content.slice(0, 3500) + "\n\n_(truncated)_" : event.content;
-    await sendAlertsBotMessage(`${mode} \u{1F4CB} *${briefLabel} Brief*
-
-${truncated}`);
-    return;
-  }
-  if (event.type === "alert" && personalAlertTypes.has(event.alertType || "")) {
-    if (!isAlertsBotConfigured()) return;
-    const icons = {
-      calendar: "\u{1F4C5}",
-      stock: "\u{1F4CA}",
-      task: "\u2705",
-      email: "\u{1F4E7}"
-    };
-    const icon = icons[event.alertType || ""] || "\u{1F514}";
-    await sendAlertsBotMessage(`${mode} ${icon} *${event.title || "Alert"}*
-
-${event.content}`);
-    return;
-  }
-  if (tradingEventTypes.has(event.type) || event.type === "alert" && !personalAlertTypes.has(event.alertType || "")) {
-    if (!isConfigured8()) return;
-    const tradingIcons = {
-      scout: "\u{1F50D}",
-      bankr: "\u{1F4B0}",
-      oversight: "\u{1F6E1}\uFE0F",
-      autoresearch: "\u{1F52C}",
-      circuit_breaker: "\u{1F6A8}"
-    };
-    const icon = tradingIcons[event.type] || "\u{1F514}";
-    await sendMessage(`${mode} ${icon} *${event.title || "Alert"}*
-
-${event.content}`);
-  }
-}
+// server.ts
+init_telegram();
 
 // src/scheduled-jobs.ts
 init_db();
+init_telegram();
 function getJobSavePath(jobId, dateStr, safeName) {
   if (jobId === "moodys-daily-intel") return `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief.md`;
   if (jobId === "moodys-profile-updates") return `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Profile-Updates.md`;
@@ -12390,6 +12843,13 @@ ${result}`);
         }
         console.log(`[scheduled-jobs] Job completed${isPartial ? " (partial)" : ""}: ${job.name}`);
         await writeJobHistory(job.id, job.name, job.lastStatus || "success", result.slice(0, 500), vaultSaved ? savePath : null, Date.now() - jobStartMs, agentResult.agentId, agentResult.modelUsed, agentResult.tokensUsed?.input, agentResult.tokensUsed?.output);
+        sendJobCompletionNotification({
+          jobId: job.id,
+          jobName: job.name,
+          status: job.lastStatus || "success",
+          summary: result.slice(0, 500),
+          durationMs: Date.now() - jobStartMs
+        }).catch((err) => console.warn("[scheduled-jobs] Telegram notification failed:", err));
         if (job.id === "scout-full-cycle" || job.id === "scout-micro-scan") {
           try {
             const pool2 = dbPoolFn ? dbPoolFn() : null;
@@ -12433,6 +12893,12 @@ ${result}`);
           timestamp: Date.now()
         });
       }
+      sendJobCompletionNotification({
+        jobId: job.id,
+        jobName: job.name,
+        status: "error",
+        summary: String(err).slice(0, 500)
+      }).catch((e) => console.warn("[scheduled-jobs] Telegram error notification failed:", e));
       console.error(`[scheduled-jobs] Job failed: ${job.name}`, err);
     } finally {
       jobRunning = false;
@@ -12571,6 +13037,13 @@ ${result}`);
       await archiveOldReports();
     }
     await writeJobHistory(job.id, job.name, job.lastStatus || "success", result.slice(0, 500), vaultSaved ? savePath : null, Date.now() - triggerStartMs, agentResult.agentId, agentResult.modelUsed, agentResult.tokensUsed?.input, agentResult.tokensUsed?.output);
+    sendJobCompletionNotification({
+      jobId: job.id,
+      jobName: job.name,
+      status: job.lastStatus || "success",
+      summary: result.slice(0, 500),
+      durationMs: Date.now() - triggerStartMs
+    }).catch((err) => console.warn("[scheduled-jobs] Telegram notification failed:", err));
     if (broadcastFn2) {
       broadcastFn2({
         type: "job_complete",
@@ -12595,6 +13068,12 @@ ${result}`);
       }
     }
     await writeJobHistory(job.id, job.name, "error", String(err).slice(0, 500), null, null);
+    sendJobCompletionNotification({
+      jobId: job.id,
+      jobName: job.name,
+      status: "error",
+      summary: String(err).slice(0, 500)
+    }).catch((e) => console.warn("[scheduled-jobs] Telegram error notification failed:", e));
     if (broadcastFn2) {
       broadcastFn2({
         type: "job_complete",
@@ -13731,6 +14210,7 @@ ${backlinkHeading}${backlinkLine}`);
 }
 
 // server.ts
+init_autoresearch();
 var PORT = parseInt(process.env.PORT || "5000", 10);
 var ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
 var APP_PASSWORD = process.env.APP_PASSWORD || "";
@@ -15508,7 +15988,7 @@ function buildCoinGeckoTools() {
           if (!riskCheck.passed) {
             return { content: [{ type: "text", text: JSON.stringify({ executed: false, tier: riskCheck.tier, reason: riskCheck.rejection_reason, checks: riskCheck.checks }) }], details: {} };
           }
-          const mode = await getMode();
+          const mode = await getMode2();
           if (mode === "SHADOW") {
             return { content: [{ type: "text", text: JSON.stringify({ executed: false, tier: riskCheck.tier, reason: "SHADOW mode \u2014 trade logged but not executed", checks: riskCheck.checks }) }], details: {} };
           }
@@ -21224,8 +21704,8 @@ async function startServer(maxRetries = 5) {
   await init3();
   await init4();
   await init5();
-  await init6();
   await init7();
+  await init6();
   setTelegramNotifier(async (msg) => {
     await sendMessage(msg);
   });

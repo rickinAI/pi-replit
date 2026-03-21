@@ -166,6 +166,7 @@ async function handleStatusCommand(): Promise<string> {
 
   let scoutLastRun = "never";
   let bankrLastRun = "never";
+  let pmLastRun = "never";
   try {
     const sr = await pool.query(`SELECT created_at FROM job_history WHERE agent_id = 'scout' ORDER BY created_at DESC LIMIT 1`);
     if (sr.rows.length > 0) scoutLastRun = timeAgo(new Date(sr.rows[0].created_at).getTime());
@@ -173,6 +174,10 @@ async function handleStatusCommand(): Promise<string> {
   try {
     const br = await pool.query(`SELECT created_at FROM job_history WHERE agent_id = 'bankr' ORDER BY created_at DESC LIMIT 1`);
     if (br.rows.length > 0) bankrLastRun = timeAgo(new Date(br.rows[0].created_at).getTime());
+  } catch {}
+  try {
+    const pr = await pool.query(`SELECT created_at FROM job_history WHERE job_id IN ('polymarket-activity-scan','polymarket-full-cycle') ORDER BY created_at DESC LIMIT 1`);
+    if (pr.rows.length > 0) pmLastRun = timeAgo(new Date(pr.rows[0].created_at).getTime());
   } catch {}
 
   let healthLine = "";
@@ -185,15 +190,42 @@ async function handleStatusCommand(): Promise<string> {
     }
   } catch {}
 
+  let fgLine = "";
+  try {
+    const { getFearGreedIndex } = await import("./signal-sources.js");
+    const fg = await getFearGreedIndex();
+    fgLine = `😱 Fear & Greed: ${fg.value} (${fg.classification})`;
+  } catch {}
+
+  let shadowLine = "";
+  try {
+    const res = await pool.query(`SELECT value FROM app_config WHERE key = 'oversight_shadow_trades'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+      const trades = res.rows[0].value;
+      const open = trades.filter((t: any) => t.status === "open");
+      const closed = trades.filter((t: any) => t.status === "closed");
+      const totalPnl = closed.reduce((s: number, t: any) => s + (t.hypothetical_pnl || 0), 0)
+        + open.reduce((s: number, t: any) => s + (t.hypothetical_pnl || 0), 0);
+      const pnlStr = totalPnl >= 0 ? `+$${totalPnl.toFixed(2)}` : `-$${Math.abs(totalPnl).toFixed(2)}`;
+      shadowLine = `👻 Shadow: ${open.length} open, ${closed.length} closed | P&L: ${pnlStr}`;
+    }
+  } catch {}
+
+  const notifyMode = await getNotificationMode();
+
   const lines = [
     `${mode} *DarkNode Status*`,
     "",
     `🔴 Kill Switch: ${killSwitchActive ? "ACTIVE" : "OFF"}`,
     `⏸ Paused: ${pauseActive ? "YES" : "NO"}`,
-    `🔍 SCOUT last run: ${scoutLastRun}`,
-    `💰 BANKR last run: ${bankrLastRun}`,
   ];
+  if (fgLine) lines.push(fgLine);
+  lines.push(`🔍 SCOUT: ${scoutLastRun}`);
+  lines.push(`🎰 PM SCOUT: ${pmLastRun}`);
+  lines.push(`💰 BANKR: ${bankrLastRun}`);
   if (healthLine) lines.push(healthLine);
+  if (shadowLine) lines.push(shadowLine);
+  lines.push(`🔔 Notifications: ${notifyMode}`);
   lines.push("");
   lines.push(`_${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`);
   return lines.join("\n");
@@ -654,10 +686,11 @@ async function handleAlertsCommand(): Promise<string> {
     `${mode} *Telegram Bots Status*`,
     "",
     `🤖 *DarkNode* (trading): ${darkNodeStatus}`,
-    "  → Scout signals, BANKR execution, oversight, circuit breakers, autoresearch, trade approvals",
+    "  → Scout signals, BANKR execution, oversight, shadow trades, job failures",
     "",
-    `📋 *Mission Control* (personal): ${alertsStatus}`,
+    `📋 *Mission Control* (personal + status): ${alertsStatus}`,
     "  → Daily briefs, calendar, email, stock watchlist, task alerts",
+    "  → DarkNode status digest (every 4h)",
   ].join("\n");
 }
 
@@ -681,6 +714,7 @@ async function handleHelpCommand(): Promise<string> {
     "/resume — Resume Wealth Engine jobs",
     "/public on|off — Toggle dashboard access",
     "/alerts — Bot connection status",
+    "/notify [smart|immediate] — Notification mode",
     "/research [crypto|polymarket|status] — Autoresearch",
     "/help — This message",
   ].join("\n");
@@ -1011,6 +1045,287 @@ export async function sendScoutBrief(brief: string): Promise<void> {
   await sendMessage(`${mode} 🔍 *SCOUT Morning Brief*\n\n${truncated}`);
 }
 
+let lastScoutNotifyHash = "";
+let lastPmNotifyHash = "";
+
+export async function sendJobCompletionNotification(params: {
+  jobId: string;
+  jobName: string;
+  status: "success" | "partial" | "error";
+  summary: string;
+  durationMs?: number;
+}): Promise<void> {
+  if (!isConfigured()) return;
+  const mode = await getMode();
+  const pool = getPool();
+
+  const notifyMode = await getNotificationMode();
+
+  const weJobIds = new Set([
+    "scout-micro-scan", "scout-full-cycle",
+    "polymarket-activity-scan", "polymarket-full-cycle",
+    "bankr-execute", "oversight-health", "oversight-weekly",
+    "oversight-daily-summary", "oversight-shadow-refresh",
+    "autoresearch-weekly",
+  ]);
+  if (!weJobIds.has(params.jobId)) return;
+
+  if (params.status === "error") {
+    const errSnippet = params.summary.slice(0, 300);
+    await sendMessage(`${mode} ❌ *Job Failed: ${params.jobName}*\n\n\`${errSnippet}\`\n\n_${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`);
+    return;
+  }
+
+  if (notifyMode === "smart") {
+    if (params.jobId === "scout-micro-scan") {
+      try {
+        const res = await pool.query(`SELECT value FROM app_config WHERE key = 'scout_active_theses'`);
+        if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+          const active = res.rows[0].value.filter((t: any) => !t.expires_at || t.expires_at > Date.now());
+          const fingerprint = active.map((t: any) => `${t.asset}:${t.direction}:${t.confidence || "?"}`).sort().join("|");
+          const hash = `micro_${fingerprint}`;
+          if (hash === lastScoutNotifyHash) return;
+          lastScoutNotifyHash = hash;
+        }
+      } catch {}
+    }
+
+    if (params.jobId === "polymarket-activity-scan") {
+      try {
+        const res = await pool.query(`SELECT value FROM app_config WHERE key = 'polymarket_scout_active_theses'`);
+        if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+          const active = res.rows[0].value.filter((t: any) => t.status === "active");
+          const fingerprint = active.map((t: any) => `${(t.asset || "").slice(0, 30)}:${t.direction}:${t.confidence || "?"}`).sort().join("|");
+          const hash = `pm_${fingerprint}`;
+          if (hash === lastPmNotifyHash) return;
+          lastPmNotifyHash = hash;
+        }
+      } catch {}
+    }
+  }
+
+  const durationStr = params.durationMs ? ` (${Math.round(params.durationMs / 1000)}s)` : "";
+  const statusIcon = params.status === "partial" ? "⚠️" : "✅";
+
+  const icons: Record<string, string> = {
+    "scout-micro-scan": "🔍", "scout-full-cycle": "🔍",
+    "polymarket-activity-scan": "🎰", "polymarket-full-cycle": "🎰",
+    "bankr-execute": "💰", "oversight-health": "🛡️",
+    "oversight-weekly": "🛡️", "oversight-daily-summary": "📊",
+    "oversight-shadow-refresh": "👻", "autoresearch-weekly": "🔬",
+  };
+  const icon = icons[params.jobId] || "⚙️";
+
+  let detail = "";
+  try {
+    if (params.jobId.startsWith("scout-")) {
+      const res = await pool.query(`SELECT value FROM app_config WHERE key = 'scout_active_theses'`);
+      if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+        const active = res.rows[0].value.filter((t: any) => !t.expires_at || t.expires_at > Date.now());
+        detail = `Active theses: ${active.length}`;
+        if (active.length > 0) {
+          detail += "\n" + active.slice(0, 3).map((t: any) => `  • ${t.asset} ${t.direction} (${t.confidence || "?"})`).join("\n");
+        }
+      }
+    } else if (params.jobId.startsWith("polymarket-")) {
+      const res = await pool.query(`SELECT value FROM app_config WHERE key = 'polymarket_scout_active_theses'`);
+      if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+        const active = res.rows[0].value.filter((t: any) => t.status === "active");
+        detail = `Active PM theses: ${active.length}`;
+      }
+    } else if (params.jobId === "bankr-execute") {
+      detail = params.summary.slice(0, 200);
+    } else if (params.jobId === "oversight-health") {
+      const res = await pool.query(`SELECT value FROM app_config WHERE key = 'oversight_health_reports'`);
+      if (res.rows.length > 0 && Array.isArray(res.rows[0].value) && res.rows[0].value.length > 0) {
+        const latest = res.rows[0].value[res.rows[0].value.length - 1];
+        detail = `Status: ${latest.overall_status}`;
+      }
+    }
+  } catch {}
+
+  const lines = [
+    `${mode} ${icon} *${params.jobName}* ${statusIcon}${durationStr}`,
+  ];
+  if (detail) lines.push(detail);
+  lines.push(`_${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`);
+
+  await sendMessage(lines.join("\n"));
+}
+
+export async function sendShadowTradeNotification(params: {
+  type: "open" | "close";
+  asset: string;
+  direction: string;
+  entryPrice: number;
+  exitPrice?: number;
+  pnl?: number;
+  reason?: string;
+  source?: string;
+}): Promise<void> {
+  if (!isConfigured()) return;
+  const mode = await getMode();
+
+  if (params.type === "open") {
+    const lines = [
+      `${mode} 👻 *Shadow Trade Opened*`,
+      "",
+      `*Asset:* ${params.asset}`,
+      `*Direction:* ${params.direction}`,
+      `*Entry:* $${params.entryPrice.toFixed(4)}`,
+    ];
+    if (params.source) lines.push(`*Source:* ${params.source}`);
+    await sendMessage(lines.join("\n"));
+  } else {
+    const pnlStr = params.pnl != null
+      ? (params.pnl >= 0 ? `+$${params.pnl.toFixed(2)}` : `-$${Math.abs(params.pnl).toFixed(2)}`)
+      : "N/A";
+    const pnlIcon = (params.pnl ?? 0) >= 0 ? "🟢" : "🔴";
+    const lines = [
+      `${mode} 👻 *Shadow Trade Closed* ${pnlIcon}`,
+      "",
+      `*Asset:* ${params.asset}`,
+      `*Direction:* ${params.direction}`,
+      `*Entry:* $${params.entryPrice.toFixed(4)}`,
+    ];
+    if (params.exitPrice != null) lines.push(`*Exit:* $${params.exitPrice.toFixed(4)}`);
+    lines.push(`*P&L:* ${pnlStr}`);
+    if (params.reason) lines.push(`_${params.reason}_`);
+    await sendMessage(lines.join("\n"));
+  }
+}
+
+async function getNotificationMode(): Promise<"smart" | "immediate"> {
+  try {
+    const pool = getPool();
+    const res = await pool.query(`SELECT value FROM app_config WHERE key = 'we_notification_mode'`);
+    if (res.rows.length > 0 && res.rows[0].value === "immediate") return "immediate";
+  } catch {}
+  return "smart";
+}
+
+async function handleNotifyCommand(args: string): Promise<string> {
+  const mode = await getMode();
+  const pool = getPool();
+  const val = args.trim().toLowerCase();
+
+  if (val !== "smart" && val !== "immediate") {
+    const current = await getNotificationMode();
+    return [
+      `${mode} *Notification Mode:* ${current}`,
+      "",
+      `*smart* — Only notify on material changes (new thesis, regime shift, P&L change)`,
+      `*immediate* — Notify on every job completion`,
+      "",
+      `Usage: /notify smart | /notify immediate`,
+    ].join("\n");
+  }
+
+  try {
+    await pool.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('we_notification_mode', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(val), Date.now()]
+    );
+    return `${mode} ✅ Notification mode set to *${val}*`;
+  } catch (err) {
+    return `${mode} ❌ Failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+let missionControlDigestInterval: ReturnType<typeof setInterval> | null = null;
+
+export async function sendMissionControlDigest(): Promise<void> {
+  if (!isAlertsBotConfigured()) return;
+  const mode = await getMode();
+  const pool = getPool();
+
+  let fgValue = "?";
+  let fgClass = "";
+  try {
+    const { getFearGreedIndex } = await import("./signal-sources.js");
+    const fg = await getFearGreedIndex();
+    fgValue = String(fg.value);
+    fgClass = fg.classification;
+  } catch {}
+
+  let thesisCount = 0;
+  try {
+    const res = await pool.query(`SELECT value FROM app_config WHERE key = 'scout_active_theses'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+      thesisCount = res.rows[0].value.filter((t: any) => !t.expires_at || t.expires_at > Date.now()).length;
+    }
+  } catch {}
+
+  let pmThesisCount = 0;
+  try {
+    const res = await pool.query(`SELECT value FROM app_config WHERE key = 'polymarket_scout_active_theses'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+      pmThesisCount = res.rows[0].value.filter((t: any) => t.status === "active").length;
+    }
+  } catch {}
+
+  let shadowPnl = 0;
+  let shadowOpen = 0;
+  let shadowClosed = 0;
+  try {
+    const res = await pool.query(`SELECT value FROM app_config WHERE key = 'oversight_shadow_trades'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+      const trades = res.rows[0].value;
+      const open = trades.filter((t: any) => t.status === "open");
+      const closed = trades.filter((t: any) => t.status === "closed");
+      shadowOpen = open.length;
+      shadowClosed = closed.length;
+      shadowPnl = closed.reduce((s: number, t: any) => s + (t.hypothetical_pnl || 0), 0)
+        + open.reduce((s: number, t: any) => s + (t.hypothetical_pnl || 0), 0);
+    }
+  } catch {}
+
+  let healthStatus = "unknown";
+  let healthIcon = "⚪";
+  try {
+    const res = await pool.query(`SELECT value FROM app_config WHERE key = 'oversight_health_reports'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value) && res.rows[0].value.length > 0) {
+      const latest = res.rows[0].value[res.rows[0].value.length - 1];
+      healthStatus = latest.overall_status || "unknown";
+      healthIcon = { healthy: "🟢", degraded: "🟡", critical: "🔴" }[healthStatus] || "⚪";
+    }
+  } catch {}
+
+  let scoutLastRun = "never";
+  let bankrLastRun = "never";
+  try {
+    const sr = await pool.query(`SELECT created_at FROM job_history WHERE agent_id = 'scout' ORDER BY created_at DESC LIMIT 1`);
+    if (sr.rows.length > 0) scoutLastRun = timeAgo(new Date(sr.rows[0].created_at).getTime());
+  } catch {}
+  try {
+    const br = await pool.query(`SELECT created_at FROM job_history WHERE agent_id = 'bankr' ORDER BY created_at DESC LIMIT 1`);
+    if (br.rows.length > 0) bankrLastRun = timeAgo(new Date(br.rows[0].created_at).getTime());
+  } catch {}
+
+  const pnlStr = shadowPnl >= 0 ? `+$${shadowPnl.toFixed(2)}` : `-$${Math.abs(shadowPnl).toFixed(2)}`;
+
+  const lines = [
+    `${mode} 📊 *DarkNode Status Digest*`,
+    "",
+    `😱 *Fear & Greed:* ${fgValue} (${fgClass})`,
+    `${healthIcon} *System:* ${healthStatus}`,
+    "",
+    `🔍 *Crypto Theses:* ${thesisCount} active`,
+    `🎰 *PM Theses:* ${pmThesisCount} active`,
+    `👻 *Shadow Trades:* ${shadowOpen} open, ${shadowClosed} closed`,
+    `💰 *Shadow P&L:* ${pnlStr}`,
+    "",
+    `🔍 SCOUT: ${scoutLastRun}`,
+    `💰 BANKR: ${bankrLastRun}`,
+    "",
+    `_${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`,
+  ];
+
+  await sendAlertsBotMessage(lines.join("\n"));
+  console.log("[telegram] Mission Control digest sent");
+}
+
 let webhookMode = false;
 
 async function registerWebhook(): Promise<boolean> {
@@ -1158,6 +1473,7 @@ export async function init(): Promise<void> {
   registerCommand("shadow", async () => handleShadowCommand());
   registerCommand("research", async (args) => handleResearchCommand(args));
   registerCommand("alerts", async () => handleAlertsCommand());
+  registerCommand("notify", async (args) => handleNotifyCommand(args));
   registerCommand("help", async () => handleHelpCommand());
 
   try {
@@ -1201,6 +1517,13 @@ export async function init(): Promise<void> {
   deadManInterval = setInterval(() => {
     checkDeadManSwitches().catch(err => console.error("[telegram] Dead man check error:", err));
   }, 60 * 60 * 1000);
+
+  if (isAlertsBotConfigured()) {
+    missionControlDigestInterval = setInterval(() => {
+      sendMissionControlDigest().catch(err => console.error("[telegram] Mission Control digest error:", err));
+    }, 4 * 60 * 60 * 1000);
+    console.log("[telegram] Mission Control status digest enabled (every 4h)");
+  }
 }
 
 export function stop(): void {
@@ -1212,6 +1535,10 @@ export function stop(): void {
   if (deadManInterval) {
     clearInterval(deadManInterval);
     deadManInterval = null;
+  }
+  if (missionControlDigestInterval) {
+    clearInterval(missionControlDigestInterval);
+    missionControlDigestInterval = null;
   }
   console.log("[telegram] stopped");
 }

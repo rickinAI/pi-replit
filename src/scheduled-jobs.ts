@@ -2,6 +2,7 @@ import { getPool } from "./db.js";
 import { getDarkNodeEmails, markDarkNodeProcessed } from "./gmail.js";
 import * as gws from "./gws.js";
 import { findOrCreateCalendar, createRecurringEvent } from "./calendar.js";
+import { sendJobCompletionNotification } from "./telegram.js";
 
 export interface ScheduledJob {
   id: string;
@@ -1849,6 +1850,14 @@ async function checkJobs(): Promise<void> {
         console.log(`[scheduled-jobs] Job completed${isPartial ? " (partial)" : ""}: ${job.name}`);
         await writeJobHistory(job.id, job.name, job.lastStatus || "success", result.slice(0, 500), vaultSaved ? savePath : null, Date.now() - jobStartMs, agentResult.agentId, agentResult.modelUsed, agentResult.tokensUsed?.input, agentResult.tokensUsed?.output);
 
+        sendJobCompletionNotification({
+          jobId: job.id,
+          jobName: job.name,
+          status: (job.lastStatus || "success") as "success" | "partial" | "error",
+          summary: result.slice(0, 500),
+          durationMs: Date.now() - jobStartMs,
+        }).catch(err => console.warn("[scheduled-jobs] Telegram notification failed:", err));
+
         if (job.id === "scout-full-cycle" || job.id === "scout-micro-scan") {
           try {
             const pool = dbPoolFn ? dbPoolFn() : null;
@@ -1890,6 +1899,12 @@ async function checkJobs(): Promise<void> {
           timestamp: Date.now(),
         });
       }
+      sendJobCompletionNotification({
+        jobId: job.id,
+        jobName: job.name,
+        status: "error",
+        summary: String(err).slice(0, 500),
+      }).catch(e => console.warn("[scheduled-jobs] Telegram error notification failed:", e));
       console.error(`[scheduled-jobs] Job failed: ${job.name}`, err);
     } finally {
       jobRunning = false;
@@ -2048,6 +2063,14 @@ export async function triggerJob(jobId: string): Promise<string> {
 
     await writeJobHistory(job.id, job.name, job.lastStatus || "success", result.slice(0, 500), vaultSaved ? savePath : null, Date.now() - triggerStartMs, agentResult.agentId, agentResult.modelUsed, agentResult.tokensUsed?.input, agentResult.tokensUsed?.output);
 
+    sendJobCompletionNotification({
+      jobId: job.id,
+      jobName: job.name,
+      status: (job.lastStatus || "success") as "success" | "partial" | "error",
+      summary: result.slice(0, 500),
+      durationMs: Date.now() - triggerStartMs,
+    }).catch(err => console.warn("[scheduled-jobs] Telegram notification failed:", err));
+
     if (broadcastFn) {
       broadcastFn({
         type: "job_complete",
@@ -2070,6 +2093,12 @@ export async function triggerJob(jobId: string): Promise<string> {
       try { await writeJobStatus(job.id, { lastRun: job.lastRun, status: "error", savedTo: null, error: String(err).slice(0, 300) }); } catch {}
     }
     await writeJobHistory(job.id, job.name, "error", String(err).slice(0, 500), null, null);
+    sendJobCompletionNotification({
+      jobId: job.id,
+      jobName: job.name,
+      status: "error",
+      summary: String(err).slice(0, 500),
+    }).catch(e => console.warn("[scheduled-jobs] Telegram error notification failed:", e));
     if (broadcastFn) {
       broadcastFn({
         type: "job_complete", jobId: job.id, jobName: job.name,
