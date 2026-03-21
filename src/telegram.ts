@@ -528,7 +528,7 @@ async function handleOversightCommand(): Promise<string> {
       openImprovements = open.length;
       criticalImprovements = open.filter((i: any) => i.severity === "critical").length;
       for (const item of open.slice(0, 5)) {
-        activeItems.push({ severity: item.severity, title: item.title, route: item.route || "manual_review" });
+        activeItems.push({ severity: item.severity, title: item.title, route: item.route || "manual" });
       }
     }
 

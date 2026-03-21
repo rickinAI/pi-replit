@@ -5062,6 +5062,12 @@ async function runHealthCheck() {
   await setConfigValue(LAST_HEALTH_CHECK_KEY, now);
   if (criticalCount > 0 || warnCount >= 2) {
     const issues = checks.filter((c) => c.status !== "ok");
+    const alertLines = issues.map((i) => `\u2022 ${i.name}: ${i.detail}`).join("\n");
+    await notifyTelegram(
+      `\u{1F534} HEALTH ${overall.toUpperCase()}
+${alertLines}
+(${checks.length} checks, ${criticalCount} critical, ${warnCount} warn)`
+    );
     for (const issue of issues) {
       await captureImprovement({
         source: "health_check",
@@ -5300,7 +5306,7 @@ async function enforceCircuitBreaker(rolling7dPct, drawdownPct) {
     description: `Auto-paused due to circuit breaker. Rolling 7d P&L: ${rolling7dPct.toFixed(1)}%, peak drawdown: ${drawdownPct.toFixed(1)}%.`,
     pattern_description: "Sustained losses exceeding risk thresholds",
     recommendation: "Review all open positions, evaluate thesis quality, reduce leverage/position sizing before resuming",
-    route: "manual_review"
+    route: "manual"
   });
 }
 async function checkApiFailureRates(pool2) {
@@ -5587,7 +5593,7 @@ async function detectCrossDomainExposure() {
       title: `Cross-domain concentration: ${alert.combined_exposure_pct.toFixed(0)}% exposure`,
       description: alert.detail,
       recommendation: "Reduce correlated positions across crypto perps and Polymarket to stay under 40% combined exposure",
-      route: "bankr_config"
+      route: "bankr-config"
     });
   }
   return alerts;
@@ -5602,10 +5608,10 @@ async function captureImprovement(params) {
   }
   const severityPriority = { critical: 1, high: 2, medium: 3, low: 4 };
   const routeMap = {
-    signal: "signal_tuning",
-    execution: "bankr_config",
-    infrastructure: "infra_fix",
-    risk: "manual_review",
+    signal: "autoresearch",
+    execution: "bankr-config",
+    infrastructure: "manual",
+    risk: "manual",
     strategy: "autoresearch"
   };
   const improvement = {
@@ -5620,7 +5626,7 @@ async function captureImprovement(params) {
     description: params.description,
     pattern_description: params.pattern_description,
     recommendation: params.recommendation,
-    route: params.route || routeMap[params.category] || "manual_review",
+    route: params.route || routeMap[params.category] || "manual",
     status: "open"
   };
   queue.push(improvement);
@@ -5752,7 +5758,7 @@ async function getOversightSummary() {
         severity: i.severity,
         title: i.title,
         domain: i.domain || "system",
-        route: i.route || "manual_review",
+        route: i.route || "manual",
         created_at: i.created_at
       }))
     },
@@ -5818,7 +5824,7 @@ async function reviewTheses() {
         description: `Adversarial review found bear case stronger: ${bearFactors.join("; ")}`,
         pattern_description: `Thesis ${thesis.id} has more bear factors (${bearFactors.length}) than bull (${bullFactors.length})`,
         recommendation,
-        route: "signal_tuning"
+        route: "autoresearch"
       });
     }
   }
@@ -5846,7 +5852,7 @@ async function checkPerAssetLosses() {
         description: `${asset} has accumulated $${Math.abs(pnl).toFixed(2)} loss (${lossPct.toFixed(1)}% of portfolio) in 7 days.`,
         pattern_description: `Concentrated losses in single asset ${asset}`,
         recommendation: `Review ${asset} thesis quality; consider blacklisting or reducing position limits`,
-        route: "bankr_config"
+        route: "bankr-config"
       });
     }
   }
@@ -6155,7 +6161,28 @@ async function openPosition(params) {
     } catch (e) {
       console.error("[bankr] Shadow tracking in SHADOW mode:", e instanceof Error ? e.message : e);
     }
-    throw new Error("SHADOW mode active \u2014 trade logged as shadow trade, no capital deployed");
+    const shadowPosId = `shadow_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const shadowTradeId = `shadow_trade_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const shadowPosition = {
+      id: shadowPosId,
+      thesis_id: params.thesis_id,
+      asset: params.asset,
+      asset_class: params.asset_class,
+      source: source2,
+      direction: params.direction,
+      leverage: String(params.leverage),
+      entry_price: params.entry_price,
+      current_price: params.entry_price,
+      size: 0,
+      unrealized_pnl: 0,
+      peak_price: params.entry_price,
+      atr_value: params.atr_value,
+      atr_stop_price: params.stop_price,
+      venue: params.venue,
+      opened_at: (/* @__PURE__ */ new Date()).toISOString(),
+      exposure_bucket: "shadow"
+    };
+    return { position: shadowPosition, trade_id: shadowTradeId };
   }
   const portfolio = await getPortfolioValue();
   const maxRisk = portfolio * 0.02;
@@ -8689,7 +8716,7 @@ async function handleOversightCommand() {
       openImprovements = open.length;
       criticalImprovements = open.filter((i) => i.severity === "critical").length;
       for (const item of open.slice(0, 5)) {
-        activeItems.push({ severity: item.severity, title: item.title, route: item.route || "manual_review" });
+        activeItems.push({ severity: item.severity, title: item.title, route: item.route || "manual" });
       }
     }
     const portfolio = portfolioRes.rows.length > 0 ? Number(portfolioRes.rows[0].value) : 50;
@@ -14093,10 +14120,8 @@ function buildOversightTools() {
         recommendation: Type.String({ description: "Recommended action to address this" }),
         route: Type.Optional(Type.Union([
           Type.Literal("autoresearch"),
-          Type.Literal("manual_review"),
-          Type.Literal("bankr_config"),
-          Type.Literal("signal_tuning"),
-          Type.Literal("infra_fix")
+          Type.Literal("manual"),
+          Type.Literal("bankr-config")
         ], { description: "Where to route this improvement for resolution" }))
       }),
       async execute(_toolCallId, params) {

@@ -390,7 +390,28 @@ export async function openPosition(params: {
     } catch (e) {
       console.error("[bankr] Shadow tracking in SHADOW mode:", e instanceof Error ? e.message : e);
     }
-    throw new Error("SHADOW mode active — trade logged as shadow trade, no capital deployed");
+    const shadowPosId = `shadow_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const shadowTradeId = `shadow_trade_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const shadowPosition: Position = {
+      id: shadowPosId,
+      thesis_id: params.thesis_id,
+      asset: params.asset,
+      asset_class: params.asset_class,
+      source: source,
+      direction: params.direction,
+      leverage: String(params.leverage),
+      entry_price: params.entry_price,
+      current_price: params.entry_price,
+      size: 0,
+      unrealized_pnl: 0,
+      peak_price: params.entry_price,
+      atr_value: params.atr_value,
+      atr_stop_price: params.stop_price,
+      venue: params.venue,
+      opened_at: new Date().toISOString(),
+      exposure_bucket: "shadow",
+    };
+    return { position: shadowPosition, trade_id: shadowTradeId };
   }
 
   const portfolio = await getPortfolioValue();

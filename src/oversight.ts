@@ -125,7 +125,7 @@ export interface ImprovementRequest {
   description: string;
   pattern_description?: string;
   recommendation: string;
-  route: "autoresearch" | "manual_review" | "bankr_config" | "signal_tuning" | "infra_fix";
+  route: "autoresearch" | "manual" | "bankr-config";
   status: "open" | "accepted" | "resolved" | "dismissed";
   resolved_at?: number;
   resolution_note?: string;
@@ -262,6 +262,12 @@ export async function runHealthCheck(): Promise<HealthReport> {
 
   if (criticalCount > 0 || warnCount >= 2) {
     const issues = checks.filter(c => c.status !== "ok");
+
+    const alertLines = issues.map(i => `• ${i.name}: ${i.detail}`).join("\n");
+    await notifyTelegram(
+      `🔴 HEALTH ${overall.toUpperCase()}\n${alertLines}\n(${checks.length} checks, ${criticalCount} critical, ${warnCount} warn)`
+    );
+
     for (const issue of issues) {
       await captureImprovement({
         source: "health_check",
@@ -493,7 +499,7 @@ async function enforceCircuitBreaker(rolling7dPct: number, drawdownPct: number):
     description: `Auto-paused due to circuit breaker. Rolling 7d P&L: ${rolling7dPct.toFixed(1)}%, peak drawdown: ${drawdownPct.toFixed(1)}%.`,
     pattern_description: "Sustained losses exceeding risk thresholds",
     recommendation: "Review all open positions, evaluate thesis quality, reduce leverage/position sizing before resuming",
-    route: "manual_review",
+    route: "manual",
   });
 }
 
@@ -813,7 +819,7 @@ export async function detectCrossDomainExposure(): Promise<CrossDomainExposure[]
       title: `Cross-domain concentration: ${alert.combined_exposure_pct.toFixed(0)}% exposure`,
       description: alert.detail,
       recommendation: "Reduce correlated positions across crypto perps and Polymarket to stay under 40% combined exposure",
-      route: "bankr_config",
+      route: "bankr-config",
     });
   }
 
@@ -844,10 +850,10 @@ export async function captureImprovement(params: {
 
   const severityPriority: Record<string, number> = { critical: 1, high: 2, medium: 3, low: 4 };
   const routeMap: Record<string, ImprovementRequest["route"]> = {
-    signal: "signal_tuning",
-    execution: "bankr_config",
-    infrastructure: "infra_fix",
-    risk: "manual_review",
+    signal: "autoresearch",
+    execution: "bankr-config",
+    infrastructure: "manual",
+    risk: "manual",
     strategy: "autoresearch",
   };
 
@@ -863,7 +869,7 @@ export async function captureImprovement(params: {
     description: params.description,
     pattern_description: params.pattern_description,
     recommendation: params.recommendation,
-    route: params.route || routeMap[params.category] || "manual_review",
+    route: params.route || routeMap[params.category] || "manual",
     status: "open",
   };
 
@@ -1046,7 +1052,7 @@ export async function getOversightSummary(): Promise<{
       critical: criticalItems.length,
       active_items: openItems.slice(0, 10).map(i => ({
         id: i.id, severity: i.severity, title: i.title,
-        domain: i.domain || "system", route: i.route || "manual_review", created_at: i.created_at,
+        domain: i.domain || "system", route: i.route || "manual", created_at: i.created_at,
       })),
     },
     shadow: { open: shadowPerf.open_trades, total_pnl: shadowPerf.total_pnl },
@@ -1199,7 +1205,7 @@ export async function reviewTheses(): Promise<ThesisReview[]> {
         description: `Adversarial review found bear case stronger: ${bearFactors.join("; ")}`,
         pattern_description: `Thesis ${thesis.id} has more bear factors (${bearFactors.length}) than bull (${bullFactors.length})`,
         recommendation,
-        route: "signal_tuning",
+        route: "autoresearch",
       });
     }
   }
@@ -1231,7 +1237,7 @@ export async function checkPerAssetLosses(): Promise<void> {
         description: `${asset} has accumulated $${Math.abs(pnl).toFixed(2)} loss (${lossPct.toFixed(1)}% of portfolio) in 7 days.`,
         pattern_description: `Concentrated losses in single asset ${asset}`,
         recommendation: `Review ${asset} thesis quality; consider blacklisting or reducing position limits`,
-        route: "bankr_config",
+        route: "bankr-config",
       });
     }
   }

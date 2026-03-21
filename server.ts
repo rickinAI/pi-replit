@@ -1901,7 +1901,7 @@ function buildOversightTools(): ToolDefinition[] {
         pattern_description: Type.Optional(Type.String({ description: "Description of the pattern or trend that led to this improvement" })),
         recommendation: Type.String({ description: "Recommended action to address this" }),
         route: Type.Optional(Type.Union([
-          Type.Literal("autoresearch"), Type.Literal("manual_review"), Type.Literal("bankr_config"), Type.Literal("signal_tuning"), Type.Literal("infra_fix"),
+          Type.Literal("autoresearch"), Type.Literal("manual"), Type.Literal("bankr-config"),
         ], { description: "Where to route this improvement for resolution" })),
       }),
       async execute(_toolCallId, params: {
@@ -1912,7 +1912,7 @@ function buildOversightTools(): ToolDefinition[] {
         priority?: number;
         title: string; description: string; recommendation: string;
         pattern_description?: string;
-        route?: "autoresearch" | "manual_review" | "bankr_config" | "signal_tuning" | "infra_fix";
+        route?: "autoresearch" | "manual" | "bankr-config";
       }) {
         try {
           const item = await oversight.captureImprovement(params);
