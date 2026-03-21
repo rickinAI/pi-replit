@@ -5397,9 +5397,9 @@ app.post("/api/pages/:slug/share", async (req: Request, res: Response) => {
         console.error("[share] wealth-engines data error:", err);
       }
       html = html.replace(/setInterval\(function\(\)\s*\{\s*fetchData\(\);\s*\}\s*,\s*\d+\);/, "");
-      html = html.replace(/<button[^>]*onclick="fetchData\(true\)"[^>]*>Refresh<\/button>/g, "");
-      html = html.replace(/<button[^>]*onclick="shareSnapshot\(\)"[^>]*>Share<\/button>/g, "");
-      html = html.replace(/<div class="share-overlay"[\s\S]*?<\/div>\s*<\/div>\s*<\/div>/, "");
+      html = html.replace(/id="refreshBtn"[^>]*>[^<]*<\/button>/g, 'id="refreshBtn" style="display:none"></button>');
+      html = html.replace(/id="shareBtn"[^>]*>[^<]*<\/button>/g, 'id="shareBtn" style="display:none"></button>');
+      html = html.replace(/id="shareModal"/, 'id="shareModal" style="display:none !important"');
     } else if (slug === "x-intelligence") {
       let xData: any = xIntelCache?.data || dailyBriefCache?.data?.xIntel;
       if (!xData) {
@@ -6849,6 +6849,14 @@ async function startServer(maxRetries = 5) {
   await alerts.init();
   await telegram.init();
   await scheduledJobs.init();
+  try {
+    const pool = (await import("./src/db.js")).getPool();
+    await pool.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_public', $1, $2)
+       ON CONFLICT (key) DO NOTHING`,
+      [JSON.stringify(false), Date.now()]
+    );
+  } catch {}
   console.log("[boot] PostgreSQL ready (shared pool, 4 tables)");
 
   gmail.checkConnectionStatus().then(status => {

@@ -16376,9 +16376,9 @@ render(SNAPSHOT_DATA);`
         console.error("[share] wealth-engines data error:", err);
       }
       html = html.replace(/setInterval\(function\(\)\s*\{\s*fetchData\(\);\s*\}\s*,\s*\d+\);/, "");
-      html = html.replace(/<button[^>]*onclick="fetchData\(true\)"[^>]*>Refresh<\/button>/g, "");
-      html = html.replace(/<button[^>]*onclick="shareSnapshot\(\)"[^>]*>Share<\/button>/g, "");
-      html = html.replace(/<div class="share-overlay"[\s\S]*?<\/div>\s*<\/div>\s*<\/div>/, "");
+      html = html.replace(/id="refreshBtn"[^>]*>[^<]*<\/button>/g, 'id="refreshBtn" style="display:none"></button>');
+      html = html.replace(/id="shareBtn"[^>]*>[^<]*<\/button>/g, 'id="shareBtn" style="display:none"></button>');
+      html = html.replace(/id="shareModal"/, 'id="shareModal" style="display:none !important"');
     } else if (slug === "x-intelligence") {
       let xData = xIntelCache?.data || dailyBriefCache?.data?.xIntel;
       if (!xData) {
@@ -17831,6 +17831,15 @@ async function startServer(maxRetries = 5) {
   await init6();
   await init7();
   await init8();
+  try {
+    const pool2 = (await Promise.resolve().then(() => (init_db(), db_exports))).getPool();
+    await pool2.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_public', $1, $2)
+       ON CONFLICT (key) DO NOTHING`,
+      [JSON.stringify(false), Date.now()]
+    );
+  } catch {
+  }
   console.log("[boot] PostgreSQL ready (shared pool, 4 tables)");
   checkConnectionStatus().then((status) => {
     if (status.connected) console.log(`[boot] Google connected: ${status.email} (Gmail, Calendar, Drive, Sheets)`);
