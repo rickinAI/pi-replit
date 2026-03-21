@@ -4930,9 +4930,10 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
       reasoning: (t.reasoning || "").slice(0, 150), created_at: t.created_at, status: t.status,
     })),
     polymarket_theses: pmTheses.slice(0, 10).map((t: any) => ({
-      id: t.id, question: t.question || t.market_question, direction: t.direction,
+      id: t.id, question: t.asset || t.question || t.market_question, direction: t.direction,
       confidence: t.confidence, whale_consensus: t.whale_consensus,
-      entry_price: t.entry_price, current_price: t.current_price,
+      current_odds: t.current_odds, entry_odds: t.entry_odds, exit_odds: t.exit_odds,
+      volume: t.volume, category: t.category,
       created_at: t.created_at, expires_at: t.expires_at, status: t.status,
     })),
     scout: {

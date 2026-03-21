@@ -11365,12 +11365,12 @@ Output the full brief \u2014 the system will save it automatically. Do NOT use n
     prompt: `Run a POLYMARKET ACTIVITY SCAN. Quick check of whale activity and market movements.
 
 1. Check polymarket_whale_activity for new whale entries in the last 30 minutes
-2. Check polymarket_consensus for any markets with 2+ whales aligned
+2. Check polymarket_consensus for any markets with 1+ whales aligned
 3. For any new consensus, check polymarket_details to get current odds and volume
 4. Report results as a brief summary:
 
 **New Whale Activity:** X entries detected
-**Active Consensus:** Y markets with 2+ whales
+**Active Consensus:** Y markets with 1+ whales
 
 For each consensus market:
 - Question, direction, whale count, avg score, current odds
@@ -11387,22 +11387,28 @@ Keep this concise \u2014 it runs every 30 minutes. Only flag actionable consensu
 
 1. Get trending markets via polymarket_trending (top 20 by volume)
 2. Search specific categories: polymarket_search("crypto"), polymarket_search("politics"), polymarket_search("sports")
-3. Filter markets: volume > $50K, odds between 15-85%, > 24h to resolution
+3. Filter markets: volume > $50K, odds between 15-85%, resolution > 12h (if volume > $100K) or > 24h
 4. Check polymarket_whale_watchlist for tracked wallets
 5. Check polymarket_whale_activity for recent whale movements
 6. Run polymarket_consensus to detect aligned whale positions
-7. For each consensus meeting thresholds (score >= 0.6, 2+ whales, volume > $50K, odds 15-85%):
-   - Generate a thesis via save_pm_thesis with full reasoning
-   - Include whale wallet addresses, average score, total amount
+7. Evaluate EACH qualifying market against TIERED thesis criteria (try all tiers top-down):
+   - HIGH: 3+ whales aligned, avg score >= 0.8
+   - MEDIUM: 2+ whales aligned, avg score >= 0.5
+   - LOW: 1 whale with score >= 0.7
+   - SPECULATIVE: No whales needed IF volume > $500K AND odds 30-70% (maximum uncertainty = edge)
+   For ANY market matching ANY tier, generate thesis via save_pm_thesis with the tier as confidence.
+   For SPECULATIVE theses: use empty whale_wallets=[], whale_avg_score=0, total_whale_amount=0.
 8. Check existing polymarket_theses \u2014 retire any that have expired or resolved
-9. Search X for sentiment on top consensus markets
+9. Search X for sentiment on top markets
+
+IMPORTANT: You MUST generate at least 1 thesis per cycle if ANY market qualifies at ANY tier. Prefer more theses at lower confidence over zero theses.
 
 Output a full brief with:
 - Market overview (total volume, trending categories)
 - Whale activity summary
-- New theses generated (with reasoning)
+- New theses generated (with tier/confidence and reasoning)
 - Existing theses status update
-- Markets to watch (close to threshold but not yet qualifying)
+- Markets that were evaluated but rejected (with which criteria failed)
 
 Do NOT use notes_create \u2014 the system saves automatically.`,
     schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 240 },
@@ -18465,12 +18471,15 @@ async function buildWealthEnginesDashboardData() {
     })),
     polymarket_theses: pmTheses.slice(0, 10).map((t) => ({
       id: t.id,
-      question: t.question || t.market_question,
+      question: t.asset || t.question || t.market_question,
       direction: t.direction,
       confidence: t.confidence,
       whale_consensus: t.whale_consensus,
-      entry_price: t.entry_price,
-      current_price: t.current_price,
+      current_odds: t.current_odds,
+      entry_odds: t.entry_odds,
+      exit_odds: t.exit_odds,
+      volume: t.volume,
+      category: t.category,
       created_at: t.created_at,
       expires_at: t.expires_at,
       status: t.status

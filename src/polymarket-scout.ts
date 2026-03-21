@@ -151,29 +151,13 @@ export function formatThesesSummary(theses: PolymarketThesis[]): string {
   return theses.map(formatThesis).join("\n\n");
 }
 
-async function loadPolymarketThresholds(): Promise<{
-  min_wallet_score: number;
-  min_whale_consensus: number;
-  min_volume: number;
-  min_odds: number;
-  max_odds: number;
-}> {
-  try {
-    const pool = getPool();
-    const res = await pool.query("SELECT value FROM app_config WHERE key = 'polymarket_scout_parameters'");
-    if (res.rows.length > 0) {
-      const parsed = typeof res.rows[0].value === "string" ? JSON.parse(res.rows[0].value) : res.rows[0].value;
-      return {
-        min_wallet_score: parsed.min_wallet_score ?? 0.6,
-        min_whale_consensus: parsed.min_whale_consensus ?? 2,
-        min_volume: parsed.min_volume ?? 50000,
-        min_odds: parsed.min_odds ?? 0.15,
-        max_odds: parsed.max_odds ?? 0.85,
-      };
-    }
-  } catch {
-  }
-  return { min_wallet_score: 0.6, min_whale_consensus: 2, min_volume: 50000, min_odds: 0.15, max_odds: 0.85 };
+export type ThesisTier = "HIGH" | "MEDIUM" | "LOW" | "SPECULATIVE";
+
+export interface ThresholdResult {
+  meets: boolean;
+  tier: ThesisTier | null;
+  failures: string[];
+  passed: string[];
 }
 
 export async function meetsThesisThresholds(params: {
@@ -183,15 +167,63 @@ export async function meetsThesisThresholds(params: {
   market_liquidity: number;
   odds: number;
   hours_to_resolution: number;
-}): Promise<{ meets: boolean; failures: string[] }> {
-  const thresholds = await loadPolymarketThresholds();
+}): Promise<ThresholdResult> {
   const failures: string[] = [];
+  const passed: string[] = [];
 
-  if (params.whale_score < thresholds.min_wallet_score) failures.push(`Wallet score ${params.whale_score.toFixed(2)} < ${thresholds.min_wallet_score}`);
-  if (params.whale_consensus < thresholds.min_whale_consensus) failures.push(`Consensus ${params.whale_consensus} < ${thresholds.min_whale_consensus} whales`);
-  if (params.market_volume < thresholds.min_volume) failures.push(`Volume $${params.market_volume.toFixed(0)} < $${thresholds.min_volume}`);
-  if (params.odds < thresholds.min_odds || params.odds > thresholds.max_odds) failures.push(`Odds ${(params.odds * 100).toFixed(0)}% outside ${(thresholds.min_odds * 100).toFixed(0)}-${(thresholds.max_odds * 100).toFixed(0)}% range`);
-  if (params.hours_to_resolution < 24) failures.push(`Resolution in ${params.hours_to_resolution.toFixed(0)}h < 24h minimum`);
+  const oddsInRange = params.odds >= 0.15 && params.odds <= 0.85;
+  const oddsInTightRange = params.odds >= 0.30 && params.odds <= 0.70;
+  const volumeAbove50K = params.market_volume >= 50000;
+  const volumeAbove100K = params.market_volume >= 100000;
+  const volumeAbove500K = params.market_volume >= 500000;
+  const minResolution = volumeAbove100K ? 12 : 24;
+  const resolutionOk = params.hours_to_resolution >= minResolution;
 
-  return { meets: failures.length === 0, failures };
+  if (!oddsInRange) failures.push(`Odds ${(params.odds * 100).toFixed(0)}% outside 15-85% range`);
+  else passed.push(`Odds ${(params.odds * 100).toFixed(0)}% in range`);
+
+  if (!resolutionOk) failures.push(`Resolution in ${params.hours_to_resolution.toFixed(0)}h < ${minResolution}h minimum`);
+  else passed.push(`Resolution ${params.hours_to_resolution.toFixed(0)}h >= ${minResolution}h`);
+
+  if (!volumeAbove50K) failures.push(`Volume $${params.market_volume.toFixed(0)} < $50,000`);
+  else passed.push(`Volume $${params.market_volume.toFixed(0)}`);
+
+  if (!oddsInRange || !resolutionOk || !volumeAbove50K) {
+    console.log(`[pm-scout] Threshold REJECT: ${failures.join("; ")}`);
+    return { meets: false, tier: null, failures, passed };
+  }
+
+  if (params.whale_consensus >= 3 && params.whale_score >= 0.8) {
+    passed.push(`Strong whale consensus: ${params.whale_consensus} whales, score ${params.whale_score.toFixed(2)}`);
+    console.log(`[pm-scout] Threshold PASS (HIGH): ${passed.join("; ")}`);
+    return { meets: true, tier: "HIGH", failures: [], passed };
+  }
+
+  if (params.whale_consensus >= 2 && params.whale_score >= 0.5) {
+    passed.push(`Whale consensus: ${params.whale_consensus} whales, score ${params.whale_score.toFixed(2)}`);
+    console.log(`[pm-scout] Threshold PASS (MEDIUM): ${passed.join("; ")}`);
+    return { meets: true, tier: "MEDIUM", failures: [], passed };
+  }
+
+  if (params.whale_consensus >= 1 && params.whale_score >= 0.7) {
+    passed.push(`Single whale signal: score ${params.whale_score.toFixed(2)}`);
+    console.log(`[pm-scout] Threshold PASS (LOW): ${passed.join("; ")}`);
+    return { meets: true, tier: "LOW", failures: [], passed };
+  }
+
+  if (volumeAbove500K && oddsInTightRange && params.whale_consensus === 0) {
+    passed.push(`Volume-weighted fallback: $${(params.market_volume / 1000).toFixed(0)}K volume, ${(params.odds * 100).toFixed(0)}% odds (high uncertainty edge)`);
+    console.log(`[pm-scout] Threshold PASS (SPECULATIVE): ${passed.join("; ")}`);
+    return { meets: true, tier: "SPECULATIVE", failures: [], passed };
+  }
+
+  failures.push(`Whale consensus ${params.whale_consensus} whales, score ${params.whale_score.toFixed(2)} — insufficient for any tier`);
+  if (!volumeAbove500K && params.whale_consensus === 0) {
+    failures.push(`Volume $${params.market_volume.toFixed(0)} < $500K for volume-only fallback`);
+  }
+  if (!oddsInTightRange && params.whale_consensus === 0) {
+    failures.push(`Odds ${(params.odds * 100).toFixed(0)}% outside 30-70% for volume-only fallback`);
+  }
+  console.log(`[pm-scout] Threshold REJECT: ${failures.join("; ")}`);
+  return { meets: false, tier: null, failures, passed };
 }
