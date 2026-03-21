@@ -1429,7 +1429,7 @@ export async function sendMissionControlDigest(): Promise<void> {
 let webhookMode = false;
 
 async function registerWebhook(): Promise<boolean> {
-  const domain = process.env.REPLIT_DEV_DOMAIN || process.env.REPLIT_DOMAINS?.split(",")[0];
+  const domain = process.env.TELEGRAM_WEBHOOK_DOMAIN || "rickin.live";
   if (!domain) {
     console.warn("[telegram] No domain available for webhook — falling back to long-polling");
     return false;

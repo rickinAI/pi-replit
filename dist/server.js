@@ -3678,7 +3678,7 @@ async function sendMissionControlDigest() {
   console.log("[telegram] Mission Control digest sent");
 }
 async function registerWebhook() {
-  const domain = process.env.REPLIT_DEV_DOMAIN || process.env.REPLIT_DOMAINS?.split(",")[0];
+  const domain = process.env.TELEGRAM_WEBHOOK_DOMAIN || "rickin.live";
   if (!domain) {
     console.warn("[telegram] No domain available for webhook \u2014 falling back to long-polling");
     return false;
