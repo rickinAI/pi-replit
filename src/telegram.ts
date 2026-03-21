@@ -6,7 +6,7 @@ const CHAT_ID = process.env.TELEGRAM_CHAT_ID || "";
 const API_BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 const ALERTS_BOT_TOKEN = process.env.TELEGRAM_ALERTS_BOT_TOKEN || "";
-const ALERTS_CHAT_ID = process.env.TELEGRAM_CHAT_ID || "";
+const ALERTS_CHAT_ID = process.env.TELEGRAM_ALERTS_CHAT_ID || process.env.TELEGRAM_CHAT_ID || "";
 const ALERTS_API_BASE = `https://api.telegram.org/bot${ALERTS_BOT_TOKEN}`;
 
 function isAlertsBotConfigured(): boolean {
@@ -1207,6 +1207,9 @@ export function stop(): void {
 export async function forwardAlertToTelegram(event: { type: string; briefType?: string; alertType?: string; title?: string; content: string }): Promise<void> {
   const mode = await getMode();
 
+  const personalAlertTypes = new Set(["calendar", "stock", "task", "email"]);
+  const tradingEventTypes = new Set(["scout", "bankr", "oversight", "autoresearch", "circuit_breaker"]);
+
   if (event.type === "brief") {
     if (!isAlertsBotConfigured()) return;
     const briefLabel = event.briefType ? event.briefType.charAt(0).toUpperCase() + event.briefType.slice(1) : "Daily";
@@ -1215,21 +1218,29 @@ export async function forwardAlertToTelegram(event: { type: string; briefType?: 
     return;
   }
 
-  if (event.type === "alert") {
-    const personalAlertTypes = new Set(["calendar", "stock", "task", "email"]);
-    if (personalAlertTypes.has(event.alertType || "")) {
-      if (!isAlertsBotConfigured()) return;
-      const icons: Record<string, string> = {
-        calendar: "📅",
-        stock: "📊",
-        task: "✅",
-        email: "📧",
-      };
-      const icon = icons[event.alertType || ""] || "🔔";
-      await sendAlertsBotMessage(`${mode} ${icon} *${event.title || "Alert"}*\n\n${event.content}`);
-    } else {
-      if (!isConfigured()) return;
-      await sendMessage(`${mode} 🔔 *${event.title || "Alert"}*\n\n${event.content}`);
-    }
+  if (event.type === "alert" && personalAlertTypes.has(event.alertType || "")) {
+    if (!isAlertsBotConfigured()) return;
+    const icons: Record<string, string> = {
+      calendar: "📅",
+      stock: "📊",
+      task: "✅",
+      email: "📧",
+    };
+    const icon = icons[event.alertType || ""] || "🔔";
+    await sendAlertsBotMessage(`${mode} ${icon} *${event.title || "Alert"}*\n\n${event.content}`);
+    return;
+  }
+
+  if (tradingEventTypes.has(event.type) || (event.type === "alert" && !personalAlertTypes.has(event.alertType || ""))) {
+    if (!isConfigured()) return;
+    const tradingIcons: Record<string, string> = {
+      scout: "🔍",
+      bankr: "💰",
+      oversight: "🛡️",
+      autoresearch: "🔬",
+      circuit_breaker: "🚨",
+    };
+    const icon = tradingIcons[event.type] || "🔔";
+    await sendMessage(`${mode} ${icon} *${event.title || "Alert"}*\n\n${event.content}`);
   }
 }

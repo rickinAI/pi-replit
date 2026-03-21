@@ -8917,7 +8917,7 @@ var BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 var CHAT_ID = process.env.TELEGRAM_CHAT_ID || "";
 var API_BASE2 = `https://api.telegram.org/bot${BOT_TOKEN}`;
 var ALERTS_BOT_TOKEN = process.env.TELEGRAM_ALERTS_BOT_TOKEN || "";
-var ALERTS_CHAT_ID = process.env.TELEGRAM_CHAT_ID || "";
+var ALERTS_CHAT_ID = process.env.TELEGRAM_ALERTS_CHAT_ID || process.env.TELEGRAM_CHAT_ID || "";
 var ALERTS_API_BASE = `https://api.telegram.org/bot${ALERTS_BOT_TOKEN}`;
 function isAlertsBotConfigured() {
   return ALERTS_BOT_TOKEN.length > 0 && ALERTS_CHAT_ID.length > 0;
@@ -10018,6 +10018,8 @@ function stop() {
 }
 async function forwardAlertToTelegram(event) {
   const mode = await getMode2();
+  const personalAlertTypes = /* @__PURE__ */ new Set(["calendar", "stock", "task", "email"]);
+  const tradingEventTypes = /* @__PURE__ */ new Set(["scout", "bankr", "oversight", "autoresearch", "circuit_breaker"]);
   if (event.type === "brief") {
     if (!isAlertsBotConfigured()) return;
     const briefLabel = event.briefType ? event.briefType.charAt(0).toUpperCase() + event.briefType.slice(1) : "Daily";
@@ -10027,26 +10029,33 @@ async function forwardAlertToTelegram(event) {
 ${truncated}`);
     return;
   }
-  if (event.type === "alert") {
-    const personalAlertTypes = /* @__PURE__ */ new Set(["calendar", "stock", "task", "email"]);
-    if (personalAlertTypes.has(event.alertType || "")) {
-      if (!isAlertsBotConfigured()) return;
-      const icons = {
-        calendar: "\u{1F4C5}",
-        stock: "\u{1F4CA}",
-        task: "\u2705",
-        email: "\u{1F4E7}"
-      };
-      const icon = icons[event.alertType || ""] || "\u{1F514}";
-      await sendAlertsBotMessage(`${mode} ${icon} *${event.title || "Alert"}*
+  if (event.type === "alert" && personalAlertTypes.has(event.alertType || "")) {
+    if (!isAlertsBotConfigured()) return;
+    const icons = {
+      calendar: "\u{1F4C5}",
+      stock: "\u{1F4CA}",
+      task: "\u2705",
+      email: "\u{1F4E7}"
+    };
+    const icon = icons[event.alertType || ""] || "\u{1F514}";
+    await sendAlertsBotMessage(`${mode} ${icon} *${event.title || "Alert"}*
 
 ${event.content}`);
-    } else {
-      if (!isConfigured8()) return;
-      await sendMessage(`${mode} \u{1F514} *${event.title || "Alert"}*
+    return;
+  }
+  if (tradingEventTypes.has(event.type) || event.type === "alert" && !personalAlertTypes.has(event.alertType || "")) {
+    if (!isConfigured8()) return;
+    const tradingIcons = {
+      scout: "\u{1F50D}",
+      bankr: "\u{1F4B0}",
+      oversight: "\u{1F6E1}\uFE0F",
+      autoresearch: "\u{1F52C}",
+      circuit_breaker: "\u{1F6A8}"
+    };
+    const icon = tradingIcons[event.type] || "\u{1F514}";
+    await sendMessage(`${mode} ${icon} *${event.title || "Alert"}*
 
 ${event.content}`);
-    }
   }
 }
 
