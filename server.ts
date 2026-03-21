@@ -40,6 +40,9 @@ import { analyzeAsset, recordSignal } from "./src/technical-signals.js";
 import * as nansen from "./src/nansen.js";
 import { runBacktest } from "./src/backtest.js";
 import * as cryptoScout from "./src/crypto-scout.js";
+import * as polymarket from "./src/polymarket.js";
+import * as polymarketScout from "./src/polymarket-scout.js";
+import * as bankr from "./src/bankr.js";
 import * as maps from "./src/maps.js";
 import * as gws from "./src/gws.js";
 import * as youtube from "./src/youtube.js";
@@ -1468,6 +1471,320 @@ function buildCoinGeckoTools(): ToolDefinition[] {
         try {
           await cryptoScout.retireThesis(params.thesis_id);
           return { content: [{ type: "text" as const, text: JSON.stringify({ retired: true, thesis_id: params.thesis_id }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "polymarket_search",
+      label: "Polymarket Search",
+      description: "Search Polymarket for prediction markets by topic/tag. Returns markets with odds, volume, liquidity, and end dates.",
+      parameters: Type.Object({
+        query: Type.Optional(Type.String({ description: "Topic or tag to search (e.g. 'crypto', 'politics', 'sports')" })),
+        limit: Type.Optional(Type.Number({ description: "Max results (default 20)" })),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        try {
+          const result = params.query
+            ? await polymarket.searchMarkets(params.query, params.limit || 20)
+            : await polymarket.getTrendingMarkets(params.limit || 20);
+          return { content: [{ type: "text" as const, text: JSON.stringify({ count: result.length, markets: result }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "polymarket_trending",
+      label: "Polymarket Trending",
+      description: "Get trending Polymarket prediction markets sorted by 24h volume.",
+      parameters: Type.Object({
+        limit: Type.Optional(Type.Number({ description: "Max results (default 20)" })),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        try {
+          const result = await polymarket.getTrendingMarkets(params.limit || 20);
+          return { content: [{ type: "text" as const, text: JSON.stringify({ count: result.length, markets: result }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "polymarket_details",
+      label: "Polymarket Market Details",
+      description: "Get detailed info for a specific Polymarket market by condition ID.",
+      parameters: Type.Object({
+        condition_id: Type.String({ description: "Polymarket condition/market ID" }),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        try {
+          const result = await polymarket.getMarketDetails(params.condition_id);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result || { error: "Market not found" }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "polymarket_whale_watchlist",
+      label: "Polymarket Whale Watchlist",
+      description: "Get the current whale watchlist for Polymarket tracking. Shows tracked wallets with composite scores, win rates, ROI.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const wallets = await polymarket.getWhaleWatchlist();
+          return { content: [{ type: "text" as const, text: JSON.stringify({ count: wallets.length, wallets }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "polymarket_whale_activity",
+      label: "Polymarket Whale Activity",
+      description: "Get recent whale activity (last 24h) from tracked Polymarket wallets.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const activities = await polymarket.getWhaleActivities();
+          return { content: [{ type: "text" as const, text: JSON.stringify({ count: activities.length, activities }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "polymarket_consensus",
+      label: "Polymarket Whale Consensus",
+      description: "Detect whale consensus — markets where multiple tracked whales are positioned in the same direction.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const activities = await polymarket.getWhaleActivities();
+          const consensus = await polymarket.detectConsensus(activities);
+          return { content: [{ type: "text" as const, text: JSON.stringify({ consensus_count: consensus.length, consensus }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "polymarket_theses",
+      label: "Polymarket Active Theses",
+      description: "Get all active Polymarket SCOUT trading theses.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const theses = await polymarketScout.getActiveTheses();
+          return { content: [{ type: "text" as const, text: JSON.stringify({ count: theses.length, theses }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "save_pm_thesis",
+      label: "Save Polymarket Thesis",
+      description: "Persist a Polymarket trading thesis. Requires: condition_id, direction (YES/NO), confidence, whale data, reasoning.",
+      parameters: Type.Object({
+        condition_id: Type.String({ description: "Polymarket market condition ID" }),
+        direction: Type.Union([Type.Literal("YES"), Type.Literal("NO")]),
+        confidence: Type.Union([Type.Literal("HIGH"), Type.Literal("MEDIUM"), Type.Literal("LOW")]),
+        whale_wallets: Type.Array(Type.String(), { description: "Wallet addresses in consensus" }),
+        whale_avg_score: Type.Number(),
+        total_whale_amount: Type.Number(),
+        reasoning: Type.String(),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        try {
+          const market = await polymarket.getMarketDetails(params.condition_id);
+          if (!market) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Market not found" }) }], details: {} };
+          const thesis = polymarketScout.buildThesis({
+            market,
+            direction: params.direction,
+            confidence: params.confidence,
+            whale_consensus: params.whale_wallets.length,
+            whale_wallets: params.whale_wallets,
+            whale_avg_score: params.whale_avg_score,
+            total_whale_amount: params.total_whale_amount,
+            sources: ["polymarket_clob", "whale_tracker"],
+            reasoning: params.reasoning,
+          });
+          await polymarketScout.saveTheses([thesis]);
+          return { content: [{ type: "text" as const, text: JSON.stringify({ saved: true, thesis_id: thesis.id }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "retire_pm_thesis",
+      label: "Retire Polymarket Thesis",
+      description: "Retire a Polymarket thesis by its ID.",
+      parameters: Type.Object({
+        thesis_id: Type.String({ description: "The PM thesis ID to retire" }),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        try {
+          await polymarketScout.retireThesis(params.thesis_id);
+          return { content: [{ type: "text" as const, text: JSON.stringify({ retired: true, thesis_id: params.thesis_id }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "bankr_risk_check",
+      label: "BANKR Pre-Trade Risk Check",
+      description: "Run pre-execution risk checks before a trade. Returns pass/fail for each check: kill switch, pause, leverage, margin, position limits, exposure, correlation.",
+      parameters: Type.Object({
+        asset: Type.String({ description: "Asset name" }),
+        asset_class: Type.Union([Type.Literal("crypto"), Type.Literal("polymarket")]),
+        direction: Type.String({ description: "LONG, SHORT, YES, or NO" }),
+        leverage: Type.Number({ description: "Leverage multiplier (max 2)" }),
+        entry_price: Type.Number(),
+        stop_price: Type.Number(),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        try {
+          const result = await bankr.runPreExecutionChecks(params);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "bankr_open_position",
+      label: "BANKR Open Position",
+      description: "Open a new position. Runs risk checks, calculates position size (2% risk), and records the trade. Requires Telegram approval in BETA mode.",
+      parameters: Type.Object({
+        thesis_id: Type.String(),
+        asset: Type.String(),
+        asset_class: Type.Union([Type.Literal("crypto"), Type.Literal("polymarket")]),
+        direction: Type.String(),
+        leverage: Type.Number(),
+        entry_price: Type.Number(),
+        stop_price: Type.Number(),
+        atr_value: Type.Number(),
+        venue: Type.Union([Type.Literal("bnkr"), Type.Literal("coinbase"), Type.Literal("kreo")]),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        try {
+          const riskCheck = await bankr.runPreExecutionChecks({
+            asset: params.asset,
+            asset_class: params.asset_class,
+            direction: params.direction,
+            leverage: params.leverage,
+            entry_price: params.entry_price,
+            stop_price: params.stop_price,
+          });
+          if (!riskCheck.passed) {
+            return { content: [{ type: "text" as const, text: JSON.stringify({ executed: false, reason: riskCheck.rejection_reason, checks: riskCheck.checks }) }], details: {} };
+          }
+          const mode = await bankr.getMode();
+          if (mode === "SHADOW") {
+            return { content: [{ type: "text" as const, text: JSON.stringify({ executed: false, reason: "SHADOW mode — trade logged but not executed", checks: riskCheck.checks }) }], details: {} };
+          }
+          const portfolio = await bankr.getPortfolioValue();
+          const riskAmount = portfolio * 0.02;
+          const approval = await telegram.requestTradeApproval({
+            thesisId: params.thesis_id,
+            asset: params.asset,
+            direction: params.direction,
+            leverage: `${params.leverage}x`,
+            entryPrice: params.entry_price.toFixed(2),
+            stopLoss: params.stop_price.toFixed(2),
+            takeProfit: "TBD",
+            riskAmount: riskAmount.toFixed(2),
+            reason: `Risk checks passed. Mode: ${mode}`,
+          });
+          if (approval !== "approve") {
+            return { content: [{ type: "text" as const, text: JSON.stringify({ executed: false, reason: `Trade ${approval} via Telegram` }) }], details: {} };
+          }
+          const result = await bankr.openPosition(params);
+          await telegram.sendTradeAlert({
+            type: "executed",
+            asset: params.asset,
+            direction: params.direction,
+            leverage: `${params.leverage}x`,
+            entryPrice: params.entry_price.toFixed(2),
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify({ executed: true, position_id: result.position.id, size: result.position.size }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "bankr_close_position",
+      label: "BANKR Close Position",
+      description: "Close an open position by ID with a specified exit price and reason.",
+      parameters: Type.Object({
+        position_id: Type.String(),
+        exit_price: Type.Number(),
+        close_reason: Type.String({ description: "Reason: manual, take_profit, stop_loss, rsi_exit, kill_switch" }),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        try {
+          const record = await bankr.closePosition(params.position_id, params.exit_price, params.close_reason);
+          if (!record) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Position not found" }) }], details: {} };
+          await telegram.sendTradeAlert({
+            type: "closed",
+            asset: record.asset,
+            direction: record.direction,
+            exitPrice: params.exit_price.toFixed(2),
+            pnl: record.pnl,
+            reason: params.close_reason,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify({ closed: true, trade_id: record.id, pnl: record.pnl, pnl_pct: record.pnl_pct }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "bankr_positions",
+      label: "BANKR Open Positions",
+      description: "Get all open positions with current P&L.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const summary = await bankr.getPortfolioSummary();
+          return { content: [{ type: "text" as const, text: JSON.stringify(summary) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "bankr_trade_history",
+      label: "BANKR Trade History",
+      description: "Get recent trade history with P&L and tax lot data.",
+      parameters: Type.Object({
+        limit: Type.Optional(Type.Number({ description: "Max trades to return (default 20)" })),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        try {
+          const history = await bankr.getTradeHistory();
+          const limited = history.slice(-(params.limit || 20));
+          return { content: [{ type: "text" as const, text: JSON.stringify({ total: history.length, trades: limited }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "bankr_tax_summary",
+      label: "BANKR Tax Summary",
+      description: "Get YTD tax summary with quarterly breakdown, estimated federal and NY tax.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const summary = await bankr.getTaxSummary();
+          return { content: [{ type: "text" as const, text: JSON.stringify(summary) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
         }
@@ -3756,6 +4073,86 @@ app.get("/api/wealth-engines/watchlist", async (_req: Request, res: Response) =>
   } catch (err: any) {
     console.error("[wealth-engines] watchlist error:", err);
     res.status(500).json({ error: "Failed to fetch watchlist" });
+  }
+});
+
+app.get("/api/wealth-engines/positions", async (_req: Request, res: Response) => {
+  try {
+    const summary = await bankr.getPortfolioSummary();
+    res.json(summary);
+  } catch (err: any) {
+    console.error("[wealth-engines] positions error:", err);
+    res.status(500).json({ error: "Failed to fetch positions" });
+  }
+});
+
+app.get("/api/wealth-engines/trades", async (_req: Request, res: Response) => {
+  try {
+    const limit = Math.min(Math.max(parseInt(String(_req.query.limit)) || 50, 1), 200);
+    const history = await bankr.getTradeHistory();
+    res.json({ total: history.length, trades: history.slice(-limit) });
+  } catch (err: any) {
+    console.error("[wealth-engines] trades error:", err);
+    res.status(500).json({ error: "Failed to fetch trades" });
+  }
+});
+
+app.get("/api/wealth-engines/tax/summary", async (_req: Request, res: Response) => {
+  try {
+    const summary = await bankr.getTaxSummary();
+    res.json(summary);
+  } catch (err: any) {
+    console.error("[wealth-engines] tax summary error:", err);
+    res.status(500).json({ error: "Failed to fetch tax summary" });
+  }
+});
+
+app.get("/api/wealth-engines/tax/8949", async (_req: Request, res: Response) => {
+  try {
+    const csv = await bankr.generateForm8949CSV();
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", `attachment; filename="form-8949-${new Date().getFullYear()}.csv"`);
+    res.send(csv);
+  } catch (err: any) {
+    console.error("[wealth-engines] 8949 error:", err);
+    res.status(500).json({ error: "Failed to generate Form 8949" });
+  }
+});
+
+app.get("/api/wealth-engines/export", async (_req: Request, res: Response) => {
+  try {
+    const [positions, trades, taxSummary, cryptoTheses, pmTheses, watchlist, portfolio] = await Promise.all([
+      bankr.getPositions(),
+      bankr.getTradeHistory(),
+      bankr.getTaxSummary(),
+      cryptoScout.getActiveTheses(),
+      polymarketScout.getActiveTheses(),
+      cryptoScout.getWatchlist(),
+      bankr.getPortfolioValue(),
+    ]);
+    res.json({
+      exported_at: new Date().toISOString(),
+      portfolio_value: portfolio,
+      positions,
+      trade_history: trades,
+      tax_summary: taxSummary,
+      crypto_theses: cryptoTheses,
+      polymarket_theses: pmTheses,
+      watchlist,
+    });
+  } catch (err: any) {
+    console.error("[wealth-engines] export error:", err);
+    res.status(500).json({ error: "Failed to export data" });
+  }
+});
+
+app.get("/api/wealth-engines/polymarket/theses", async (_req: Request, res: Response) => {
+  try {
+    const theses = await polymarketScout.getActiveTheses();
+    res.json({ count: theses.length, theses });
+  } catch (err: any) {
+    console.error("[wealth-engines] pm theses error:", err);
+    res.status(500).json({ error: "Failed to fetch polymarket theses" });
   }
 });
 
@@ -6295,6 +6692,37 @@ async function startServer(maxRetries = 5) {
             async (from, to) => kbMove(from, to),
             () => db.getPool(),
           );
+
+          setInterval(async () => {
+            try {
+              const result = await bankr.runPositionMonitor();
+              const monitorPool = db.getPool();
+              await monitorPool.query(
+                `INSERT INTO app_config (key, value, updated_at) VALUES ('bankr_monitor_last_tick', $1, $2)
+                 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+                [JSON.stringify(Date.now()), Date.now()]
+              );
+              if (result.closed.length > 0) {
+                for (const trade of result.closed) {
+                  await telegram.sendTradeAlert({
+                    type: trade.close_reason === "kill_switch" ? "emergency" : "stopped",
+                    asset: trade.asset,
+                    direction: trade.direction,
+                    exitPrice: trade.exit_price.toFixed(2),
+                    pnl: trade.pnl,
+                    reason: trade.close_reason,
+                  });
+                }
+              }
+              if (result.errors.length > 0) {
+                console.warn("[bankr-monitor] Errors:", result.errors.join("; "));
+              }
+            } catch (err) {
+              console.error("[bankr-monitor] Position monitor error:", err);
+            }
+          }, 5 * 60 * 1000);
+          console.log("[boot] BANKR position monitor started (5-min interval)");
+
           resolve();
         });
       });

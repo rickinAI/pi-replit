@@ -4485,6 +4485,678 @@ function buildThesis(params) {
   };
 }
 
+// src/polymarket.ts
+var GAMMA_API = "https://gamma-api.polymarket.com";
+var cache = /* @__PURE__ */ new Map();
+var MARKET_TTL = 5 * 60 * 1e3;
+var WALLET_TTL = 15 * 60 * 1e3;
+function getCached2(key, ttl) {
+  const entry = cache.get(key);
+  if (entry && Date.now() - entry.ts < ttl) return entry.data;
+  return null;
+}
+function setCache2(key, data) {
+  cache.set(key, { data, ts: Date.now() });
+}
+async function fetchJson(url, options) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15e3);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+    return await res.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+async function searchMarkets(query, limit = 20) {
+  const cacheKey = `markets_search_${query}_${limit}`;
+  const cached = getCached2(cacheKey, MARKET_TTL);
+  if (cached) return cached;
+  try {
+    const url = `${GAMMA_API}/markets?closed=false&limit=${limit}&order=volume&ascending=false${query ? `&tag=${encodeURIComponent(query)}` : ""}`;
+    const data = await fetchJson(url);
+    const markets = Array.isArray(data) ? data : [];
+    const result = markets.map(normalizeMarket);
+    setCache2(cacheKey, result);
+    return result;
+  } catch (err) {
+    console.error("[polymarket] searchMarkets error:", err);
+    return [];
+  }
+}
+async function getTrendingMarkets(limit = 20) {
+  const cacheKey = `markets_trending_${limit}`;
+  const cached = getCached2(cacheKey, MARKET_TTL);
+  if (cached) return cached;
+  try {
+    const url = `${GAMMA_API}/markets?closed=false&limit=${limit}&order=volume24hr&ascending=false`;
+    const data = await fetchJson(url);
+    const markets = Array.isArray(data) ? data : [];
+    const result = markets.map(normalizeMarket);
+    setCache2(cacheKey, result);
+    return result;
+  } catch (err) {
+    console.error("[polymarket] getTrendingMarkets error:", err);
+    return [];
+  }
+}
+async function getMarketDetails(conditionId) {
+  const cacheKey = `market_${conditionId}`;
+  const cached = getCached2(cacheKey, MARKET_TTL);
+  if (cached) return cached;
+  try {
+    const url = `${GAMMA_API}/markets/${conditionId}`;
+    const data = await fetchJson(url);
+    const result = normalizeMarket(data);
+    setCache2(cacheKey, result);
+    return result;
+  } catch (err) {
+    console.error("[polymarket] getMarketDetails error:", err);
+    return null;
+  }
+}
+function normalizeMarket(raw) {
+  const outcomes = raw.outcomes ? typeof raw.outcomes === "string" ? JSON.parse(raw.outcomes) : raw.outcomes : ["Yes", "No"];
+  const outcomePrices = raw.outcomePrices ? typeof raw.outcomePrices === "string" ? JSON.parse(raw.outcomePrices) : raw.outcomePrices : [];
+  const tokens = [];
+  if (raw.tokens && Array.isArray(raw.tokens)) {
+    for (const t of raw.tokens) {
+      tokens.push({ token_id: t.token_id, outcome: t.outcome, price: parseFloat(t.price || "0") });
+    }
+  } else if (outcomePrices.length > 0) {
+    for (let i = 0; i < outcomes.length; i++) {
+      tokens.push({ token_id: `${raw.condition_id || raw.id}_${i}`, outcome: outcomes[i], price: parseFloat(outcomePrices[i] || "0") });
+    }
+  }
+  return {
+    condition_id: raw.condition_id || raw.id || "",
+    question: raw.question || "",
+    description: raw.description || "",
+    market_slug: raw.market_slug || raw.slug || "",
+    outcomes,
+    outcome_prices: outcomePrices,
+    tokens,
+    volume: parseFloat(raw.volume || "0"),
+    volume_24h: parseFloat(raw.volume24hr || raw.volume_24h || "0"),
+    liquidity: parseFloat(raw.liquidity || "0"),
+    end_date_iso: raw.end_date_iso || raw.endDate || "",
+    active: raw.active !== false,
+    closed: raw.closed === true,
+    category: raw.category || raw.groupItemTitle || "",
+    tags: raw.tags ? typeof raw.tags === "string" ? JSON.parse(raw.tags) : raw.tags : []
+  };
+}
+async function getWhaleWatchlist() {
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'polymarket_whale_watchlist'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+      return res.rows[0].value;
+    }
+  } catch (err) {
+    console.error("[polymarket] getWhaleWatchlist error:", err);
+  }
+  return [];
+}
+async function getWhaleActivities() {
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'polymarket_whale_activities'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+      const now = Date.now();
+      const recentCutoff = 24 * 60 * 60 * 1e3;
+      return res.rows[0].value.filter((a) => now - a.detected_at < recentCutoff);
+    }
+  } catch {
+  }
+  return [];
+}
+async function detectConsensus(activities) {
+  const byMarket = {};
+  for (const a of activities) {
+    if (a.activity_type === "position_exit") continue;
+    if (!byMarket[a.market_id]) byMarket[a.market_id] = { yes: [], no: [] };
+    if (a.direction === "YES") byMarket[a.market_id].yes.push(a);
+    else byMarket[a.market_id].no.push(a);
+  }
+  const results = [];
+  for (const [marketId, sides] of Object.entries(byMarket)) {
+    for (const [dir, acts] of [["YES", sides.yes], ["NO", sides.no]]) {
+      if (acts.length >= 2) {
+        const totalAmount = acts.reduce((s, a) => s + a.amount_usd, 0);
+        const avgScore = acts.reduce((s, a) => s + a.wallet_score, 0) / acts.length;
+        results.push({
+          market_id: marketId,
+          question: acts[0].market_question,
+          direction: dir,
+          whale_count: acts.length,
+          total_amount: totalAmount,
+          avg_score: parseFloat(avgScore.toFixed(3))
+        });
+      }
+    }
+  }
+  return results.sort((a, b) => b.whale_count - a.whale_count || b.avg_score - a.avg_score);
+}
+
+// src/polymarket-scout.ts
+var PM_THESIS_EXPIRY_MS = 72 * 60 * 60 * 1e3;
+function createPMThesisId(marketSlug) {
+  const date = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10).replace(/-/g, "_");
+  const rand = Math.random().toString(36).slice(2, 8);
+  const slug = marketSlug.replace(/[^a-z0-9]/gi, "_").slice(0, 20);
+  return `pm_${date}_${slug}_${rand}`;
+}
+async function getActiveTheses2() {
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'polymarket_scout_active_theses'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+      const now = Date.now();
+      return res.rows[0].value.filter((t) => t.status === "active" && t.expires_at > now);
+    }
+  } catch (err) {
+    console.error("[polymarket-scout] getActiveTheses error:", err);
+  }
+  return [];
+}
+async function saveTheses2(theses) {
+  const pool2 = getPool();
+  const existing = await getActiveTheses2();
+  const now = Date.now();
+  const activeExisting = existing.filter((t) => t.expires_at > now && t.status === "active");
+  const newMarketIds = new Set(theses.map((t) => t.market_id));
+  const kept = activeExisting.filter((t) => !newMarketIds.has(t.market_id));
+  const merged = [...kept, ...theses];
+  await pool2.query(
+    `INSERT INTO app_config (key, value, updated_at) VALUES ('polymarket_scout_active_theses', $1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [JSON.stringify(merged), Date.now()]
+  );
+}
+async function retireThesis2(thesisId) {
+  const pool2 = getPool();
+  const theses = await getActiveTheses2();
+  const updated = theses.map((t) => t.id === thesisId ? { ...t, status: "retired" } : t);
+  await pool2.query(
+    `INSERT INTO app_config (key, value, updated_at) VALUES ('polymarket_scout_active_theses', $1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [JSON.stringify(updated), Date.now()]
+  );
+}
+function buildThesis2(params) {
+  const now = Date.now();
+  const market = params.market;
+  const yesPrice = market.tokens.find((t) => t.outcome === "Yes")?.price || 0;
+  const noPrice = market.tokens.find((t) => t.outcome === "No")?.price || 0;
+  const currentOdds = params.direction === "YES" ? yesPrice : noPrice;
+  const entryOdds = currentOdds;
+  const exitOdds = params.direction === "YES" ? Math.min(currentOdds + 0.15, 0.95) : Math.max(currentOdds - 0.15, 0.05);
+  return {
+    id: createPMThesisId(market.market_slug),
+    asset: market.question,
+    asset_class: "polymarket",
+    market_id: market.condition_id,
+    market_slug: market.market_slug,
+    direction: params.direction,
+    confidence: params.confidence,
+    current_odds: parseFloat(currentOdds.toFixed(3)),
+    entry_odds: parseFloat(entryOdds.toFixed(3)),
+    exit_odds: parseFloat(exitOdds.toFixed(3)),
+    whale_consensus: params.whale_consensus,
+    whale_wallets: params.whale_wallets,
+    whale_avg_score: params.whale_avg_score,
+    total_whale_amount: params.total_whale_amount,
+    volume: market.volume,
+    liquidity: market.liquidity,
+    end_date: market.end_date_iso,
+    category: market.category,
+    sources: params.sources,
+    reasoning: params.reasoning,
+    created_at: now,
+    expires_at: now + PM_THESIS_EXPIRY_MS,
+    status: "active"
+  };
+}
+
+// src/bankr.ts
+var PORTFOLIO_VALUE_KEY = "wealth_engines_portfolio_value";
+var DEFAULT_PORTFOLIO = 50;
+async function getPortfolioValue() {
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = $1`, [PORTFOLIO_VALUE_KEY]);
+    if (res.rows.length > 0 && typeof res.rows[0].value === "number") {
+      return res.rows[0].value;
+    }
+  } catch {
+  }
+  return DEFAULT_PORTFOLIO;
+}
+async function setPortfolioValue(value) {
+  const pool2 = getPool();
+  await pool2.query(
+    `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [PORTFOLIO_VALUE_KEY, JSON.stringify(value), Date.now()]
+  );
+}
+async function getPositions() {
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_positions'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+      return res.rows[0].value;
+    }
+  } catch {
+  }
+  return [];
+}
+async function savePositions(positions) {
+  const pool2 = getPool();
+  await pool2.query(
+    `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_positions', $1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [JSON.stringify(positions), Date.now()]
+  );
+}
+async function getTradeHistory() {
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_trade_history'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+      return res.rows[0].value;
+    }
+  } catch {
+  }
+  return [];
+}
+async function appendTradeHistory(record) {
+  const pool2 = getPool();
+  const history = await getTradeHistory();
+  history.push(record);
+  await pool2.query(
+    `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_trade_history', $1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [JSON.stringify(history), Date.now()]
+  );
+}
+async function isKillSwitchActive() {
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_kill_switch'`);
+    return res.rows.length > 0 && res.rows[0].value === true;
+  } catch {
+    return false;
+  }
+}
+async function isPaused() {
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_paused'`);
+    return res.rows.length > 0 && res.rows[0].value === true;
+  } catch {
+    return false;
+  }
+}
+async function getMode() {
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_mode'`);
+    if (res.rows.length > 0 && typeof res.rows[0].value === "string") {
+      return res.rows[0].value;
+    }
+  } catch {
+  }
+  return "BETA";
+}
+function getExposureBucket(asset, assetClass) {
+  const lower = asset.toLowerCase();
+  if (assetClass === "polymarket" && !lower.includes("btc") && !lower.includes("eth") && !lower.includes("sol")) {
+    return "prediction-only";
+  }
+  if (lower.includes("btc") || lower.includes("bitcoin")) return "btc";
+  if (lower.includes("eth") || lower.includes("ethereum")) return "eth";
+  if (lower.includes("sol") || lower.includes("solana")) return "sol";
+  return "general-crypto";
+}
+async function runPreExecutionChecks(params) {
+  const checks = [];
+  let allPassed = true;
+  const killActive = await isKillSwitchActive();
+  checks.push({ name: "kill_switch", passed: !killActive, detail: killActive ? "Kill switch is ACTIVE" : "Kill switch inactive" });
+  if (killActive) allPassed = false;
+  const paused = await isPaused();
+  checks.push({ name: "pause_state", passed: !paused, detail: paused ? "System is PAUSED" : "System active" });
+  if (paused) allPassed = false;
+  const mode = await getMode();
+  const isLiveOrBeta = mode === "LIVE" || mode === "BETA";
+  checks.push({ name: "mode_check", passed: true, detail: `Mode: ${mode}${mode === "SHADOW" ? " (shadow trades only)" : ""}` });
+  const levOk = params.leverage <= 2;
+  checks.push({ name: "leverage_cap", passed: levOk, detail: `Requested: ${params.leverage}x, Max: 2x` });
+  if (!levOk) allPassed = false;
+  const portfolio = await getPortfolioValue();
+  const maxRisk = portfolio * 0.02;
+  const riskDistance = Math.abs(params.entry_price - params.stop_price);
+  const riskAmount = params.risk_amount || (riskDistance > 0 ? maxRisk : 0);
+  const riskOk = riskAmount <= maxRisk;
+  checks.push({ name: "risk_per_trade", passed: riskOk, detail: `Risk: $${riskAmount.toFixed(2)}, Max: $${maxRisk.toFixed(2)} (2% of $${portfolio.toFixed(2)})` });
+  if (!riskOk) allPassed = false;
+  if (params.leverage > 1) {
+    const marginPerUnit = params.entry_price / params.leverage;
+    const liquidationDistance = marginPerUnit;
+    const bufferOk = riskDistance < liquidationDistance * 0.8;
+    checks.push({ name: "margin_buffer", passed: bufferOk, detail: bufferOk ? "20% buffer above liquidation maintained" : "Insufficient margin buffer \u2014 liquidation too close to stop" });
+    if (!bufferOk) allPassed = false;
+  } else {
+    checks.push({ name: "margin_buffer", passed: true, detail: "No leverage \u2014 no liquidation risk" });
+  }
+  const positions = await getPositions();
+  const posCountOk = positions.length < 5;
+  checks.push({ name: "max_positions", passed: posCountOk, detail: `Open: ${positions.length}/5` });
+  if (!posCountOk) allPassed = false;
+  const totalExposure = positions.reduce((sum, p) => sum + p.size * p.entry_price, 0);
+  const newPositionSize = riskDistance > 0 ? riskAmount / riskDistance : 0;
+  const newExposure = newPositionSize * params.entry_price;
+  const totalAfter = totalExposure + newExposure;
+  const exposureLimit = portfolio * 0.8;
+  const exposureOk = totalAfter <= exposureLimit;
+  checks.push({ name: "total_exposure", passed: exposureOk, detail: `After: $${totalAfter.toFixed(2)} / $${exposureLimit.toFixed(2)} (80% of portfolio)` });
+  if (!exposureOk) allPassed = false;
+  const bucket = getExposureBucket(params.asset, params.asset_class);
+  const bucketCount = positions.filter((p) => p.exposure_bucket === bucket).length;
+  const correlationOk = bucketCount < 2;
+  checks.push({ name: "correlation_limit", passed: correlationOk, detail: `Bucket "${bucket}": ${bucketCount}/2 positions` });
+  if (!correlationOk) allPassed = false;
+  const rejectionReason = allPassed ? null : checks.filter((c) => !c.passed).map((c) => c.detail).join("; ");
+  return { passed: allPassed, checks, rejection_reason: rejectionReason };
+}
+async function openPosition(params) {
+  const portfolio = await getPortfolioValue();
+  const maxRisk = portfolio * 0.02;
+  const riskDistance = Math.abs(params.entry_price - params.stop_price);
+  const size = riskDistance > 0 ? maxRisk / riskDistance : 0;
+  const posId = `pos_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const tradeId = `trade_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const position = {
+    id: posId,
+    thesis_id: params.thesis_id,
+    asset: params.asset,
+    asset_class: params.asset_class,
+    direction: params.direction,
+    leverage: `${params.leverage}x`,
+    entry_price: params.entry_price,
+    current_price: params.entry_price,
+    size,
+    unrealized_pnl: 0,
+    peak_price: params.entry_price,
+    atr_value: params.atr_value,
+    atr_stop_price: params.entry_price - params.atr_value * 5.5,
+    opened_at: (/* @__PURE__ */ new Date()).toISOString(),
+    venue: params.venue,
+    exposure_bucket: getExposureBucket(params.asset, params.asset_class)
+  };
+  const positions = await getPositions();
+  positions.push(position);
+  await savePositions(positions);
+  recordSignal(params.asset.toLowerCase(), "entry");
+  return { position, trade_id: tradeId };
+}
+async function closePosition(positionId, exitPrice, closeReason, txHash) {
+  const positions = await getPositions();
+  const idx = positions.findIndex((p) => p.id === positionId);
+  if (idx === -1) return null;
+  const pos = positions[idx];
+  const isLong = pos.direction === "LONG" || pos.direction === "YES";
+  const priceDiff = isLong ? exitPrice - pos.entry_price : pos.entry_price - exitPrice;
+  const pnl = priceDiff * pos.size;
+  const pnlPct = pos.entry_price > 0 ? priceDiff / pos.entry_price * 100 : 0;
+  const fees = pos.size * exitPrice * 1e-3;
+  const taxLot = {
+    id: `lot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    asset: pos.asset,
+    asset_class: pos.asset_class,
+    quantity: pos.size,
+    cost_basis: pos.size * pos.entry_price + fees,
+    cost_per_unit: pos.entry_price,
+    acquired_at: pos.opened_at,
+    disposed_at: (/* @__PURE__ */ new Date()).toISOString(),
+    proceeds: pos.size * exitPrice - fees,
+    gain_loss: pnl - fees * 2,
+    holding_period: "short",
+    wash_sale_flagged: false,
+    wash_sale_disallowed: 0,
+    venue: pos.venue,
+    tx_hash: txHash || null
+  };
+  const tradeRecord = {
+    id: `trade_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    thesis_id: pos.thesis_id,
+    asset: pos.asset,
+    asset_class: pos.asset_class,
+    direction: pos.direction,
+    leverage: pos.leverage,
+    entry_price: pos.entry_price,
+    exit_price: exitPrice,
+    expected_entry_price: pos.entry_price,
+    size: pos.size,
+    pnl: parseFloat(pnl.toFixed(4)),
+    pnl_pct: parseFloat(pnlPct.toFixed(2)),
+    fees: parseFloat(fees.toFixed(4)),
+    opened_at: pos.opened_at,
+    closed_at: (/* @__PURE__ */ new Date()).toISOString(),
+    close_reason: closeReason,
+    tax_lot: taxLot
+  };
+  positions.splice(idx, 1);
+  await savePositions(positions);
+  await appendTradeHistory(tradeRecord);
+  const portfolio = await getPortfolioValue();
+  await setPortfolioValue(portfolio + pnl - fees * 2);
+  recordSignal(pos.asset.toLowerCase(), "exit");
+  return tradeRecord;
+}
+async function closeAllPositions(reason) {
+  const positions = await getPositions();
+  const records = [];
+  for (const pos of positions) {
+    const record = await closePosition(pos.id, pos.current_price, reason);
+    if (record) records.push(record);
+  }
+  return records;
+}
+async function checkCircuitBreaker() {
+  const history = await getTradeHistory();
+  const now = Date.now();
+  const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1e3;
+  const recentTrades = history.filter((t) => new Date(t.closed_at).getTime() > sevenDaysAgo);
+  const rolling7dayPnl = recentTrades.reduce((sum, t) => sum + t.pnl, 0);
+  const portfolio = await getPortfolioValue();
+  const pnlPct = portfolio > 0 ? rolling7dayPnl / portfolio * 100 : 0;
+  const triggered = pnlPct < -15;
+  if (triggered) {
+    const pool2 = getPool();
+    await pool2.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_paused', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(true), Date.now()]
+    );
+    console.log(`[bankr] Circuit breaker TRIGGERED: 7-day P&L ${pnlPct.toFixed(1)}% < -15%`);
+  }
+  return { triggered, rolling7dayPnl: parseFloat(rolling7dayPnl.toFixed(4)), pnlPct: parseFloat(pnlPct.toFixed(2)) };
+}
+async function runPositionMonitor() {
+  const killActive = await isKillSwitchActive();
+  const positions = await getPositions();
+  const closed = [];
+  const errors = [];
+  if (killActive && positions.length > 0) {
+    console.log("[bankr] Kill switch active \u2014 closing ALL positions");
+    const records = await closeAllPositions("kill_switch");
+    return { checked: positions.length, closed: records, errors: [] };
+  }
+  if (positions.length === 0) {
+    return { checked: 0, closed: [], errors: [] };
+  }
+  for (const pos of positions) {
+    try {
+      if (pos.asset_class === "crypto") {
+        await monitorCryptoPosition(pos, closed);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`${pos.asset}: ${msg}`);
+    }
+  }
+  const cb = await checkCircuitBreaker();
+  if (cb.triggered) {
+    console.log("[bankr] Circuit breaker triggered during monitor \u2014 closing remaining positions");
+    const remaining = await getPositions();
+    for (const p of remaining) {
+      const record = await closePosition(p.id, p.current_price, "circuit_breaker");
+      if (record) closed.push(record);
+    }
+  }
+  return { checked: positions.length, closed, errors };
+}
+async function monitorCryptoPosition(pos, closed) {
+  let currentPrice;
+  try {
+    const candles = await getHistoricalOHLCV(pos.asset, 7);
+    if (candles.length === 0) return;
+    currentPrice = candles[candles.length - 1].close;
+  } catch {
+    return;
+  }
+  const positions = await getPositions();
+  const livePos = positions.find((p) => p.id === pos.id);
+  if (!livePos) return;
+  livePos.current_price = currentPrice;
+  const isLong = livePos.direction === "LONG";
+  if (isLong && currentPrice > livePos.peak_price) {
+    livePos.peak_price = currentPrice;
+    livePos.atr_stop_price = currentPrice - livePos.atr_value * 5.5;
+  } else if (!isLong && currentPrice < livePos.peak_price) {
+    livePos.peak_price = currentPrice;
+    livePos.atr_stop_price = currentPrice + livePos.atr_value * 5.5;
+  }
+  const priceDiff = isLong ? currentPrice - livePos.entry_price : livePos.entry_price - currentPrice;
+  livePos.unrealized_pnl = parseFloat((priceDiff * livePos.size).toFixed(4));
+  await savePositions(positions);
+  if (isLong && currentPrice <= livePos.atr_stop_price) {
+    console.log(`[bankr] Trailing stop hit for ${pos.asset} at $${currentPrice}`);
+    const record = await closePosition(pos.id, currentPrice, "trailing_stop");
+    if (record) closed.push(record);
+    return;
+  }
+  if (!isLong && currentPrice >= livePos.atr_stop_price) {
+    console.log(`[bankr] Trailing stop hit for ${pos.asset} SHORT at $${currentPrice}`);
+    const record = await closePosition(pos.id, currentPrice, "trailing_stop");
+    if (record) closed.push(record);
+    return;
+  }
+  try {
+    const candles = await getHistoricalOHLCV(pos.asset, 14);
+    if (candles.length >= 30) {
+      const result = analyzeAsset(candles);
+      if (isLong && result.votes.rsi_overbought) {
+        console.log(`[bankr] RSI exit (overbought) for ${pos.asset}`);
+        const record = await closePosition(pos.id, currentPrice, "rsi_exit");
+        if (record) closed.push(record);
+        return;
+      }
+      if (!isLong && result.votes.rsi_oversold) {
+        console.log(`[bankr] RSI exit (oversold) for ${pos.asset} SHORT`);
+        const record = await closePosition(pos.id, currentPrice, "rsi_exit");
+        if (record) closed.push(record);
+        return;
+      }
+    }
+  } catch {
+  }
+}
+async function getPortfolioSummary() {
+  const [portfolio, positions, mode, paused, killSwitch] = await Promise.all([
+    getPortfolioValue(),
+    getPositions(),
+    getMode(),
+    isPaused(),
+    isKillSwitchActive()
+  ]);
+  const totalExposure = positions.reduce((sum, p) => sum + p.size * p.entry_price, 0);
+  const unrealizedPnl = positions.reduce((sum, p) => sum + p.unrealized_pnl, 0);
+  return {
+    portfolio_value: portfolio,
+    open_positions: positions.length,
+    total_exposure: parseFloat(totalExposure.toFixed(2)),
+    unrealized_pnl: parseFloat(unrealizedPnl.toFixed(4)),
+    mode,
+    paused,
+    kill_switch: killSwitch,
+    positions
+  };
+}
+async function getTaxSummary() {
+  const history = await getTradeHistory();
+  const year = (/* @__PURE__ */ new Date()).getFullYear();
+  const yearStart = new Date(year, 0, 1).getTime();
+  const yearTrades = history.filter((t) => new Date(t.closed_at).getTime() >= yearStart);
+  let gains = 0;
+  let losses = 0;
+  let washSaleAdj = 0;
+  const quarterly = {};
+  for (const t of yearTrades) {
+    const q = `Q${Math.floor(new Date(t.closed_at).getMonth() / 3) + 1}`;
+    if (!quarterly[q]) quarterly[q] = { trades: 0, pnl: 0 };
+    quarterly[q].trades++;
+    quarterly[q].pnl += t.pnl;
+    if (t.pnl >= 0) gains += t.pnl;
+    else losses += t.pnl;
+    if (t.tax_lot.wash_sale_flagged) {
+      washSaleAdj += t.tax_lot.wash_sale_disallowed;
+    }
+  }
+  const netTaxable = gains + losses + washSaleAdj;
+  const federalRate = 0.24;
+  const nyRate = 0.0685;
+  return {
+    year,
+    total_trades: yearTrades.length,
+    realized_pnl: parseFloat((gains + losses).toFixed(2)),
+    short_term_gains: parseFloat(gains.toFixed(2)),
+    short_term_losses: parseFloat(losses.toFixed(2)),
+    wash_sale_adjustments: parseFloat(washSaleAdj.toFixed(2)),
+    net_taxable: parseFloat(netTaxable.toFixed(2)),
+    estimated_federal_tax: parseFloat((Math.max(0, netTaxable) * federalRate).toFixed(2)),
+    estimated_ny_tax: parseFloat((Math.max(0, netTaxable) * nyRate).toFixed(2)),
+    total_estimated_tax: parseFloat((Math.max(0, netTaxable) * (federalRate + nyRate)).toFixed(2)),
+    quarterly
+  };
+}
+async function generateForm8949CSV() {
+  const history = await getTradeHistory();
+  const year = (/* @__PURE__ */ new Date()).getFullYear();
+  const yearStart = new Date(year, 0, 1).getTime();
+  const yearTrades = history.filter((t) => new Date(t.closed_at).getTime() >= yearStart);
+  const lines = [
+    '"Description of Property","Date Acquired","Date Sold","Proceeds","Cost or Other Basis","Code","Amount of Adjustment","Gain or (Loss)"'
+  ];
+  for (const t of yearTrades) {
+    const lot = t.tax_lot;
+    const desc = `${t.size.toFixed(6)} ${t.asset}`;
+    const acquired = new Date(lot.acquired_at).toLocaleDateString("en-US");
+    const disposed = lot.disposed_at ? new Date(lot.disposed_at).toLocaleDateString("en-US") : "";
+    const proceeds = lot.proceeds?.toFixed(2) || "0.00";
+    const costBasis = lot.cost_basis.toFixed(2);
+    const code = lot.wash_sale_flagged ? "W" : "";
+    const adjustment = lot.wash_sale_disallowed > 0 ? lot.wash_sale_disallowed.toFixed(2) : "";
+    const gainLoss = lot.gain_loss?.toFixed(2) || "0.00";
+    lines.push(`"${desc}","${acquired}","${disposed}","${proceeds}","${costBasis}","${code}","${adjustment}","${gainLoss}"`);
+  }
+  return lines.join("\n");
+}
+
 // src/maps.ts
 var TIMEOUT_MS5 = 1e4;
 var NOMINATIM_BASE = "https://nominatim.openstreetmap.org";
@@ -6028,7 +6700,7 @@ var deadManInterval = null;
 var lastDeadManAlert = {};
 var commands = {};
 var pendingApprovals = /* @__PURE__ */ new Map();
-async function getMode() {
+async function getMode2() {
   try {
     const pool2 = getPool();
     const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_mode'`);
@@ -6069,6 +6741,22 @@ async function sendMessage(text, parseMode = "Markdown") {
     return null;
   }
 }
+async function sendMessageWithKeyboard(text, keyboard, parseMode = "Markdown") {
+  if (!isConfigured6()) return null;
+  try {
+    const result = await tgFetch("sendMessage", {
+      chat_id: CHAT_ID,
+      text,
+      parse_mode: parseMode,
+      disable_web_page_preview: true,
+      reply_markup: { inline_keyboard: keyboard }
+    });
+    return result.result?.message_id || null;
+  } catch (err) {
+    console.error("[telegram] sendMessageWithKeyboard failed:", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
 async function answerCallbackQuery(callbackQueryId, text) {
   try {
     await tgFetch("answerCallbackQuery", {
@@ -6095,7 +6783,7 @@ function registerCommand(name, handler) {
   commands[name.toLowerCase()] = handler;
 }
 async function handleStatusCommand() {
-  const mode = await getMode();
+  const mode = await getMode2();
   const pool2 = getPool();
   let killSwitchActive = false;
   try {
@@ -6134,7 +6822,7 @@ async function handleStatusCommand() {
   return lines.join("\n");
 }
 async function handlePortfolioCommand() {
-  const mode = await getMode();
+  const mode = await getMode2();
   const pool2 = getPool();
   let positions = [];
   try {
@@ -6167,7 +6855,7 @@ _Use /trades to see recent trade history._`;
   return lines.join("\n");
 }
 async function handleIntelCommand() {
-  const mode = await getMode();
+  const mode = await getMode2();
   const pool2 = getPool();
   try {
     const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scout_latest_brief'`);
@@ -6186,7 +6874,7 @@ ${truncated}`;
 No SCOUT brief available yet. SCOUT agent has not run.`;
 }
 async function handlePauseCommand() {
-  const mode = await getMode();
+  const mode = await getMode2();
   const pool2 = getPool();
   try {
     await pool2.query(
@@ -6205,7 +6893,7 @@ Use /resume to restart.`;
   }
 }
 async function handleResumeCommand() {
-  const mode = await getMode();
+  const mode = await getMode2();
   const pool2 = getPool();
   try {
     await pool2.query(
@@ -6213,17 +6901,22 @@ async function handleResumeCommand() {
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
       [JSON.stringify(false), Date.now()]
     );
-    console.log("[telegram] Wealth Engines RESUMED via Telegram");
+    await pool2.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_kill_switch', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(false), Date.now()]
+    );
+    console.log("[telegram] Wealth Engines RESUMED + kill switch deactivated via Telegram");
     return `${mode} \u25B6\uFE0F *System RESUMED*
 
-All Wealth Engine jobs are active again.`;
+All Wealth Engine jobs are active. Kill switch deactivated.`;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return `${mode} \u274C Failed to resume: ${msg}`;
   }
 }
 async function handleScoutCommand() {
-  const mode = await getMode();
+  const mode = await getMode2();
   const pool2 = getPool();
   try {
     const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scout_active_theses'`);
@@ -6263,7 +6956,7 @@ All theses have expired. Waiting for next SCOUT cycle.`;
 No active theses. SCOUT has not generated any yet.`;
 }
 async function handleTradesCommand(args) {
-  const mode = await getMode();
+  const mode = await getMode2();
   const pool2 = getPool();
   const limit = Math.min(Math.max(parseInt(args) || 5, 1), 20);
   try {
@@ -6289,7 +6982,7 @@ async function handleTradesCommand(args) {
 No trade history yet.`;
 }
 async function handlePublicCommand(args) {
-  const mode = await getMode();
+  const mode = await getMode2();
   const pool2 = getPool();
   const val = args.trim().toLowerCase();
   if (val !== "on" && val !== "off") {
@@ -6318,21 +7011,214 @@ Usage: /public on | /public off`;
     return `${mode} \u274C Failed to update: ${msg}`;
   }
 }
+async function handleKillCommand() {
+  const mode = await getMode2();
+  const pool2 = getPool();
+  try {
+    await pool2.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_kill_switch', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(true), Date.now()]
+    );
+    console.log("[telegram] KILL SWITCH ACTIVATED via Telegram");
+    return `${mode} \u{1F6A8} *KILL SWITCH ACTIVATED*
+
+All positions will be closed on the next monitor tick (within 5 minutes).
+Use /resume to deactivate kill switch and resume.`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `${mode} \u274C Kill switch failed: ${msg}`;
+  }
+}
+async function handleRiskCommand() {
+  const mode = await getMode2();
+  const pool2 = getPool();
+  let portfolio = 50;
+  try {
+    const pv = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_portfolio_value'`);
+    if (pv.rows.length > 0 && typeof pv.rows[0].value === "number") portfolio = pv.rows[0].value;
+  } catch {
+  }
+  let positions = [];
+  try {
+    const pos = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_positions'`);
+    if (pos.rows.length > 0 && Array.isArray(pos.rows[0].value)) positions = pos.rows[0].value;
+  } catch {
+  }
+  let history = [];
+  try {
+    const hist = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_trade_history'`);
+    if (hist.rows.length > 0 && Array.isArray(hist.rows[0].value)) history = hist.rows[0].value;
+  } catch {
+  }
+  const totalExposure = positions.reduce((s, p) => s + (p.size || 0) * (p.entry_price || 0), 0);
+  const unrealizedPnl = positions.reduce((s, p) => s + (p.unrealized_pnl || 0), 0);
+  const exposurePct = portfolio > 0 ? totalExposure / portfolio * 100 : 0;
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1e3;
+  const recentTrades = history.filter((t) => new Date(t.closed_at).getTime() > sevenDaysAgo);
+  const rolling7d = recentTrades.reduce((s, t) => s + (t.pnl || 0), 0);
+  const rolling7dPct = portfolio > 0 ? rolling7d / portfolio * 100 : 0;
+  const buckets = {};
+  for (const p of positions) {
+    const b = p.exposure_bucket || "general";
+    buckets[b] = (buckets[b] || 0) + 1;
+  }
+  const lines = [
+    `${mode} *Risk Dashboard*`,
+    "",
+    `\u{1F4B0} Portfolio: $${portfolio.toFixed(2)}`,
+    `\u{1F4CA} Exposure: $${totalExposure.toFixed(2)} (${exposurePct.toFixed(0)}% of portfolio)`,
+    `\u{1F4C8} Unrealized P&L: ${unrealizedPnl >= 0 ? "+" : ""}$${unrealizedPnl.toFixed(2)}`,
+    `\u{1F4C9} 7-Day Rolling P&L: ${rolling7d >= 0 ? "+" : ""}$${rolling7d.toFixed(2)} (${rolling7dPct.toFixed(1)}%)`,
+    `\u{1F53B} Circuit Breaker: ${rolling7dPct < -15 ? "\u26A0\uFE0F TRIGGERED" : "OK"} (threshold: -15%)`,
+    "",
+    `*Positions:* ${positions.length}/5`,
+    `*Exposure Limit:* ${exposurePct.toFixed(0)}%/80%`,
+    `*Buckets:* ${Object.entries(buckets).map(([b, c]) => `${b}: ${c}/2`).join(", ") || "none"}`
+  ];
+  return lines.join("\n");
+}
+async function handlePolymarketCommand() {
+  const mode = await getMode2();
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'polymarket_scout_active_theses'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value) && res.rows[0].value.length > 0) {
+      const theses = res.rows[0].value;
+      const now = Date.now();
+      const active = theses.filter((t) => t.status === "active" && (!t.expires_at || t.expires_at > now));
+      if (active.length === 0) {
+        return `${mode} *Polymarket Theses*
+
+No active theses. Waiting for next scan.`;
+      }
+      const lines = [`${mode} *Polymarket Theses* (${active.length})`, ""];
+      for (const t of active.slice(0, 8)) {
+        const dir = t.direction === "YES" ? "\u2705 YES" : "\u274C NO";
+        const age = Math.floor((now - t.created_at) / 36e5);
+        const conf = { HIGH: "\u{1F7E2}", MEDIUM: "\u{1F7E1}", LOW: "\u{1F534}" }[t.confidence] || "\u26AA";
+        lines.push(`${conf} *${(t.asset || "").slice(0, 60)}*`);
+        lines.push(`  ${dir} | Odds: ${((t.current_odds || 0) * 100).toFixed(0)}% | Whales: ${t.whale_consensus || 0}`);
+        lines.push(`  Score: ${(t.whale_avg_score || 0).toFixed(2)} | _${age}h ago_`);
+        lines.push("");
+      }
+      return lines.join("\n");
+    }
+  } catch {
+  }
+  return `${mode} *Polymarket Theses*
+
+No active theses. Polymarket SCOUT has not generated any yet.`;
+}
+async function handleTaxCommand() {
+  const mode = await getMode2();
+  const pool2 = getPool();
+  let history = [];
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_trade_history'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) history = res.rows[0].value;
+  } catch {
+  }
+  const year = (/* @__PURE__ */ new Date()).getFullYear();
+  const yearStart = new Date(year, 0, 1).getTime();
+  const yearTrades = history.filter((t) => new Date(t.closed_at).getTime() >= yearStart);
+  let gains = 0, losses = 0, washAdj = 0;
+  for (const t of yearTrades) {
+    if ((t.pnl || 0) >= 0) gains += t.pnl;
+    else losses += t.pnl;
+    if (t.tax_lot?.wash_sale_flagged) washAdj += t.tax_lot.wash_sale_disallowed || 0;
+  }
+  const net = gains + losses + washAdj;
+  const fedTax = Math.max(0, net) * 0.24;
+  const nyTax = Math.max(0, net) * 0.0685;
+  const lines = [
+    `${mode} *${year} Tax Summary*`,
+    "",
+    `\u{1F4CA} Total Trades: ${yearTrades.length}`,
+    `\u{1F7E2} Gains: +$${gains.toFixed(2)}`,
+    `\u{1F534} Losses: -$${Math.abs(losses).toFixed(2)}`,
+    `\u26A0\uFE0F Wash Sale Adj: $${washAdj.toFixed(2)}`,
+    `\u{1F4B5} Net Taxable: $${net.toFixed(2)}`,
+    "",
+    `*Estimated Tax:*`,
+    `  Federal (24%): $${fedTax.toFixed(2)}`,
+    `  NY State (6.85%): $${nyTax.toFixed(2)}`,
+    `  Total: $${(fedTax + nyTax).toFixed(2)}`
+  ];
+  return lines.join("\n");
+}
 async function handleHelpCommand() {
-  const mode = await getMode();
+  const mode = await getMode2();
   return [
     `${mode} *DarkNode Commands*`,
     "",
     "/status \u2014 System health & mode",
     "/portfolio \u2014 Open positions & P&L",
     "/intel \u2014 Latest SCOUT brief",
-    "/scout \u2014 Active theses",
+    "/scout \u2014 Active crypto theses",
+    "/polymarket \u2014 Active PM theses",
     "/trades [n] \u2014 Last N trades (default 5)",
+    "/risk \u2014 Risk dashboard",
+    "/tax \u2014 YTD tax summary",
+    "/kill \u2014 Emergency kill switch",
     "/pause \u2014 Halt all Wealth Engine jobs",
     "/resume \u2014 Resume Wealth Engine jobs",
     "/public on|off \u2014 Toggle dashboard access",
     "/help \u2014 This message"
   ].join("\n");
+}
+async function requestTradeApproval(params) {
+  const mode = await getMode2();
+  if (!isConfigured6()) {
+    console.warn("[telegram] Trade approval requested but Telegram not configured \u2014 auto-skipping");
+    return "skip";
+  }
+  const text = [
+    `${mode} \u{1F514} *Trade Approval Required*`,
+    "",
+    `*Asset:* ${params.asset}`,
+    `*Direction:* ${params.direction}`,
+    `*Leverage:* ${params.leverage}`,
+    `*Entry:* $${params.entryPrice}`,
+    `*Stop Loss:* $${params.stopLoss}`,
+    `*Take Profit:* $${params.takeProfit}`,
+    `*Risk:* $${params.riskAmount}`,
+    "",
+    `*Reason:* ${params.reason}`,
+    "",
+    `_Thesis: ${params.thesisId}_`
+  ].join("\n");
+  const approvalId = `approval_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const keyboard = [
+    [
+      { text: "\u2705 Approve", callback_data: `trade_approve:${approvalId}` },
+      { text: "\u23ED Skip", callback_data: `trade_skip:${approvalId}` },
+      { text: "\u23F8 Hold", callback_data: `trade_hold:${approvalId}` }
+    ]
+  ];
+  return new Promise(async (resolve) => {
+    const msgId = await sendMessageWithKeyboard(text, keyboard);
+    pendingApprovals.set(approvalId, {
+      thesisId: params.thesisId,
+      asset: params.asset,
+      direction: params.direction,
+      leverage: params.leverage,
+      messageId: msgId || 0,
+      createdAt: Date.now(),
+      resolve
+    });
+    setTimeout(() => {
+      if (pendingApprovals.has(approvalId)) {
+        pendingApprovals.delete(approvalId);
+        resolve("skip");
+        if (msgId) {
+          editMessage(msgId, `${text}
+
+\u23F0 _Expired \u2014 auto-skipped after 30 minutes_`);
+        }
+      }
+    }, 30 * 60 * 1e3);
+  });
 }
 async function handleCallbackQuery(callbackQueryId, data) {
   const [action, approvalId] = data.split(":");
@@ -6366,7 +7252,7 @@ async function handleCallbackQuery(callbackQueryId, data) {
     skip: "\u23ED SKIPPED",
     hold: "\u23F8 ON HOLD"
   };
-  const mode = await getMode();
+  const mode = await getMode2();
   if (pending.messageId) {
     await editMessage(
       pending.messageId,
@@ -6451,7 +7337,7 @@ async function isJobEnabled(pool2, agentId) {
 async function checkDeadManSwitches() {
   if (!isConfigured6()) return;
   const pool2 = getPool();
-  const mode = await getMode();
+  const mode = await getMode2();
   let paused = false;
   try {
     const pa = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_paused'`);
@@ -6491,6 +7377,33 @@ Check scheduled jobs or run manually.`
   } else {
     delete lastDeadManAlert["scout"];
   }
+  try {
+    const monitorRes = await pool2.query(
+      `SELECT value FROM app_config WHERE key = 'bankr_monitor_last_tick'`
+    );
+    if (monitorRes.rows.length > 0) {
+      const lastTick = typeof monitorRes.rows[0].value === "number" ? monitorRes.rows[0].value : parseInt(String(monitorRes.rows[0].value));
+      const minsSince = (Date.now() - lastTick) / (60 * 1e3);
+      if (minsSince > 30) {
+        const lastAlert = lastDeadManAlert["bankr-monitor"] || 0;
+        if (Date.now() - lastAlert > 60 * 60 * 1e3) {
+          lastDeadManAlert["bankr-monitor"] = Date.now();
+          await sendMessage(
+            `${mode} \u26A0\uFE0F *Dead Man's Switch: BANKR Monitor*
+
+Position monitor has not ticked in ${Math.floor(minsSince)} min (threshold: 30 min).
+Last tick: ${timeAgo(lastTick)}
+
+The server may have restarted or crashed.`
+          );
+        }
+      } else {
+        delete lastDeadManAlert["bankr-monitor"];
+      }
+    }
+  } catch (err) {
+    console.error("[telegram] Dead man switch BANKR monitor check failed:", err);
+  }
   const bankrEnabled = await isJobEnabled(pool2, "bankr");
   if (bankrEnabled) {
     try {
@@ -6507,7 +7420,7 @@ Check scheduled jobs or run manually.`
             await sendMessage(
               `${mode} \u26A0\uFE0F *Dead Man's Switch: BANKR*
 
-BANKR monitor has not run in ${Math.floor(hoursSince)}h (threshold: 8h).
+BANKR agent has not run in ${Math.floor(hoursSince)}h (threshold: 8h).
 Last run: ${timeAgo(lastRun)}
 
 Check scheduled jobs or run manually.`
@@ -6523,6 +7436,29 @@ Check scheduled jobs or run manually.`
   } else {
     delete lastDeadManAlert["bankr"];
   }
+}
+async function sendTradeAlert(params) {
+  const mode = await getMode2();
+  const icons = {
+    executed: "\u{1F4C8}",
+    stopped: "\u{1F6D1}",
+    emergency: "\u{1F6A8}",
+    closed: "\u2705"
+  };
+  const icon = icons[params.type] || "\u{1F4CA}";
+  const lines = [`${mode} ${icon} *Trade ${params.type.toUpperCase()}*`, ""];
+  lines.push(`*Asset:* ${params.asset}`);
+  if (params.direction) lines.push(`*Direction:* ${params.direction}`);
+  if (params.leverage) lines.push(`*Leverage:* ${params.leverage}`);
+  if (params.entryPrice) lines.push(`*Entry:* $${params.entryPrice}`);
+  if (params.exitPrice) lines.push(`*Exit:* $${params.exitPrice}`);
+  if (params.pnl != null) {
+    const pnlStr = params.pnl >= 0 ? `+$${params.pnl.toFixed(2)}` : `-$${Math.abs(params.pnl).toFixed(2)}`;
+    lines.push(`*P&L:* ${pnlStr}`);
+  }
+  if (params.reason) lines.push(`
+_${params.reason}_`);
+  await sendMessage(lines.join("\n"));
 }
 var webhookMode = false;
 async function registerWebhook() {
@@ -6603,6 +7539,10 @@ async function init7() {
   registerCommand("scout", async () => handleScoutCommand());
   registerCommand("trades", async (args) => handleTradesCommand(args));
   registerCommand("public", async (args) => handlePublicCommand(args));
+  registerCommand("kill", async () => handleKillCommand());
+  registerCommand("risk", async () => handleRiskCommand());
+  registerCommand("polymarket", async () => handlePolymarketCommand());
+  registerCommand("tax", async () => handleTaxCommand());
   registerCommand("help", async () => handleHelpCommand());
   try {
     const me = await tgFetch("getMe");
@@ -6638,7 +7578,7 @@ function stop() {
 }
 async function forwardAlertToTelegram(event) {
   if (!isConfigured6()) return;
-  const mode = await getMode();
+  const mode = await getMode2();
   if (event.type === "brief") {
     const briefLabel = event.briefType ? event.briefType.charAt(0).toUpperCase() + event.briefType.slice(1) : "Daily";
     const truncated = event.content.length > 3500 ? event.content.slice(0, 3500) + "\n\n_(truncated)_" : event.content;
@@ -6676,6 +7616,8 @@ function getJobSavePath(jobId, dateStr, safeName) {
   if (jobId === "birthday-calendar-sync") return `Scheduled Reports/Birthday Sync/${dateStr}-Sync.md`;
   if (jobId === "scout-micro-scan") return `Scheduled Reports/Wealth Engines/Scout/${dateStr}-Micro-Scan.md`;
   if (jobId === "scout-full-cycle") return `Scheduled Reports/Wealth Engines/Scout/${dateStr}-Full-Cycle.md`;
+  if (jobId === "polymarket-activity-scan") return `Scheduled Reports/Wealth Engines/Polymarket/${dateStr}-Activity-Scan.md`;
+  if (jobId === "polymarket-full-cycle") return `Scheduled Reports/Wealth Engines/Polymarket/${dateStr}-Full-Cycle.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 var jobStatusCache = {};
@@ -7424,6 +8366,56 @@ Keep this concise \u2014 it runs every 30 minutes. No thesis generation, no Nans
 Output the full brief \u2014 the system will save it automatically. Do NOT use notes_create.`,
     schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 240 },
     enabled: true
+  },
+  {
+    id: "polymarket-activity-scan",
+    name: "Polymarket Activity Scan",
+    agentId: "polymarket-scout",
+    prompt: `Run a POLYMARKET ACTIVITY SCAN. Quick check of whale activity and market movements.
+
+1. Check polymarket_whale_activity for new whale entries in the last 30 minutes
+2. Check polymarket_consensus for any markets with 2+ whales aligned
+3. For any new consensus, check polymarket_details to get current odds and volume
+4. Report results as a brief summary:
+
+**New Whale Activity:** X entries detected
+**Active Consensus:** Y markets with 2+ whales
+
+For each consensus market:
+- Question, direction, whale count, avg score, current odds
+
+Keep this concise \u2014 it runs every 30 minutes. Only flag actionable consensus.`,
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 30 },
+    enabled: true
+  },
+  {
+    id: "polymarket-full-cycle",
+    name: "Polymarket Full Cycle",
+    agentId: "polymarket-scout",
+    prompt: `Run a FULL POLYMARKET CYCLE. Comprehensive prediction market scan.
+
+1. Get trending markets via polymarket_trending (top 20 by volume)
+2. Search specific categories: polymarket_search("crypto"), polymarket_search("politics"), polymarket_search("sports")
+3. Filter markets: volume > $50K, odds between 15-85%, > 24h to resolution
+4. Check polymarket_whale_watchlist for tracked wallets
+5. Check polymarket_whale_activity for recent whale movements
+6. Run polymarket_consensus to detect aligned whale positions
+7. For each consensus meeting thresholds (score >= 0.6, 2+ whales, volume > $50K, odds 15-85%):
+   - Generate a thesis via save_pm_thesis with full reasoning
+   - Include whale wallet addresses, average score, total amount
+8. Check existing polymarket_theses \u2014 retire any that have expired or resolved
+9. Search X for sentiment on top consensus markets
+
+Output a full brief with:
+- Market overview (total volume, trending categories)
+- Whale activity summary
+- New theses generated (with reasoning)
+- Existing theses status update
+- Markets to watch (close to threshold but not yet qualifying)
+
+Do NOT use notes_create \u2014 the system saves automatically.`,
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 240 },
+    enabled: true
   }
 ];
 var config2 = {
@@ -8081,7 +9073,7 @@ ${fullResult}`);
     });
   }
 }
-var WEALTH_ENGINE_AGENTS = /* @__PURE__ */ new Set(["scout", "bankr"]);
+var WEALTH_ENGINE_AGENTS = /* @__PURE__ */ new Set(["scout", "bankr", "polymarket-scout"]);
 async function isWealthEnginesPaused() {
   try {
     const pool2 = dbPoolFn ? dbPoolFn() : getPool();
@@ -10734,6 +11726,318 @@ function buildCoinGeckoTools() {
           return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
         }
       }
+    },
+    {
+      name: "polymarket_search",
+      label: "Polymarket Search",
+      description: "Search Polymarket for prediction markets by topic/tag. Returns markets with odds, volume, liquidity, and end dates.",
+      parameters: Type.Object({
+        query: Type.Optional(Type.String({ description: "Topic or tag to search (e.g. 'crypto', 'politics', 'sports')" })),
+        limit: Type.Optional(Type.Number({ description: "Max results (default 20)" }))
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const result = params.query ? await searchMarkets(params.query, params.limit || 20) : await getTrendingMarkets(params.limit || 20);
+          return { content: [{ type: "text", text: JSON.stringify({ count: result.length, markets: result }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "polymarket_trending",
+      label: "Polymarket Trending",
+      description: "Get trending Polymarket prediction markets sorted by 24h volume.",
+      parameters: Type.Object({
+        limit: Type.Optional(Type.Number({ description: "Max results (default 20)" }))
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const result = await getTrendingMarkets(params.limit || 20);
+          return { content: [{ type: "text", text: JSON.stringify({ count: result.length, markets: result }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "polymarket_details",
+      label: "Polymarket Market Details",
+      description: "Get detailed info for a specific Polymarket market by condition ID.",
+      parameters: Type.Object({
+        condition_id: Type.String({ description: "Polymarket condition/market ID" })
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const result = await getMarketDetails(params.condition_id);
+          return { content: [{ type: "text", text: JSON.stringify(result || { error: "Market not found" }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "polymarket_whale_watchlist",
+      label: "Polymarket Whale Watchlist",
+      description: "Get the current whale watchlist for Polymarket tracking. Shows tracked wallets with composite scores, win rates, ROI.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const wallets = await getWhaleWatchlist();
+          return { content: [{ type: "text", text: JSON.stringify({ count: wallets.length, wallets }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "polymarket_whale_activity",
+      label: "Polymarket Whale Activity",
+      description: "Get recent whale activity (last 24h) from tracked Polymarket wallets.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const activities = await getWhaleActivities();
+          return { content: [{ type: "text", text: JSON.stringify({ count: activities.length, activities }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "polymarket_consensus",
+      label: "Polymarket Whale Consensus",
+      description: "Detect whale consensus \u2014 markets where multiple tracked whales are positioned in the same direction.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const activities = await getWhaleActivities();
+          const consensus = await detectConsensus(activities);
+          return { content: [{ type: "text", text: JSON.stringify({ consensus_count: consensus.length, consensus }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "polymarket_theses",
+      label: "Polymarket Active Theses",
+      description: "Get all active Polymarket SCOUT trading theses.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const theses = await getActiveTheses2();
+          return { content: [{ type: "text", text: JSON.stringify({ count: theses.length, theses }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "save_pm_thesis",
+      label: "Save Polymarket Thesis",
+      description: "Persist a Polymarket trading thesis. Requires: condition_id, direction (YES/NO), confidence, whale data, reasoning.",
+      parameters: Type.Object({
+        condition_id: Type.String({ description: "Polymarket market condition ID" }),
+        direction: Type.Union([Type.Literal("YES"), Type.Literal("NO")]),
+        confidence: Type.Union([Type.Literal("HIGH"), Type.Literal("MEDIUM"), Type.Literal("LOW")]),
+        whale_wallets: Type.Array(Type.String(), { description: "Wallet addresses in consensus" }),
+        whale_avg_score: Type.Number(),
+        total_whale_amount: Type.Number(),
+        reasoning: Type.String()
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const market = await getMarketDetails(params.condition_id);
+          if (!market) return { content: [{ type: "text", text: JSON.stringify({ error: "Market not found" }) }], details: {} };
+          const thesis = buildThesis2({
+            market,
+            direction: params.direction,
+            confidence: params.confidence,
+            whale_consensus: params.whale_wallets.length,
+            whale_wallets: params.whale_wallets,
+            whale_avg_score: params.whale_avg_score,
+            total_whale_amount: params.total_whale_amount,
+            sources: ["polymarket_clob", "whale_tracker"],
+            reasoning: params.reasoning
+          });
+          await saveTheses2([thesis]);
+          return { content: [{ type: "text", text: JSON.stringify({ saved: true, thesis_id: thesis.id }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "retire_pm_thesis",
+      label: "Retire Polymarket Thesis",
+      description: "Retire a Polymarket thesis by its ID.",
+      parameters: Type.Object({
+        thesis_id: Type.String({ description: "The PM thesis ID to retire" })
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          await retireThesis2(params.thesis_id);
+          return { content: [{ type: "text", text: JSON.stringify({ retired: true, thesis_id: params.thesis_id }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "bankr_risk_check",
+      label: "BANKR Pre-Trade Risk Check",
+      description: "Run pre-execution risk checks before a trade. Returns pass/fail for each check: kill switch, pause, leverage, margin, position limits, exposure, correlation.",
+      parameters: Type.Object({
+        asset: Type.String({ description: "Asset name" }),
+        asset_class: Type.Union([Type.Literal("crypto"), Type.Literal("polymarket")]),
+        direction: Type.String({ description: "LONG, SHORT, YES, or NO" }),
+        leverage: Type.Number({ description: "Leverage multiplier (max 2)" }),
+        entry_price: Type.Number(),
+        stop_price: Type.Number()
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const result = await runPreExecutionChecks(params);
+          return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "bankr_open_position",
+      label: "BANKR Open Position",
+      description: "Open a new position. Runs risk checks, calculates position size (2% risk), and records the trade. Requires Telegram approval in BETA mode.",
+      parameters: Type.Object({
+        thesis_id: Type.String(),
+        asset: Type.String(),
+        asset_class: Type.Union([Type.Literal("crypto"), Type.Literal("polymarket")]),
+        direction: Type.String(),
+        leverage: Type.Number(),
+        entry_price: Type.Number(),
+        stop_price: Type.Number(),
+        atr_value: Type.Number(),
+        venue: Type.Union([Type.Literal("bnkr"), Type.Literal("coinbase"), Type.Literal("kreo")])
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const riskCheck = await runPreExecutionChecks({
+            asset: params.asset,
+            asset_class: params.asset_class,
+            direction: params.direction,
+            leverage: params.leverage,
+            entry_price: params.entry_price,
+            stop_price: params.stop_price
+          });
+          if (!riskCheck.passed) {
+            return { content: [{ type: "text", text: JSON.stringify({ executed: false, reason: riskCheck.rejection_reason, checks: riskCheck.checks }) }], details: {} };
+          }
+          const mode = await getMode();
+          if (mode === "SHADOW") {
+            return { content: [{ type: "text", text: JSON.stringify({ executed: false, reason: "SHADOW mode \u2014 trade logged but not executed", checks: riskCheck.checks }) }], details: {} };
+          }
+          const portfolio = await getPortfolioValue();
+          const riskAmount = portfolio * 0.02;
+          const approval = await requestTradeApproval({
+            thesisId: params.thesis_id,
+            asset: params.asset,
+            direction: params.direction,
+            leverage: `${params.leverage}x`,
+            entryPrice: params.entry_price.toFixed(2),
+            stopLoss: params.stop_price.toFixed(2),
+            takeProfit: "TBD",
+            riskAmount: riskAmount.toFixed(2),
+            reason: `Risk checks passed. Mode: ${mode}`
+          });
+          if (approval !== "approve") {
+            return { content: [{ type: "text", text: JSON.stringify({ executed: false, reason: `Trade ${approval} via Telegram` }) }], details: {} };
+          }
+          const result = await openPosition(params);
+          await sendTradeAlert({
+            type: "executed",
+            asset: params.asset,
+            direction: params.direction,
+            leverage: `${params.leverage}x`,
+            entryPrice: params.entry_price.toFixed(2)
+          });
+          return { content: [{ type: "text", text: JSON.stringify({ executed: true, position_id: result.position.id, size: result.position.size }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "bankr_close_position",
+      label: "BANKR Close Position",
+      description: "Close an open position by ID with a specified exit price and reason.",
+      parameters: Type.Object({
+        position_id: Type.String(),
+        exit_price: Type.Number(),
+        close_reason: Type.String({ description: "Reason: manual, take_profit, stop_loss, rsi_exit, kill_switch" })
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const record = await closePosition(params.position_id, params.exit_price, params.close_reason);
+          if (!record) return { content: [{ type: "text", text: JSON.stringify({ error: "Position not found" }) }], details: {} };
+          await sendTradeAlert({
+            type: "closed",
+            asset: record.asset,
+            direction: record.direction,
+            exitPrice: params.exit_price.toFixed(2),
+            pnl: record.pnl,
+            reason: params.close_reason
+          });
+          return { content: [{ type: "text", text: JSON.stringify({ closed: true, trade_id: record.id, pnl: record.pnl, pnl_pct: record.pnl_pct }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "bankr_positions",
+      label: "BANKR Open Positions",
+      description: "Get all open positions with current P&L.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const summary = await getPortfolioSummary();
+          return { content: [{ type: "text", text: JSON.stringify(summary) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "bankr_trade_history",
+      label: "BANKR Trade History",
+      description: "Get recent trade history with P&L and tax lot data.",
+      parameters: Type.Object({
+        limit: Type.Optional(Type.Number({ description: "Max trades to return (default 20)" }))
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const history = await getTradeHistory();
+          const limited = history.slice(-(params.limit || 20));
+          return { content: [{ type: "text", text: JSON.stringify({ total: history.length, trades: limited }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "bankr_tax_summary",
+      label: "BANKR Tax Summary",
+      description: "Get YTD tax summary with quarterly breakdown, estimated federal and NY tax.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const summary = await getTaxSummary();
+          return { content: [{ type: "text", text: JSON.stringify(summary) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
     }
   ];
 }
@@ -12994,6 +14298,80 @@ app.get("/api/wealth-engines/watchlist", async (_req, res) => {
   } catch (err) {
     console.error("[wealth-engines] watchlist error:", err);
     res.status(500).json({ error: "Failed to fetch watchlist" });
+  }
+});
+app.get("/api/wealth-engines/positions", async (_req, res) => {
+  try {
+    const summary = await getPortfolioSummary();
+    res.json(summary);
+  } catch (err) {
+    console.error("[wealth-engines] positions error:", err);
+    res.status(500).json({ error: "Failed to fetch positions" });
+  }
+});
+app.get("/api/wealth-engines/trades", async (_req, res) => {
+  try {
+    const limit = Math.min(Math.max(parseInt(String(_req.query.limit)) || 50, 1), 200);
+    const history = await getTradeHistory();
+    res.json({ total: history.length, trades: history.slice(-limit) });
+  } catch (err) {
+    console.error("[wealth-engines] trades error:", err);
+    res.status(500).json({ error: "Failed to fetch trades" });
+  }
+});
+app.get("/api/wealth-engines/tax/summary", async (_req, res) => {
+  try {
+    const summary = await getTaxSummary();
+    res.json(summary);
+  } catch (err) {
+    console.error("[wealth-engines] tax summary error:", err);
+    res.status(500).json({ error: "Failed to fetch tax summary" });
+  }
+});
+app.get("/api/wealth-engines/tax/8949", async (_req, res) => {
+  try {
+    const csv = await generateForm8949CSV();
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", `attachment; filename="form-8949-${(/* @__PURE__ */ new Date()).getFullYear()}.csv"`);
+    res.send(csv);
+  } catch (err) {
+    console.error("[wealth-engines] 8949 error:", err);
+    res.status(500).json({ error: "Failed to generate Form 8949" });
+  }
+});
+app.get("/api/wealth-engines/export", async (_req, res) => {
+  try {
+    const [positions, trades, taxSummary, cryptoTheses, pmTheses, watchlist, portfolio] = await Promise.all([
+      getPositions(),
+      getTradeHistory(),
+      getTaxSummary(),
+      getActiveTheses(),
+      getActiveTheses2(),
+      getWatchlist(),
+      getPortfolioValue()
+    ]);
+    res.json({
+      exported_at: (/* @__PURE__ */ new Date()).toISOString(),
+      portfolio_value: portfolio,
+      positions,
+      trade_history: trades,
+      tax_summary: taxSummary,
+      crypto_theses: cryptoTheses,
+      polymarket_theses: pmTheses,
+      watchlist
+    });
+  } catch (err) {
+    console.error("[wealth-engines] export error:", err);
+    res.status(500).json({ error: "Failed to export data" });
+  }
+});
+app.get("/api/wealth-engines/polymarket/theses", async (_req, res) => {
+  try {
+    const theses = await getActiveTheses2();
+    res.json({ count: theses.length, theses });
+  } catch (err) {
+    console.error("[wealth-engines] pm theses error:", err);
+    res.status(500).json({ error: "Failed to fetch polymarket theses" });
   }
 });
 app.get("/api/x-intelligence/data", async (_req, res) => {
@@ -15560,6 +16938,35 @@ async function startServer(maxRetries = 5) {
             async (from, to) => kbMove(from, to),
             () => getPool()
           );
+          setInterval(async () => {
+            try {
+              const result = await runPositionMonitor();
+              const monitorPool = getPool();
+              await monitorPool.query(
+                `INSERT INTO app_config (key, value, updated_at) VALUES ('bankr_monitor_last_tick', $1, $2)
+                 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+                [JSON.stringify(Date.now()), Date.now()]
+              );
+              if (result.closed.length > 0) {
+                for (const trade of result.closed) {
+                  await sendTradeAlert({
+                    type: trade.close_reason === "kill_switch" ? "emergency" : "stopped",
+                    asset: trade.asset,
+                    direction: trade.direction,
+                    exitPrice: trade.exit_price.toFixed(2),
+                    pnl: trade.pnl,
+                    reason: trade.close_reason
+                  });
+                }
+              }
+              if (result.errors.length > 0) {
+                console.warn("[bankr-monitor] Errors:", result.errors.join("; "));
+              }
+            } catch (err) {
+              console.error("[bankr-monitor] Position monitor error:", err);
+            }
+          }, 5 * 60 * 1e3);
+          console.log("[boot] BANKR position monitor started (5-min interval)");
           resolve();
         });
       });

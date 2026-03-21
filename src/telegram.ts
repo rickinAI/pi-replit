@@ -240,8 +240,13 @@ async function handleResumeCommand(): Promise<string> {
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
       [JSON.stringify(false), Date.now()]
     );
-    console.log("[telegram] Wealth Engines RESUMED via Telegram");
-    return `${mode} ▶️ *System RESUMED*\n\nAll Wealth Engine jobs are active again.`;
+    await pool.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_kill_switch', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(false), Date.now()]
+    );
+    console.log("[telegram] Wealth Engines RESUMED + kill switch deactivated via Telegram");
+    return `${mode} ▶️ *System RESUMED*\n\nAll Wealth Engine jobs are active. Kill switch deactivated.`;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return `${mode} ❌ Failed to resume: ${msg}`;
@@ -341,6 +346,148 @@ async function handlePublicCommand(args: string): Promise<string> {
   }
 }
 
+async function handleKillCommand(): Promise<string> {
+  const mode = await getMode();
+  const pool = getPool();
+  try {
+    await pool.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_kill_switch', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(true), Date.now()]
+    );
+    console.log("[telegram] KILL SWITCH ACTIVATED via Telegram");
+    return `${mode} 🚨 *KILL SWITCH ACTIVATED*\n\nAll positions will be closed on the next monitor tick (within 5 minutes).\nUse /resume to deactivate kill switch and resume.`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `${mode} ❌ Kill switch failed: ${msg}`;
+  }
+}
+
+async function handleRiskCommand(): Promise<string> {
+  const mode = await getMode();
+  const pool = getPool();
+
+  let portfolio = 50;
+  try {
+    const pv = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_portfolio_value'`);
+    if (pv.rows.length > 0 && typeof pv.rows[0].value === "number") portfolio = pv.rows[0].value;
+  } catch {}
+
+  let positions: any[] = [];
+  try {
+    const pos = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_positions'`);
+    if (pos.rows.length > 0 && Array.isArray(pos.rows[0].value)) positions = pos.rows[0].value;
+  } catch {}
+
+  let history: any[] = [];
+  try {
+    const hist = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_trade_history'`);
+    if (hist.rows.length > 0 && Array.isArray(hist.rows[0].value)) history = hist.rows[0].value;
+  } catch {}
+
+  const totalExposure = positions.reduce((s: number, p: any) => s + (p.size || 0) * (p.entry_price || 0), 0);
+  const unrealizedPnl = positions.reduce((s: number, p: any) => s + (p.unrealized_pnl || 0), 0);
+  const exposurePct = portfolio > 0 ? (totalExposure / portfolio * 100) : 0;
+
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const recentTrades = history.filter((t: any) => new Date(t.closed_at).getTime() > sevenDaysAgo);
+  const rolling7d = recentTrades.reduce((s: number, t: any) => s + (t.pnl || 0), 0);
+  const rolling7dPct = portfolio > 0 ? (rolling7d / portfolio * 100) : 0;
+
+  const buckets: Record<string, number> = {};
+  for (const p of positions) {
+    const b = p.exposure_bucket || "general";
+    buckets[b] = (buckets[b] || 0) + 1;
+  }
+
+  const lines = [
+    `${mode} *Risk Dashboard*`,
+    "",
+    `💰 Portfolio: $${portfolio.toFixed(2)}`,
+    `📊 Exposure: $${totalExposure.toFixed(2)} (${exposurePct.toFixed(0)}% of portfolio)`,
+    `📈 Unrealized P&L: ${unrealizedPnl >= 0 ? "+" : ""}$${unrealizedPnl.toFixed(2)}`,
+    `📉 7-Day Rolling P&L: ${rolling7d >= 0 ? "+" : ""}$${rolling7d.toFixed(2)} (${rolling7dPct.toFixed(1)}%)`,
+    `🔻 Circuit Breaker: ${rolling7dPct < -15 ? "⚠️ TRIGGERED" : "OK"} (threshold: -15%)`,
+    "",
+    `*Positions:* ${positions.length}/5`,
+    `*Exposure Limit:* ${exposurePct.toFixed(0)}%/80%`,
+    `*Buckets:* ${Object.entries(buckets).map(([b, c]) => `${b}: ${c}/2`).join(", ") || "none"}`,
+  ];
+  return lines.join("\n");
+}
+
+async function handlePolymarketCommand(): Promise<string> {
+  const mode = await getMode();
+  const pool = getPool();
+
+  try {
+    const res = await pool.query(`SELECT value FROM app_config WHERE key = 'polymarket_scout_active_theses'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value) && res.rows[0].value.length > 0) {
+      const theses = res.rows[0].value;
+      const now = Date.now();
+      const active = theses.filter((t: any) => t.status === "active" && (!t.expires_at || t.expires_at > now));
+      if (active.length === 0) {
+        return `${mode} *Polymarket Theses*\n\nNo active theses. Waiting for next scan.`;
+      }
+      const lines = [`${mode} *Polymarket Theses* (${active.length})`, ""];
+      for (const t of active.slice(0, 8)) {
+        const dir = t.direction === "YES" ? "✅ YES" : "❌ NO";
+        const age = Math.floor((now - t.created_at) / 3600000);
+        const conf = { HIGH: "🟢", MEDIUM: "🟡", LOW: "🔴" }[t.confidence as string] || "⚪";
+        lines.push(`${conf} *${(t.asset || "").slice(0, 60)}*`);
+        lines.push(`  ${dir} | Odds: ${((t.current_odds || 0) * 100).toFixed(0)}% | Whales: ${t.whale_consensus || 0}`);
+        lines.push(`  Score: ${(t.whale_avg_score || 0).toFixed(2)} | _${age}h ago_`);
+        lines.push("");
+      }
+      return lines.join("\n");
+    }
+  } catch {}
+
+  return `${mode} *Polymarket Theses*\n\nNo active theses. Polymarket SCOUT has not generated any yet.`;
+}
+
+async function handleTaxCommand(): Promise<string> {
+  const mode = await getMode();
+  const pool = getPool();
+
+  let history: any[] = [];
+  try {
+    const res = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_trade_history'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) history = res.rows[0].value;
+  } catch {}
+
+  const year = new Date().getFullYear();
+  const yearStart = new Date(year, 0, 1).getTime();
+  const yearTrades = history.filter((t: any) => new Date(t.closed_at).getTime() >= yearStart);
+
+  let gains = 0, losses = 0, washAdj = 0;
+  for (const t of yearTrades) {
+    if ((t.pnl || 0) >= 0) gains += t.pnl;
+    else losses += t.pnl;
+    if (t.tax_lot?.wash_sale_flagged) washAdj += t.tax_lot.wash_sale_disallowed || 0;
+  }
+
+  const net = gains + losses + washAdj;
+  const fedTax = Math.max(0, net) * 0.24;
+  const nyTax = Math.max(0, net) * 0.0685;
+
+  const lines = [
+    `${mode} *${year} Tax Summary*`,
+    "",
+    `📊 Total Trades: ${yearTrades.length}`,
+    `🟢 Gains: +$${gains.toFixed(2)}`,
+    `🔴 Losses: -$${Math.abs(losses).toFixed(2)}`,
+    `⚠️ Wash Sale Adj: $${washAdj.toFixed(2)}`,
+    `💵 Net Taxable: $${net.toFixed(2)}`,
+    "",
+    `*Estimated Tax:*`,
+    `  Federal (24%): $${fedTax.toFixed(2)}`,
+    `  NY State (6.85%): $${nyTax.toFixed(2)}`,
+    `  Total: $${(fedTax + nyTax).toFixed(2)}`,
+  ];
+  return lines.join("\n");
+}
+
 async function handleHelpCommand(): Promise<string> {
   const mode = await getMode();
   return [
@@ -349,8 +496,12 @@ async function handleHelpCommand(): Promise<string> {
     "/status — System health & mode",
     "/portfolio — Open positions & P&L",
     "/intel — Latest SCOUT brief",
-    "/scout — Active theses",
+    "/scout — Active crypto theses",
+    "/polymarket — Active PM theses",
     "/trades [n] — Last N trades (default 5)",
+    "/risk — Risk dashboard",
+    "/tax — YTD tax summary",
+    "/kill — Emergency kill switch",
     "/pause — Halt all Wealth Engine jobs",
     "/resume — Resume Wealth Engine jobs",
     "/public on|off — Toggle dashboard access",
@@ -591,6 +742,29 @@ async function checkDeadManSwitches(): Promise<void> {
     delete lastDeadManAlert["scout"];
   }
 
+  try {
+    const monitorRes = await pool.query(
+      `SELECT value FROM app_config WHERE key = 'bankr_monitor_last_tick'`
+    );
+    if (monitorRes.rows.length > 0) {
+      const lastTick = typeof monitorRes.rows[0].value === "number" ? monitorRes.rows[0].value : parseInt(String(monitorRes.rows[0].value));
+      const minsSince = (Date.now() - lastTick) / (60 * 1000);
+      if (minsSince > 30) {
+        const lastAlert = lastDeadManAlert["bankr-monitor"] || 0;
+        if (Date.now() - lastAlert > 60 * 60 * 1000) {
+          lastDeadManAlert["bankr-monitor"] = Date.now();
+          await sendMessage(
+            `${mode} ⚠️ *Dead Man's Switch: BANKR Monitor*\n\nPosition monitor has not ticked in ${Math.floor(minsSince)} min (threshold: 30 min).\nLast tick: ${timeAgo(lastTick)}\n\nThe server may have restarted or crashed.`
+          );
+        }
+      } else {
+        delete lastDeadManAlert["bankr-monitor"];
+      }
+    }
+  } catch (err) {
+    console.error("[telegram] Dead man switch BANKR monitor check failed:", err);
+  }
+
   const bankrEnabled = await isJobEnabled(pool, "bankr");
   if (bankrEnabled) {
     try {
@@ -605,7 +779,7 @@ async function checkDeadManSwitches(): Promise<void> {
           if (Date.now() - lastAlert > 4 * 3600 * 1000) {
             lastDeadManAlert["bankr"] = Date.now();
             await sendMessage(
-              `${mode} ⚠️ *Dead Man's Switch: BANKR*\n\nBANKR monitor has not run in ${Math.floor(hoursSince)}h (threshold: 8h).\nLast run: ${timeAgo(lastRun)}\n\nCheck scheduled jobs or run manually.`
+              `${mode} ⚠️ *Dead Man's Switch: BANKR*\n\nBANKR agent has not run in ${Math.floor(hoursSince)}h (threshold: 8h).\nLast run: ${timeAgo(lastRun)}\n\nCheck scheduled jobs or run manually.`
             );
           }
         } else {
@@ -747,6 +921,10 @@ export async function init(): Promise<void> {
   registerCommand("scout", async () => handleScoutCommand());
   registerCommand("trades", async (args) => handleTradesCommand(args));
   registerCommand("public", async (args) => handlePublicCommand(args));
+  registerCommand("kill", async () => handleKillCommand());
+  registerCommand("risk", async () => handleRiskCommand());
+  registerCommand("polymarket", async () => handlePolymarketCommand());
+  registerCommand("tax", async () => handleTaxCommand());
   registerCommand("help", async () => handleHelpCommand());
 
   try {

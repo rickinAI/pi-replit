@@ -47,6 +47,8 @@ function getJobSavePath(jobId: string, dateStr: string, safeName: string): strin
   if (jobId === "birthday-calendar-sync") return `Scheduled Reports/Birthday Sync/${dateStr}-Sync.md`;
   if (jobId === "scout-micro-scan") return `Scheduled Reports/Wealth Engines/Scout/${dateStr}-Micro-Scan.md`;
   if (jobId === "scout-full-cycle") return `Scheduled Reports/Wealth Engines/Scout/${dateStr}-Full-Cycle.md`;
+  if (jobId === "polymarket-activity-scan") return `Scheduled Reports/Wealth Engines/Polymarket/${dateStr}-Activity-Scan.md`;
+  if (jobId === "polymarket-full-cycle") return `Scheduled Reports/Wealth Engines/Polymarket/${dateStr}-Full-Cycle.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 
@@ -799,6 +801,56 @@ Output the full brief — the system will save it automatically. Do NOT use note
     schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 240 },
     enabled: true,
   },
+  {
+    id: "polymarket-activity-scan",
+    name: "Polymarket Activity Scan",
+    agentId: "polymarket-scout",
+    prompt: `Run a POLYMARKET ACTIVITY SCAN. Quick check of whale activity and market movements.
+
+1. Check polymarket_whale_activity for new whale entries in the last 30 minutes
+2. Check polymarket_consensus for any markets with 2+ whales aligned
+3. For any new consensus, check polymarket_details to get current odds and volume
+4. Report results as a brief summary:
+
+**New Whale Activity:** X entries detected
+**Active Consensus:** Y markets with 2+ whales
+
+For each consensus market:
+- Question, direction, whale count, avg score, current odds
+
+Keep this concise — it runs every 30 minutes. Only flag actionable consensus.`,
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 30 },
+    enabled: true,
+  },
+  {
+    id: "polymarket-full-cycle",
+    name: "Polymarket Full Cycle",
+    agentId: "polymarket-scout",
+    prompt: `Run a FULL POLYMARKET CYCLE. Comprehensive prediction market scan.
+
+1. Get trending markets via polymarket_trending (top 20 by volume)
+2. Search specific categories: polymarket_search("crypto"), polymarket_search("politics"), polymarket_search("sports")
+3. Filter markets: volume > $50K, odds between 15-85%, > 24h to resolution
+4. Check polymarket_whale_watchlist for tracked wallets
+5. Check polymarket_whale_activity for recent whale movements
+6. Run polymarket_consensus to detect aligned whale positions
+7. For each consensus meeting thresholds (score >= 0.6, 2+ whales, volume > $50K, odds 15-85%):
+   - Generate a thesis via save_pm_thesis with full reasoning
+   - Include whale wallet addresses, average score, total amount
+8. Check existing polymarket_theses — retire any that have expired or resolved
+9. Search X for sentiment on top consensus markets
+
+Output a full brief with:
+- Market overview (total volume, trending categories)
+- Whale activity summary
+- New theses generated (with reasoning)
+- Existing theses status update
+- Markets to watch (close to threshold but not yet qualifying)
+
+Do NOT use notes_create — the system saves automatically.`,
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 240 },
+    enabled: true,
+  },
 ];
 
 let config: ScheduledJobsConfig = {
@@ -1509,7 +1561,7 @@ After processing, briefly confirm what you did.`;
   }
 }
 
-const WEALTH_ENGINE_AGENTS = new Set(["scout", "bankr"]);
+const WEALTH_ENGINE_AGENTS = new Set(["scout", "bankr", "polymarket-scout"]);
 
 async function isWealthEnginesPaused(): Promise<boolean> {
   try {
