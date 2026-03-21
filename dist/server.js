@@ -5079,26 +5079,27 @@ async function monitorCryptoPosition(pos, closed) {
   }
 }
 async function monitorPolymarketPosition(pos, closed) {
-  let marketId = "";
+  let thesis = null;
   try {
     const pool2 = getPool();
     const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'polymarket_scout_active_theses'`);
-    const allTheses = res.rows.length > 0 && Array.isArray(res.rows[0].value) ? res.rows[0].value : [];
-    const thesis = allTheses.find((t) => t.id === pos.thesis_id);
-    if (thesis) marketId = thesis.market_id;
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+      const found = res.rows[0].value.find((t) => t.id === pos.thesis_id);
+      if (found) thesis = found;
+    }
   } catch {
   }
-  if (!marketId) return;
-  const market = await getMarketDetails(marketId);
+  if (!thesis) return;
+  const market = await getMarketDetails(thesis.market_id);
   if (!market) return;
   const yesPrice = market.tokens.find((t) => t.outcome === "Yes")?.price || 0;
   const noPrice = market.tokens.find((t) => t.outcome === "No")?.price || 0;
-  const currentOdds = pos.direction === "YES" ? yesPrice : noPrice;
+  const isYes = pos.direction === "YES";
+  const currentOdds = isYes ? yesPrice : noPrice;
   const positions = await getPositions();
   const livePos = positions.find((p) => p.id === pos.id);
   if (!livePos) return;
   livePos.current_price = currentOdds;
-  const isYes = livePos.direction === "YES";
   const priceDiff = isYes ? currentOdds - livePos.entry_price : livePos.entry_price - currentOdds;
   livePos.unrealized_pnl = parseFloat((priceDiff * livePos.size).toFixed(4));
   if (isYes && currentOdds > livePos.peak_price || !isYes && currentOdds < livePos.peak_price) {
@@ -5119,16 +5120,29 @@ async function monitorPolymarketPosition(pos, closed) {
     if (record) closed.push(record);
     return;
   }
-  const exitOdds = livePos.atr_stop_price;
-  if (isYes && currentOdds >= exitOdds && exitOdds > 0) {
-    console.log(`[bankr] Polymarket target reached (${(currentOdds * 100).toFixed(0)}%) for ${pos.asset.slice(0, 60)}`);
+  const targetOdds = thesis.exit_odds;
+  if (isYes && currentOdds >= targetOdds) {
+    console.log(`[bankr] Polymarket target reached (${(currentOdds * 100).toFixed(0)}% >= ${(targetOdds * 100).toFixed(0)}%) for ${pos.asset.slice(0, 60)}`);
     const record = await closePosition(pos.id, currentOdds, "odds_target");
     if (record) closed.push(record);
     return;
   }
-  if (!isYes && currentOdds <= exitOdds && exitOdds > 0) {
-    console.log(`[bankr] Polymarket target reached (${(currentOdds * 100).toFixed(0)}%) for ${pos.asset.slice(0, 60)}`);
+  if (!isYes && currentOdds <= targetOdds) {
+    console.log(`[bankr] Polymarket target reached (${(currentOdds * 100).toFixed(0)}% <= ${(targetOdds * 100).toFixed(0)}%) for ${pos.asset.slice(0, 60)}`);
     const record = await closePosition(pos.id, currentOdds, "odds_target");
+    if (record) closed.push(record);
+    return;
+  }
+  const stopLoss = 0.1;
+  if (isYes && currentOdds <= livePos.entry_price - stopLoss) {
+    console.log(`[bankr] Polymarket stop loss (${(currentOdds * 100).toFixed(0)}%) for ${pos.asset.slice(0, 60)}`);
+    const record = await closePosition(pos.id, currentOdds, "pm_stop_loss");
+    if (record) closed.push(record);
+    return;
+  }
+  if (!isYes && currentOdds >= livePos.entry_price + stopLoss) {
+    console.log(`[bankr] Polymarket stop loss (${(currentOdds * 100).toFixed(0)}%) for ${pos.asset.slice(0, 60)}`);
+    const record = await closePosition(pos.id, currentOdds, "pm_stop_loss");
     if (record) closed.push(record);
     return;
   }
