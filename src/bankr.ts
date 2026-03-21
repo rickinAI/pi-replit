@@ -5,6 +5,7 @@ import * as polymarket from "./polymarket.js";
 import * as bnkr from "./bnkr.js";
 import * as coinbaseWallet from "./coinbase-wallet.js";
 import type { PolymarketThesis } from "./polymarket-scout.js";
+import { autoTrackShadowTrade } from "./oversight.js";
 
 export interface Position {
   id: string;
@@ -339,6 +340,23 @@ export async function runPreExecutionChecks(params: {
 
   const rejectionReason = allPassed ? null : checks.filter(c => !c.passed).map(c => c.detail).join("; ");
 
+  if (!allPassed) {
+    try {
+      const source: "crypto_scout" | "polymarket_scout" = params.asset_class === "polymarket" ? "polymarket_scout" : "crypto_scout";
+      await autoTrackShadowTrade({
+        thesis_id: `riskfail_${Date.now()}`,
+        asset: params.asset,
+        asset_class: params.asset_class,
+        source,
+        direction: params.direction,
+        entry_price: params.entry_price,
+        reason: `risk_check_failed: ${rejectionReason}`,
+      });
+    } catch (e) {
+      console.error("[bankr] Shadow tracking on risk fail:", e instanceof Error ? e.message : e);
+    }
+  }
+
   return { passed: allPassed, tier, checks, rejection_reason: rejectionReason };
 }
 
@@ -356,6 +374,25 @@ export async function openPosition(params: {
   tx_hash?: string;
   market_id?: string;
 }): Promise<{ position: Position; trade_id: string; bnkr_order_id?: string }> {
+  const mode = await getMode();
+  if (mode === "SHADOW") {
+    const source: "crypto_scout" | "polymarket_scout" = params.source === "polymarket_scout" ? "polymarket_scout" : "crypto_scout";
+    try {
+      await autoTrackShadowTrade({
+        thesis_id: params.thesis_id,
+        asset: params.asset,
+        asset_class: params.asset_class,
+        source,
+        direction: params.direction,
+        entry_price: params.entry_price,
+        reason: "shadow_mode_active",
+      });
+    } catch (e) {
+      console.error("[bankr] Shadow tracking in SHADOW mode:", e instanceof Error ? e.message : e);
+    }
+    throw new Error("SHADOW mode active — trade logged as shadow trade, no capital deployed");
+  }
+
   const portfolio = await getPortfolioValue();
   const maxRisk = portfolio * 0.02;
   const riskDistance = Math.abs(params.entry_price - params.stop_price);

@@ -1,5 +1,43 @@
 import { getPool } from "./db.js";
+import type { Pool } from "pg";
 import type { Position, TradeRecord } from "./bankr.js";
+
+interface TimestampedRecord {
+  timestamp?: number;
+  created_at?: number;
+  opened_at?: number;
+}
+
+interface JobRow {
+  status: string;
+}
+
+interface ApiErrorRecord {
+  timestamp: number;
+}
+
+interface DurationRow {
+  created_at: string | null;
+  completed_at: string | null;
+}
+
+interface ThesisRecord {
+  id: string;
+  status?: string;
+  signal_type?: string;
+  source?: string;
+  confidence?: number;
+  score?: number;
+  asset?: string;
+  question?: string;
+  reasoning?: string;
+  age_hours?: number;
+  invalidation_criteria?: string;
+  whale_count?: number;
+  odds?: number;
+  direction?: string;
+  _source?: string;
+}
 
 let telegramNotifier: ((msg: string) => Promise<void>) | null = null;
 
@@ -85,7 +123,7 @@ export interface ImprovementRequest {
   title: string;
   description: string;
   pattern_description?: string;
-  suggested_action: string;
+  recommendation: string;
   route: "autoresearch" | "manual_review" | "bankr_config" | "signal_tuning" | "infra_fix";
   status: "open" | "accepted" | "resolved" | "dismissed";
   resolved_at?: number;
@@ -122,7 +160,7 @@ const HEALTH_REPORTS_KEY = "oversight_health_reports";
 const IMPROVEMENT_QUEUE_KEY = "oversight_improvement_queue";
 const SHADOW_TRADES_KEY = "oversight_shadow_trades";
 const LAST_HEALTH_CHECK_KEY = "oversight_last_health_check";
-const MAX_REPORTS = 50;
+const MAX_REPORTS = 200;
 const MAX_IMPROVEMENTS = 100;
 const MAX_SHADOW_TRADES = 200;
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
@@ -138,7 +176,7 @@ async function getConfigValue<T>(key: string, fallback: T): Promise<T> {
   return fallback;
 }
 
-async function setConfigValue(key: string, value: any): Promise<void> {
+async function setConfigValue(key: string, value: unknown): Promise<void> {
   const pool = getPool();
   await pool.query(
     `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
@@ -152,7 +190,8 @@ function pruneByAge<T extends { timestamp?: number; created_at?: number; opened_
 ): T[] {
   const cutoff = Date.now() - THIRTY_DAYS_MS;
   const filtered = items.filter(i => {
-    const ts = (i as any).timestamp || (i as any).created_at || (i as any).opened_at || 0;
+    const rec = i as TimestampedRecord;
+    const ts = rec.timestamp || rec.created_at || rec.opened_at || 0;
     return ts > cutoff;
   });
   return filtered.slice(-maxItems);
@@ -229,7 +268,7 @@ export async function runHealthCheck(): Promise<HealthReport> {
         severity: issue.status === "critical" ? "critical" : "medium",
         title: `Health: ${issue.name}`,
         description: issue.detail,
-        suggested_action: `Investigate ${issue.name} — status: ${issue.status}`,
+        recommendation: `Investigate ${issue.name} — status: ${issue.status}`,
       });
     }
   }
@@ -238,7 +277,7 @@ export async function runHealthCheck(): Promise<HealthReport> {
 }
 
 async function checkAgentFreshness(
-  pool: any, agentId: string, label: string, thresholdHours: number
+  pool: Pool, agentId: string, label: string, thresholdHours: number
 ): Promise<HealthCheck> {
   try {
     const res = await pool.query(
@@ -280,7 +319,7 @@ async function checkAgentFreshness(
   }
 }
 
-async function checkMonitorHeartbeat(pool: any, now: number): Promise<HealthCheck> {
+async function checkMonitorHeartbeat(pool: Pool, now: number): Promise<HealthCheck> {
   try {
     const res = await pool.query(`SELECT value FROM app_config WHERE key = 'bankr_monitor_last_tick'`);
     if (res.rows.length === 0) {
@@ -311,7 +350,7 @@ async function checkMonitorHeartbeat(pool: any, now: number): Promise<HealthChec
   }
 }
 
-async function checkKillSwitch(pool: any): Promise<HealthCheck> {
+async function checkKillSwitch(pool: Pool): Promise<HealthCheck> {
   try {
     const res = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_kill_switch'`);
     if (res.rows.length > 0 && res.rows[0].value === true) {
@@ -321,7 +360,7 @@ async function checkKillSwitch(pool: any): Promise<HealthCheck> {
   return { name: "Kill Switch", status: "ok", detail: "Kill switch inactive" };
 }
 
-async function checkPauseState(pool: any): Promise<HealthCheck> {
+async function checkPauseState(pool: Pool): Promise<HealthCheck> {
   try {
     const res = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_paused'`);
     if (res.rows.length > 0 && res.rows[0].value === true) {
@@ -331,7 +370,7 @@ async function checkPauseState(pool: any): Promise<HealthCheck> {
   return { name: "System Paused", status: "ok", detail: "System is running" };
 }
 
-async function checkCircuitBreakerState(pool: any): Promise<HealthCheck> {
+async function checkCircuitBreakerState(pool: Pool): Promise<HealthCheck> {
   try {
     const history = await getConfigValue<TradeRecord[]>("wealth_engines_trade_history", []);
     const portfolio = await getConfigValue<number>("wealth_engines_portfolio_value", 50);
@@ -365,7 +404,7 @@ async function checkCircuitBreakerState(pool: any): Promise<HealthCheck> {
   }
 }
 
-async function checkDataFreshness(pool: any, now: number): Promise<HealthCheck> {
+async function checkDataFreshness(pool: Pool, now: number): Promise<HealthCheck> {
   try {
     const res = await pool.query(`SELECT value FROM app_config WHERE key = 'scout_latest_brief'`);
     if (res.rows.length === 0) {
@@ -388,7 +427,7 @@ async function checkDataFreshness(pool: any, now: number): Promise<HealthCheck> 
   }
 }
 
-async function checkRecentJobFailures(pool: any): Promise<HealthCheck> {
+async function checkRecentJobFailures(pool: Pool): Promise<HealthCheck> {
   try {
     const res = await pool.query(
       `SELECT job_id, status FROM job_history
@@ -396,7 +435,7 @@ async function checkRecentJobFailures(pool: any): Promise<HealthCheck> {
        AND created_at > NOW() - INTERVAL '24 hours'
        ORDER BY created_at DESC LIMIT 20`
     );
-    const failures = res.rows.filter((r: any) => r.status === "error");
+    const failures = res.rows.filter((r: JobRow) => r.status === "error");
     if (failures.length >= 5) {
       return {
         name: "Job Failures", status: "critical",
@@ -452,12 +491,12 @@ async function enforceCircuitBreaker(rolling7dPct: number, drawdownPct: number):
     title: `Circuit breaker: 7d ${rolling7dPct.toFixed(1)}%, DD ${drawdownPct.toFixed(1)}%`,
     description: `Auto-paused due to circuit breaker. Rolling 7d P&L: ${rolling7dPct.toFixed(1)}%, peak drawdown: ${drawdownPct.toFixed(1)}%.`,
     pattern_description: "Sustained losses exceeding risk thresholds",
-    suggested_action: "Review all open positions, evaluate thesis quality, reduce leverage/position sizing before resuming",
+    recommendation: "Review all open positions, evaluate thesis quality, reduce leverage/position sizing before resuming",
     route: "manual_review",
   });
 }
 
-async function checkApiFailureRates(pool: any): Promise<HealthCheck> {
+async function checkApiFailureRates(pool: Pool): Promise<HealthCheck> {
   try {
     const res = await pool.query(
       `SELECT value FROM app_config WHERE key = 'wealth_engines_api_errors'`
@@ -467,7 +506,7 @@ async function checkApiFailureRates(pool: any): Promise<HealthCheck> {
     }
     const errors = res.rows[0].value;
     const recentErrors = Array.isArray(errors)
-      ? errors.filter((e: any) => e.timestamp > Date.now() - 6 * 60 * 60 * 1000)
+      ? errors.filter((e: ApiErrorRecord) => e.timestamp > Date.now() - 6 * 60 * 60 * 1000)
       : [];
     const byService: Record<string, number> = {};
     for (const e of recentErrors) {
@@ -489,7 +528,7 @@ async function checkApiFailureRates(pool: any): Promise<HealthCheck> {
   }
 }
 
-async function checkJobExecutionTrends(pool: any): Promise<HealthCheck> {
+async function checkJobExecutionTrends(pool: Pool): Promise<HealthCheck> {
   try {
     const res = await pool.query(
       `SELECT job_id, created_at, completed_at FROM job_history
@@ -501,9 +540,9 @@ async function checkJobExecutionTrends(pool: any): Promise<HealthCheck> {
     if (res.rows.length < 3) {
       return { name: "Job Latency", status: "ok", detail: "Insufficient data for trend analysis" };
     }
-    const durations = res.rows.map((r: any) => {
-      const start = new Date(r.created_at).getTime();
-      const end = new Date(r.completed_at).getTime();
+    const durations = res.rows.map((r: DurationRow) => {
+      const start = new Date(r.created_at || 0).getTime();
+      const end = new Date(r.completed_at || 0).getTime();
       return (end - start) / 1000;
     }).filter((d: number) => d > 0);
     if (durations.length === 0) {
@@ -563,13 +602,13 @@ export async function runPerformanceReview(periodDays: number = 7): Promise<Perf
   });
   const avgHoldTime = holdTimes.length > 0 ? holdTimes.reduce((a, b) => a + b, 0) / holdTimes.length : 0;
 
-  const cryptoTheses = await getConfigValue<any[]>("scout_active_theses", []);
-  const pmTheses = await getConfigValue<any[]>("polymarket_scout_active_theses", []);
+  const cryptoTheses = await getConfigValue<ThesisRecord[]>("scout_active_theses", []);
+  const pmTheses = await getConfigValue<ThesisRecord[]>("polymarket_scout_active_theses", []);
   const totalTheses = cryptoTheses.length + pmTheses.length;
   const tradedThesisIds = new Set(periodTrades.map(t => t.thesis_id));
   const allThesisIds = new Set([
-    ...cryptoTheses.map((t: any) => t.id),
-    ...pmTheses.map((t: any) => t.id),
+    ...cryptoTheses.map((t: ThesisRecord) => t.id),
+    ...pmTheses.map((t: ThesisRecord) => t.id),
   ]);
   const convertedCount = [...tradedThesisIds].filter(id => allThesisIds.has(id)).length;
   const conversionRate = totalTheses > 0 ? (convertedCount / totalTheses) * 100 : 0;
@@ -649,7 +688,7 @@ export async function runPerformanceReview(periodDays: number = 7): Promise<Perf
       severity: "high",
       title: `Low win rate: ${winRate.toFixed(0)}%`,
       description: `Win rate over ${periodDays}d is ${winRate.toFixed(1)}% (${wins.length}/${periodTrades.length}). Signal quality may be degraded.`,
-      suggested_action: "Review SCOUT thesis generation criteria; consider tightening confidence thresholds",
+      recommendation: "Review SCOUT thesis generation criteria; consider tightening confidence thresholds",
     });
   }
 
@@ -660,7 +699,7 @@ export async function runPerformanceReview(periodDays: number = 7): Promise<Perf
       severity: "medium",
       title: `High slippage: ${avgSlippage.toFixed(2)}%`,
       description: `Average execution slippage is ${avgSlippage.toFixed(2)}% over ${slippages.length} trades.`,
-      suggested_action: "Review BNKR execution timing; consider limit orders or smaller position sizes",
+      recommendation: "Review BNKR execution timing; consider limit orders or smaller position sizes",
     });
   }
 
@@ -670,7 +709,7 @@ export async function runPerformanceReview(periodDays: number = 7): Promise<Perf
 function buildSignalAttribution(trades: TradeRecord[], totalPnl: number): SignalAttribution[] {
   const bySignal: Record<string, TradeRecord[]> = {};
   for (const t of trades) {
-    const signalType = (t as any).signal_type || t.source || "unknown";
+    const signalType = t.source || "unknown";
     if (!bySignal[signalType]) bySignal[signalType] = [];
     bySignal[signalType].push(t);
   }
@@ -680,7 +719,7 @@ function buildSignalAttribution(trades: TradeRecord[], totalPnl: number): Signal
     const wins = signalTrades.filter(t => (t.pnl || 0) > 0);
     const losses = signalTrades.filter(t => (t.pnl || 0) <= 0);
     const signalPnl = signalTrades.reduce((s, t) => s + (t.pnl || 0), 0);
-    const avgConf = signalTrades.reduce((s, t) => s + ((t as any).confidence || 0), 0) / signalTrades.length;
+    const avgConf = 0;
     attrs.push({
       signal_type: signal,
       trades: signalTrades.length,
@@ -768,7 +807,7 @@ export async function captureImprovement(params: {
   severity: ImprovementRequest["severity"];
   title: string;
   description: string;
-  suggested_action: string;
+  recommendation: string;
   domain?: ImprovementRequest["domain"];
   priority?: number;
   pattern_description?: string;
@@ -804,7 +843,7 @@ export async function captureImprovement(params: {
     title: params.title,
     description: params.description,
     pattern_description: params.pattern_description,
-    suggested_action: params.suggested_action,
+    recommendation: params.recommendation,
     route: params.route || routeMap[params.category] || "manual_review",
     status: "open",
   };
@@ -1069,14 +1108,14 @@ export function formatPerformanceReview(review: PerformanceReview): string {
 }
 
 export async function reviewTheses(): Promise<ThesisReview[]> {
-  const cryptoTheses = await getConfigValue<any[]>("scout_active_theses", []);
-  const pmTheses = await getConfigValue<any[]>("polymarket_scout_active_theses", []);
+  const cryptoTheses = await getConfigValue<ThesisRecord[]>("scout_active_theses", []);
+  const pmTheses = await getConfigValue<ThesisRecord[]>("polymarket_scout_active_theses", []);
   const history = await getConfigValue<TradeRecord[]>("wealth_engines_trade_history", []);
   const reviews: ThesisReview[] = [];
 
-  const allTheses = [
-    ...cryptoTheses.filter((t: any) => t.status === "active").map((t: any) => ({ ...t, _source: "crypto_scout" })),
-    ...pmTheses.filter((t: any) => t.status === "active").map((t: any) => ({ ...t, _source: "polymarket_scout" })),
+  const allTheses: ThesisRecord[] = [
+    ...cryptoTheses.filter((t) => t.status === "active").map((t) => ({ ...t, _source: "crypto_scout" as const })),
+    ...pmTheses.filter((t) => t.status === "active").map((t) => ({ ...t, _source: "polymarket_scout" as const })),
   ];
 
   for (const thesis of allTheses) {
@@ -1106,7 +1145,7 @@ export async function reviewTheses(): Promise<ThesisReview[]> {
     if (thesis.invalidation_criteria) bullFactors.push(`Clear invalidation criteria defined`);
 
     if (thesis._source === "polymarket_scout") {
-      if (thesis.whale_count >= 3) bullFactors.push(`Strong whale consensus: ${thesis.whale_count} whales`);
+      if ((thesis.whale_count ?? 0) >= 3) bullFactors.push(`Strong whale consensus: ${thesis.whale_count} whales`);
       else bearFactors.push(`Weak whale consensus: ${thesis.whale_count || 0} whales`);
       if (thesis.odds && (thesis.odds > 85 || thesis.odds < 15)) bearFactors.push(`Extreme odds: ${thesis.odds}% — limited edge`);
     }
@@ -1123,8 +1162,8 @@ export async function reviewTheses(): Promise<ThesisReview[]> {
     reviews.push({
       thesis_id: thesis.id,
       asset: typeof asset === "string" ? asset.slice(0, 50) : "unknown",
-      source: thesis._source,
-      direction,
+      source: thesis._source || "unknown",
+      direction: direction || "unknown",
       bull_case: bullFactors.join("; ") || "No strong bull factors",
       bear_case: bearFactors.join("; ") || "No significant bear factors",
       verdict,
@@ -1140,7 +1179,7 @@ export async function reviewTheses(): Promise<ThesisReview[]> {
         title: `Bear-favored thesis: ${typeof asset === "string" ? asset.slice(0, 30) : "unknown"}`,
         description: `Adversarial review found bear case stronger: ${bearFactors.join("; ")}`,
         pattern_description: `Thesis ${thesis.id} has more bear factors (${bearFactors.length}) than bull (${bullFactors.length})`,
-        suggested_action: recommendation,
+        recommendation,
         route: "signal_tuning",
       });
     }
@@ -1172,7 +1211,7 @@ export async function checkPerAssetLosses(): Promise<void> {
         title: `Per-asset loss: ${asset} -${lossPct.toFixed(1)}%`,
         description: `${asset} has accumulated $${Math.abs(pnl).toFixed(2)} loss (${lossPct.toFixed(1)}% of portfolio) in 7 days.`,
         pattern_description: `Concentrated losses in single asset ${asset}`,
-        suggested_action: `Review ${asset} thesis quality; consider blacklisting or reducing position limits`,
+        recommendation: `Review ${asset} thesis quality; consider blacklisting or reducing position limits`,
         route: "bankr_config",
       });
     }
