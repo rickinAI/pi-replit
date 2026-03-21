@@ -36,6 +36,7 @@ interface ThesisRecord {
   whale_count?: number;
   odds?: number;
   direction?: string;
+  position_size?: number;
   _source?: string;
 }
 
@@ -735,7 +736,7 @@ function buildSignalAttribution(trades: TradeRecord[], totalPnl: number): Signal
 
 export async function detectCrossDomainExposure(): Promise<CrossDomainExposure[]> {
   const positions = await getConfigValue<Position[]>("wealth_engines_positions", []);
-  const pmTheses = await getConfigValue<any[]>("polymarket_scout_active_theses", []);
+  const pmTheses = await getConfigValue<ThesisRecord[]>("polymarket_scout_active_theses", []);
   const portfolio = await getConfigValue<number>("wealth_engines_portfolio_value", 50);
   const alerts: CrossDomainExposure[] = [];
 
@@ -796,6 +797,24 @@ export async function detectCrossDomainExposure(): Promise<CrossDomainExposure[]
         });
       }
     }
+  }
+
+  const EXPOSURE_ALERT_THRESHOLD = 40;
+  const highExposure = alerts.filter(a => a.combined_exposure_pct > EXPOSURE_ALERT_THRESHOLD);
+  for (const alert of highExposure) {
+    await notifyTelegram(
+      `⚠️ CROSS-DOMAIN RISK: ${alert.crypto_asset} + ${alert.polymarket_question.slice(0, 40)} — ${alert.combined_exposure_pct.toFixed(0)}% combined exposure (${alert.correlation_type})`
+    );
+    await captureImprovement({
+      source: "health_check",
+      category: "risk",
+      severity: alert.combined_exposure_pct > 60 ? "critical" : "high",
+      domain: "cross_domain",
+      title: `Cross-domain concentration: ${alert.combined_exposure_pct.toFixed(0)}% exposure`,
+      description: alert.detail,
+      recommendation: "Reduce correlated positions across crypto perps and Polymarket to stay under 40% combined exposure",
+      route: "bankr_config",
+    });
   }
 
   return alerts;

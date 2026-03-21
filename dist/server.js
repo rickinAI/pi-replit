@@ -5573,6 +5573,23 @@ async function detectCrossDomainExposure() {
       }
     }
   }
+  const EXPOSURE_ALERT_THRESHOLD = 40;
+  const highExposure = alerts.filter((a) => a.combined_exposure_pct > EXPOSURE_ALERT_THRESHOLD);
+  for (const alert of highExposure) {
+    await notifyTelegram(
+      `\u26A0\uFE0F CROSS-DOMAIN RISK: ${alert.crypto_asset} + ${alert.polymarket_question.slice(0, 40)} \u2014 ${alert.combined_exposure_pct.toFixed(0)}% combined exposure (${alert.correlation_type})`
+    );
+    await captureImprovement({
+      source: "health_check",
+      category: "risk",
+      severity: alert.combined_exposure_pct > 60 ? "critical" : "high",
+      domain: "cross_domain",
+      title: `Cross-domain concentration: ${alert.combined_exposure_pct.toFixed(0)}% exposure`,
+      description: alert.detail,
+      recommendation: "Reduce correlated positions across crypto perps and Polymarket to stay under 40% combined exposure",
+      route: "bankr_config"
+    });
+  }
   return alerts;
 }
 async function captureImprovement(params) {
@@ -5667,6 +5684,20 @@ async function closeShadowTrade(id, exitPrice, reason) {
   await setConfigValue(SHADOW_TRADES_KEY, trades);
   console.log(`[oversight] Shadow trade closed: ${trade.asset} P&L: $${trade.hypothetical_pnl.toFixed(2)}`);
   return trade;
+}
+async function updateShadowPrices(priceUpdates) {
+  const trades = await getConfigValue(SHADOW_TRADES_KEY, []);
+  const openTrades = trades.filter((t) => t.status === "open");
+  for (const trade of openTrades) {
+    const newPrice = priceUpdates[trade.asset];
+    if (newPrice != null) {
+      trade.current_price = newPrice;
+      const multiplier = trade.direction === "LONG" || trade.direction === "YES" ? 1 : -1;
+      trade.hypothetical_pnl = (newPrice - trade.entry_price) * multiplier;
+    }
+  }
+  await setConfigValue(SHADOW_TRADES_KEY, trades);
+  return openTrades;
 }
 async function getShadowTrades(statusFilter) {
   const trades = await getConfigValue(SHADOW_TRADES_KEY, []);
@@ -6275,6 +6306,16 @@ async function closePosition(positionId, exitPrice, closeReason, txHash) {
   await setPortfolioValue(portfolio + pnl - fees * 2);
   await updateConsecutiveLosses(pnl);
   recordSignal(pos.asset.toLowerCase(), "exit");
+  try {
+    const openShadows = await getShadowTrades("open");
+    for (const shadow of openShadows) {
+      if (shadow.thesis_id === pos.thesis_id || shadow.asset === pos.asset) {
+        await closeShadowTrade(shadow.id, exitPrice, closeReason);
+      }
+    }
+  } catch (e) {
+    console.error("[bankr] Shadow trade close sync:", e instanceof Error ? e.message : e);
+  }
   return tradeRecord;
 }
 async function closeAllPositions(reason) {
@@ -6347,6 +6388,19 @@ async function runPositionMonitor() {
       const record = await closePosition(p.id, p.current_price, "circuit_breaker");
       if (record) closed.push(record);
     }
+  }
+  try {
+    const priceMap = {};
+    for (const pos of positions) {
+      if (pos.current_price > 0) {
+        priceMap[pos.asset] = pos.current_price;
+      }
+    }
+    if (Object.keys(priceMap).length > 0) {
+      await updateShadowPrices(priceMap);
+    }
+  } catch (e) {
+    console.error("[bankr] Shadow price update:", e instanceof Error ? e.message : e);
   }
   return { checked: positions.length, closed, errors };
 }

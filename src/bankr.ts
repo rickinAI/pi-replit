@@ -5,7 +5,7 @@ import * as polymarket from "./polymarket.js";
 import * as bnkr from "./bnkr.js";
 import * as coinbaseWallet from "./coinbase-wallet.js";
 import type { PolymarketThesis } from "./polymarket-scout.js";
-import { autoTrackShadowTrade } from "./oversight.js";
+import { autoTrackShadowTrade, closeShadowTrade, updateShadowPrices, getShadowTrades } from "./oversight.js";
 
 export interface Position {
   id: string;
@@ -563,6 +563,17 @@ export async function closePosition(positionId: string, exitPrice: number, close
 
   recordSignal(pos.asset.toLowerCase(), "exit");
 
+  try {
+    const openShadows = await getShadowTrades("open");
+    for (const shadow of openShadows) {
+      if (shadow.thesis_id === pos.thesis_id || shadow.asset === pos.asset) {
+        await closeShadowTrade(shadow.id, exitPrice, closeReason);
+      }
+    }
+  } catch (e) {
+    console.error("[bankr] Shadow trade close sync:", e instanceof Error ? e.message : e);
+  }
+
   return tradeRecord;
 }
 
@@ -649,6 +660,20 @@ export async function runPositionMonitor(): Promise<{ checked: number; closed: T
       const record = await closePosition(p.id, p.current_price, "circuit_breaker");
       if (record) closed.push(record);
     }
+  }
+
+  try {
+    const priceMap: Record<string, number> = {};
+    for (const pos of positions) {
+      if (pos.current_price > 0) {
+        priceMap[pos.asset] = pos.current_price;
+      }
+    }
+    if (Object.keys(priceMap).length > 0) {
+      await updateShadowPrices(priceMap);
+    }
+  } catch (e) {
+    console.error("[bankr] Shadow price update:", e instanceof Error ? e.message : e);
   }
 
   return { checked: positions.length, closed, errors };
