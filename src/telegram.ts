@@ -1,4 +1,5 @@
 import { getPool } from "./db.js";
+import * as autoresearch from "./autoresearch.js";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID || "";
@@ -1037,6 +1038,58 @@ export async function handleWebhookUpdate(update: any): Promise<void> {
   }
 }
 
+async function handleResearchCommand(args: string): Promise<string> {
+  const mode = await getMode();
+  const parts = args.trim().toLowerCase().split(/\s+/);
+
+  if (parts[0] === "rollback") {
+    const domain = parts[1] === "polymarket" ? "polymarket" as const : "crypto" as const;
+    const result = await autoresearch.rollbackParams(domain);
+    return `${mode} ${result.success ? "✅" : "❌"} ${result.message}`;
+  }
+
+  if (parts[0] === "status") {
+    const status = await autoresearch.getResearchStatus();
+    const lines = [
+      `${mode} 🔬 *Autoresearch Status*`,
+      "",
+      `*Crypto Parameters:*`,
+      ...Object.entries(status.crypto_params).slice(0, 8).map(([k, v]) => `  ${k}: ${v}`),
+      `  ... (${Object.keys(status.crypto_params).length} total)`,
+      "",
+      `*Polymarket Parameters:*`,
+      ...Object.entries(status.polymarket_params).slice(0, 8).map(([k, v]) => `  ${k}: ${v}`),
+      `  ... (${Object.keys(status.polymarket_params).length} total)`,
+      "",
+      `*History:* ${status.crypto_history_count} crypto, ${status.polymarket_history_count} polymarket rollback sets`,
+      `*Recent Experiments:* ${status.recent_experiments.length} logged`,
+    ];
+
+    if (status.recent_experiments.length > 0) {
+      const last3 = status.recent_experiments.slice(-3);
+      lines.push("");
+      for (const e of last3) {
+        lines.push(`  ${e.domain}: ${e.outcome} (${e.delta_pct.toFixed(1)}%) — ${Object.keys(e.parameters_changed).join(", ")}`);
+      }
+    }
+
+    return lines.join("\n");
+  }
+
+  await sendMessage(`${mode} 🔬 Starting autoresearch...`);
+
+  let summaries: autoresearch.ResearchRunSummary[];
+  if (parts[0] === "crypto") {
+    summaries = [await autoresearch.runCryptoResearch()];
+  } else if (parts[0] === "polymarket") {
+    summaries = [await autoresearch.runPolymarketResearch()];
+  } else {
+    summaries = await autoresearch.runFullResearch();
+  }
+
+  return autoresearch.formatResearchSummary(summaries);
+}
+
 export async function init(): Promise<void> {
   if (!BOT_TOKEN) {
     console.warn("[telegram] TELEGRAM_BOT_TOKEN not set — Telegram bot disabled");
@@ -1061,6 +1114,7 @@ export async function init(): Promise<void> {
   registerCommand("tax", async () => handleTaxCommand());
   registerCommand("oversight", async () => handleOversightCommand());
   registerCommand("shadow", async () => handleShadowCommand());
+  registerCommand("research", async (args) => handleResearchCommand(args));
   registerCommand("help", async () => handleHelpCommand());
 
   try {

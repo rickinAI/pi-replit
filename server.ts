@@ -57,6 +57,7 @@ import { cleanHtmlToMarkdown, looksLikeHtml } from "./src/defuddle.js";
 import * as vaultGraph from "./src/vault-graph.js";
 import * as hindsight from "./src/hindsight.js";
 import * as oversight from "./src/oversight.js";
+import * as autoresearch from "./src/autoresearch.js";
 
 const PORT = parseInt(process.env.PORT || "5000", 10);
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
@@ -2116,6 +2117,101 @@ function buildOversightTools(): ToolDefinition[] {
         try {
           await oversight.checkPerAssetLosses();
           return { content: [{ type: "text" as const, text: JSON.stringify({ checked: true }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "autoresearch_run",
+      label: "Autoresearch Run",
+      description: "Run autoresearch parameter optimization experiments. Supports crypto, polymarket, or both domains. Backtests parameter mutations against historical data and keeps improvements.",
+      parameters: Type.Object({
+        domain: Type.Union([Type.Literal("crypto"), Type.Literal("polymarket"), Type.Literal("both")], { description: "Which domain(s) to optimize" }),
+        experiments_per_domain: Type.Optional(Type.Number({ description: "Number of experiments per domain (default 15)" })),
+      }),
+      async execute(_toolCallId: string, params: { domain: "crypto" | "polymarket" | "both"; experiments_per_domain?: number }) {
+        try {
+          const count = params.experiments_per_domain || 15;
+          let summaries: autoresearch.ResearchRunSummary[];
+          if (params.domain === "crypto") {
+            summaries = [await autoresearch.runCryptoResearch(count)];
+          } else if (params.domain === "polymarket") {
+            summaries = [await autoresearch.runPolymarketResearch(count)];
+          } else {
+            summaries = await autoresearch.runFullResearch(count);
+          }
+          return { content: [{ type: "text" as const, text: JSON.stringify(summaries) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "autoresearch_status",
+      label: "Autoresearch Status",
+      description: "Get current autoresearch status including active parameters for both crypto and polymarket, recent experiment history, and rollback availability.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const status = await autoresearch.getResearchStatus();
+          return { content: [{ type: "text" as const, text: JSON.stringify(status) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "autoresearch_rollback",
+      label: "Autoresearch Rollback",
+      description: "Roll back parameters to the previous set for a given domain. Maintains up to 5 rollback points per domain.",
+      parameters: Type.Object({
+        domain: Type.Union([Type.Literal("crypto"), Type.Literal("polymarket")], { description: "Which domain to roll back" }),
+      }),
+      async execute(_toolCallId: string, params: { domain: "crypto" | "polymarket" }) {
+        try {
+          const result = await autoresearch.rollbackParams(params.domain);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "autoresearch_experiment_log",
+      label: "Autoresearch Experiment Log",
+      description: "Get the full experiment history showing all parameter mutations, their backtested scores, and whether they were kept or reverted.",
+      parameters: Type.Object({
+        domain: Type.Optional(Type.Union([Type.Literal("crypto"), Type.Literal("polymarket")], { description: "Filter by domain" })),
+        limit: Type.Optional(Type.Number({ description: "Number of recent experiments to return (default 20)" })),
+      }),
+      async execute(_toolCallId: string, params: { domain?: "crypto" | "polymarket"; limit?: number }) {
+        try {
+          const log = await autoresearch.getExperimentLog();
+          let filtered = params.domain ? log.filter(e => e.domain === params.domain) : log;
+          const limit = params.limit || 20;
+          filtered = filtered.slice(-limit);
+          return { content: [{ type: "text" as const, text: JSON.stringify(filtered) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "autoresearch_params",
+      label: "Autoresearch Current Parameters",
+      description: "Get the current optimized parameters for crypto signals or polymarket thresholds.",
+      parameters: Type.Object({
+        domain: Type.Union([Type.Literal("crypto"), Type.Literal("polymarket")], { description: "Which domain's parameters to retrieve" }),
+      }),
+      async execute(_toolCallId: string, params: { domain: "crypto" | "polymarket" }) {
+        try {
+          if (params.domain === "crypto") {
+            const p = await autoresearch.getCryptoParams();
+            return { content: [{ type: "text" as const, text: JSON.stringify(p) }], details: {} };
+          }
+          const p = await autoresearch.getPolymarketParams();
+          return { content: [{ type: "text" as const, text: JSON.stringify(p) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
         }

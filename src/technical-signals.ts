@@ -1,4 +1,5 @@
 import type { OHLCVCandle } from "./coingecko.js";
+import { getPool } from "./db.js";
 
 export type MarketRegime = "TRENDING" | "RANGING" | "VOLATILE";
 
@@ -101,6 +102,34 @@ const DEFAULT_CONFIG: SignalConfig = {
   enable_bb: true,
   enable_volatility_regime: true,
 };
+
+let _dbParamsCache: Partial<SignalConfig> | null = null;
+let _dbParamsCacheTime = 0;
+const DB_PARAMS_CACHE_TTL = 300_000;
+
+export async function loadCryptoSignalParams(): Promise<Partial<SignalConfig>> {
+  const now = Date.now();
+  if (_dbParamsCache && (now - _dbParamsCacheTime) < DB_PARAMS_CACHE_TTL) {
+    return _dbParamsCache;
+  }
+  try {
+    const pool = getPool();
+    const res = await pool.query("SELECT value FROM app_config WHERE key = 'crypto_signal_parameters'");
+    if (res.rows.length > 0) {
+      const parsed = typeof res.rows[0].value === "string" ? JSON.parse(res.rows[0].value) : res.rows[0].value;
+      _dbParamsCache = parsed as Partial<SignalConfig>;
+      _dbParamsCacheTime = now;
+      return _dbParamsCache;
+    }
+  } catch {
+  }
+  return {};
+}
+
+export function invalidateCryptoParamsCache(): void {
+  _dbParamsCache = null;
+  _dbParamsCacheTime = 0;
+}
 
 const cooldownTracker: Map<string, { lastSignalTime: number; lastSignalType: "entry" | "exit" }> = new Map();
 const BAR_INTERVAL_MS = 60 * 60 * 1000;

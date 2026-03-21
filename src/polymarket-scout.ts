@@ -151,6 +151,31 @@ export function formatThesesSummary(theses: PolymarketThesis[]): string {
   return theses.map(formatThesis).join("\n\n");
 }
 
+async function loadPolymarketThresholds(): Promise<{
+  min_wallet_score: number;
+  min_whale_consensus: number;
+  min_volume: number;
+  min_odds: number;
+  max_odds: number;
+}> {
+  try {
+    const pool = getPool();
+    const res = await pool.query("SELECT value FROM app_config WHERE key = 'polymarket_scout_parameters'");
+    if (res.rows.length > 0) {
+      const parsed = typeof res.rows[0].value === "string" ? JSON.parse(res.rows[0].value) : res.rows[0].value;
+      return {
+        min_wallet_score: parsed.min_wallet_score ?? 0.6,
+        min_whale_consensus: parsed.min_whale_consensus ?? 2,
+        min_volume: parsed.min_volume ?? 50000,
+        min_odds: parsed.min_odds ?? 0.15,
+        max_odds: parsed.max_odds ?? 0.85,
+      };
+    }
+  } catch {
+  }
+  return { min_wallet_score: 0.6, min_whale_consensus: 2, min_volume: 50000, min_odds: 0.15, max_odds: 0.85 };
+}
+
 export async function meetsThesisThresholds(params: {
   whale_score: number;
   whale_consensus: number;
@@ -159,12 +184,13 @@ export async function meetsThesisThresholds(params: {
   odds: number;
   hours_to_resolution: number;
 }): Promise<{ meets: boolean; failures: string[] }> {
+  const thresholds = await loadPolymarketThresholds();
   const failures: string[] = [];
 
-  if (params.whale_score < 0.6) failures.push(`Wallet score ${params.whale_score.toFixed(2)} < 0.6`);
-  if (params.whale_consensus < 2) failures.push(`Consensus ${params.whale_consensus} < 2 whales`);
-  if (params.market_volume < 50000) failures.push(`Volume $${params.market_volume.toFixed(0)} < $50K`);
-  if (params.odds < 0.15 || params.odds > 0.85) failures.push(`Odds ${(params.odds * 100).toFixed(0)}% outside 15-85% range`);
+  if (params.whale_score < thresholds.min_wallet_score) failures.push(`Wallet score ${params.whale_score.toFixed(2)} < ${thresholds.min_wallet_score}`);
+  if (params.whale_consensus < thresholds.min_whale_consensus) failures.push(`Consensus ${params.whale_consensus} < ${thresholds.min_whale_consensus} whales`);
+  if (params.market_volume < thresholds.min_volume) failures.push(`Volume $${params.market_volume.toFixed(0)} < $${thresholds.min_volume}`);
+  if (params.odds < thresholds.min_odds || params.odds > thresholds.max_odds) failures.push(`Odds ${(params.odds * 100).toFixed(0)}% outside ${(thresholds.min_odds * 100).toFixed(0)}-${(thresholds.max_odds * 100).toFixed(0)}% range`);
   if (params.hours_to_resolution < 24) failures.push(`Resolution in ${params.hours_to_resolution.toFixed(0)}h < 24h minimum`);
 
   return { meets: failures.length === 0, failures };

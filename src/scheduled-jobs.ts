@@ -55,6 +55,7 @@ function getJobSavePath(jobId: string, dateStr: string, safeName: string): strin
   if (jobId === "oversight-weekly") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Weekly-Review.md`;
   if (jobId === "oversight-daily-summary") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Daily-Summary.md`;
   if (jobId === "oversight-shadow-refresh") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Shadow-Refresh.md`;
+  if (jobId === "autoresearch-weekly") return `Scheduled Reports/Wealth Engines/Autoresearch/${dateStr}-Weekly-Optimization.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 
@@ -981,6 +982,23 @@ Keep it quick — the daily summary is meant to be a 30-second glance at the day
 
 This ensures shadow/paper trading accurately tracks what BANKR would have earned.`,
     schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 60 },
+    enabled: true,
+  },
+  {
+    id: "autoresearch-weekly",
+    name: "Autoresearch Strategy Optimization",
+    agentId: "scout",
+    prompt: `Run the WEEKLY AUTORESEARCH STRATEGY OPTIMIZATION.
+
+1. Call autoresearch_run with domain "both" and experiments_per_domain 15.
+2. This runs parameter mutation experiments against crypto signals and polymarket thresholds.
+3. Each experiment backtests a parameter variation and keeps improvements >0.5%.
+4. Report the results: experiments run, improvements found, score progression, parameters changed.
+5. If improvements were found, note which parameters evolved and by how much.
+6. Save the full results summary to the vault.
+
+This autonomously evolves trading parameters based on recent market data.`,
+    schedule: { type: "weekly", hour: 3, minute: 0, daysOfWeek: [0] },
     enabled: true,
   },
 ];
