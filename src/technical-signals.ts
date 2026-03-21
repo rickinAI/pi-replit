@@ -44,6 +44,7 @@ export interface EnsembleResult {
   parameters_validated: boolean;
   vol_adjusted_threshold: number;
   btc_confirmation?: BTCConfirmation;
+  cooldown?: { in_cooldown: boolean; detail: string };
   reason?: string;
 }
 
@@ -100,6 +101,28 @@ const DEFAULT_CONFIG: SignalConfig = {
   enable_bb: true,
   enable_volatility_regime: true,
 };
+
+const cooldownTracker: Map<string, { lastSignalTime: number; lastSignalType: "entry" | "exit" }> = new Map();
+const COOLDOWN_BARS_MS = 2 * 60 * 60 * 1000;
+
+export function checkCooldown(assetId: string): { inCooldown: boolean; detail: string } {
+  const entry = cooldownTracker.get(assetId);
+  if (!entry) return { inCooldown: false, detail: "No recent signals" };
+  const elapsed = Date.now() - entry.lastSignalTime;
+  if (elapsed < COOLDOWN_BARS_MS) {
+    const remaining = Math.ceil((COOLDOWN_BARS_MS - elapsed) / (60 * 1000));
+    return { inCooldown: true, detail: `Cooldown active (${remaining}min remaining after ${entry.lastSignalType})` };
+  }
+  return { inCooldown: false, detail: "Cooldown expired" };
+}
+
+export function recordSignal(assetId: string, signalType: "entry" | "exit"): void {
+  cooldownTracker.set(assetId, { lastSignalTime: Date.now(), lastSignalType: signalType });
+}
+
+export function clearCooldown(assetId: string): void {
+  cooldownTracker.delete(assetId);
+}
 
 function ema(data: number[], period: number): number[] {
   if (data.length === 0) return [];
@@ -495,7 +518,7 @@ export function computeBTCConfirmation(btcCandles: OHLCVCandle[], cfg: SignalCon
   };
 }
 
-export function analyzeAsset(candles: OHLCVCandle[], config?: Partial<SignalConfig>, btcCandles?: OHLCVCandle[]): EnsembleResult {
+export function analyzeAsset(candles: OHLCVCandle[], config?: Partial<SignalConfig>, btcCandles?: OHLCVCandle[], assetId?: string): EnsembleResult {
   const cfg: SignalConfig = { ...DEFAULT_CONFIG, ...config };
 
   const closes = candles.map(c => c.close);
@@ -613,6 +636,15 @@ export function analyzeAsset(candles: OHLCVCandle[], config?: Partial<SignalConf
     }
   }
 
+  let cooldownResult: { in_cooldown: boolean; detail: string } | undefined;
+  if (assetId) {
+    const cd = checkCooldown(assetId);
+    cooldownResult = { in_cooldown: cd.inCooldown, detail: cd.detail };
+    if (cd.inCooldown && votes.entry_signal) {
+      votes.entry_signal = false;
+    }
+  }
+
   return {
     technical_score: parseFloat(technicalScore.toFixed(3)),
     regime,
@@ -627,6 +659,7 @@ export function analyzeAsset(candles: OHLCVCandle[], config?: Partial<SignalConf
     parameters_validated: false,
     vol_adjusted_threshold: volAdjustedThreshold,
     btc_confirmation: btcConfirmation,
+    cooldown: cooldownResult,
   };
 }
 

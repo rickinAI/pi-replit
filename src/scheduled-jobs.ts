@@ -776,7 +776,7 @@ Process everything autonomously. Be thorough but efficient.`,
 
 Keep this concise — it runs every 30 minutes. No thesis generation, no Nansen/X checks, just signal refresh.`,
     schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 30 },
-    enabled: false,
+    enabled: true,
   },
   {
     id: "scout-full-cycle",
@@ -797,7 +797,7 @@ Keep this concise — it runs every 30 minutes. No thesis generation, no Nansen/
 
 Output the full brief — the system will save it automatically. Do NOT use notes_create.`,
     schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 240 },
-    enabled: false,
+    enabled: true,
   },
 ];
 
@@ -1631,12 +1631,13 @@ async function checkJobs(): Promise<void> {
           try {
             const pool = dbPoolFn ? dbPoolFn() : null;
             if (pool) {
+              const briefKey = job.id === "scout-full-cycle" ? "scout_latest_brief" : "scout_latest_micro_scan";
               await pool.query(
-                `INSERT INTO app_config (key, value, updated_at) VALUES ('scout_latest_brief', $1, $2)
+                `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
                  ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
-                [JSON.stringify(result.slice(0, 10000)), Date.now()]
+                [briefKey, JSON.stringify(result.slice(0, 10000)), Date.now()]
               );
-              console.log(`[scheduled-jobs] Saved SCOUT brief to scout_latest_brief`);
+              console.log(`[scheduled-jobs] Saved SCOUT brief to ${briefKey}`);
             }
           } catch (e) {
             console.warn(`[scheduled-jobs] Failed to save SCOUT brief:`, e);
@@ -1806,12 +1807,13 @@ export async function triggerJob(jobId: string): Promise<string> {
       try {
         const pool = dbPoolFn ? dbPoolFn() : null;
         if (pool) {
+          const briefKey = job.id === "scout-full-cycle" ? "scout_latest_brief" : "scout_latest_micro_scan";
           await pool.query(
-            `INSERT INTO app_config (key, value, updated_at) VALUES ('scout_latest_brief', $1, $2)
+            `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
              ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
-            [JSON.stringify(result.slice(0, 10000)), Date.now()]
+            [briefKey, JSON.stringify(result.slice(0, 10000)), Date.now()]
           );
-          console.log(`[scheduled-jobs] Saved SCOUT brief to scout_latest_brief (manual trigger)`);
+          console.log(`[scheduled-jobs] Saved SCOUT brief to ${briefKey} (manual trigger)`);
         }
       } catch (e) {
         console.warn(`[scheduled-jobs] Failed to save SCOUT brief:`, e);

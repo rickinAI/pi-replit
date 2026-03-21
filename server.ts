@@ -36,7 +36,7 @@ import * as twitter from "./src/twitter.js";
 import * as stocks from "./src/stocks.js";
 import * as coingecko from "./src/coingecko.js";
 import { getHistoricalOHLCV } from "./src/coingecko.js";
-import { analyzeAsset, formatAnalysis } from "./src/technical-signals.js";
+import { analyzeAsset, formatAnalysis, recordSignal } from "./src/technical-signals.js";
 import * as nansen from "./src/nansen.js";
 import { runBacktest, formatBacktestResult } from "./src/backtest.js";
 import * as cryptoScout from "./src/crypto-scout.js";
@@ -1284,7 +1284,7 @@ function buildCoinGeckoTools(): ToolDefinition[] {
               btcCandles = await getHistoricalOHLCV("bitcoin", Math.min(params.days || 90, 90));
             } catch {}
           }
-          const result = analyzeAsset(candles, undefined, btcCandles);
+          const result = analyzeAsset(candles, undefined, btcCandles, coinLower);
           return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
@@ -1433,6 +1433,7 @@ function buildCoinGeckoTools(): ToolDefinition[] {
             time_horizon: params.time_horizon,
           });
           await cryptoScout.saveTheses([thesis]);
+          recordSignal(params.asset_id, "entry");
           return { content: [{ type: "text" as const, text: JSON.stringify({ saved: true, thesis_id: thesis.id, expires_at: new Date(thesis.expires_at).toISOString() }) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };

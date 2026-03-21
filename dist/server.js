@@ -3585,6 +3585,21 @@ var DEFAULT_CONFIG = {
   enable_bb: true,
   enable_volatility_regime: true
 };
+var cooldownTracker = /* @__PURE__ */ new Map();
+var COOLDOWN_BARS_MS = 2 * 60 * 60 * 1e3;
+function checkCooldown(assetId) {
+  const entry = cooldownTracker.get(assetId);
+  if (!entry) return { inCooldown: false, detail: "No recent signals" };
+  const elapsed = Date.now() - entry.lastSignalTime;
+  if (elapsed < COOLDOWN_BARS_MS) {
+    const remaining = Math.ceil((COOLDOWN_BARS_MS - elapsed) / (60 * 1e3));
+    return { inCooldown: true, detail: `Cooldown active (${remaining}min remaining after ${entry.lastSignalType})` };
+  }
+  return { inCooldown: false, detail: "Cooldown expired" };
+}
+function recordSignal(assetId, signalType) {
+  cooldownTracker.set(assetId, { lastSignalTime: Date.now(), lastSignalType: signalType });
+}
 function ema(data, period) {
   if (data.length === 0) return [];
   const k = 2 / (period + 1);
@@ -3883,7 +3898,7 @@ function computeBTCConfirmation(btcCandles, cfg) {
     detail: `BTC momentum(${cfg.momentum_lookback}-bar): ${(ret * 100).toFixed(2)}%`
   };
 }
-function analyzeAsset(candles, config3, btcCandles) {
+function analyzeAsset(candles, config3, btcCandles, assetId) {
   const cfg = { ...DEFAULT_CONFIG, ...config3 };
   const closes = candles.map((c) => c.close);
   const currentPrice = closes.length > 0 ? closes[closes.length - 1] : 0;
@@ -3987,6 +4002,14 @@ function analyzeAsset(candles, config3, btcCandles) {
       votes.entry_signal = false;
     }
   }
+  let cooldownResult;
+  if (assetId) {
+    const cd = checkCooldown(assetId);
+    cooldownResult = { in_cooldown: cd.inCooldown, detail: cd.detail };
+    if (cd.inCooldown && votes.entry_signal) {
+      votes.entry_signal = false;
+    }
+  }
   return {
     technical_score: parseFloat(technicalScore.toFixed(3)),
     regime,
@@ -4000,7 +4023,8 @@ function analyzeAsset(candles, config3, btcCandles) {
     data_quality: "sufficient",
     parameters_validated: false,
     vol_adjusted_threshold: volAdjustedThreshold,
-    btc_confirmation: btcConfirmation
+    btc_confirmation: btcConfirmation,
+    cooldown: cooldownResult
   };
 }
 
@@ -7377,7 +7401,7 @@ Process everything autonomously. Be thorough but efficient.`,
 
 Keep this concise \u2014 it runs every 30 minutes. No thesis generation, no Nansen/X checks, just signal refresh.`,
     schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 30 },
-    enabled: false
+    enabled: true
   },
   {
     id: "scout-full-cycle",
@@ -7398,7 +7422,7 @@ Keep this concise \u2014 it runs every 30 minutes. No thesis generation, no Nans
 
 Output the full brief \u2014 the system will save it automatically. Do NOT use notes_create.`,
     schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 240 },
-    enabled: false
+    enabled: true
   }
 ];
 var config2 = {
@@ -8167,12 +8191,13 @@ ${result}`);
           try {
             const pool2 = dbPoolFn ? dbPoolFn() : null;
             if (pool2) {
+              const briefKey = job.id === "scout-full-cycle" ? "scout_latest_brief" : "scout_latest_micro_scan";
               await pool2.query(
-                `INSERT INTO app_config (key, value, updated_at) VALUES ('scout_latest_brief', $1, $2)
+                `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
                  ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
-                [JSON.stringify(result.slice(0, 1e4)), Date.now()]
+                [briefKey, JSON.stringify(result.slice(0, 1e4)), Date.now()]
               );
-              console.log(`[scheduled-jobs] Saved SCOUT brief to scout_latest_brief`);
+              console.log(`[scheduled-jobs] Saved SCOUT brief to ${briefKey}`);
             }
           } catch (e) {
             console.warn(`[scheduled-jobs] Failed to save SCOUT brief:`, e);
@@ -8327,12 +8352,13 @@ ${result}`);
       try {
         const pool2 = dbPoolFn ? dbPoolFn() : null;
         if (pool2) {
+          const briefKey = job.id === "scout-full-cycle" ? "scout_latest_brief" : "scout_latest_micro_scan";
           await pool2.query(
-            `INSERT INTO app_config (key, value, updated_at) VALUES ('scout_latest_brief', $1, $2)
+            `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
              ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
-            [JSON.stringify(result.slice(0, 1e4)), Date.now()]
+            [briefKey, JSON.stringify(result.slice(0, 1e4)), Date.now()]
           );
-          console.log(`[scheduled-jobs] Saved SCOUT brief to scout_latest_brief (manual trigger)`);
+          console.log(`[scheduled-jobs] Saved SCOUT brief to ${briefKey} (manual trigger)`);
         }
       } catch (e) {
         console.warn(`[scheduled-jobs] Failed to save SCOUT brief:`, e);
@@ -10519,7 +10545,7 @@ function buildCoinGeckoTools() {
             } catch {
             }
           }
-          const result = analyzeAsset(candles, void 0, btcCandles);
+          const result = analyzeAsset(candles, void 0, btcCandles, coinLower);
           return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
@@ -10668,6 +10694,7 @@ function buildCoinGeckoTools() {
             time_horizon: params.time_horizon
           });
           await saveTheses([thesis]);
+          recordSignal(params.asset_id, "entry");
           return { content: [{ type: "text", text: JSON.stringify({ saved: true, thesis_id: thesis.id, expires_at: new Date(thesis.expires_at).toISOString() }) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
