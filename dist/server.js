@@ -11789,6 +11789,20 @@ async function init8() {
         console.log("[scheduled-jobs] Migrated real-estate-daily-scan: updated budget to $1.3M\u2013$1.8M, 4+ bed, added commute/market-overview steps");
         await saveConfig2();
       }
+      const pmFullCycle = config2.jobs.find((j) => j.id === "polymarket-full-cycle");
+      if (pmFullCycle && pmFullCycle.prompt.includes("score >= 0.6, 2+ whales")) {
+        const preset = DEFAULT_JOBS.find((j) => j.id === "polymarket-full-cycle");
+        pmFullCycle.prompt = preset.prompt;
+        console.log("[scheduled-jobs] Migrated polymarket-full-cycle: updated to tiered threshold criteria (HIGH/MEDIUM/SPECULATIVE/LOW)");
+        await saveConfig2();
+      }
+      const pmActivityScan = config2.jobs.find((j) => j.id === "polymarket-activity-scan");
+      if (pmActivityScan && pmActivityScan.prompt.includes("2+ whales aligned")) {
+        const preset = DEFAULT_JOBS.find((j) => j.id === "polymarket-activity-scan");
+        pmActivityScan.prompt = preset.prompt;
+        console.log("[scheduled-jobs] Migrated polymarket-activity-scan: updated to 1+ whale threshold");
+        await saveConfig2();
+      }
     } else {
       await saveConfig2();
     }
