@@ -266,7 +266,7 @@ async function handleScoutCommand(): Promise<string> {
         const conf = t.confidence || "?";
         const dir = t.direction || "?";
         const vc = t.vote_count ?? t.votes;
-        const votes = vc != null ? `${vc}/6` : "?";
+        const votes = vc != null ? (typeof vc === "string" && vc.includes("/") ? vc : `${vc}/6`) : "?";
         const score = t.technical_score != null ? t.technical_score.toFixed(2) : "?";
         const regime = t.market_regime || t.regime || "?";
         const nansenFlow = t.nansen_flow_direction || t.nansen_flow || "";

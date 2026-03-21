@@ -3869,6 +3869,20 @@ function computeVolAdjustedThreshold(closes, cfg) {
   if (annualizedVol < 0.5) return Math.max(cfg.vote_threshold - 1, 3);
   return cfg.vote_threshold;
 }
+function computeBTCConfirmation(btcCandles, cfg) {
+  if (btcCandles.length < cfg.momentum_lookback + 1) {
+    return { btc_momentum_bull: false, btc_momentum_bear: false, detail: "Insufficient BTC data" };
+  }
+  const closes = btcCandles.map((c) => c.close);
+  const current = closes[closes.length - 1];
+  const pastIdx = closes.length - 1 - cfg.momentum_lookback;
+  const ret = pastIdx >= 0 ? (current - closes[pastIdx]) / closes[pastIdx] : 0;
+  return {
+    btc_momentum_bull: ret > 0,
+    btc_momentum_bear: ret < -0.01,
+    detail: `BTC momentum(${cfg.momentum_lookback}-bar): ${(ret * 100).toFixed(2)}%`
+  };
+}
 function analyzeAsset(candles, config3, btcCandles) {
   const cfg = { ...DEFAULT_CONFIG, ...config3 };
   const closes = candles.map((c) => c.close);
@@ -3962,6 +3976,17 @@ function analyzeAsset(candles, config3, btcCandles) {
     totalWeight += w;
   }
   const technicalScore = totalWeight > 0 ? weightedSum / totalWeight : 0;
+  let btcConfirmation;
+  if (btcCandles && btcCandles.length > cfg.momentum_lookback + 1) {
+    const btcResult = computeBTCConfirmation(btcCandles, cfg);
+    btcConfirmation = {
+      ...btcResult,
+      alt_entry_allowed: !btcResult.btc_momentum_bear
+    };
+    if (btcResult.btc_momentum_bear && entry_signal) {
+      votes.entry_signal = false;
+    }
+  }
   return {
     technical_score: parseFloat(technicalScore.toFixed(3)),
     regime,
@@ -3974,7 +3999,8 @@ function analyzeAsset(candles, config3, btcCandles) {
     active_signal_count: activeSignals.length,
     data_quality: "sufficient",
     parameters_validated: false,
-    vol_adjusted_threshold: volAdjustedThreshold
+    vol_adjusted_threshold: volAdjustedThreshold,
+    btc_confirmation: btcConfirmation
   };
 }
 
@@ -4335,6 +4361,31 @@ function runBacktest(candles, assetName, config3) {
 
 // src/crypto-scout.ts
 var THESIS_EXPIRY_MS = 72 * 60 * 60 * 1e3;
+function createThesisId(asset) {
+  const date = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10).replace(/-/g, "_");
+  const rand = Math.random().toString(36).slice(2, 8);
+  return `scout_${date}_${asset.toLowerCase().replace(/[^a-z0-9]/g, "_")}_${rand}`;
+}
+async function saveTheses(theses) {
+  const pool2 = getPool();
+  const existing = await getActiveTheses();
+  const expiredIds = /* @__PURE__ */ new Set();
+  const now = Date.now();
+  for (const t of existing) {
+    if (t.expires_at < now) {
+      expiredIds.add(t.id);
+    }
+  }
+  const activeExisting = existing.filter((t) => !expiredIds.has(t.id) && t.status === "active");
+  const newAssetIds = new Set(theses.map((t) => t.asset_id));
+  const kept = activeExisting.filter((t) => !newAssetIds.has(t.asset_id));
+  const merged = [...kept, ...theses];
+  await pool2.query(
+    `INSERT INTO app_config (key, value, updated_at) VALUES ('scout_active_theses', $1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [JSON.stringify(merged), Date.now()]
+  );
+}
 async function getActiveTheses() {
   const pool2 = getPool();
   try {
@@ -4347,6 +4398,16 @@ async function getActiveTheses() {
     console.error("[crypto-scout] getActiveTheses failed:", err);
   }
   return [];
+}
+async function retireThesis(thesisId) {
+  const pool2 = getPool();
+  const theses = await getActiveTheses();
+  const updated = theses.map((t) => t.id === thesisId ? { ...t, status: "retired" } : t);
+  await pool2.query(
+    `INSERT INTO app_config (key, value, updated_at) VALUES ('scout_active_theses', $1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [JSON.stringify(updated), Date.now()]
+  );
 }
 async function getWatchlist() {
   const pool2 = getPool();
@@ -4361,6 +4422,42 @@ async function getWatchlist() {
   } catch {
   }
   return defaults;
+}
+async function updateWatchlist(assets) {
+  const pool2 = getPool();
+  const defaults = ["bitcoin", "ethereum", "solana", "bankr"];
+  const merged = Array.from(/* @__PURE__ */ new Set([...defaults, ...assets]));
+  await pool2.query(
+    `INSERT INTO app_config (key, value, updated_at) VALUES ('scout_watchlist', $1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [JSON.stringify(merged), Date.now()]
+  );
+}
+function buildThesis(params) {
+  const now = Date.now();
+  return {
+    id: createThesisId(params.asset),
+    asset: params.asset,
+    asset_id: params.asset_id,
+    asset_class: "crypto",
+    direction: params.direction,
+    confidence: params.confidence,
+    technical_score: params.technical_score,
+    vote_count: params.vote_count,
+    market_regime: params.market_regime,
+    entry_price: params.entry_price,
+    exit_price: params.exit_price,
+    stop_price: params.stop_price,
+    atr_value: params.atr_value,
+    time_horizon: params.time_horizon || "24h",
+    sources: params.sources,
+    backtest_score: params.backtest_score ?? null,
+    nansen_flow_direction: params.nansen_flow_direction ?? null,
+    created_at: now,
+    expires_at: now + THESIS_EXPIRY_MS,
+    status: "active",
+    reasoning: params.reasoning
+  };
 }
 
 // src/maps.ts
@@ -6119,7 +6216,7 @@ All theses have expired. Waiting for next SCOUT cycle.`;
         const conf = t.confidence || "?";
         const dir = t.direction || "?";
         const vc = t.vote_count ?? t.votes;
-        const votes = vc != null ? `${vc}/6` : "?";
+        const votes = vc != null ? typeof vc === "string" && vc.includes("/") ? vc : `${vc}/6` : "?";
         const score = t.technical_score != null ? t.technical_score.toFixed(2) : "?";
         const regime = t.market_regime || t.regime || "?";
         const nansenFlow = t.nansen_flow_direction || t.nansen_flow || "";
@@ -10402,7 +10499,7 @@ function buildCoinGeckoTools() {
     {
       name: "technical_analysis",
       label: "Technical Analysis",
-      description: "Run technical analysis on a cryptocurrency. Returns structured JSON: technical_score (0.0-1.0), regime (TRENDING/RANGING/VOLATILE), ATR stop loss, per-signal breakdown, data quality. Uses cached hourly OHLCV. Parameters are UNVALIDATED starting points.",
+      description: "Run technical analysis on a cryptocurrency using the 6-signal Nunchi voting ensemble. Returns structured JSON: technical_score (0.0-1.0), regime (TRENDING/RANGING/VOLATILE), ATR stop loss, per-signal breakdown, vote counts, BTC confirmation filter (for alt coins). Uses cached hourly OHLCV. Parameters are UNVALIDATED starting points.",
       parameters: Type.Object({
         coin: Type.String({ description: "Cryptocurrency name or ticker (e.g. 'bitcoin', 'BTC', 'BNKR', 'VIRTUAL')" }),
         days: Type.Optional(Type.Number({ description: "Days of data to analyze (max 90). Default: 90", default: 90 }))
@@ -10413,7 +10510,16 @@ function buildCoinGeckoTools() {
           if (candles.length === 0) {
             return { content: [{ type: "text", text: JSON.stringify({ error: `No historical data available for "${params.coin}"` }) }], details: {} };
           }
-          const result = analyzeAsset(candles);
+          const coinLower = (params.coin || "").toLowerCase();
+          const isBTC = coinLower === "bitcoin" || coinLower === "btc";
+          let btcCandles;
+          if (!isBTC) {
+            try {
+              btcCandles = await getHistoricalOHLCV("bitcoin", Math.min(params.days || 90, 90));
+            } catch {
+            }
+          }
+          const result = analyzeAsset(candles, void 0, btcCandles);
           return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
@@ -10514,6 +10620,88 @@ function buildCoinGeckoTools() {
         try {
           const watchlist = await getWatchlist();
           return { content: [{ type: "text", text: JSON.stringify({ count: watchlist.length, assets: watchlist }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "save_thesis",
+      label: "Save SCOUT Thesis",
+      description: "Persist a trading thesis to the database. Required fields: asset, asset_id (CoinGecko ID), direction (LONG/SHORT), confidence (HIGH/MEDIUM/LOW), technical_score, vote_count (e.g. '5/6'), market_regime, entry_price, exit_price (target), stop_price, atr_value, sources (array), reasoning. Optional: backtest_score, nansen_flow_direction, time_horizon.",
+      parameters: Type.Object({
+        asset: Type.String({ description: "Asset display name (e.g. 'Bitcoin')" }),
+        asset_id: Type.String({ description: "CoinGecko ID (e.g. 'bitcoin')" }),
+        direction: Type.Union([Type.Literal("LONG"), Type.Literal("SHORT")]),
+        confidence: Type.Union([Type.Literal("HIGH"), Type.Literal("MEDIUM"), Type.Literal("LOW")]),
+        technical_score: Type.Number(),
+        vote_count: Type.String({ description: "Vote count string e.g. '5/6'" }),
+        market_regime: Type.String(),
+        entry_price: Type.Number(),
+        exit_price: Type.Number({ description: "Target/take-profit price" }),
+        stop_price: Type.Number(),
+        atr_value: Type.Number(),
+        sources: Type.Array(Type.String()),
+        reasoning: Type.String(),
+        backtest_score: Type.Optional(Type.Number()),
+        nansen_flow_direction: Type.Optional(Type.String()),
+        time_horizon: Type.Optional(Type.String())
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const thesis = buildThesis({
+            asset: params.asset,
+            asset_id: params.asset_id,
+            direction: params.direction,
+            confidence: params.confidence,
+            technical_score: params.technical_score,
+            vote_count: params.vote_count,
+            market_regime: params.market_regime,
+            entry_price: params.entry_price,
+            exit_price: params.exit_price,
+            stop_price: params.stop_price,
+            atr_value: params.atr_value,
+            sources: params.sources,
+            reasoning: params.reasoning,
+            backtest_score: params.backtest_score,
+            nansen_flow_direction: params.nansen_flow_direction,
+            time_horizon: params.time_horizon
+          });
+          await saveTheses([thesis]);
+          return { content: [{ type: "text", text: JSON.stringify({ saved: true, thesis_id: thesis.id, expires_at: new Date(thesis.expires_at).toISOString() }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "update_watchlist",
+      label: "Update SCOUT Watchlist",
+      description: "Update the SCOUT watchlist with a list of CoinGecko IDs. Default assets (BTC, ETH, SOL, BNKR) are always included.",
+      parameters: Type.Object({
+        assets: Type.Array(Type.String(), { description: "Array of CoinGecko IDs to watch (e.g. ['bitcoin', 'ethereum', 'solana', 'virtual-protocol'])" })
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          await updateWatchlist(params.assets);
+          const updated = await getWatchlist();
+          return { content: [{ type: "text", text: JSON.stringify({ updated: true, count: updated.length, assets: updated }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "retire_thesis",
+      label: "Retire SCOUT Thesis",
+      description: "Retire (deactivate) a SCOUT thesis by its ID. Used when a thesis is no longer valid or has been executed.",
+      parameters: Type.Object({
+        thesis_id: Type.String({ description: "The thesis ID to retire" })
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          await retireThesis(params.thesis_id);
+          return { content: [{ type: "text", text: JSON.stringify({ retired: true, thesis_id: params.thesis_id }) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
         }

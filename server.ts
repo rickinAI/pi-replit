@@ -1265,7 +1265,7 @@ function buildCoinGeckoTools(): ToolDefinition[] {
     {
       name: "technical_analysis",
       label: "Technical Analysis",
-      description: "Run technical analysis on a cryptocurrency. Returns structured JSON: technical_score (0.0-1.0), regime (TRENDING/RANGING/VOLATILE), ATR stop loss, per-signal breakdown, data quality. Uses cached hourly OHLCV. Parameters are UNVALIDATED starting points.",
+      description: "Run technical analysis on a cryptocurrency using the 6-signal Nunchi voting ensemble. Returns structured JSON: technical_score (0.0-1.0), regime (TRENDING/RANGING/VOLATILE), ATR stop loss, per-signal breakdown, vote counts, BTC confirmation filter (for alt coins). Uses cached hourly OHLCV. Parameters are UNVALIDATED starting points.",
       parameters: Type.Object({
         coin: Type.String({ description: "Cryptocurrency name or ticker (e.g. 'bitcoin', 'BTC', 'BNKR', 'VIRTUAL')" }),
         days: Type.Optional(Type.Number({ description: "Days of data to analyze (max 90). Default: 90", default: 90 })),
@@ -1276,7 +1276,15 @@ function buildCoinGeckoTools(): ToolDefinition[] {
           if (candles.length === 0) {
             return { content: [{ type: "text" as const, text: JSON.stringify({ error: `No historical data available for "${params.coin}"` }) }], details: {} };
           }
-          const result = analyzeAsset(candles);
+          const coinLower = (params.coin || "").toLowerCase();
+          const isBTC = coinLower === "bitcoin" || coinLower === "btc";
+          let btcCandles: any[] | undefined;
+          if (!isBTC) {
+            try {
+              btcCandles = await getHistoricalOHLCV("bitcoin", Math.min(params.days || 90, 90));
+            } catch {}
+          }
+          const result = analyzeAsset(candles, undefined, btcCandles);
           return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
@@ -1377,6 +1385,88 @@ function buildCoinGeckoTools(): ToolDefinition[] {
         try {
           const watchlist = await cryptoScout.getWatchlist();
           return { content: [{ type: "text" as const, text: JSON.stringify({ count: watchlist.length, assets: watchlist }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "save_thesis",
+      label: "Save SCOUT Thesis",
+      description: "Persist a trading thesis to the database. Required fields: asset, asset_id (CoinGecko ID), direction (LONG/SHORT), confidence (HIGH/MEDIUM/LOW), technical_score, vote_count (e.g. '5/6'), market_regime, entry_price, exit_price (target), stop_price, atr_value, sources (array), reasoning. Optional: backtest_score, nansen_flow_direction, time_horizon.",
+      parameters: Type.Object({
+        asset: Type.String({ description: "Asset display name (e.g. 'Bitcoin')" }),
+        asset_id: Type.String({ description: "CoinGecko ID (e.g. 'bitcoin')" }),
+        direction: Type.Union([Type.Literal("LONG"), Type.Literal("SHORT")]),
+        confidence: Type.Union([Type.Literal("HIGH"), Type.Literal("MEDIUM"), Type.Literal("LOW")]),
+        technical_score: Type.Number(),
+        vote_count: Type.String({ description: "Vote count string e.g. '5/6'" }),
+        market_regime: Type.String(),
+        entry_price: Type.Number(),
+        exit_price: Type.Number({ description: "Target/take-profit price" }),
+        stop_price: Type.Number(),
+        atr_value: Type.Number(),
+        sources: Type.Array(Type.String()),
+        reasoning: Type.String(),
+        backtest_score: Type.Optional(Type.Number()),
+        nansen_flow_direction: Type.Optional(Type.String()),
+        time_horizon: Type.Optional(Type.String()),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        try {
+          const thesis = cryptoScout.buildThesis({
+            asset: params.asset,
+            asset_id: params.asset_id,
+            direction: params.direction,
+            confidence: params.confidence,
+            technical_score: params.technical_score,
+            vote_count: params.vote_count,
+            market_regime: params.market_regime,
+            entry_price: params.entry_price,
+            exit_price: params.exit_price,
+            stop_price: params.stop_price,
+            atr_value: params.atr_value,
+            sources: params.sources,
+            reasoning: params.reasoning,
+            backtest_score: params.backtest_score,
+            nansen_flow_direction: params.nansen_flow_direction,
+            time_horizon: params.time_horizon,
+          });
+          await cryptoScout.saveTheses([thesis]);
+          return { content: [{ type: "text" as const, text: JSON.stringify({ saved: true, thesis_id: thesis.id, expires_at: new Date(thesis.expires_at).toISOString() }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "update_watchlist",
+      label: "Update SCOUT Watchlist",
+      description: "Update the SCOUT watchlist with a list of CoinGecko IDs. Default assets (BTC, ETH, SOL, BNKR) are always included.",
+      parameters: Type.Object({
+        assets: Type.Array(Type.String(), { description: "Array of CoinGecko IDs to watch (e.g. ['bitcoin', 'ethereum', 'solana', 'virtual-protocol'])" }),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        try {
+          await cryptoScout.updateWatchlist(params.assets);
+          const updated = await cryptoScout.getWatchlist();
+          return { content: [{ type: "text" as const, text: JSON.stringify({ updated: true, count: updated.length, assets: updated }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "retire_thesis",
+      label: "Retire SCOUT Thesis",
+      description: "Retire (deactivate) a SCOUT thesis by its ID. Used when a thesis is no longer valid or has been executed.",
+      parameters: Type.Object({
+        thesis_id: Type.String({ description: "The thesis ID to retire" }),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        try {
+          await cryptoScout.retireThesis(params.thesis_id);
+          return { content: [{ type: "text" as const, text: JSON.stringify({ retired: true, thesis_id: params.thesis_id }) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
         }

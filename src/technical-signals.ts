@@ -23,6 +23,13 @@ export interface VoteResult {
   rsi_oversold: boolean;
 }
 
+export interface BTCConfirmation {
+  btc_momentum_bull: boolean;
+  btc_momentum_bear: boolean;
+  alt_entry_allowed: boolean;
+  detail: string;
+}
+
 export interface EnsembleResult {
   technical_score: number;
   regime: MarketRegime;
@@ -36,6 +43,7 @@ export interface EnsembleResult {
   data_quality: "sufficient" | "insufficient";
   parameters_validated: boolean;
   vol_adjusted_threshold: number;
+  btc_confirmation?: BTCConfirmation;
   reason?: string;
 }
 
@@ -593,6 +601,18 @@ export function analyzeAsset(candles: OHLCVCandle[], config?: Partial<SignalConf
   }
   const technicalScore = totalWeight > 0 ? weightedSum / totalWeight : 0;
 
+  let btcConfirmation: BTCConfirmation | undefined;
+  if (btcCandles && btcCandles.length > cfg.momentum_lookback + 1) {
+    const btcResult = computeBTCConfirmation(btcCandles, cfg);
+    btcConfirmation = {
+      ...btcResult,
+      alt_entry_allowed: !btcResult.btc_momentum_bear,
+    };
+    if (btcResult.btc_momentum_bear && entry_signal) {
+      votes.entry_signal = false;
+    }
+  }
+
   return {
     technical_score: parseFloat(technicalScore.toFixed(3)),
     regime,
@@ -606,6 +626,7 @@ export function analyzeAsset(candles: OHLCVCandle[], config?: Partial<SignalConf
     data_quality: "sufficient",
     parameters_validated: false,
     vol_adjusted_threshold: volAdjustedThreshold,
+    btc_confirmation: btcConfirmation,
   };
 }
 
