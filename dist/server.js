@@ -8422,23 +8422,27 @@ Do NOT use notes_create \u2014 the system saves automatically.`,
     id: "weekly-memory-reflect",
     name: "Weekly Memory Reflect",
     agentId: "knowledge-organizer",
-    prompt: `Run a WEEKLY MEMORY REFLECTION. Use memory_recall to surface patterns and insights from Rickin's accumulated memories.
+    prompt: `Run a WEEKLY MEMORY REFLECTION using Hindsight knowledge graph.
 
-1. Use memory_recall with query "important decisions and preferences" (top 15)
-2. Use memory_recall with query "projects and work activities" (top 15)
-3. Use memory_recall with query "family, personal life, and routines" (top 15)
-4. Use memory_recall with query "action items and follow-ups" (top 10)
+STEP 1: Call memory_reflect to consolidate and analyze all stored memories. This triggers the Hindsight reflect operation which surfaces patterns, recurring themes, and insights.
 
-Synthesize into a weekly digest:
+STEP 2: Call memory_recall with these queries to gather additional context:
+- "important decisions and preferences" (top 15)
+- "projects and work activities" (top 15)
+- "family, personal life, and routines" (top 10)
+- "action items and follow-ups" (top 10)
+
+STEP 3: Synthesize the reflect results and recall results into a weekly digest:
 - **Key Themes**: What topics dominated this week
 - **Decisions Made**: Important choices or directions set
 - **Active Projects**: Status of ongoing work
 - **Personal**: Family, health, routine updates
 - **Open Items**: Things that need follow-up
-- **Patterns**: Recurring topics or concerns
+- **Patterns**: Recurring topics or concerns (from memory_reflect output)
+- **Insights**: Meta-observations about activity patterns
 
 Keep it concise and actionable. Save to the vault automatically.`,
-    schedule: { type: "weekly", hour: 9, minute: 0, dayOfWeek: 0 },
+    schedule: { type: "weekly", hour: 9, minute: 0, daysOfWeek: [0] },
     enabled: true
   }
 ];
@@ -9964,6 +9968,62 @@ async function recall(params) {
   } catch (err) {
     console.error("[hindsight] recall failed:", err);
     return { memories: [] };
+  }
+}
+async function reflect() {
+  try {
+    const data = await apiRequest("POST", "/memory/reflect", {});
+    if (data && typeof data === "object") {
+      return {
+        summary: data.summary || data.text || "Reflection complete.",
+        patterns: Array.isArray(data.patterns) ? data.patterns : [],
+        insights: Array.isArray(data.insights) ? data.insights : []
+      };
+    }
+    return await reflectLocal();
+  } catch (err) {
+    if (err?.message?.includes("404") || err?.message?.includes("405") || err?.message?.includes("not found")) {
+      console.warn("[hindsight] reflect endpoint not available, using local fallback");
+      return await reflectLocal();
+    }
+    console.error("[hindsight] reflect failed:", err);
+    return { summary: "Reflection failed", patterns: [], insights: [] };
+  }
+}
+async function reflectLocal() {
+  try {
+    const recent = await recall({ query: "What are the most important things I've been working on and thinking about recently?", topK: 50 });
+    if (recent.memories.length === 0) {
+      return { summary: "No memories stored yet.", patterns: [], insights: [] };
+    }
+    const memoryTexts = recent.memories.map((m) => m.text);
+    const categories = {};
+    for (const text of memoryTexts) {
+      const lower = text.toLowerCase();
+      let cat = "general";
+      if (lower.includes("project") || lower.includes("work") || lower.includes("moody")) cat = "work";
+      else if (lower.includes("family") || lower.includes("baby") || lower.includes("pooja") || lower.includes("reya")) cat = "family";
+      else if (lower.includes("trade") || lower.includes("crypto") || lower.includes("invest") || lower.includes("market")) cat = "finance";
+      else if (lower.includes("health") || lower.includes("exercise") || lower.includes("diet")) cat = "health";
+      else if (lower.includes("house") || lower.includes("property") || lower.includes("real estate")) cat = "housing";
+      if (!categories[cat]) categories[cat] = [];
+      categories[cat].push(text);
+    }
+    const patterns = [];
+    for (const [cat, items] of Object.entries(categories)) {
+      if (items.length >= 3) {
+        patterns.push(`${cat}: ${items.length} related memories (frequent topic)`);
+      }
+    }
+    const insights = [];
+    if (categories["work"]?.length >= 5) insights.push("Heavy work focus detected \u2014 consider work-life balance check");
+    if (categories["finance"]?.length >= 3) insights.push("Active financial decision-making period");
+    if (categories["family"]?.length >= 3) insights.push("Family-focused period \u2014 priorities are shifting toward family matters");
+    const summary = `Memory digest: ${recent.memories.length} memories analyzed across ${Object.keys(categories).length} categories. ${patterns.length} recurring patterns detected.`;
+    return { summary, patterns, insights };
+  } catch (err) {
+    console.error("[hindsight] reflectLocal failed:", err);
+    return { summary: "Reflection failed", patterns: [], insights: [] };
   }
 }
 
@@ -13343,6 +13403,30 @@ function buildMemoryTools() {
         return { content: [{ type: "text", text: `Found ${result.memories.length} relevant memories:
 
 ${formatted}` }], details: {} };
+      }
+    },
+    {
+      name: "memory_reflect",
+      label: "Memory Reflect",
+      description: "Consolidate and reflect on accumulated memories. Calls the Hindsight knowledge graph reflect operation to surface patterns, recurring themes, and insights across all stored memories. Use this for weekly memory digests or when asked 'what patterns do you see in my activity?'",
+      parameters: Type.Object({}),
+      async execute() {
+        if (!isConfigured7()) {
+          return { content: [{ type: "text", text: "Memory reflect is not configured. Set VECTORIZE_API_KEY, VECTORIZE_ORG_ID, and VECTORIZE_KB_ID to enable." }], details: {} };
+        }
+        const result = await reflect();
+        const lines = [`**Memory Reflection**
+`, result.summary, ""];
+        if (result.patterns.length > 0) {
+          lines.push("**Recurring Patterns:**");
+          result.patterns.forEach((p) => lines.push(`- ${p}`));
+          lines.push("");
+        }
+        if (result.insights.length > 0) {
+          lines.push("**Insights:**");
+          result.insights.forEach((i) => lines.push(`- ${i}`));
+        }
+        return { content: [{ type: "text", text: lines.join("\n") }], details: {} };
       }
     }
   ];

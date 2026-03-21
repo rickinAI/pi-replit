@@ -856,23 +856,27 @@ Do NOT use notes_create — the system saves automatically.`,
     id: "weekly-memory-reflect",
     name: "Weekly Memory Reflect",
     agentId: "knowledge-organizer",
-    prompt: `Run a WEEKLY MEMORY REFLECTION. Use memory_recall to surface patterns and insights from Rickin's accumulated memories.
+    prompt: `Run a WEEKLY MEMORY REFLECTION using Hindsight knowledge graph.
 
-1. Use memory_recall with query "important decisions and preferences" (top 15)
-2. Use memory_recall with query "projects and work activities" (top 15)
-3. Use memory_recall with query "family, personal life, and routines" (top 15)
-4. Use memory_recall with query "action items and follow-ups" (top 10)
+STEP 1: Call memory_reflect to consolidate and analyze all stored memories. This triggers the Hindsight reflect operation which surfaces patterns, recurring themes, and insights.
 
-Synthesize into a weekly digest:
+STEP 2: Call memory_recall with these queries to gather additional context:
+- "important decisions and preferences" (top 15)
+- "projects and work activities" (top 15)
+- "family, personal life, and routines" (top 10)
+- "action items and follow-ups" (top 10)
+
+STEP 3: Synthesize the reflect results and recall results into a weekly digest:
 - **Key Themes**: What topics dominated this week
 - **Decisions Made**: Important choices or directions set
 - **Active Projects**: Status of ongoing work
 - **Personal**: Family, health, routine updates
 - **Open Items**: Things that need follow-up
-- **Patterns**: Recurring topics or concerns
+- **Patterns**: Recurring topics or concerns (from memory_reflect output)
+- **Insights**: Meta-observations about activity patterns
 
 Keep it concise and actionable. Save to the vault automatically.`,
-    schedule: { type: "weekly", hour: 9, minute: 0, dayOfWeek: 0 },
+    schedule: { type: "weekly", hour: 9, minute: 0, daysOfWeek: [0] },
     enabled: true,
   },
 ];

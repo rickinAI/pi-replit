@@ -149,6 +149,29 @@ export async function recall(params: RecallParams): Promise<RecallResult> {
 
 export async function reflect(): Promise<ReflectResult> {
   try {
+    const data = await apiRequest("POST", "/memory/reflect", {});
+
+    if (data && typeof data === "object") {
+      return {
+        summary: data.summary || data.text || "Reflection complete.",
+        patterns: Array.isArray(data.patterns) ? data.patterns : [],
+        insights: Array.isArray(data.insights) ? data.insights : [],
+      };
+    }
+
+    return await reflectLocal();
+  } catch (err: any) {
+    if (err?.message?.includes("404") || err?.message?.includes("405") || err?.message?.includes("not found")) {
+      console.warn("[hindsight] reflect endpoint not available, using local fallback");
+      return await reflectLocal();
+    }
+    console.error("[hindsight] reflect failed:", err);
+    return { summary: "Reflection failed", patterns: [], insights: [] };
+  }
+}
+
+async function reflectLocal(): Promise<ReflectResult> {
+  try {
     const recent = await recall({ query: "What are the most important things I've been working on and thinking about recently?", topK: 50 });
 
     if (recent.memories.length === 0) {
@@ -187,7 +210,7 @@ export async function reflect(): Promise<ReflectResult> {
 
     return { summary, patterns, insights };
   } catch (err) {
-    console.error("[hindsight] reflect failed:", err);
+    console.error("[hindsight] reflectLocal failed:", err);
     return { summary: "Reflection failed", patterns: [], insights: [] };
   }
 }

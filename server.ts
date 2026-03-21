@@ -2969,6 +2969,32 @@ function buildMemoryTools(): ToolDefinition[] {
         return { content: [{ type: "text" as const, text: `Found ${result.memories.length} relevant memories:\n\n${formatted}` }], details: {} };
       },
     },
+    {
+      name: "memory_reflect",
+      label: "Memory Reflect",
+      description: "Consolidate and reflect on accumulated memories. Calls the Hindsight knowledge graph reflect operation to surface patterns, recurring themes, and insights across all stored memories. Use this for weekly memory digests or when asked 'what patterns do you see in my activity?'",
+      parameters: Type.Object({}),
+      async execute() {
+        if (!hindsight.isConfigured()) {
+          return { content: [{ type: "text" as const, text: "Memory reflect is not configured. Set VECTORIZE_API_KEY, VECTORIZE_ORG_ID, and VECTORIZE_KB_ID to enable." }], details: {} };
+        }
+
+        const result = await hindsight.reflect();
+
+        const lines = [`**Memory Reflection**\n`, result.summary, ""];
+        if (result.patterns.length > 0) {
+          lines.push("**Recurring Patterns:**");
+          result.patterns.forEach(p => lines.push(`- ${p}`));
+          lines.push("");
+        }
+        if (result.insights.length > 0) {
+          lines.push("**Insights:**");
+          result.insights.forEach(i => lines.push(`- ${i}`));
+        }
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }], details: {} };
+      },
+    },
   ];
 }
 
