@@ -56,6 +56,7 @@ import * as obsidianSkills from "./src/obsidian-skills.js";
 import { cleanHtmlToMarkdown, looksLikeHtml } from "./src/defuddle.js";
 import * as vaultGraph from "./src/vault-graph.js";
 import * as hindsight from "./src/hindsight.js";
+import * as oversight from "./src/oversight.js";
 
 const PORT = parseInt(process.env.PORT || "5000", 10);
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
@@ -1801,6 +1802,216 @@ function buildCoinGeckoTools(): ToolDefinition[] {
       async execute() {
         try {
           const summary = await bankr.getTaxSummary();
+          return { content: [{ type: "text" as const, text: JSON.stringify(summary) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+  ];
+}
+
+function buildOversightTools(): ToolDefinition[] {
+  return [
+    {
+      name: "oversight_health_check",
+      label: "Oversight Health Check",
+      description: "Run a comprehensive health check on all Wealth Engines subsystems. Evaluates agent freshness, monitor heartbeat, kill switch, circuit breaker, data freshness, and job failures.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const report = await oversight.runHealthCheck();
+          return { content: [{ type: "text" as const, text: JSON.stringify(report) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "oversight_performance_review",
+      label: "Oversight Performance Review",
+      description: "Generate a performance review for the specified period. Calculates win rate, Sharpe ratio, slippage, source attribution, and thesis conversion rate.",
+      parameters: Type.Object({
+        period_days: Type.Optional(Type.Number({ description: "Review period in days (default 7)" })),
+      }),
+      async execute(_toolCallId, params: { period_days?: number }) {
+        try {
+          const review = await oversight.runPerformanceReview(params.period_days ?? 7);
+          return { content: [{ type: "text" as const, text: JSON.stringify(review) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "oversight_cross_domain_exposure",
+      label: "Oversight Cross-Domain Exposure",
+      description: "Detect correlated exposure between crypto positions and Polymarket positions. Flags when both domains have aligned bets on the same underlying asset or theme.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const alerts = await oversight.detectCrossDomainExposure();
+          return { content: [{ type: "text" as const, text: JSON.stringify({ count: alerts.length, alerts }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "oversight_improvement_queue",
+      label: "Oversight Improvement Queue",
+      description: "Get all improvement requests captured by the oversight system. Filter by status to see open, resolved, or dismissed items.",
+      parameters: Type.Object({
+        status: Type.Optional(Type.Union([
+          Type.Literal("open"), Type.Literal("accepted"), Type.Literal("resolved"), Type.Literal("dismissed"),
+        ], { description: "Filter by status. Default: all." })),
+      }),
+      async execute(_toolCallId, params: { status?: string }) {
+        try {
+          let queue = await oversight.getImprovementQueue();
+          if (params.status) {
+            queue = queue.filter(i => i.status === params.status);
+          }
+          return { content: [{ type: "text" as const, text: JSON.stringify({ count: queue.length, items: queue }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "oversight_capture_improvement",
+      label: "Oversight Capture Improvement",
+      description: "Capture a new improvement request. Use when you identify an issue or optimization opportunity.",
+      parameters: Type.Object({
+        source: Type.Union([
+          Type.Literal("health_check"), Type.Literal("performance_review"), Type.Literal("manual"), Type.Literal("circuit_breaker"),
+        ], { description: "Source of the improvement" }),
+        category: Type.Union([
+          Type.Literal("risk"), Type.Literal("execution"), Type.Literal("signal"), Type.Literal("infrastructure"), Type.Literal("strategy"),
+        ], { description: "Category of the improvement" }),
+        severity: Type.Union([
+          Type.Literal("low"), Type.Literal("medium"), Type.Literal("high"), Type.Literal("critical"),
+        ], { description: "Severity level" }),
+        title: Type.String({ description: "Short title for the improvement" }),
+        description: Type.String({ description: "Detailed description of the issue" }),
+        suggested_action: Type.String({ description: "Recommended action to address this" }),
+      }),
+      async execute(_toolCallId, params: {
+        source: "health_check" | "performance_review" | "manual" | "circuit_breaker";
+        category: "risk" | "execution" | "signal" | "infrastructure" | "strategy";
+        severity: "low" | "medium" | "high" | "critical";
+        title: string; description: string; suggested_action: string;
+      }) {
+        try {
+          const item = await oversight.captureImprovement(params);
+          return { content: [{ type: "text" as const, text: JSON.stringify(item) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "oversight_update_improvement",
+      label: "Oversight Update Improvement",
+      description: "Update the status of an improvement request.",
+      parameters: Type.Object({
+        id: Type.String({ description: "Improvement request ID" }),
+        status: Type.Union([
+          Type.Literal("accepted"), Type.Literal("resolved"), Type.Literal("dismissed"),
+        ], { description: "New status" }),
+        note: Type.Optional(Type.String({ description: "Resolution note" })),
+      }),
+      async execute(_toolCallId, params: { id: string; status: "accepted" | "resolved" | "dismissed"; note?: string }) {
+        try {
+          const item = await oversight.updateImprovement(params.id, params.status, params.note);
+          if (!item) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Improvement not found" }) }], details: {} };
+          return { content: [{ type: "text" as const, text: JSON.stringify(item) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "oversight_shadow_open",
+      label: "Oversight Shadow Trade Open",
+      description: "Open a hypothetical shadow trade to track what would have happened without real execution.",
+      parameters: Type.Object({
+        thesis_id: Type.String({ description: "Thesis ID that generated this signal" }),
+        asset: Type.String({ description: "Asset name (e.g. BTC, ETH, or Polymarket question)" }),
+        asset_class: Type.Union([Type.Literal("crypto"), Type.Literal("polymarket")], { description: "Asset class" }),
+        source: Type.Union([Type.Literal("crypto_scout"), Type.Literal("polymarket_scout")], { description: "Signal source" }),
+        direction: Type.String({ description: "LONG/SHORT for crypto, YES/NO for polymarket" }),
+        entry_price: Type.Number({ description: "Entry price at signal time" }),
+      }),
+      async execute(_toolCallId, params: {
+        thesis_id: string; asset: string; asset_class: "crypto" | "polymarket";
+        source: "crypto_scout" | "polymarket_scout"; direction: string; entry_price: number;
+      }) {
+        try {
+          const trade = await oversight.openShadowTrade(params);
+          return { content: [{ type: "text" as const, text: JSON.stringify(trade) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "oversight_shadow_close",
+      label: "Oversight Shadow Trade Close",
+      description: "Close a shadow trade with an exit price and reason.",
+      parameters: Type.Object({
+        id: Type.String({ description: "Shadow trade ID" }),
+        exit_price: Type.Number({ description: "Exit price" }),
+        reason: Type.String({ description: "Close reason (e.g. stop_loss, take_profit, thesis_expired)" }),
+      }),
+      async execute(_toolCallId, params: { id: string; exit_price: number; reason: string }) {
+        try {
+          const trade = await oversight.closeShadowTrade(params.id, params.exit_price, params.reason);
+          if (!trade) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Shadow trade not found" }) }], details: {} };
+          return { content: [{ type: "text" as const, text: JSON.stringify(trade) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "oversight_shadow_trades",
+      label: "Oversight Shadow Trades",
+      description: "List shadow trades. Optionally filter by status (open or closed).",
+      parameters: Type.Object({
+        status: Type.Optional(Type.Union([Type.Literal("open"), Type.Literal("closed")], { description: "Filter by status" })),
+      }),
+      async execute(_toolCallId, params: { status?: "open" | "closed" }) {
+        try {
+          const trades = await oversight.getShadowTrades(params.status);
+          return { content: [{ type: "text" as const, text: JSON.stringify({ count: trades.length, trades }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "oversight_shadow_performance",
+      label: "Oversight Shadow Performance",
+      description: "Get aggregate shadow trading performance: total trades, win rate, P&L.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const perf = await oversight.getShadowPerformance();
+          return { content: [{ type: "text" as const, text: JSON.stringify(perf) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "oversight_summary",
+      label: "Oversight Summary",
+      description: "Get a quick overview of oversight status: latest health report, improvement queue counts, and shadow trading stats.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const summary = await oversight.getOversightSummary();
           return { content: [{ type: "text" as const, text: JSON.stringify(summary) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
@@ -4246,6 +4457,16 @@ app.get("/api/wealth-engines/polymarket/theses", async (_req: Request, res: Resp
   }
 });
 
+app.get("/api/wealth-engines/oversight", async (_req: Request, res: Response) => {
+  try {
+    const summary = await oversight.getOversightSummary();
+    res.json(summary);
+  } catch (err: any) {
+    console.error("[wealth-engines] oversight error:", err);
+    res.status(500).json({ error: "Failed to fetch oversight data" });
+  }
+});
+
 let weDashboardCache: { data: any; ts: number } | null = null;
 const WE_DASHBOARD_TTL = 30_000;
 
@@ -5517,6 +5738,7 @@ const cachedStaticTools: ToolDefinition[] = [
   ...buildConversationTools(),
   ...buildMemoryTools(),
   ...buildWebPublishTools(),
+  ...buildOversightTools(),
 ];
 
 {

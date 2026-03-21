@@ -488,6 +488,93 @@ async function handleTaxCommand(): Promise<string> {
   return lines.join("\n");
 }
 
+async function handleOversightCommand(): Promise<string> {
+  const mode = await getMode();
+  const pool = getPool();
+
+  try {
+    const healthRes = await pool.query(`SELECT value FROM app_config WHERE key = 'oversight_health_reports'`);
+    const queueRes = await pool.query(`SELECT value FROM app_config WHERE key = 'oversight_improvement_queue'`);
+    const lastCheckRes = await pool.query(`SELECT value FROM app_config WHERE key = 'oversight_last_health_check'`);
+
+    let healthStatus = "No health checks run yet";
+    let healthIcon = "⚪";
+    if (healthRes.rows.length > 0 && Array.isArray(healthRes.rows[0].value) && healthRes.rows[0].value.length > 0) {
+      const latest = healthRes.rows[0].value[healthRes.rows[0].value.length - 1];
+      const icons: Record<string, string> = { healthy: "🟢", degraded: "🟡", critical: "🔴" };
+      healthIcon = icons[latest.overall_status] || "⚪";
+      healthStatus = latest.summary || latest.overall_status;
+    }
+
+    let openImprovements = 0;
+    let criticalImprovements = 0;
+    if (queueRes.rows.length > 0 && Array.isArray(queueRes.rows[0].value)) {
+      const open = queueRes.rows[0].value.filter((i: any) => i.status === "open");
+      openImprovements = open.length;
+      criticalImprovements = open.filter((i: any) => i.severity === "critical").length;
+    }
+
+    let lastCheck = "never";
+    if (lastCheckRes.rows.length > 0 && typeof lastCheckRes.rows[0].value === "number") {
+      lastCheck = timeAgo(lastCheckRes.rows[0].value);
+    }
+
+    const lines = [
+      `${mode} *Oversight Status*`,
+      "",
+      `${healthIcon} *Health:* ${healthStatus}`,
+      `🕐 *Last Check:* ${lastCheck}`,
+      `📋 *Open Improvements:* ${openImprovements}${criticalImprovements > 0 ? ` (${criticalImprovements} critical)` : ""}`,
+    ];
+
+    return lines.join("\n");
+  } catch (err) {
+    return `${mode} *Oversight Status*\n\n❌ Failed to fetch: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+async function handleShadowCommand(): Promise<string> {
+  const mode = await getMode();
+  const pool = getPool();
+
+  try {
+    const res = await pool.query(`SELECT value FROM app_config WHERE key = 'oversight_shadow_trades'`);
+    if (res.rows.length === 0 || !Array.isArray(res.rows[0].value) || res.rows[0].value.length === 0) {
+      return `${mode} *Shadow Trading*\n\nNo shadow trades recorded yet.`;
+    }
+
+    const trades = res.rows[0].value;
+    const openTrades = trades.filter((t: any) => t.status === "open");
+    const closedTrades = trades.filter((t: any) => t.status === "closed");
+    const totalPnl = closedTrades.reduce((s: number, t: any) => s + (t.hypothetical_pnl || 0), 0);
+    const openPnl = openTrades.reduce((s: number, t: any) => s + (t.hypothetical_pnl || 0), 0);
+    const wins = closedTrades.filter((t: any) => (t.hypothetical_pnl || 0) > 0);
+    const winRate = closedTrades.length > 0 ? (wins.length / closedTrades.length * 100) : 0;
+
+    const lines = [
+      `${mode} *Shadow Trading*`,
+      "",
+      `📊 *Total:* ${trades.length} trades (${openTrades.length} open, ${closedTrades.length} closed)`,
+      `💰 *Closed P&L:* ${totalPnl >= 0 ? "+" : ""}$${totalPnl.toFixed(2)}`,
+      `📈 *Open P&L:* ${openPnl >= 0 ? "+" : ""}$${openPnl.toFixed(2)}`,
+      `🎯 *Win Rate:* ${winRate.toFixed(0)}%`,
+    ];
+
+    if (openTrades.length > 0) {
+      lines.push("");
+      lines.push("*Open Positions:*");
+      for (const t of openTrades.slice(0, 5)) {
+        const pnlStr = t.hypothetical_pnl >= 0 ? `+$${t.hypothetical_pnl.toFixed(2)}` : `-$${Math.abs(t.hypothetical_pnl).toFixed(2)}`;
+        lines.push(`  • ${t.asset} ${t.direction} — ${pnlStr}`);
+      }
+    }
+
+    return lines.join("\n");
+  } catch (err) {
+    return `${mode} *Shadow Trading*\n\n❌ Failed to fetch: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
 async function handleHelpCommand(): Promise<string> {
   const mode = await getMode();
   return [
@@ -500,6 +587,8 @@ async function handleHelpCommand(): Promise<string> {
     "/polymarket — Active PM theses",
     "/trades [n] — Last N trades (default 5)",
     "/risk — Risk dashboard",
+    "/oversight — Oversight agent status",
+    "/shadow — Shadow trading stats",
     "/tax — YTD tax summary",
     "/kill — Emergency kill switch",
     "/pause — Halt all Wealth Engine jobs",
@@ -925,6 +1014,8 @@ export async function init(): Promise<void> {
   registerCommand("risk", async () => handleRiskCommand());
   registerCommand("polymarket", async () => handlePolymarketCommand());
   registerCommand("tax", async () => handleTaxCommand());
+  registerCommand("oversight", async () => handleOversightCommand());
+  registerCommand("shadow", async () => handleShadowCommand());
   registerCommand("help", async () => handleHelpCommand());
 
   try {

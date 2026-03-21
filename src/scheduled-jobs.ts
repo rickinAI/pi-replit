@@ -51,6 +51,8 @@ function getJobSavePath(jobId: string, dateStr: string, safeName: string): strin
   if (jobId === "polymarket-full-cycle") return `Scheduled Reports/Wealth Engines/Polymarket/${dateStr}-Full-Cycle.md`;
   if (jobId === "weekly-memory-reflect") return `Scheduled Reports/Memory/${dateStr}-Weekly-Digest.md`;
   if (jobId === "bankr-execute") return `Scheduled Reports/Wealth Engines/BANKR/${dateStr}-Execution.md`;
+  if (jobId === "oversight-health") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Health.md`;
+  if (jobId === "oversight-weekly") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Weekly-Review.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 
@@ -904,6 +906,46 @@ Keep it concise and actionable. Save to the vault automatically.`,
     schedule: { type: "weekly", hour: 9, minute: 0, daysOfWeek: [0] },
     enabled: true,
   },
+  {
+    id: "oversight-health",
+    name: "Oversight Health Check",
+    agentId: "oversight",
+    prompt: `Run a scheduled HEALTH CHECK on all Wealth Engines subsystems.
+
+1. Call oversight_health_check — this evaluates SCOUT freshness, BANKR freshness, Polymarket SCOUT freshness, position monitor heartbeat, kill switch, pause state, circuit breaker, scout data freshness, and recent job failures.
+2. Review the report. If overall status is "degraded" or "critical", flag the specific failing checks.
+3. If any issues are found, they are auto-captured as improvement requests.
+4. Save a brief summary (overall status + any failing checks) to the vault.
+
+Keep the output concise — just the health status and any action items.`,
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 240 },
+    enabled: true,
+  },
+  {
+    id: "oversight-weekly",
+    name: "Oversight Weekly Review",
+    agentId: "oversight",
+    prompt: `Run the WEEKLY OVERSIGHT REVIEW for Wealth Engines.
+
+STEP 1: Run oversight_health_check for current system state.
+STEP 2: Run oversight_performance_review for 7-day trading performance stats.
+STEP 3: Run oversight_cross_domain_exposure to detect crypto-Polymarket correlations.
+STEP 4: Check oversight_improvement_queue for open improvement requests.
+STEP 5: Check oversight_shadow_performance for shadow trading results.
+
+STEP 6: Compile a weekly report with these sections:
+- System Health: overall status, any recurring issues this week
+- Performance: win rate, total P&L, Sharpe ratio, best/worst trades, slippage
+- Source Analysis: crypto_scout vs polymarket_scout signal quality comparison
+- Cross-Domain Exposure: any correlated positions flagged
+- Improvements: open items, resolved items, new items this week
+- Shadow Trading: shadow vs live comparison (if shadow trades exist)
+- Recommendations: 3-5 specific action items for next week
+
+Save the full report to the vault. Keep it actionable and data-driven.`,
+    schedule: { type: "weekly", hour: 8, minute: 30, daysOfWeek: [0] },
+    enabled: true,
+  },
 ];
 
 let config: ScheduledJobsConfig = {
@@ -1614,7 +1656,7 @@ After processing, briefly confirm what you did.`;
   }
 }
 
-const WEALTH_ENGINE_AGENTS = new Set(["scout", "bankr", "polymarket-scout"]);
+const WEALTH_ENGINE_AGENTS = new Set(["scout", "bankr", "polymarket-scout", "oversight"]);
 
 async function isWealthEnginesPaused(): Promise<boolean> {
   try {

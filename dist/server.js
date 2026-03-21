@@ -7662,6 +7662,86 @@ async function handleTaxCommand() {
   ];
   return lines.join("\n");
 }
+async function handleOversightCommand() {
+  const mode = await getMode2();
+  const pool2 = getPool();
+  try {
+    const healthRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_health_reports'`);
+    const queueRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_improvement_queue'`);
+    const lastCheckRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_last_health_check'`);
+    let healthStatus = "No health checks run yet";
+    let healthIcon = "\u26AA";
+    if (healthRes.rows.length > 0 && Array.isArray(healthRes.rows[0].value) && healthRes.rows[0].value.length > 0) {
+      const latest = healthRes.rows[0].value[healthRes.rows[0].value.length - 1];
+      const icons = { healthy: "\u{1F7E2}", degraded: "\u{1F7E1}", critical: "\u{1F534}" };
+      healthIcon = icons[latest.overall_status] || "\u26AA";
+      healthStatus = latest.summary || latest.overall_status;
+    }
+    let openImprovements = 0;
+    let criticalImprovements = 0;
+    if (queueRes.rows.length > 0 && Array.isArray(queueRes.rows[0].value)) {
+      const open = queueRes.rows[0].value.filter((i) => i.status === "open");
+      openImprovements = open.length;
+      criticalImprovements = open.filter((i) => i.severity === "critical").length;
+    }
+    let lastCheck = "never";
+    if (lastCheckRes.rows.length > 0 && typeof lastCheckRes.rows[0].value === "number") {
+      lastCheck = timeAgo(lastCheckRes.rows[0].value);
+    }
+    const lines = [
+      `${mode} *Oversight Status*`,
+      "",
+      `${healthIcon} *Health:* ${healthStatus}`,
+      `\u{1F550} *Last Check:* ${lastCheck}`,
+      `\u{1F4CB} *Open Improvements:* ${openImprovements}${criticalImprovements > 0 ? ` (${criticalImprovements} critical)` : ""}`
+    ];
+    return lines.join("\n");
+  } catch (err) {
+    return `${mode} *Oversight Status*
+
+\u274C Failed to fetch: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+async function handleShadowCommand() {
+  const mode = await getMode2();
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_shadow_trades'`);
+    if (res.rows.length === 0 || !Array.isArray(res.rows[0].value) || res.rows[0].value.length === 0) {
+      return `${mode} *Shadow Trading*
+
+No shadow trades recorded yet.`;
+    }
+    const trades = res.rows[0].value;
+    const openTrades = trades.filter((t) => t.status === "open");
+    const closedTrades = trades.filter((t) => t.status === "closed");
+    const totalPnl = closedTrades.reduce((s, t) => s + (t.hypothetical_pnl || 0), 0);
+    const openPnl = openTrades.reduce((s, t) => s + (t.hypothetical_pnl || 0), 0);
+    const wins = closedTrades.filter((t) => (t.hypothetical_pnl || 0) > 0);
+    const winRate = closedTrades.length > 0 ? wins.length / closedTrades.length * 100 : 0;
+    const lines = [
+      `${mode} *Shadow Trading*`,
+      "",
+      `\u{1F4CA} *Total:* ${trades.length} trades (${openTrades.length} open, ${closedTrades.length} closed)`,
+      `\u{1F4B0} *Closed P&L:* ${totalPnl >= 0 ? "+" : ""}$${totalPnl.toFixed(2)}`,
+      `\u{1F4C8} *Open P&L:* ${openPnl >= 0 ? "+" : ""}$${openPnl.toFixed(2)}`,
+      `\u{1F3AF} *Win Rate:* ${winRate.toFixed(0)}%`
+    ];
+    if (openTrades.length > 0) {
+      lines.push("");
+      lines.push("*Open Positions:*");
+      for (const t of openTrades.slice(0, 5)) {
+        const pnlStr = t.hypothetical_pnl >= 0 ? `+$${t.hypothetical_pnl.toFixed(2)}` : `-$${Math.abs(t.hypothetical_pnl).toFixed(2)}`;
+        lines.push(`  \u2022 ${t.asset} ${t.direction} \u2014 ${pnlStr}`);
+      }
+    }
+    return lines.join("\n");
+  } catch (err) {
+    return `${mode} *Shadow Trading*
+
+\u274C Failed to fetch: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
 async function handleHelpCommand() {
   const mode = await getMode2();
   return [
@@ -7674,6 +7754,8 @@ async function handleHelpCommand() {
     "/polymarket \u2014 Active PM theses",
     "/trades [n] \u2014 Last N trades (default 5)",
     "/risk \u2014 Risk dashboard",
+    "/oversight \u2014 Oversight agent status",
+    "/shadow \u2014 Shadow trading stats",
     "/tax \u2014 YTD tax summary",
     "/kill \u2014 Emergency kill switch",
     "/pause \u2014 Halt all Wealth Engine jobs",
@@ -8058,6 +8140,8 @@ async function init7() {
   registerCommand("risk", async () => handleRiskCommand());
   registerCommand("polymarket", async () => handlePolymarketCommand());
   registerCommand("tax", async () => handleTaxCommand());
+  registerCommand("oversight", async () => handleOversightCommand());
+  registerCommand("shadow", async () => handleShadowCommand());
   registerCommand("help", async () => handleHelpCommand());
   try {
     const me = await tgFetch("getMe");
@@ -8136,6 +8220,8 @@ function getJobSavePath(jobId, dateStr, safeName) {
   if (jobId === "polymarket-full-cycle") return `Scheduled Reports/Wealth Engines/Polymarket/${dateStr}-Full-Cycle.md`;
   if (jobId === "weekly-memory-reflect") return `Scheduled Reports/Memory/${dateStr}-Weekly-Digest.md`;
   if (jobId === "bankr-execute") return `Scheduled Reports/Wealth Engines/BANKR/${dateStr}-Execution.md`;
+  if (jobId === "oversight-health") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Health.md`;
+  if (jobId === "oversight-weekly") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Weekly-Review.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 var jobStatusCache = {};
@@ -8985,6 +9071,46 @@ STEP 3: Synthesize the reflect results and recall results into a weekly digest:
 Keep it concise and actionable. Save to the vault automatically.`,
     schedule: { type: "weekly", hour: 9, minute: 0, daysOfWeek: [0] },
     enabled: true
+  },
+  {
+    id: "oversight-health",
+    name: "Oversight Health Check",
+    agentId: "oversight",
+    prompt: `Run a scheduled HEALTH CHECK on all Wealth Engines subsystems.
+
+1. Call oversight_health_check \u2014 this evaluates SCOUT freshness, BANKR freshness, Polymarket SCOUT freshness, position monitor heartbeat, kill switch, pause state, circuit breaker, scout data freshness, and recent job failures.
+2. Review the report. If overall status is "degraded" or "critical", flag the specific failing checks.
+3. If any issues are found, they are auto-captured as improvement requests.
+4. Save a brief summary (overall status + any failing checks) to the vault.
+
+Keep the output concise \u2014 just the health status and any action items.`,
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 240 },
+    enabled: true
+  },
+  {
+    id: "oversight-weekly",
+    name: "Oversight Weekly Review",
+    agentId: "oversight",
+    prompt: `Run the WEEKLY OVERSIGHT REVIEW for Wealth Engines.
+
+STEP 1: Run oversight_health_check for current system state.
+STEP 2: Run oversight_performance_review for 7-day trading performance stats.
+STEP 3: Run oversight_cross_domain_exposure to detect crypto-Polymarket correlations.
+STEP 4: Check oversight_improvement_queue for open improvement requests.
+STEP 5: Check oversight_shadow_performance for shadow trading results.
+
+STEP 6: Compile a weekly report with these sections:
+- System Health: overall status, any recurring issues this week
+- Performance: win rate, total P&L, Sharpe ratio, best/worst trades, slippage
+- Source Analysis: crypto_scout vs polymarket_scout signal quality comparison
+- Cross-Domain Exposure: any correlated positions flagged
+- Improvements: open items, resolved items, new items this week
+- Shadow Trading: shadow vs live comparison (if shadow trades exist)
+- Recommendations: 3-5 specific action items for next week
+
+Save the full report to the vault. Keep it actionable and data-driven.`,
+    schedule: { type: "weekly", hour: 8, minute: 30, daysOfWeek: [0] },
+    enabled: true
   }
 ];
 var config2 = {
@@ -9642,7 +9768,7 @@ ${fullResult}`);
     });
   }
 }
-var WEALTH_ENGINE_AGENTS = /* @__PURE__ */ new Set(["scout", "bankr", "polymarket-scout"]);
+var WEALTH_ENGINE_AGENTS = /* @__PURE__ */ new Set(["scout", "bankr", "polymarket-scout", "oversight"]);
 async function isWealthEnginesPaused() {
   try {
     const pool2 = dbPoolFn ? dbPoolFn() : getPool();
@@ -11085,6 +11211,551 @@ ${backlinkHeading}${backlinkLine}`);
     }
   }
   return { linkedTo: related };
+}
+
+// src/oversight.ts
+init_db();
+var HEALTH_REPORTS_KEY = "oversight_health_reports";
+var IMPROVEMENT_QUEUE_KEY = "oversight_improvement_queue";
+var SHADOW_TRADES_KEY = "oversight_shadow_trades";
+var LAST_HEALTH_CHECK_KEY = "oversight_last_health_check";
+var MAX_REPORTS = 50;
+var MAX_IMPROVEMENTS = 100;
+var MAX_SHADOW_TRADES = 200;
+var THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1e3;
+async function getConfigValue(key, fallback) {
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = $1`, [key]);
+    if (res.rows.length > 0) return res.rows[0].value;
+  } catch (err) {
+    console.warn(`[oversight] Failed to read ${key}:`, err instanceof Error ? err.message : err);
+  }
+  return fallback;
+}
+async function setConfigValue(key, value) {
+  const pool2 = getPool();
+  await pool2.query(
+    `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [key, JSON.stringify(value), Date.now()]
+  );
+}
+function pruneByAge(items, maxItems) {
+  const cutoff = Date.now() - THIRTY_DAYS_MS;
+  const filtered = items.filter((i) => {
+    const ts = i.timestamp || i.created_at || i.opened_at || 0;
+    return ts > cutoff;
+  });
+  return filtered.slice(-maxItems);
+}
+async function runHealthCheck() {
+  const pool2 = getPool();
+  const checks = [];
+  const now = Date.now();
+  const scoutCheck = await checkAgentFreshness(pool2, "scout", "SCOUT", 6);
+  checks.push(scoutCheck);
+  const bankrCheck = await checkAgentFreshness(pool2, "bankr", "BANKR", 8);
+  checks.push(bankrCheck);
+  const polyScoutCheck = await checkAgentFreshness(pool2, "polymarket-scout", "Polymarket SCOUT", 6);
+  checks.push(polyScoutCheck);
+  const monitorCheck = await checkMonitorHeartbeat(pool2, now);
+  checks.push(monitorCheck);
+  const killCheck = await checkKillSwitch(pool2);
+  checks.push(killCheck);
+  const pauseCheck = await checkPauseState(pool2);
+  checks.push(pauseCheck);
+  const circuitCheck = await checkCircuitBreakerState(pool2);
+  checks.push(circuitCheck);
+  const dataCheck = await checkDataFreshness(pool2, now);
+  checks.push(dataCheck);
+  const jobFailCheck = await checkRecentJobFailures(pool2);
+  checks.push(jobFailCheck);
+  const criticalCount = checks.filter((c) => c.status === "critical").length;
+  const warnCount = checks.filter((c) => c.status === "warn").length;
+  const overall = criticalCount > 0 ? "critical" : warnCount >= 2 ? "degraded" : "healthy";
+  const summaryParts = [];
+  if (criticalCount > 0) summaryParts.push(`${criticalCount} critical`);
+  if (warnCount > 0) summaryParts.push(`${warnCount} warnings`);
+  const okCount = checks.length - criticalCount - warnCount;
+  if (okCount > 0) summaryParts.push(`${okCount} ok`);
+  const report = {
+    id: `health_${now}`,
+    timestamp: now,
+    checks,
+    overall_status: overall,
+    summary: `${overall.toUpperCase()}: ${summaryParts.join(", ")} (${checks.length} checks)`
+  };
+  const existing = await getConfigValue(HEALTH_REPORTS_KEY, []);
+  existing.push(report);
+  await setConfigValue(HEALTH_REPORTS_KEY, pruneByAge(existing, MAX_REPORTS));
+  await setConfigValue(LAST_HEALTH_CHECK_KEY, now);
+  if (criticalCount > 0 || warnCount >= 2) {
+    const issues = checks.filter((c) => c.status !== "ok");
+    for (const issue of issues) {
+      await captureImprovement({
+        source: "health_check",
+        category: "infrastructure",
+        severity: issue.status === "critical" ? "critical" : "medium",
+        title: `Health: ${issue.name}`,
+        description: issue.detail,
+        suggested_action: `Investigate ${issue.name} \u2014 status: ${issue.status}`
+      });
+    }
+  }
+  return report;
+}
+async function checkAgentFreshness(pool2, agentId, label, thresholdHours) {
+  try {
+    const res = await pool2.query(
+      `SELECT created_at, status FROM job_history WHERE agent_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [agentId]
+    );
+    if (res.rows.length === 0) {
+      return { name: `${label} Freshness`, status: "warn", detail: `${label} has never run` };
+    }
+    const lastRun = new Date(res.rows[0].created_at).getTime();
+    const hoursSince = (Date.now() - lastRun) / (3600 * 1e3);
+    if (hoursSince > thresholdHours * 2) {
+      return {
+        name: `${label} Freshness`,
+        status: "critical",
+        detail: `${label} last ran ${Math.floor(hoursSince)}h ago (threshold: ${thresholdHours}h)`,
+        value: hoursSince,
+        threshold: thresholdHours
+      };
+    }
+    if (hoursSince > thresholdHours) {
+      return {
+        name: `${label} Freshness`,
+        status: "warn",
+        detail: `${label} last ran ${Math.floor(hoursSince)}h ago (threshold: ${thresholdHours}h)`,
+        value: hoursSince,
+        threshold: thresholdHours
+      };
+    }
+    const lastStatus = res.rows[0].status;
+    if (lastStatus === "error") {
+      return {
+        name: `${label} Freshness`,
+        status: "warn",
+        detail: `${label} ran ${Math.floor(hoursSince)}h ago but last status was error`
+      };
+    }
+    return {
+      name: `${label} Freshness`,
+      status: "ok",
+      detail: `${label} ran ${Math.floor(hoursSince)}h ago \u2014 OK`
+    };
+  } catch {
+    return { name: `${label} Freshness`, status: "warn", detail: `Could not check ${label} status` };
+  }
+}
+async function checkMonitorHeartbeat(pool2, now) {
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'bankr_monitor_last_tick'`);
+    if (res.rows.length === 0) {
+      return { name: "Position Monitor", status: "warn", detail: "Monitor has never ticked" };
+    }
+    const lastTick = typeof res.rows[0].value === "number" ? res.rows[0].value : parseInt(String(res.rows[0].value));
+    const minsSince = (now - lastTick) / (60 * 1e3);
+    if (minsSince > 30) {
+      return {
+        name: "Position Monitor",
+        status: "critical",
+        detail: `Monitor last ticked ${Math.floor(minsSince)} min ago (threshold: 30 min)`,
+        value: minsSince,
+        threshold: 30
+      };
+    }
+    if (minsSince > 15) {
+      return {
+        name: "Position Monitor",
+        status: "warn",
+        detail: `Monitor last ticked ${Math.floor(minsSince)} min ago`,
+        value: minsSince,
+        threshold: 30
+      };
+    }
+    return {
+      name: "Position Monitor",
+      status: "ok",
+      detail: `Monitor ticked ${Math.floor(minsSince)} min ago \u2014 OK`
+    };
+  } catch {
+    return { name: "Position Monitor", status: "warn", detail: "Could not check monitor heartbeat" };
+  }
+}
+async function checkKillSwitch(pool2) {
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_kill_switch'`);
+    if (res.rows.length > 0 && res.rows[0].value === true) {
+      return { name: "Kill Switch", status: "critical", detail: "Kill switch is ACTIVE \u2014 all trading halted" };
+    }
+  } catch {
+  }
+  return { name: "Kill Switch", status: "ok", detail: "Kill switch inactive" };
+}
+async function checkPauseState(pool2) {
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_paused'`);
+    if (res.rows.length > 0 && res.rows[0].value === true) {
+      return { name: "System Paused", status: "warn", detail: "System is PAUSED \u2014 jobs will not execute" };
+    }
+  } catch {
+  }
+  return { name: "System Paused", status: "ok", detail: "System is running" };
+}
+async function checkCircuitBreakerState(pool2) {
+  try {
+    const history = await getConfigValue("wealth_engines_trade_history", []);
+    const portfolio = await getConfigValue("wealth_engines_portfolio_value", 50);
+    const peak = await getConfigValue("wealth_engines_peak_portfolio", 50);
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1e3;
+    const recentTrades = history.filter((t) => new Date(t.closed_at).getTime() > sevenDaysAgo);
+    const rolling7d = recentTrades.reduce((s, t) => s + (t.pnl || 0), 0);
+    const rolling7dPct = portfolio > 0 ? rolling7d / portfolio * 100 : 0;
+    const drawdownPct = peak > 0 ? (peak - portfolio) / peak * 100 : 0;
+    if (rolling7dPct < -15 || drawdownPct > 25) {
+      return {
+        name: "Circuit Breaker",
+        status: "critical",
+        detail: `Circuit breaker triggered \u2014 7d P&L: ${rolling7dPct.toFixed(1)}%, drawdown: ${drawdownPct.toFixed(1)}%`
+      };
+    }
+    if (rolling7dPct < -10 || drawdownPct > 20) {
+      return {
+        name: "Circuit Breaker",
+        status: "warn",
+        detail: `Approaching circuit breaker \u2014 7d P&L: ${rolling7dPct.toFixed(1)}%, drawdown: ${drawdownPct.toFixed(1)}%`
+      };
+    }
+    return {
+      name: "Circuit Breaker",
+      status: "ok",
+      detail: `7d P&L: ${rolling7dPct.toFixed(1)}%, drawdown: ${drawdownPct.toFixed(1)}% \u2014 OK`
+    };
+  } catch {
+    return { name: "Circuit Breaker", status: "warn", detail: "Could not evaluate circuit breaker" };
+  }
+}
+async function checkDataFreshness(pool2, now) {
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scout_latest_brief'`);
+    if (res.rows.length === 0) {
+      return { name: "Scout Data", status: "warn", detail: "No scout brief data available" };
+    }
+    const brief = res.rows[0].value;
+    const briefTs = brief?.timestamp || brief?.created_at;
+    if (briefTs) {
+      const hoursSince = (now - briefTs) / (3600 * 1e3);
+      if (hoursSince > 12) {
+        return {
+          name: "Scout Data",
+          status: "warn",
+          detail: `Scout brief is ${Math.floor(hoursSince)}h old (stale >12h)`
+        };
+      }
+    }
+    return { name: "Scout Data", status: "ok", detail: "Scout brief data available" };
+  } catch {
+    return { name: "Scout Data", status: "warn", detail: "Could not check scout data" };
+  }
+}
+async function checkRecentJobFailures(pool2) {
+  try {
+    const res = await pool2.query(
+      `SELECT job_id, status FROM job_history
+       WHERE agent_id IN ('scout', 'bankr', 'polymarket-scout')
+       AND created_at > NOW() - INTERVAL '24 hours'
+       ORDER BY created_at DESC LIMIT 20`
+    );
+    const failures = res.rows.filter((r) => r.status === "error");
+    if (failures.length >= 5) {
+      return {
+        name: "Job Failures",
+        status: "critical",
+        detail: `${failures.length} WE job failures in last 24h`,
+        value: failures.length,
+        threshold: 5
+      };
+    }
+    if (failures.length >= 2) {
+      return {
+        name: "Job Failures",
+        status: "warn",
+        detail: `${failures.length} WE job failures in last 24h`,
+        value: failures.length,
+        threshold: 5
+      };
+    }
+    return {
+      name: "Job Failures",
+      status: "ok",
+      detail: `${failures.length} failures in last 24h \u2014 OK`
+    };
+  } catch {
+    return { name: "Job Failures", status: "warn", detail: "Could not check job failures" };
+  }
+}
+async function runPerformanceReview(periodDays = 7) {
+  const now = Date.now();
+  const periodStart = now - periodDays * 24 * 60 * 60 * 1e3;
+  const history = await getConfigValue("wealth_engines_trade_history", []);
+  const periodTrades = history.filter((t) => new Date(t.closed_at).getTime() > periodStart);
+  const wins = periodTrades.filter((t) => (t.pnl || 0) > 0);
+  const winRate = periodTrades.length > 0 ? wins.length / periodTrades.length * 100 : 0;
+  const totalPnl = periodTrades.reduce((s, t) => s + (t.pnl || 0), 0);
+  const avgPnl = periodTrades.length > 0 ? totalPnl / periodTrades.length : 0;
+  let sharpe = 0;
+  if (periodTrades.length >= 2) {
+    const pnls = periodTrades.map((t) => t.pnl || 0);
+    const mean = pnls.reduce((a, b) => a + b, 0) / pnls.length;
+    const variance = pnls.reduce((a, b) => a + (b - mean) ** 2, 0) / (pnls.length - 1);
+    const stdDev = Math.sqrt(variance);
+    sharpe = stdDev > 0 ? mean / stdDev * Math.sqrt(252 / periodDays) : 0;
+  }
+  let bestTrade = null;
+  let worstTrade = null;
+  for (const t of periodTrades) {
+    if (!bestTrade || t.pnl > bestTrade.pnl) bestTrade = { asset: t.asset, pnl: t.pnl };
+    if (!worstTrade || t.pnl < worstTrade.pnl) worstTrade = { asset: t.asset, pnl: t.pnl };
+  }
+  const holdTimes = periodTrades.map((t) => {
+    const open = new Date(t.opened_at).getTime();
+    const close = new Date(t.closed_at).getTime();
+    return (close - open) / (3600 * 1e3);
+  });
+  const avgHoldTime = holdTimes.length > 0 ? holdTimes.reduce((a, b) => a + b, 0) / holdTimes.length : 0;
+  const cryptoTheses = await getConfigValue("scout_active_theses", []);
+  const pmTheses = await getConfigValue("polymarket_scout_active_theses", []);
+  const totalTheses = cryptoTheses.length + pmTheses.length;
+  const tradedThesisIds = new Set(periodTrades.map((t) => t.thesis_id));
+  const allThesisIds = /* @__PURE__ */ new Set([
+    ...cryptoTheses.map((t) => t.id),
+    ...pmTheses.map((t) => t.id)
+  ]);
+  const convertedCount = [...tradedThesisIds].filter((id) => allThesisIds.has(id)).length;
+  const conversionRate = totalTheses > 0 ? convertedCount / totalTheses * 100 : 0;
+  const slippages = periodTrades.filter((t) => t.expected_entry_price && t.entry_price).map((t) => Math.abs(t.entry_price - t.expected_entry_price) / t.expected_entry_price * 100);
+  const avgSlippage = slippages.length > 0 ? slippages.reduce((a, b) => a + b, 0) / slippages.length : 0;
+  const sourceBreakdown = {};
+  for (const t of periodTrades) {
+    const src = t.source || "unknown";
+    if (!sourceBreakdown[src]) sourceBreakdown[src] = { trades: 0, pnl: 0, win_rate: 0 };
+    sourceBreakdown[src].trades++;
+    sourceBreakdown[src].pnl += t.pnl || 0;
+  }
+  for (const src of Object.keys(sourceBreakdown)) {
+    const srcTrades = periodTrades.filter((t) => (t.source || "unknown") === src);
+    const srcWins = srcTrades.filter((t) => (t.pnl || 0) > 0);
+    sourceBreakdown[src].win_rate = srcTrades.length > 0 ? srcWins.length / srcTrades.length * 100 : 0;
+  }
+  const exposureAlerts = await detectCrossDomainExposure();
+  const review = {
+    id: `perf_${now}`,
+    timestamp: now,
+    period_start: periodStart,
+    period_end: now,
+    total_trades: periodTrades.length,
+    win_rate: winRate,
+    avg_pnl: avgPnl,
+    total_pnl: totalPnl,
+    sharpe_ratio: sharpe,
+    best_trade: bestTrade,
+    worst_trade: worstTrade,
+    avg_hold_time_hours: avgHoldTime,
+    thesis_conversion_rate: conversionRate,
+    avg_slippage_pct: avgSlippage,
+    source_breakdown: sourceBreakdown,
+    exposure_alerts: exposureAlerts.map((e) => e.detail)
+  };
+  if (winRate < 40 && periodTrades.length >= 3) {
+    await captureImprovement({
+      source: "performance_review",
+      category: "signal",
+      severity: "high",
+      title: `Low win rate: ${winRate.toFixed(0)}%`,
+      description: `Win rate over ${periodDays}d is ${winRate.toFixed(1)}% (${wins.length}/${periodTrades.length}). Signal quality may be degraded.`,
+      suggested_action: "Review SCOUT thesis generation criteria; consider tightening confidence thresholds"
+    });
+  }
+  if (avgSlippage > 1.5 && slippages.length >= 2) {
+    await captureImprovement({
+      source: "performance_review",
+      category: "execution",
+      severity: "medium",
+      title: `High slippage: ${avgSlippage.toFixed(2)}%`,
+      description: `Average execution slippage is ${avgSlippage.toFixed(2)}% over ${slippages.length} trades.`,
+      suggested_action: "Review BNKR execution timing; consider limit orders or smaller position sizes"
+    });
+  }
+  return review;
+}
+async function detectCrossDomainExposure() {
+  const positions = await getConfigValue("wealth_engines_positions", []);
+  const pmTheses = await getConfigValue("polymarket_scout_active_theses", []);
+  const portfolio = await getConfigValue("wealth_engines_portfolio_value", 50);
+  const alerts = [];
+  const cryptoPositions = positions.filter((p) => p.asset_class === "crypto");
+  const pmPositions = positions.filter((p) => p.asset_class === "polymarket");
+  const CRYPTO_PM_CORRELATIONS = {
+    BTC: ["bitcoin", "btc", "crypto"],
+    ETH: ["ethereum", "eth", "crypto"],
+    SOL: ["solana", "sol"],
+    DOGE: ["doge", "meme"],
+    XRP: ["xrp", "ripple"]
+  };
+  for (const cryptoPos of cryptoPositions) {
+    const asset = cryptoPos.asset.toUpperCase().replace(/USDT?$/, "");
+    const keywords = CRYPTO_PM_CORRELATIONS[asset] || [asset.toLowerCase()];
+    for (const pmThesis of pmTheses) {
+      if (pmThesis.status !== "active") continue;
+      const question = (pmThesis.asset || pmThesis.question || "").toLowerCase();
+      const matched = keywords.some((kw) => question.includes(kw));
+      if (!matched) continue;
+      const cryptoExposure = (cryptoPos.size || 0) * (cryptoPos.entry_price || 0);
+      const pmExposure = pmThesis.position_size || 0;
+      const combinedPct = portfolio > 0 ? (cryptoExposure + pmExposure) / portfolio * 100 : 0;
+      const isSameDirection = cryptoPos.direction === "LONG" && pmThesis.direction === "YES" || cryptoPos.direction === "SHORT" && pmThesis.direction === "NO";
+      alerts.push({
+        crypto_asset: cryptoPos.asset,
+        polymarket_question: (pmThesis.asset || pmThesis.question || "").slice(0, 80),
+        correlation_type: isSameDirection ? "direct" : "inverse",
+        combined_exposure_pct: combinedPct,
+        risk_level: combinedPct > 40 ? "high" : combinedPct > 25 ? "medium" : "low",
+        detail: `${cryptoPos.asset} ${cryptoPos.direction} + PM "${(pmThesis.asset || "").slice(0, 40)}" ${pmThesis.direction} \u2014 ${combinedPct.toFixed(0)}% combined exposure (${isSameDirection ? "correlated" : "hedged"})`
+      });
+    }
+  }
+  for (let i = 0; i < pmPositions.length; i++) {
+    for (let j = i + 1; j < pmPositions.length; j++) {
+      const a = pmPositions[i];
+      const b = pmPositions[j];
+      if (a.exposure_bucket === b.exposure_bucket) {
+        const combinedExposure = a.size * a.entry_price + b.size * b.entry_price;
+        const combinedPct = portfolio > 0 ? combinedExposure / portfolio * 100 : 0;
+        alerts.push({
+          crypto_asset: `PM: ${a.asset}`,
+          polymarket_question: b.asset,
+          correlation_type: "thematic",
+          combined_exposure_pct: combinedPct,
+          risk_level: combinedPct > 30 ? "high" : "medium",
+          detail: `PM bucket overlap: "${a.asset.slice(0, 30)}" + "${b.asset.slice(0, 30)}" in bucket "${a.exposure_bucket}" \u2014 ${combinedPct.toFixed(0)}% combined`
+        });
+      }
+    }
+  }
+  return alerts;
+}
+async function captureImprovement(params) {
+  const queue = await getConfigValue(IMPROVEMENT_QUEUE_KEY, []);
+  const isDuplicate = queue.some(
+    (i) => i.title === params.title && i.status === "open" && Date.now() - i.created_at < 24 * 60 * 60 * 1e3
+  );
+  if (isDuplicate) {
+    return queue.find((i) => i.title === params.title && i.status === "open");
+  }
+  const improvement = {
+    id: `imp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    created_at: Date.now(),
+    ...params,
+    status: "open"
+  };
+  queue.push(improvement);
+  await setConfigValue(IMPROVEMENT_QUEUE_KEY, pruneByAge(queue, MAX_IMPROVEMENTS));
+  console.log(`[oversight] Improvement captured: [${params.severity}] ${params.title}`);
+  return improvement;
+}
+async function updateImprovement(id, status, note) {
+  const queue = await getConfigValue(IMPROVEMENT_QUEUE_KEY, []);
+  const idx = queue.findIndex((i) => i.id === id);
+  if (idx === -1) return null;
+  queue[idx].status = status;
+  if (status === "resolved" || status === "dismissed") {
+    queue[idx].resolved_at = Date.now();
+    if (note) queue[idx].resolution_note = note;
+  }
+  await setConfigValue(IMPROVEMENT_QUEUE_KEY, queue);
+  return queue[idx];
+}
+async function getImprovementQueue() {
+  return getConfigValue(IMPROVEMENT_QUEUE_KEY, []);
+}
+async function openShadowTrade(params) {
+  const shadow = {
+    id: `shadow_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    thesis_id: params.thesis_id,
+    asset: params.asset,
+    asset_class: params.asset_class,
+    source: params.source,
+    direction: params.direction,
+    entry_price: params.entry_price,
+    current_price: params.entry_price,
+    hypothetical_pnl: 0,
+    opened_at: Date.now(),
+    status: "open"
+  };
+  const trades = await getConfigValue(SHADOW_TRADES_KEY, []);
+  trades.push(shadow);
+  await setConfigValue(SHADOW_TRADES_KEY, pruneByAge(trades, MAX_SHADOW_TRADES));
+  console.log(`[oversight] Shadow trade opened: ${params.asset} ${params.direction} @ $${params.entry_price}`);
+  return shadow;
+}
+async function closeShadowTrade(id, exitPrice, reason) {
+  const trades = await getConfigValue(SHADOW_TRADES_KEY, []);
+  const idx = trades.findIndex((t) => t.id === id);
+  if (idx === -1) return null;
+  const trade = trades[idx];
+  trade.status = "closed";
+  trade.exit_price = exitPrice;
+  trade.closed_at = Date.now();
+  trade.close_reason = reason;
+  const multiplier = trade.direction === "LONG" || trade.direction === "YES" ? 1 : -1;
+  trade.hypothetical_pnl = (exitPrice - trade.entry_price) * multiplier;
+  await setConfigValue(SHADOW_TRADES_KEY, trades);
+  console.log(`[oversight] Shadow trade closed: ${trade.asset} P&L: $${trade.hypothetical_pnl.toFixed(2)}`);
+  return trade;
+}
+async function getShadowTrades(statusFilter) {
+  const trades = await getConfigValue(SHADOW_TRADES_KEY, []);
+  if (statusFilter) return trades.filter((t) => t.status === statusFilter);
+  return trades;
+}
+async function getShadowPerformance() {
+  const trades = await getConfigValue(SHADOW_TRADES_KEY, []);
+  const closed = trades.filter((t) => t.status === "closed");
+  const open = trades.filter((t) => t.status === "open");
+  const wins = closed.filter((t) => t.hypothetical_pnl > 0);
+  const totalPnl = closed.reduce((s, t) => s + t.hypothetical_pnl, 0);
+  const openPnl = open.reduce((s, t) => s + t.hypothetical_pnl, 0);
+  return {
+    total_trades: trades.length,
+    open_trades: open.length,
+    closed_trades: closed.length,
+    total_pnl: totalPnl + openPnl,
+    win_rate: closed.length > 0 ? wins.length / closed.length * 100 : 0,
+    avg_pnl: closed.length > 0 ? totalPnl / closed.length : 0,
+    trades
+  };
+}
+async function getLatestHealthReport() {
+  const reports = await getConfigValue(HEALTH_REPORTS_KEY, []);
+  return reports.length > 0 ? reports[reports.length - 1] : null;
+}
+async function getOversightSummary() {
+  const health = await getLatestHealthReport();
+  const queue = await getConfigValue(IMPROVEMENT_QUEUE_KEY, []);
+  const openItems = queue.filter((i) => i.status === "open");
+  const criticalItems = openItems.filter((i) => i.severity === "critical");
+  const shadowPerf = await getShadowPerformance();
+  const lastCheck = await getConfigValue(LAST_HEALTH_CHECK_KEY, null);
+  return {
+    health,
+    improvements: { open: openItems.length, total: queue.length, critical: criticalItems.length },
+    shadow: { open: shadowPerf.open_trades, total_pnl: shadowPerf.total_pnl },
+    last_check: lastCheck
+  };
 }
 
 // server.ts
@@ -12800,6 +13471,222 @@ function buildCoinGeckoTools() {
       async execute() {
         try {
           const summary = await getTaxSummary();
+          return { content: [{ type: "text", text: JSON.stringify(summary) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    }
+  ];
+}
+function buildOversightTools() {
+  return [
+    {
+      name: "oversight_health_check",
+      label: "Oversight Health Check",
+      description: "Run a comprehensive health check on all Wealth Engines subsystems. Evaluates agent freshness, monitor heartbeat, kill switch, circuit breaker, data freshness, and job failures.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const report = await runHealthCheck();
+          return { content: [{ type: "text", text: JSON.stringify(report) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "oversight_performance_review",
+      label: "Oversight Performance Review",
+      description: "Generate a performance review for the specified period. Calculates win rate, Sharpe ratio, slippage, source attribution, and thesis conversion rate.",
+      parameters: Type.Object({
+        period_days: Type.Optional(Type.Number({ description: "Review period in days (default 7)" }))
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const review = await runPerformanceReview(params.period_days ?? 7);
+          return { content: [{ type: "text", text: JSON.stringify(review) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "oversight_cross_domain_exposure",
+      label: "Oversight Cross-Domain Exposure",
+      description: "Detect correlated exposure between crypto positions and Polymarket positions. Flags when both domains have aligned bets on the same underlying asset or theme.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const alerts = await detectCrossDomainExposure();
+          return { content: [{ type: "text", text: JSON.stringify({ count: alerts.length, alerts }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "oversight_improvement_queue",
+      label: "Oversight Improvement Queue",
+      description: "Get all improvement requests captured by the oversight system. Filter by status to see open, resolved, or dismissed items.",
+      parameters: Type.Object({
+        status: Type.Optional(Type.Union([
+          Type.Literal("open"),
+          Type.Literal("accepted"),
+          Type.Literal("resolved"),
+          Type.Literal("dismissed")
+        ], { description: "Filter by status. Default: all." }))
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          let queue = await getImprovementQueue();
+          if (params.status) {
+            queue = queue.filter((i) => i.status === params.status);
+          }
+          return { content: [{ type: "text", text: JSON.stringify({ count: queue.length, items: queue }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "oversight_capture_improvement",
+      label: "Oversight Capture Improvement",
+      description: "Capture a new improvement request. Use when you identify an issue or optimization opportunity.",
+      parameters: Type.Object({
+        source: Type.Union([
+          Type.Literal("health_check"),
+          Type.Literal("performance_review"),
+          Type.Literal("manual"),
+          Type.Literal("circuit_breaker")
+        ], { description: "Source of the improvement" }),
+        category: Type.Union([
+          Type.Literal("risk"),
+          Type.Literal("execution"),
+          Type.Literal("signal"),
+          Type.Literal("infrastructure"),
+          Type.Literal("strategy")
+        ], { description: "Category of the improvement" }),
+        severity: Type.Union([
+          Type.Literal("low"),
+          Type.Literal("medium"),
+          Type.Literal("high"),
+          Type.Literal("critical")
+        ], { description: "Severity level" }),
+        title: Type.String({ description: "Short title for the improvement" }),
+        description: Type.String({ description: "Detailed description of the issue" }),
+        suggested_action: Type.String({ description: "Recommended action to address this" })
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const item = await captureImprovement(params);
+          return { content: [{ type: "text", text: JSON.stringify(item) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "oversight_update_improvement",
+      label: "Oversight Update Improvement",
+      description: "Update the status of an improvement request.",
+      parameters: Type.Object({
+        id: Type.String({ description: "Improvement request ID" }),
+        status: Type.Union([
+          Type.Literal("accepted"),
+          Type.Literal("resolved"),
+          Type.Literal("dismissed")
+        ], { description: "New status" }),
+        note: Type.Optional(Type.String({ description: "Resolution note" }))
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const item = await updateImprovement(params.id, params.status, params.note);
+          if (!item) return { content: [{ type: "text", text: JSON.stringify({ error: "Improvement not found" }) }], details: {} };
+          return { content: [{ type: "text", text: JSON.stringify(item) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "oversight_shadow_open",
+      label: "Oversight Shadow Trade Open",
+      description: "Open a hypothetical shadow trade to track what would have happened without real execution.",
+      parameters: Type.Object({
+        thesis_id: Type.String({ description: "Thesis ID that generated this signal" }),
+        asset: Type.String({ description: "Asset name (e.g. BTC, ETH, or Polymarket question)" }),
+        asset_class: Type.Union([Type.Literal("crypto"), Type.Literal("polymarket")], { description: "Asset class" }),
+        source: Type.Union([Type.Literal("crypto_scout"), Type.Literal("polymarket_scout")], { description: "Signal source" }),
+        direction: Type.String({ description: "LONG/SHORT for crypto, YES/NO for polymarket" }),
+        entry_price: Type.Number({ description: "Entry price at signal time" })
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const trade = await openShadowTrade(params);
+          return { content: [{ type: "text", text: JSON.stringify(trade) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "oversight_shadow_close",
+      label: "Oversight Shadow Trade Close",
+      description: "Close a shadow trade with an exit price and reason.",
+      parameters: Type.Object({
+        id: Type.String({ description: "Shadow trade ID" }),
+        exit_price: Type.Number({ description: "Exit price" }),
+        reason: Type.String({ description: "Close reason (e.g. stop_loss, take_profit, thesis_expired)" })
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const trade = await closeShadowTrade(params.id, params.exit_price, params.reason);
+          if (!trade) return { content: [{ type: "text", text: JSON.stringify({ error: "Shadow trade not found" }) }], details: {} };
+          return { content: [{ type: "text", text: JSON.stringify(trade) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "oversight_shadow_trades",
+      label: "Oversight Shadow Trades",
+      description: "List shadow trades. Optionally filter by status (open or closed).",
+      parameters: Type.Object({
+        status: Type.Optional(Type.Union([Type.Literal("open"), Type.Literal("closed")], { description: "Filter by status" }))
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const trades = await getShadowTrades(params.status);
+          return { content: [{ type: "text", text: JSON.stringify({ count: trades.length, trades }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "oversight_shadow_performance",
+      label: "Oversight Shadow Performance",
+      description: "Get aggregate shadow trading performance: total trades, win rate, P&L.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const perf = await getShadowPerformance();
+          return { content: [{ type: "text", text: JSON.stringify(perf) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "oversight_summary",
+      label: "Oversight Summary",
+      description: "Get a quick overview of oversight status: latest health report, improvement queue counts, and shadow trading stats.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const summary = await getOversightSummary();
           return { content: [{ type: "text", text: JSON.stringify(summary) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
@@ -15213,6 +16100,15 @@ app.get("/api/wealth-engines/polymarket/theses", async (_req, res) => {
     res.status(500).json({ error: "Failed to fetch polymarket theses" });
   }
 });
+app.get("/api/wealth-engines/oversight", async (_req, res) => {
+  try {
+    const summary = await getOversightSummary();
+    res.json(summary);
+  } catch (err) {
+    console.error("[wealth-engines] oversight error:", err);
+    res.status(500).json({ error: "Failed to fetch oversight data" });
+  }
+});
 var weDashboardCache = null;
 var WE_DASHBOARD_TTL = 3e4;
 async function buildWealthEnginesDashboardData() {
@@ -16494,7 +17390,8 @@ var cachedStaticTools = [
   ...buildRealEstateTools(),
   ...buildConversationTools(),
   ...buildMemoryTools(),
-  ...buildWebPublishTools()
+  ...buildWebPublishTools(),
+  ...buildOversightTools()
 ];
 {
   const kbToolNames = buildKnowledgeBaseTools().map((t) => t.name);
