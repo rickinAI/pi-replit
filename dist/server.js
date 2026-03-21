@@ -5527,7 +5527,6 @@ function buildSignalAttribution(trades, totalPnl) {
 }
 async function detectCrossDomainExposure() {
   const positions = await getConfigValue("wealth_engines_positions", []);
-  const pmTheses = await getConfigValue("polymarket_scout_active_theses", []);
   const portfolio = await getConfigValue("wealth_engines_portfolio_value", 50);
   const alerts = [];
   const cryptoPositions = positions.filter((p) => p.asset_class === "crypto");
@@ -5542,22 +5541,21 @@ async function detectCrossDomainExposure() {
   for (const cryptoPos of cryptoPositions) {
     const asset = cryptoPos.asset.toUpperCase().replace(/USDT?$/, "");
     const keywords = CRYPTO_PM_CORRELATIONS[asset] || [asset.toLowerCase()];
-    for (const pmThesis of pmTheses) {
-      if (pmThesis.status !== "active") continue;
-      const question = (pmThesis.asset || pmThesis.question || "").toLowerCase();
-      const matched = keywords.some((kw) => question.includes(kw));
+    for (const pmPos of pmPositions) {
+      const pmAsset = pmPos.asset.toLowerCase();
+      const matched = keywords.some((kw) => pmAsset.includes(kw));
       if (!matched) continue;
       const cryptoExposure = (cryptoPos.size || 0) * (cryptoPos.entry_price || 0);
-      const pmExposure = pmThesis.position_size || 0;
+      const pmExposure = (pmPos.size || 0) * (pmPos.entry_price || 0);
       const combinedPct = portfolio > 0 ? (cryptoExposure + pmExposure) / portfolio * 100 : 0;
-      const isSameDirection = cryptoPos.direction === "LONG" && pmThesis.direction === "YES" || cryptoPos.direction === "SHORT" && pmThesis.direction === "NO";
+      const isSameDirection = cryptoPos.direction === "LONG" && pmPos.direction === "YES" || cryptoPos.direction === "SHORT" && pmPos.direction === "NO";
       alerts.push({
         crypto_asset: cryptoPos.asset,
-        polymarket_question: (pmThesis.asset || pmThesis.question || "").slice(0, 80),
+        polymarket_question: pmPos.asset.slice(0, 80),
         correlation_type: isSameDirection ? "direct" : "inverse",
         combined_exposure_pct: combinedPct,
         risk_level: combinedPct > 40 ? "high" : combinedPct > 25 ? "medium" : "low",
-        detail: `${cryptoPos.asset} ${cryptoPos.direction} + PM "${(pmThesis.asset || "").slice(0, 40)}" ${pmThesis.direction} \u2014 ${combinedPct.toFixed(0)}% combined exposure (${isSameDirection ? "correlated" : "hedged"})`
+        detail: `${cryptoPos.asset} ${cryptoPos.direction} + PM "${pmPos.asset.slice(0, 40)}" ${pmPos.direction} \u2014 ${combinedPct.toFixed(0)}% combined exposure (${isSameDirection ? "correlated" : "hedged"})`
       });
     }
   }
@@ -5577,6 +5575,26 @@ async function detectCrossDomainExposure() {
           detail: `PM bucket overlap: "${a.asset.slice(0, 30)}" + "${b.asset.slice(0, 30)}" in bucket "${a.exposure_bucket}" \u2014 ${combinedPct.toFixed(0)}% combined`
         });
       }
+    }
+  }
+  const bucketExposure = {};
+  for (const pos of positions) {
+    const bucket = pos.exposure_bucket || "general";
+    const exposure = (pos.size || 0) * (pos.entry_price || 0);
+    bucketExposure[bucket] = (bucketExposure[bucket] || 0) + exposure;
+  }
+  const BUCKET_THRESHOLD_PCT = 40;
+  for (const [bucket, exposure] of Object.entries(bucketExposure)) {
+    const pct = portfolio > 0 ? exposure / portfolio * 100 : 0;
+    if (pct > BUCKET_THRESHOLD_PCT) {
+      alerts.push({
+        crypto_asset: `Bucket: ${bucket}`,
+        polymarket_question: `All positions in "${bucket}"`,
+        correlation_type: "thematic",
+        combined_exposure_pct: pct,
+        risk_level: pct > 60 ? "high" : "medium",
+        detail: `Exposure bucket "${bucket}" has ${pct.toFixed(0)}% of portfolio ($${exposure.toFixed(2)}) across ${positions.filter((p) => (p.exposure_bucket || "general") === bucket).length} positions`
+      });
     }
   }
   const EXPOSURE_ALERT_THRESHOLD = 40;
@@ -5668,6 +5686,7 @@ async function openShadowTrade(params) {
     current_price: params.entry_price,
     hypothetical_pnl: 0,
     opened_at: Date.now(),
+    market_id: params.market_id,
     status: "open"
   };
   const trades = await getConfigValue(SHADOW_TRADES_KEY, []);
@@ -5704,6 +5723,55 @@ async function updateShadowPrices(priceUpdates) {
   }
   await setConfigValue(SHADOW_TRADES_KEY, trades);
   return openTrades;
+}
+var SHADOW_MAX_AGE_HOURS = 168;
+async function refreshShadowTradesFromMarket() {
+  const trades = await getConfigValue(SHADOW_TRADES_KEY, []);
+  const openTrades = trades.filter((t) => t.status === "open");
+  let updated = 0;
+  let closed = 0;
+  const errors = [];
+  const now = Date.now();
+  for (const trade of openTrades) {
+    const ageHours = (now - trade.opened_at) / (3600 * 1e3);
+    if (ageHours > SHADOW_MAX_AGE_HOURS) {
+      trade.status = "closed";
+      trade.closed_at = now;
+      trade.close_reason = "expired";
+      trade.exit_price = trade.current_price;
+      const multiplier = trade.direction === "LONG" || trade.direction === "YES" ? 1 : -1;
+      trade.hypothetical_pnl = (trade.current_price - trade.entry_price) * multiplier;
+      closed++;
+      continue;
+    }
+    try {
+      if (trade.asset_class === "crypto") {
+        const candles = await getHistoricalOHLCV(trade.asset, 1);
+        if (candles.length > 0) {
+          const latestPrice = candles[candles.length - 1].close;
+          trade.current_price = latestPrice;
+          const multiplier = trade.direction === "LONG" || trade.direction === "SHORT" ? trade.direction === "LONG" ? 1 : -1 : 1;
+          trade.hypothetical_pnl = (latestPrice - trade.entry_price) * multiplier;
+          updated++;
+        }
+      } else if (trade.asset_class === "polymarket" && trade.market_id) {
+        const market = await getMarketDetails(trade.market_id);
+        if (market && market.outcomePrices) {
+          const prices = JSON.parse(market.outcomePrices);
+          const currentOdds = prices[0] || trade.current_price;
+          trade.current_price = currentOdds;
+          const multiplier = trade.direction === "YES" ? 1 : -1;
+          trade.hypothetical_pnl = (currentOdds - trade.entry_price) * multiplier;
+          updated++;
+        }
+      }
+    } catch (e) {
+      errors.push(`${trade.asset}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  await setConfigValue(SHADOW_TRADES_KEY, trades);
+  console.log(`[oversight] Shadow refresh: ${updated} updated, ${closed} expired, ${errors.length} errors`);
+  return { updated, closed, errors };
 }
 async function getShadowTrades(statusFilter) {
   const trades = await getConfigValue(SHADOW_TRADES_KEY, []);
@@ -5898,7 +5966,8 @@ async function autoTrackShadowTrade(params) {
     asset_class: params.asset_class,
     source: params.source,
     direction: params.direction,
-    entry_price: params.entry_price
+    entry_price: params.entry_price,
+    market_id: params.market_id
   });
   console.log(`[oversight] Auto-shadow: ${params.asset} ${params.direction} @ $${params.entry_price} \u2014 ${params.reason}`);
   return shadow;
@@ -6156,7 +6225,8 @@ async function openPosition(params) {
         source: source2,
         direction: params.direction,
         entry_price: params.entry_price,
-        reason: "shadow_mode_active"
+        reason: "shadow_mode_active",
+        market_id: params.market_id
       });
     } catch (e) {
       console.error("[bankr] Shadow tracking in SHADOW mode:", e instanceof Error ? e.message : e);
@@ -9281,6 +9351,7 @@ function getJobSavePath(jobId, dateStr, safeName) {
   if (jobId === "oversight-health") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Health.md`;
   if (jobId === "oversight-weekly") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Weekly-Review.md`;
   if (jobId === "oversight-daily-summary") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Daily-Summary.md`;
+  if (jobId === "oversight-shadow-refresh") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Shadow-Refresh.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 var jobStatusCache = {};
@@ -10189,6 +10260,21 @@ Save the full report to the vault. Keep it actionable and data-driven.`,
 
 Keep it quick \u2014 the daily summary is meant to be a 30-second glance at the day's results.`,
     schedule: { type: "daily", hour: 20, minute: 0 },
+    enabled: true
+  },
+  {
+    id: "oversight-shadow-refresh",
+    name: "Oversight Shadow Price Refresh",
+    agentId: "oversight",
+    prompt: `Refresh shadow trade prices from live market data.
+
+1. Call oversight_shadow_refresh to fetch current market prices for all open shadow trades.
+2. This updates hypothetical P&L using real market data and auto-closes trades older than 7 days.
+3. If any trades were updated or closed, note the counts.
+4. Save a brief summary to the vault.
+
+This ensures shadow/paper trading accurately tracks what BANKR would have earned.`,
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 60 },
     enabled: true
   }
 ];
@@ -14221,6 +14307,20 @@ function buildOversightTools() {
         try {
           const perf = await getShadowPerformance();
           return { content: [{ type: "text", text: JSON.stringify(perf) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "oversight_shadow_refresh",
+      label: "Oversight Shadow Refresh",
+      description: "Fetch live market prices for all open shadow trades and update their hypothetical P&L. Auto-closes trades older than 7 days.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const result = await refreshShadowTradesFromMarket();
+          return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
         }

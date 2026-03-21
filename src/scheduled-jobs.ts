@@ -54,6 +54,7 @@ function getJobSavePath(jobId: string, dateStr: string, safeName: string): strin
   if (jobId === "oversight-health") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Health.md`;
   if (jobId === "oversight-weekly") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Weekly-Review.md`;
   if (jobId === "oversight-daily-summary") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Daily-Summary.md`;
+  if (jobId === "oversight-shadow-refresh") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Shadow-Refresh.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 
@@ -965,6 +966,21 @@ Save the full report to the vault. Keep it actionable and data-driven.`,
 
 Keep it quick — the daily summary is meant to be a 30-second glance at the day's results.`,
     schedule: { type: "daily", hour: 20, minute: 0 },
+    enabled: true,
+  },
+  {
+    id: "oversight-shadow-refresh",
+    name: "Oversight Shadow Price Refresh",
+    agentId: "oversight",
+    prompt: `Refresh shadow trade prices from live market data.
+
+1. Call oversight_shadow_refresh to fetch current market prices for all open shadow trades.
+2. This updates hypothetical P&L using real market data and auto-closes trades older than 7 days.
+3. If any trades were updated or closed, note the counts.
+4. Save a brief summary to the vault.
+
+This ensures shadow/paper trading accurately tracks what BANKR would have earned.`,
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 60 },
     enabled: true,
   },
 ];

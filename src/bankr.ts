@@ -386,6 +386,7 @@ export async function openPosition(params: {
         direction: params.direction,
         entry_price: params.entry_price,
         reason: "shadow_mode_active",
+        market_id: params.market_id,
       });
     } catch (e) {
       console.error("[bankr] Shadow tracking in SHADOW mode:", e instanceof Error ? e.message : e);

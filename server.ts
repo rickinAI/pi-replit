@@ -2017,6 +2017,20 @@ function buildOversightTools(): ToolDefinition[] {
       },
     },
     {
+      name: "oversight_shadow_refresh",
+      label: "Oversight Shadow Refresh",
+      description: "Fetch live market prices for all open shadow trades and update their hypothetical P&L. Auto-closes trades older than 7 days.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const result = await oversight.refreshShadowTradesFromMarket();
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
       name: "oversight_summary",
       label: "Oversight Summary",
       description: "Get a quick overview of oversight status: latest health report, drawdown status, active improvement details, and shadow trading stats.",

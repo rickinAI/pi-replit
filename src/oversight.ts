@@ -1,6 +1,8 @@
 import { getPool } from "./db.js";
 import type { Pool } from "pg";
 import type { Position, TradeRecord } from "./bankr.js";
+import { getHistoricalOHLCV } from "./coingecko.js";
+import * as polymarket from "./polymarket.js";
 
 interface TimestampedRecord {
   timestamp?: number;
@@ -145,6 +147,7 @@ export interface ShadowTrade {
   closed_at?: number;
   exit_price?: number;
   close_reason?: string;
+  market_id?: string;
   status: "open" | "closed";
 }
 
@@ -742,7 +745,6 @@ function buildSignalAttribution(trades: TradeRecord[], totalPnl: number): Signal
 
 export async function detectCrossDomainExposure(): Promise<CrossDomainExposure[]> {
   const positions = await getConfigValue<Position[]>("wealth_engines_positions", []);
-  const pmTheses = await getConfigValue<ThesisRecord[]>("polymarket_scout_active_theses", []);
   const portfolio = await getConfigValue<number>("wealth_engines_portfolio_value", 50);
   const alerts: CrossDomainExposure[] = [];
 
@@ -761,27 +763,26 @@ export async function detectCrossDomainExposure(): Promise<CrossDomainExposure[]
     const asset = cryptoPos.asset.toUpperCase().replace(/USDT?$/, "");
     const keywords = CRYPTO_PM_CORRELATIONS[asset] || [asset.toLowerCase()];
 
-    for (const pmThesis of pmTheses) {
-      if (pmThesis.status !== "active") continue;
-      const question = (pmThesis.asset || pmThesis.question || "").toLowerCase();
-      const matched = keywords.some(kw => question.includes(kw));
+    for (const pmPos of pmPositions) {
+      const pmAsset = pmPos.asset.toLowerCase();
+      const matched = keywords.some(kw => pmAsset.includes(kw));
       if (!matched) continue;
 
       const cryptoExposure = (cryptoPos.size || 0) * (cryptoPos.entry_price || 0);
-      const pmExposure = pmThesis.position_size || 0;
+      const pmExposure = (pmPos.size || 0) * (pmPos.entry_price || 0);
       const combinedPct = portfolio > 0 ? ((cryptoExposure + pmExposure) / portfolio * 100) : 0;
 
       const isSameDirection =
-        (cryptoPos.direction === "LONG" && pmThesis.direction === "YES") ||
-        (cryptoPos.direction === "SHORT" && pmThesis.direction === "NO");
+        (cryptoPos.direction === "LONG" && pmPos.direction === "YES") ||
+        (cryptoPos.direction === "SHORT" && pmPos.direction === "NO");
 
       alerts.push({
         crypto_asset: cryptoPos.asset,
-        polymarket_question: (pmThesis.asset || pmThesis.question || "").slice(0, 80),
+        polymarket_question: pmPos.asset.slice(0, 80),
         correlation_type: isSameDirection ? "direct" : "inverse",
         combined_exposure_pct: combinedPct,
         risk_level: combinedPct > 40 ? "high" : combinedPct > 25 ? "medium" : "low",
-        detail: `${cryptoPos.asset} ${cryptoPos.direction} + PM "${(pmThesis.asset || "").slice(0, 40)}" ${pmThesis.direction} — ${combinedPct.toFixed(0)}% combined exposure (${isSameDirection ? "correlated" : "hedged"})`,
+        detail: `${cryptoPos.asset} ${cryptoPos.direction} + PM "${pmPos.asset.slice(0, 40)}" ${pmPos.direction} — ${combinedPct.toFixed(0)}% combined exposure (${isSameDirection ? "correlated" : "hedged"})`,
       });
     }
   }
@@ -802,6 +803,27 @@ export async function detectCrossDomainExposure(): Promise<CrossDomainExposure[]
           detail: `PM bucket overlap: "${a.asset.slice(0, 30)}" + "${b.asset.slice(0, 30)}" in bucket "${a.exposure_bucket}" — ${combinedPct.toFixed(0)}% combined`,
         });
       }
+    }
+  }
+
+  const bucketExposure: Record<string, number> = {};
+  for (const pos of positions) {
+    const bucket = pos.exposure_bucket || "general";
+    const exposure = (pos.size || 0) * (pos.entry_price || 0);
+    bucketExposure[bucket] = (bucketExposure[bucket] || 0) + exposure;
+  }
+  const BUCKET_THRESHOLD_PCT = 40;
+  for (const [bucket, exposure] of Object.entries(bucketExposure)) {
+    const pct = portfolio > 0 ? (exposure / portfolio) * 100 : 0;
+    if (pct > BUCKET_THRESHOLD_PCT) {
+      alerts.push({
+        crypto_asset: `Bucket: ${bucket}`,
+        polymarket_question: `All positions in "${bucket}"`,
+        correlation_type: "thematic",
+        combined_exposure_pct: pct,
+        risk_level: pct > 60 ? "high" : "medium",
+        detail: `Exposure bucket "${bucket}" has ${pct.toFixed(0)}% of portfolio ($${exposure.toFixed(2)}) across ${positions.filter(p => (p.exposure_bucket || "general") === bucket).length} positions`,
+      });
     }
   }
 
@@ -916,6 +938,7 @@ export async function openShadowTrade(params: {
   source: "crypto_scout" | "polymarket_scout";
   direction: string;
   entry_price: number;
+  market_id?: string;
 }): Promise<ShadowTrade> {
   const shadow: ShadowTrade = {
     id: `shadow_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -928,6 +951,7 @@ export async function openShadowTrade(params: {
     current_price: params.entry_price,
     hypothetical_pnl: 0,
     opened_at: Date.now(),
+    market_id: params.market_id,
     status: "open",
   };
 
@@ -977,6 +1001,65 @@ export async function updateShadowPrices(
 
   await setConfigValue(SHADOW_TRADES_KEY, trades);
   return openTrades;
+}
+
+const SHADOW_MAX_AGE_HOURS = 168;
+
+export async function refreshShadowTradesFromMarket(): Promise<{
+  updated: number;
+  closed: number;
+  errors: string[];
+}> {
+  const trades = await getConfigValue<ShadowTrade[]>(SHADOW_TRADES_KEY, []);
+  const openTrades = trades.filter(t => t.status === "open");
+  let updated = 0;
+  let closed = 0;
+  const errors: string[] = [];
+
+  const now = Date.now();
+
+  for (const trade of openTrades) {
+    const ageHours = (now - trade.opened_at) / (3600 * 1000);
+    if (ageHours > SHADOW_MAX_AGE_HOURS) {
+      trade.status = "closed";
+      trade.closed_at = now;
+      trade.close_reason = "expired";
+      trade.exit_price = trade.current_price;
+      const multiplier = trade.direction === "LONG" || trade.direction === "YES" ? 1 : -1;
+      trade.hypothetical_pnl = (trade.current_price - trade.entry_price) * multiplier;
+      closed++;
+      continue;
+    }
+
+    try {
+      if (trade.asset_class === "crypto") {
+        const candles = await getHistoricalOHLCV(trade.asset, 1);
+        if (candles.length > 0) {
+          const latestPrice = candles[candles.length - 1].close;
+          trade.current_price = latestPrice;
+          const multiplier = trade.direction === "LONG" || trade.direction === "SHORT" ? (trade.direction === "LONG" ? 1 : -1) : 1;
+          trade.hypothetical_pnl = (latestPrice - trade.entry_price) * multiplier;
+          updated++;
+        }
+      } else if (trade.asset_class === "polymarket" && trade.market_id) {
+        const market = await polymarket.getMarketDetails(trade.market_id);
+        if (market && market.outcomePrices) {
+          const prices = JSON.parse(market.outcomePrices) as number[];
+          const currentOdds = prices[0] || trade.current_price;
+          trade.current_price = currentOdds;
+          const multiplier = trade.direction === "YES" ? 1 : -1;
+          trade.hypothetical_pnl = (currentOdds - trade.entry_price) * multiplier;
+          updated++;
+        }
+      }
+    } catch (e) {
+      errors.push(`${trade.asset}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  await setConfigValue(SHADOW_TRADES_KEY, trades);
+  console.log(`[oversight] Shadow refresh: ${updated} updated, ${closed} expired, ${errors.length} errors`);
+  return { updated, closed, errors };
 }
 
 export async function getShadowTrades(statusFilter?: "open" | "closed"): Promise<ShadowTrade[]> {
@@ -1288,6 +1371,7 @@ export async function autoTrackShadowTrade(params: {
   direction: string;
   entry_price: number;
   reason: string;
+  market_id?: string;
 }): Promise<ShadowTrade | null> {
   const existing = await getShadowTrades("open");
   const alreadyTracked = existing.some(t => t.thesis_id === params.thesis_id && t.asset === params.asset);
@@ -1300,6 +1384,7 @@ export async function autoTrackShadowTrade(params: {
     source: params.source,
     direction: params.direction,
     entry_price: params.entry_price,
+    market_id: params.market_id,
   });
   console.log(`[oversight] Auto-shadow: ${params.asset} ${params.direction} @ $${params.entry_price} — ${params.reason}`);
   return shadow;
