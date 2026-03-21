@@ -1212,7 +1212,7 @@ function buildSignalSourceTools(): ToolDefinition[] {
       parameters: Type.Object({
         symbol: Type.String({ description: "Trading pair symbol (e.g. 'BTC', 'BTCUSDT', 'ETH', 'SOL')" }),
       }),
-      async execute(_toolCallId: string, params: any) {
+      async execute(_toolCallId: string, params: { symbol: string }) {
         try {
           const result = await signalSources.getBinanceSignals(params.symbol);
           return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
@@ -1228,7 +1228,7 @@ function buildSignalSourceTools(): ToolDefinition[] {
       parameters: Type.Object({
         symbols: Type.Array(Type.String(), { description: "Array of symbols to scan (e.g. ['BTC', 'ETH', 'SOL', 'BNKR'])" }),
       }),
-      async execute(_toolCallId: string, params: any) {
+      async execute(_toolCallId: string, params: { symbols: string[] }) {
         try {
           const result = await signalSources.scanBinanceWatchlist(params.symbols);
           return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
@@ -1258,7 +1258,7 @@ function buildSignalSourceTools(): ToolDefinition[] {
       parameters: Type.Object({
         query: Type.String({ description: "Crypto asset name or ticker (e.g. 'bitcoin', 'BTC', 'ethereum')" }),
       }),
-      async execute(_toolCallId: string, params: any) {
+      async execute(_toolCallId: string, params: { query: string }) {
         try {
           const result = await signalSources.getCryptoSentiment(params.query);
           return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
@@ -1274,7 +1274,7 @@ function buildSignalSourceTools(): ToolDefinition[] {
       parameters: Type.Object({
         protocol: Type.Optional(Type.String({ description: "Specific protocol slug (e.g. 'aave', 'uniswap'). Omit for global overview." })),
       }),
-      async execute(_toolCallId: string, params: any) {
+      async execute(_toolCallId: string, params: { protocol?: string }) {
         try {
           const result = await signalSources.getDefiLlamaData(params.protocol);
           return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
@@ -1304,7 +1304,7 @@ function buildSignalSourceTools(): ToolDefinition[] {
       parameters: Type.Object({
         symbols: Type.Optional(Type.Array(Type.String(), { description: "Filter by specific symbols (e.g. ['BTC', 'ETH']). Omit for top 30." })),
       }),
-      async execute(_toolCallId: string, params: any) {
+      async execute(_toolCallId: string, params: { symbols?: string[] }) {
         try {
           const result = await signalSources.getBinanceFundingRates(params.symbols);
           return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
@@ -1320,7 +1320,7 @@ function buildSignalSourceTools(): ToolDefinition[] {
       parameters: Type.Object({
         symbol: Type.String({ description: "Futures pair (e.g. 'BTC', 'BTCUSDT', 'ETH')" }),
       }),
-      async execute(_toolCallId: string, params: any) {
+      async execute(_toolCallId: string, params: { symbol: string }) {
         try {
           const result = await signalSources.getOpenInterestHistory(params.symbol);
           return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
@@ -1336,7 +1336,7 @@ function buildSignalSourceTools(): ToolDefinition[] {
       parameters: Type.Object({
         category: Type.Optional(Type.String({ description: "Optional category filter" })),
       }),
-      async execute(_toolCallId: string, params: any) {
+      async execute(_toolCallId: string, params: { category?: string }) {
         try {
           const result = await signalSources.getEnhancedCoinGeckoData(params.category);
           return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
