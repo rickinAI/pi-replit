@@ -719,29 +719,64 @@ export async function runPerformanceReview(periodDays: number = 7): Promise<Perf
 }
 
 function buildSignalAttribution(trades: TradeRecord[], totalPnl: number): SignalAttribution[] {
-  const bySignal: Record<string, TradeRecord[]> = {};
+  const groupKeys: Record<string, TradeRecord[]> = {};
   for (const t of trades) {
-    const signalType = t.source || "unknown";
-    if (!bySignal[signalType]) bySignal[signalType] = [];
-    bySignal[signalType].push(t);
+    const source = t.source || "unknown";
+    const direction = t.direction || "unknown";
+    const key = `${source}/${direction}`;
+    if (!groupKeys[key]) groupKeys[key] = [];
+    groupKeys[key].push(t);
+
+    const sourceKey = source;
+    if (!groupKeys[sourceKey]) groupKeys[sourceKey] = [];
+    groupKeys[sourceKey].push(t);
   }
 
   const attrs: SignalAttribution[] = [];
-  for (const [signal, signalTrades] of Object.entries(bySignal)) {
-    const wins = signalTrades.filter(t => (t.pnl || 0) > 0);
-    const losses = signalTrades.filter(t => (t.pnl || 0) <= 0);
-    const signalPnl = signalTrades.reduce((s, t) => s + (t.pnl || 0), 0);
-    const avgConf = 0;
+  const seen = new Set<string>();
+
+  for (const source of ["crypto_scout", "polymarket_scout", "manual"]) {
+    const sourceTrades = groupKeys[source];
+    if (!sourceTrades || seen.has(source)) continue;
+    seen.add(source);
+
+    const wins = sourceTrades.filter(t => (t.pnl || 0) > 0);
+    const losses = sourceTrades.filter(t => (t.pnl || 0) <= 0);
+    const signalPnl = sourceTrades.reduce((s, t) => s + (t.pnl || 0), 0);
+    const avgPnlPerTrade = sourceTrades.length > 0 ? signalPnl / sourceTrades.length : 0;
+
     attrs.push({
-      signal_type: signal,
-      trades: signalTrades.length,
+      signal_type: source,
+      trades: sourceTrades.length,
       wins: wins.length,
       losses: losses.length,
       total_pnl: signalPnl,
-      avg_confidence: avgConf,
+      avg_confidence: avgPnlPerTrade,
       contribution_pct: totalPnl !== 0 ? (signalPnl / Math.abs(totalPnl)) * 100 : 0,
     });
+
+    for (const dir of ["LONG", "SHORT", "YES", "NO"]) {
+      const dirKey = `${source}/${dir}`;
+      const dirTrades = groupKeys[dirKey];
+      if (!dirTrades || seen.has(dirKey)) continue;
+      seen.add(dirKey);
+
+      const dirWins = dirTrades.filter(t => (t.pnl || 0) > 0);
+      const dirLosses = dirTrades.filter(t => (t.pnl || 0) <= 0);
+      const dirPnl = dirTrades.reduce((s, t) => s + (t.pnl || 0), 0);
+
+      attrs.push({
+        signal_type: `${source}/${dir}`,
+        trades: dirTrades.length,
+        wins: dirWins.length,
+        losses: dirLosses.length,
+        total_pnl: dirPnl,
+        avg_confidence: dirTrades.length > 0 ? dirPnl / dirTrades.length : 0,
+        contribution_pct: totalPnl !== 0 ? (dirPnl / Math.abs(totalPnl)) * 100 : 0,
+      });
+    }
   }
+
   return attrs.sort((a, b) => b.total_pnl - a.total_pnl);
 }
 
@@ -1045,9 +1080,8 @@ export async function refreshShadowTradesFromMarket(): Promise<{
         }
       } else if (trade.asset_class === "polymarket" && trade.market_id) {
         const market = await polymarket.getMarketDetails(trade.market_id);
-        if (market && market.outcomePrices) {
-          const prices = JSON.parse(market.outcomePrices) as number[];
-          const currentOdds = prices[0] || trade.current_price;
+        if (market && market.outcome_prices && market.outcome_prices.length > 0) {
+          const currentOdds = parseFloat(String(market.outcome_prices[0])) || trade.current_price;
           trade.current_price = currentOdds;
           const multiplier = trade.direction === "YES" ? 1 : -1;
           trade.hypothetical_pnl = (currentOdds - trade.entry_price) * multiplier;
