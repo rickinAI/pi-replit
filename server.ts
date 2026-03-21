@@ -7655,6 +7655,39 @@ async function runStartupRecovery() {
   } catch (err) {
     console.error("[recovery] Shadow price refresh failed:", err instanceof Error ? err.message : err);
   }
+
+  try {
+    const jobs = scheduledJobs.getJobs();
+    const missedJobs: string[] = [];
+    for (const job of jobs) {
+      if (!job.enabled || !job.lastRun) continue;
+      const lastRunTime = new Date(job.lastRun).getTime();
+      if (isNaN(lastRunTime)) continue;
+      let expectedIntervalMs = 0;
+      if (job.schedule.type === "interval" && job.schedule.intervalMinutes) {
+        expectedIntervalMs = job.schedule.intervalMinutes * 60 * 1000;
+      } else if (job.schedule.type === "daily") {
+        expectedIntervalMs = 24 * 60 * 60 * 1000;
+      } else if (job.schedule.type === "weekly") {
+        expectedIntervalMs = 7 * 24 * 60 * 60 * 1000;
+      }
+      if (expectedIntervalMs > 0) {
+        const elapsed = startupTime - lastRunTime;
+        if (elapsed > expectedIntervalMs * 2) {
+          const missedWindows = Math.floor(elapsed / expectedIntervalMs) - 1;
+          missedJobs.push(`${job.name} (missed ~${missedWindows} window${missedWindows > 1 ? "s" : ""}, last ran ${Math.floor(elapsed / 60000)}m ago)`);
+        }
+      }
+    }
+    if (missedJobs.length > 0) {
+      console.warn(`[recovery] Missed job windows detected:\n  - ${missedJobs.join("\n  - ")}`);
+      telegram.sendMessage(`⚠️ *Missed Job Windows*\n\n${missedJobs.map(j => `• ${j}`).join("\n")}`).catch(() => {});
+    } else {
+      console.log("[recovery] No missed job windows detected");
+    }
+  } catch (err) {
+    console.error("[recovery] Missed job check failed:", err instanceof Error ? err.message : err);
+  }
 }
 
 async function sendStartupNotification(googleStatus: { connected: boolean; email?: string; error?: string }) {
