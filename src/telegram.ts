@@ -149,6 +149,16 @@ async function handleStatusCommand(): Promise<string> {
     if (br.rows.length > 0) bankrLastRun = timeAgo(new Date(br.rows[0].created_at).getTime());
   } catch {}
 
+  let healthLine = "";
+  try {
+    const healthRes = await pool.query(`SELECT value FROM app_config WHERE key = 'oversight_health_reports'`);
+    if (healthRes.rows.length > 0 && Array.isArray(healthRes.rows[0].value) && healthRes.rows[0].value.length > 0) {
+      const latest = healthRes.rows[0].value[healthRes.rows[0].value.length - 1];
+      const icons: Record<string, string> = { healthy: "🟢", degraded: "🟡", critical: "🔴" };
+      healthLine = `${icons[latest.overall_status] || "⚪"} Oversight: ${latest.overall_status}`;
+    }
+  } catch {}
+
   const lines = [
     `${mode} *DarkNode Status*`,
     "",
@@ -156,9 +166,10 @@ async function handleStatusCommand(): Promise<string> {
     `⏸ Paused: ${pauseActive ? "YES" : "NO"}`,
     `🔍 SCOUT last run: ${scoutLastRun}`,
     `💰 BANKR last run: ${bankrLastRun}`,
-    "",
-    `_${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`,
   ];
+  if (healthLine) lines.push(healthLine);
+  lines.push("");
+  lines.push(`_${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`);
   return lines.join("\n");
 }
 

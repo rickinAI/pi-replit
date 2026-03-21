@@ -7324,16 +7324,27 @@ async function handleStatusCommand() {
     if (br.rows.length > 0) bankrLastRun = timeAgo(new Date(br.rows[0].created_at).getTime());
   } catch {
   }
+  let healthLine = "";
+  try {
+    const healthRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_health_reports'`);
+    if (healthRes.rows.length > 0 && Array.isArray(healthRes.rows[0].value) && healthRes.rows[0].value.length > 0) {
+      const latest = healthRes.rows[0].value[healthRes.rows[0].value.length - 1];
+      const icons = { healthy: "\u{1F7E2}", degraded: "\u{1F7E1}", critical: "\u{1F534}" };
+      healthLine = `${icons[latest.overall_status] || "\u26AA"} Oversight: ${latest.overall_status}`;
+    }
+  } catch {
+  }
   const lines = [
     `${mode} *DarkNode Status*`,
     "",
     `\u{1F534} Kill Switch: ${killSwitchActive ? "ACTIVE" : "OFF"}`,
     `\u23F8 Paused: ${pauseActive ? "YES" : "NO"}`,
     `\u{1F50D} SCOUT last run: ${scoutLastRun}`,
-    `\u{1F4B0} BANKR last run: ${bankrLastRun}`,
-    "",
-    `_${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`
+    `\u{1F4B0} BANKR last run: ${bankrLastRun}`
   ];
+  if (healthLine) lines.push(healthLine);
+  lines.push("");
+  lines.push(`_${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`);
   return lines.join("\n");
 }
 async function handlePortfolioCommand() {
@@ -9130,13 +9141,17 @@ STEP 3: Run oversight_cross_domain_exposure to detect crypto-Polymarket correlat
 STEP 4: Check oversight_improvement_queue for open improvement requests.
 STEP 5: Check oversight_shadow_performance for shadow trading results.
 
-STEP 6: Compile a weekly report with these sections:
+STEP 6: Run oversight_thesis_review for adversarial bull/bear analysis of all active theses.
+STEP 7: Run oversight_per_asset_losses to check for concentrated per-asset losses.
+
+STEP 8: Compile a weekly report with these sections:
 - System Health: overall status, any recurring issues this week
-- Performance: win rate, total P&L, Sharpe ratio, best/worst trades, slippage
+- Performance: win rate, total P&L, max drawdown, Sharpe ratio, best/worst trades, slippage
+- Per-Asset Analysis: P&L by asset, flag concentrated losses
 - Source Analysis: crypto_scout vs polymarket_scout signal quality comparison
 - Cross-Domain Exposure: any correlated positions flagged
 - Signal Attribution: which signal types contributed to wins vs losses
-- Bull/Bear Thesis Review: for each active thesis, construct bull case and bear case. If bear is stronger, capture improvement.
+- Bull/Bear Thesis Review: summary of thesis verdicts from adversarial review
 - Improvements: open items, resolved items, new items this week, routing summary
 - Shadow Trading: shadow vs live comparison (if shadow trades exist)
 - Recommendations: 3-5 specific action items for next week
@@ -11721,6 +11736,28 @@ async function runPerformanceReview(periodDays = 7) {
     const srcWins = srcTrades.filter((t) => (t.pnl || 0) > 0);
     sourceBreakdown[src].win_rate = srcTrades.length > 0 ? srcWins.length / srcTrades.length * 100 : 0;
   }
+  const perAssetPnl = {};
+  for (const t of periodTrades) {
+    const asset = t.asset || "unknown";
+    if (!perAssetPnl[asset]) perAssetPnl[asset] = { trades: 0, pnl: 0, cumulative_loss: 0 };
+    perAssetPnl[asset].trades++;
+    perAssetPnl[asset].pnl += t.pnl || 0;
+    if ((t.pnl || 0) < 0) perAssetPnl[asset].cumulative_loss += Math.abs(t.pnl || 0);
+  }
+  let maxDrawdownPct = 0;
+  if (periodTrades.length > 0) {
+    let peak = 0;
+    let running = 0;
+    const sorted = [...periodTrades].sort(
+      (a, b) => new Date(a.closed_at).getTime() - new Date(b.closed_at).getTime()
+    );
+    for (const t of sorted) {
+      running += t.pnl || 0;
+      if (running > peak) peak = running;
+      const dd = peak > 0 ? (peak - running) / peak * 100 : 0;
+      if (dd > maxDrawdownPct) maxDrawdownPct = dd;
+    }
+  }
   const signalAttribution = buildSignalAttribution(periodTrades, totalPnl);
   const exposureAlerts = await detectCrossDomainExposure();
   const review = {
@@ -11732,12 +11769,14 @@ async function runPerformanceReview(periodDays = 7) {
     win_rate: winRate,
     avg_pnl: avgPnl,
     total_pnl: totalPnl,
+    max_drawdown_pct: maxDrawdownPct,
     sharpe_ratio: sharpe,
     best_trade: bestTrade,
     worst_trade: worstTrade,
     avg_hold_time_hours: avgHoldTime,
     thesis_conversion_rate: conversionRate,
     avg_slippage_pct: avgSlippage,
+    per_asset_pnl: perAssetPnl,
     source_breakdown: sourceBreakdown,
     signal_attribution: signalAttribution,
     exposure_alerts: exposureAlerts.map((e) => e.detail)
@@ -11998,6 +12037,97 @@ async function getOversightSummary() {
     shadow: { open: shadowPerf.open_trades, total_pnl: shadowPerf.total_pnl },
     last_check: lastCheck
   };
+}
+async function reviewTheses() {
+  const cryptoTheses = await getConfigValue("scout_active_theses", []);
+  const pmTheses = await getConfigValue("polymarket_scout_active_theses", []);
+  const history = await getConfigValue("wealth_engines_trade_history", []);
+  const reviews = [];
+  const allTheses = [
+    ...cryptoTheses.filter((t) => t.status === "active").map((t) => ({ ...t, _source: "crypto_scout" })),
+    ...pmTheses.filter((t) => t.status === "active").map((t) => ({ ...t, _source: "polymarket_scout" }))
+  ];
+  for (const thesis of allTheses) {
+    const asset = thesis.asset || thesis.question || "unknown";
+    const assetHistory = history.filter((t) => t.thesis_id === thesis.id);
+    const assetPnl = assetHistory.reduce((s, t) => s + (t.pnl || 0), 0);
+    const assetWins = assetHistory.filter((t) => (t.pnl || 0) > 0).length;
+    const assetLosses = assetHistory.filter((t) => (t.pnl || 0) <= 0).length;
+    const confidence = thesis.confidence || thesis.score || 0;
+    const direction = thesis.direction || "LONG";
+    const bullFactors = [];
+    const bearFactors = [];
+    if (confidence >= 0.7 || confidence >= 3.5) bullFactors.push(`High confidence: ${confidence}`);
+    else bearFactors.push(`Low confidence: ${confidence}`);
+    if (assetWins > assetLosses) bullFactors.push(`Positive track record: ${assetWins}W/${assetLosses}L`);
+    else if (assetLosses > 0) bearFactors.push(`Negative track record: ${assetWins}W/${assetLosses}L`);
+    if (assetPnl > 0) bullFactors.push(`Cumulative profit: $${assetPnl.toFixed(2)}`);
+    else if (assetPnl < 0) bearFactors.push(`Cumulative loss: $${assetPnl.toFixed(2)}`);
+    if (thesis.reasoning) bullFactors.push(`Thesis reasoning documented`);
+    if (thesis.age_hours && thesis.age_hours > 72) bearFactors.push(`Thesis aging: ${thesis.age_hours.toFixed(0)}h old`);
+    if (thesis.invalidation_criteria) bullFactors.push(`Clear invalidation criteria defined`);
+    if (thesis._source === "polymarket_scout") {
+      if (thesis.whale_count >= 3) bullFactors.push(`Strong whale consensus: ${thesis.whale_count} whales`);
+      else bearFactors.push(`Weak whale consensus: ${thesis.whale_count || 0} whales`);
+      if (thesis.odds && (thesis.odds > 85 || thesis.odds < 15)) bearFactors.push(`Extreme odds: ${thesis.odds}% \u2014 limited edge`);
+    }
+    const verdict = bullFactors.length > bearFactors.length + 1 ? "bull_favored" : bearFactors.length > bullFactors.length + 1 ? "bear_favored" : "neutral";
+    let recommendation = "Continue monitoring";
+    if (verdict === "bear_favored") {
+      recommendation = "Consider reducing position size or tightening stops";
+    }
+    reviews.push({
+      thesis_id: thesis.id,
+      asset: typeof asset === "string" ? asset.slice(0, 50) : "unknown",
+      source: thesis._source,
+      direction,
+      bull_case: bullFactors.join("; ") || "No strong bull factors",
+      bear_case: bearFactors.join("; ") || "No significant bear factors",
+      verdict,
+      recommendation
+    });
+    if (verdict === "bear_favored") {
+      await captureImprovement({
+        source: "performance_review",
+        category: "signal",
+        severity: "medium",
+        domain: thesis._source === "polymarket_scout" ? "polymarket" : "crypto",
+        title: `Bear-favored thesis: ${typeof asset === "string" ? asset.slice(0, 30) : "unknown"}`,
+        description: `Adversarial review found bear case stronger: ${bearFactors.join("; ")}`,
+        pattern_description: `Thesis ${thesis.id} has more bear factors (${bearFactors.length}) than bull (${bullFactors.length})`,
+        suggested_action: recommendation,
+        route: "signal_tuning"
+      });
+    }
+  }
+  return reviews;
+}
+async function checkPerAssetLosses() {
+  const history = await getConfigValue("wealth_engines_trade_history", []);
+  const portfolio = await getConfigValue("wealth_engines_portfolio_value", 50);
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1e3;
+  const recent = history.filter((t) => new Date(t.closed_at).getTime() > sevenDaysAgo);
+  const byAsset = {};
+  for (const t of recent) {
+    const asset = t.asset || "unknown";
+    byAsset[asset] = (byAsset[asset] || 0) + (t.pnl || 0);
+  }
+  for (const [asset, pnl] of Object.entries(byAsset)) {
+    const lossPct = portfolio > 0 ? Math.abs(pnl) / portfolio * 100 : 0;
+    if (pnl < 0 && lossPct > 10) {
+      await captureImprovement({
+        source: "performance_review",
+        category: "risk",
+        severity: lossPct > 20 ? "critical" : "high",
+        domain: "crypto",
+        title: `Per-asset loss: ${asset} -${lossPct.toFixed(1)}%`,
+        description: `${asset} has accumulated $${Math.abs(pnl).toFixed(2)} loss (${lossPct.toFixed(1)}% of portfolio) in 7 days.`,
+        pattern_description: `Concentrated losses in single asset ${asset}`,
+        suggested_action: `Review ${asset} thesis quality; consider blacklisting or reducing position limits`,
+        route: "bankr_config"
+      });
+    }
+  }
 }
 async function generateDailyPerformanceSummary() {
   const review = await runPerformanceReview(1);
@@ -14036,6 +14166,34 @@ function buildOversightTools() {
             return { content: [{ type: "text", text: JSON.stringify(shadow) }], details: {} };
           }
           return { content: [{ type: "text", text: JSON.stringify({ skipped: true, reason: "Already tracking this thesis/asset" }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "oversight_thesis_review",
+      label: "Oversight Thesis Review",
+      description: "Run adversarial bull/bear review on all active theses from SCOUT and Polymarket SCOUT. Evaluates confidence, track record, and thesis age to produce a verdict (bull_favored, bear_favored, neutral) with recommendation. Auto-captures improvements for bear-favored theses.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const reviews = await reviewTheses();
+          return { content: [{ type: "text", text: JSON.stringify({ count: reviews.length, reviews }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "oversight_per_asset_losses",
+      label: "Oversight Per-Asset Loss Check",
+      description: "Check for concentrated per-asset losses over the last 7 days. Captures improvement requests when any single asset exceeds 10% portfolio loss.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          await checkPerAssetLosses();
+          return { content: [{ type: "text", text: JSON.stringify({ checked: true }) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
         }

@@ -2079,6 +2079,34 @@ function buildOversightTools(): ToolDefinition[] {
         }
       },
     },
+    {
+      name: "oversight_thesis_review",
+      label: "Oversight Thesis Review",
+      description: "Run adversarial bull/bear review on all active theses from SCOUT and Polymarket SCOUT. Evaluates confidence, track record, and thesis age to produce a verdict (bull_favored, bear_favored, neutral) with recommendation. Auto-captures improvements for bear-favored theses.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const reviews = await oversight.reviewTheses();
+          return { content: [{ type: "text" as const, text: JSON.stringify({ count: reviews.length, reviews }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "oversight_per_asset_losses",
+      label: "Oversight Per-Asset Loss Check",
+      description: "Check for concentrated per-asset losses over the last 7 days. Captures improvement requests when any single asset exceeds 10% portfolio loss.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          await oversight.checkPerAssetLosses();
+          return { content: [{ type: "text" as const, text: JSON.stringify({ checked: true }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
   ];
 }
 

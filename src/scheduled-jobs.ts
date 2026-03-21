@@ -934,13 +934,17 @@ STEP 3: Run oversight_cross_domain_exposure to detect crypto-Polymarket correlat
 STEP 4: Check oversight_improvement_queue for open improvement requests.
 STEP 5: Check oversight_shadow_performance for shadow trading results.
 
-STEP 6: Compile a weekly report with these sections:
+STEP 6: Run oversight_thesis_review for adversarial bull/bear analysis of all active theses.
+STEP 7: Run oversight_per_asset_losses to check for concentrated per-asset losses.
+
+STEP 8: Compile a weekly report with these sections:
 - System Health: overall status, any recurring issues this week
-- Performance: win rate, total P&L, Sharpe ratio, best/worst trades, slippage
+- Performance: win rate, total P&L, max drawdown, Sharpe ratio, best/worst trades, slippage
+- Per-Asset Analysis: P&L by asset, flag concentrated losses
 - Source Analysis: crypto_scout vs polymarket_scout signal quality comparison
 - Cross-Domain Exposure: any correlated positions flagged
 - Signal Attribution: which signal types contributed to wins vs losses
-- Bull/Bear Thesis Review: for each active thesis, construct bull case and bear case. If bear is stronger, capture improvement.
+- Bull/Bear Thesis Review: summary of thesis verdicts from adversarial review
 - Improvements: open items, resolved items, new items this week, routing summary
 - Shadow Trading: shadow vs live comparison (if shadow trades exist)
 - Recommendations: 3-5 specific action items for next week
