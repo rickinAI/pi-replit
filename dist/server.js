@@ -1495,6 +1495,293 @@ var init_crypto_scout = __esm({
   }
 });
 
+// src/polymarket.ts
+function getCached2(key, ttl) {
+  const entry = cache.get(key);
+  if (entry && Date.now() - entry.ts < ttl) return entry.data;
+  return null;
+}
+function setCache2(key, data) {
+  cache.set(key, { data, ts: Date.now() });
+}
+async function fetchJson(url, options) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15e3);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+    return await res.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+async function searchMarkets(query, limit = 20) {
+  const cacheKey = `markets_search_${query}_${limit}`;
+  const cached2 = getCached2(cacheKey, MARKET_TTL);
+  if (cached2) return cached2;
+  try {
+    const url = `${GAMMA_API}/markets?closed=false&limit=${limit}&order=volume&ascending=false${query ? `&tag=${encodeURIComponent(query)}` : ""}`;
+    const data = await fetchJson(url);
+    const markets = Array.isArray(data) ? data : [];
+    const result = markets.map(normalizeMarket);
+    setCache2(cacheKey, result);
+    return result;
+  } catch (err) {
+    console.error("[polymarket] searchMarkets error:", err);
+    return [];
+  }
+}
+async function getTrendingMarkets(limit = 20) {
+  const cacheKey = `markets_trending_${limit}`;
+  const cached2 = getCached2(cacheKey, MARKET_TTL);
+  if (cached2) return cached2;
+  try {
+    const url = `${GAMMA_API}/markets?closed=false&limit=${limit}&order=volume24hr&ascending=false`;
+    const data = await fetchJson(url);
+    const markets = Array.isArray(data) ? data : [];
+    const result = markets.map(normalizeMarket);
+    setCache2(cacheKey, result);
+    return result;
+  } catch (err) {
+    console.error("[polymarket] getTrendingMarkets error:", err);
+    return [];
+  }
+}
+async function getMarketDetails(conditionId) {
+  const cacheKey = `market_${conditionId}`;
+  const cached2 = getCached2(cacheKey, MARKET_TTL);
+  if (cached2) return cached2;
+  try {
+    const url = `${GAMMA_API}/markets/${conditionId}`;
+    const data = await fetchJson(url);
+    const result = normalizeMarket(data);
+    setCache2(cacheKey, result);
+    return result;
+  } catch (err) {
+    console.error("[polymarket] getMarketDetails error:", err);
+    return null;
+  }
+}
+function normalizeMarket(raw) {
+  const outcomes = raw.outcomes ? typeof raw.outcomes === "string" ? JSON.parse(raw.outcomes) : raw.outcomes : ["Yes", "No"];
+  const outcomePrices = raw.outcomePrices ? typeof raw.outcomePrices === "string" ? JSON.parse(raw.outcomePrices) : raw.outcomePrices : [];
+  const tokens = [];
+  if (raw.tokens && Array.isArray(raw.tokens)) {
+    for (const t of raw.tokens) {
+      tokens.push({ token_id: t.token_id, outcome: t.outcome, price: parseFloat(t.price || "0") });
+    }
+  } else if (outcomePrices.length > 0) {
+    for (let i = 0; i < outcomes.length; i++) {
+      tokens.push({ token_id: `${raw.condition_id || raw.id}_${i}`, outcome: outcomes[i], price: parseFloat(outcomePrices[i] || "0") });
+    }
+  }
+  return {
+    condition_id: raw.condition_id || raw.id || "",
+    question: raw.question || "",
+    description: raw.description || "",
+    market_slug: raw.market_slug || raw.slug || "",
+    outcomes,
+    outcome_prices: outcomePrices,
+    tokens,
+    volume: parseFloat(raw.volume || "0"),
+    volume_24h: parseFloat(raw.volume24hr || raw.volume_24h || "0"),
+    liquidity: parseFloat(raw.liquidity || "0"),
+    end_date_iso: raw.end_date_iso || raw.endDate || "",
+    active: raw.active !== false,
+    closed: raw.closed === true,
+    category: raw.category || raw.groupItemTitle || "",
+    tags: raw.tags ? typeof raw.tags === "string" ? JSON.parse(raw.tags) : raw.tags : []
+  };
+}
+async function getWhaleWatchlist() {
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'polymarket_whale_watchlist'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+      return res.rows[0].value;
+    }
+  } catch (err) {
+    console.error("[polymarket] getWhaleWatchlist error:", err);
+  }
+  return [];
+}
+async function getWhaleActivities() {
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'polymarket_whale_activities'`);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+      const now = Date.now();
+      const recentCutoff = 24 * 60 * 60 * 1e3;
+      return res.rows[0].value.filter((a) => now - a.detected_at < recentCutoff);
+    }
+  } catch {
+  }
+  return [];
+}
+async function detectConsensus(activities) {
+  const byMarket = {};
+  for (const a of activities) {
+    if (a.activity_type === "position_exit") continue;
+    if (!byMarket[a.market_id]) byMarket[a.market_id] = { yes: [], no: [] };
+    if (a.direction === "YES") byMarket[a.market_id].yes.push(a);
+    else byMarket[a.market_id].no.push(a);
+  }
+  const results = [];
+  for (const [marketId, sides] of Object.entries(byMarket)) {
+    for (const [dir, acts] of [["YES", sides.yes], ["NO", sides.no]]) {
+      if (acts.length >= 2) {
+        const totalAmount = acts.reduce((s, a) => s + a.amount_usd, 0);
+        const avgScore = acts.reduce((s, a) => s + a.wallet_score, 0) / acts.length;
+        results.push({
+          market_id: marketId,
+          question: acts[0].market_question,
+          direction: dir,
+          whale_count: acts.length,
+          total_amount: totalAmount,
+          avg_score: parseFloat(avgScore.toFixed(3))
+        });
+      }
+    }
+  }
+  return results.sort((a, b) => b.whale_count - a.whale_count || b.avg_score - a.avg_score);
+}
+var GAMMA_API, cache, MARKET_TTL, WALLET_TTL;
+var init_polymarket = __esm({
+  "src/polymarket.ts"() {
+    "use strict";
+    init_db();
+    GAMMA_API = "https://gamma-api.polymarket.com";
+    cache = /* @__PURE__ */ new Map();
+    MARKET_TTL = 5 * 60 * 1e3;
+    WALLET_TTL = 15 * 60 * 1e3;
+  }
+});
+
+// src/bnkr.ts
+var bnkr_exports = {};
+__export(bnkr_exports, {
+  closeCryptoPosition: () => closeCryptoPosition,
+  closePolymarketPosition: () => closePolymarketPosition,
+  getCryptoPositionPnL: () => getCryptoPositionPnL,
+  getCryptoPositions: () => getCryptoPositions,
+  getPolymarketPositionPnL: () => getPolymarketPositionPnL,
+  getPolymarketPositions: () => getPolymarketPositions,
+  isConfigured: () => isConfigured6,
+  openCryptoPosition: () => openCryptoPosition,
+  openPolymarketPosition: () => openPolymarketPosition
+});
+function isConfigured6() {
+  return BNKR_API_KEY.length > 0 && BNKR_WALLET.length > 0;
+}
+async function bnkrFetch(path8, body) {
+  const url = `${BNKR_BASE_URL}${path8}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15e3);
+  try {
+    const opts = {
+      method: body ? "POST" : "GET",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${BNKR_API_KEY}`,
+        "X-Wallet-Address": BNKR_WALLET
+      },
+      signal: controller.signal
+    };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch(url, opts);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`BNKR API ${path8} failed (${res.status}): ${text}`);
+    }
+    return res.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+async function openCryptoPosition(params) {
+  if (!isConfigured6()) {
+    console.log(`[bnkr] SHADOW: openCryptoPosition ${params.asset} ${params.direction} ${params.leverage}x size=${params.size}`);
+    return {
+      order_id: `shadow_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      asset: params.asset,
+      direction: params.direction,
+      leverage: params.leverage,
+      size: params.size,
+      entry_price: 0,
+      status: "filled",
+      tx_hash: null
+    };
+  }
+  const result = await bnkrFetch("/crypto/open", {
+    asset: params.asset,
+    direction: params.direction,
+    leverage: params.leverage,
+    size: params.size,
+    stop_price: params.stop_price,
+    wallet: BNKR_WALLET
+  });
+  return result;
+}
+async function closeCryptoPosition(orderId) {
+  if (!isConfigured6()) {
+    console.log(`[bnkr] SHADOW: closeCryptoPosition ${orderId}`);
+    return { tx_hash: "", exit_price: 0 };
+  }
+  return bnkrFetch("/crypto/close", { order_id: orderId, wallet: BNKR_WALLET });
+}
+async function getCryptoPositions() {
+  if (!isConfigured6()) return [];
+  return bnkrFetch("/crypto/positions");
+}
+async function getCryptoPositionPnL(orderId) {
+  if (!isConfigured6()) return { pnl: 0, pnl_pct: 0, current_price: 0 };
+  return bnkrFetch(`/crypto/pnl/${orderId}`);
+}
+async function openPolymarketPosition(params) {
+  if (!isConfigured6()) {
+    console.log(`[bnkr] SHADOW: openPolymarketPosition market=${params.market_id} ${params.direction} $${params.amount_usd}`);
+    return {
+      order_id: `shadow_pm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      market_id: params.market_id,
+      direction: params.direction,
+      amount_usd: params.amount_usd,
+      entry_odds: 0,
+      status: "filled",
+      tx_hash: null
+    };
+  }
+  return bnkrFetch("/polymarket/open", {
+    market_id: params.market_id,
+    direction: params.direction,
+    amount_usd: params.amount_usd,
+    wallet: BNKR_WALLET
+  });
+}
+async function closePolymarketPosition(orderId) {
+  if (!isConfigured6()) {
+    console.log(`[bnkr] SHADOW: closePolymarketPosition ${orderId}`);
+    return { tx_hash: "", exit_odds: 0 };
+  }
+  return bnkrFetch("/polymarket/close", { order_id: orderId, wallet: BNKR_WALLET });
+}
+async function getPolymarketPositions() {
+  if (!isConfigured6()) return [];
+  return bnkrFetch("/polymarket/positions");
+}
+async function getPolymarketPositionPnL(orderId) {
+  if (!isConfigured6()) return { pnl: 0, pnl_pct: 0, current_odds: 0 };
+  return bnkrFetch(`/polymarket/pnl/${orderId}`);
+}
+var BNKR_API_KEY, BNKR_WALLET, BNKR_BASE_URL;
+var init_bnkr = __esm({
+  "src/bnkr.ts"() {
+    "use strict";
+    BNKR_API_KEY = process.env.BANKR_API_KEY || "";
+    BNKR_WALLET = process.env.BANKR_WALLET_ADDRESS || "";
+    BNKR_BASE_URL = process.env.BANKR_API_URL || "https://api.bnkr.com/v1";
+  }
+});
+
 // src/autoresearch.ts
 async function getConfigValue(key, fallback) {
   try {
@@ -3662,6 +3949,1249 @@ var init_telegram = __esm({
     digestFlushInterval = null;
     missionControlDigestInterval = null;
     webhookMode = false;
+  }
+});
+
+// src/oversight.ts
+var oversight_exports = {};
+__export(oversight_exports, {
+  autoTrackShadowTrade: () => autoTrackShadowTrade,
+  captureImprovement: () => captureImprovement,
+  checkPerAssetLosses: () => checkPerAssetLosses,
+  closeShadowTrade: () => closeShadowTrade,
+  detectCrossDomainExposure: () => detectCrossDomainExposure,
+  formatHealthReport: () => formatHealthReport,
+  formatPerformanceReview: () => formatPerformanceReview,
+  generateDailyPerformanceSummary: () => generateDailyPerformanceSummary,
+  getImprovementQueue: () => getImprovementQueue,
+  getLatestHealthReport: () => getLatestHealthReport,
+  getOversightSummary: () => getOversightSummary,
+  getShadowPerformance: () => getShadowPerformance,
+  getShadowTrades: () => getShadowTrades,
+  openShadowTrade: () => openShadowTrade,
+  refreshShadowTradesFromMarket: () => refreshShadowTradesFromMarket,
+  reviewTheses: () => reviewTheses,
+  runHealthCheck: () => runHealthCheck,
+  runPerformanceReview: () => runPerformanceReview,
+  sendDailyPerformanceSummary: () => sendDailyPerformanceSummary,
+  setTelegramNotifier: () => setTelegramNotifier,
+  updateImprovement: () => updateImprovement,
+  updateShadowPrices: () => updateShadowPrices
+});
+function setTelegramNotifier(fn) {
+  telegramNotifier = fn;
+}
+async function notifyTelegram(msg) {
+  if (telegramNotifier) {
+    try {
+      await telegramNotifier(msg);
+    } catch (e) {
+      console.error("[oversight] Telegram notification failed:", e instanceof Error ? e.message : e);
+    }
+  }
+}
+async function getConfigValue2(key, fallback) {
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = $1`, [key]);
+    if (res.rows.length > 0) return res.rows[0].value;
+  } catch (err) {
+    console.warn(`[oversight] Failed to read ${key}:`, err instanceof Error ? err.message : err);
+  }
+  return fallback;
+}
+async function setConfigValue2(key, value) {
+  const pool2 = getPool();
+  await pool2.query(
+    `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [key, JSON.stringify(value), Date.now()]
+  );
+}
+function pruneByAge(items, maxItems) {
+  const cutoff = Date.now() - THIRTY_DAYS_MS;
+  const filtered = items.filter((i) => {
+    const rec = i;
+    const ts = rec.timestamp || rec.created_at || rec.opened_at || 0;
+    return ts > cutoff;
+  });
+  return filtered.slice(-maxItems);
+}
+async function runHealthCheck() {
+  const pool2 = getPool();
+  const checks = [];
+  const now = Date.now();
+  const scoutCheck = await checkAgentFreshness(pool2, "scout", "SCOUT", 6);
+  checks.push(scoutCheck);
+  const bankrCheck = await checkAgentFreshness(pool2, "bankr", "BANKR", 8);
+  checks.push(bankrCheck);
+  const polyScoutCheck = await checkAgentFreshness(pool2, "polymarket-scout", "Polymarket SCOUT", 6);
+  checks.push(polyScoutCheck);
+  const monitorCheck = await checkMonitorHeartbeat(pool2, now);
+  checks.push(monitorCheck);
+  const killCheck = await checkKillSwitch(pool2);
+  checks.push(killCheck);
+  const pauseCheck = await checkPauseState(pool2);
+  checks.push(pauseCheck);
+  const circuitCheck = await checkCircuitBreakerState(pool2);
+  checks.push(circuitCheck);
+  const dataCheck = await checkDataFreshness(pool2, now);
+  checks.push(dataCheck);
+  const jobFailCheck = await checkRecentJobFailures(pool2);
+  checks.push(jobFailCheck);
+  const apiCheck = await checkApiFailureRates(pool2);
+  checks.push(apiCheck);
+  const latencyCheck = await checkJobExecutionTrends(pool2);
+  checks.push(latencyCheck);
+  const criticalCount = checks.filter((c) => c.status === "critical").length;
+  const warnCount = checks.filter((c) => c.status === "warn").length;
+  const overall = criticalCount > 0 ? "critical" : warnCount >= 2 ? "degraded" : "healthy";
+  const summaryParts = [];
+  if (criticalCount > 0) summaryParts.push(`${criticalCount} critical`);
+  if (warnCount > 0) summaryParts.push(`${warnCount} warnings`);
+  const okCount = checks.length - criticalCount - warnCount;
+  if (okCount > 0) summaryParts.push(`${okCount} ok`);
+  const report = {
+    id: `health_${now}`,
+    timestamp: now,
+    checks,
+    overall_status: overall,
+    summary: `${overall.toUpperCase()}: ${summaryParts.join(", ")} (${checks.length} checks)`
+  };
+  const existing = await getConfigValue2(HEALTH_REPORTS_KEY, []);
+  existing.push(report);
+  await setConfigValue2(HEALTH_REPORTS_KEY, pruneByAge(existing, MAX_REPORTS));
+  await setConfigValue2(LAST_HEALTH_CHECK_KEY, now);
+  if (criticalCount > 0 || warnCount >= 2) {
+    const issues = checks.filter((c) => c.status !== "ok");
+    const alertLines = issues.map((i) => `\u2022 ${i.name}: ${i.detail}`).join("\n");
+    await notifyTelegram(
+      `\u{1F534} HEALTH ${overall.toUpperCase()}
+${alertLines}
+(${checks.length} checks, ${criticalCount} critical, ${warnCount} warn)`
+    );
+    for (const issue of issues) {
+      await captureImprovement({
+        source: "health_check",
+        category: "infrastructure",
+        severity: issue.status === "critical" ? "critical" : "medium",
+        title: `Health: ${issue.name}`,
+        description: issue.detail,
+        recommendation: `Investigate ${issue.name} \u2014 status: ${issue.status}`
+      });
+    }
+  }
+  return report;
+}
+async function checkAgentFreshness(pool2, agentId, label, thresholdHours) {
+  try {
+    const res = await pool2.query(
+      `SELECT created_at, status FROM job_history WHERE agent_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [agentId]
+    );
+    if (res.rows.length === 0) {
+      return { name: `${label} Freshness`, status: "warn", detail: `${label} has never run` };
+    }
+    const lastRun = new Date(res.rows[0].created_at).getTime();
+    const hoursSince = (Date.now() - lastRun) / (3600 * 1e3);
+    if (hoursSince > thresholdHours * 2) {
+      return {
+        name: `${label} Freshness`,
+        status: "critical",
+        detail: `${label} last ran ${Math.floor(hoursSince)}h ago (threshold: ${thresholdHours}h)`,
+        value: hoursSince,
+        threshold: thresholdHours
+      };
+    }
+    if (hoursSince > thresholdHours) {
+      return {
+        name: `${label} Freshness`,
+        status: "warn",
+        detail: `${label} last ran ${Math.floor(hoursSince)}h ago (threshold: ${thresholdHours}h)`,
+        value: hoursSince,
+        threshold: thresholdHours
+      };
+    }
+    const lastStatus = res.rows[0].status;
+    if (lastStatus === "error") {
+      return {
+        name: `${label} Freshness`,
+        status: "warn",
+        detail: `${label} ran ${Math.floor(hoursSince)}h ago but last status was error`
+      };
+    }
+    return {
+      name: `${label} Freshness`,
+      status: "ok",
+      detail: `${label} ran ${Math.floor(hoursSince)}h ago \u2014 OK`
+    };
+  } catch {
+    return { name: `${label} Freshness`, status: "warn", detail: `Could not check ${label} status` };
+  }
+}
+async function checkMonitorHeartbeat(pool2, now) {
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'bankr_monitor_last_tick'`);
+    if (res.rows.length === 0) {
+      return { name: "Position Monitor", status: "warn", detail: "Monitor has never ticked" };
+    }
+    const lastTick = typeof res.rows[0].value === "number" ? res.rows[0].value : parseInt(String(res.rows[0].value));
+    const minsSince = (now - lastTick) / (60 * 1e3);
+    if (minsSince > 30) {
+      return {
+        name: "Position Monitor",
+        status: "critical",
+        detail: `Monitor last ticked ${Math.floor(minsSince)} min ago (threshold: 30 min)`,
+        value: minsSince,
+        threshold: 30
+      };
+    }
+    if (minsSince > 15) {
+      return {
+        name: "Position Monitor",
+        status: "warn",
+        detail: `Monitor last ticked ${Math.floor(minsSince)} min ago`,
+        value: minsSince,
+        threshold: 30
+      };
+    }
+    return {
+      name: "Position Monitor",
+      status: "ok",
+      detail: `Monitor ticked ${Math.floor(minsSince)} min ago \u2014 OK`
+    };
+  } catch {
+    return { name: "Position Monitor", status: "warn", detail: "Could not check monitor heartbeat" };
+  }
+}
+async function checkKillSwitch(pool2) {
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_kill_switch'`);
+    if (res.rows.length > 0 && res.rows[0].value === true) {
+      return { name: "Kill Switch", status: "critical", detail: "Kill switch is ACTIVE \u2014 all trading halted" };
+    }
+  } catch {
+  }
+  return { name: "Kill Switch", status: "ok", detail: "Kill switch inactive" };
+}
+async function checkPauseState(pool2) {
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_paused'`);
+    if (res.rows.length > 0 && res.rows[0].value === true) {
+      return { name: "System Paused", status: "warn", detail: "System is PAUSED \u2014 jobs will not execute" };
+    }
+  } catch {
+  }
+  return { name: "System Paused", status: "ok", detail: "System is running" };
+}
+async function checkCircuitBreakerState(pool2) {
+  try {
+    const history = await getConfigValue2("wealth_engines_trade_history", []);
+    const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 50);
+    const peak = await getConfigValue2("wealth_engines_peak_portfolio", 50);
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1e3;
+    const recentTrades = history.filter((t) => new Date(t.closed_at).getTime() > sevenDaysAgo);
+    const rolling7d = recentTrades.reduce((s, t) => s + (t.pnl || 0), 0);
+    const rolling7dPct = portfolio > 0 ? rolling7d / portfolio * 100 : 0;
+    const drawdownPct = peak > 0 ? (peak - portfolio) / peak * 100 : 0;
+    if (rolling7dPct < -15 || drawdownPct > 25) {
+      await enforceCircuitBreaker(rolling7dPct, drawdownPct);
+      return {
+        name: "Circuit Breaker",
+        status: "critical",
+        detail: `Circuit breaker TRIGGERED & ENFORCED \u2014 7d P&L: ${rolling7dPct.toFixed(1)}%, drawdown: ${drawdownPct.toFixed(1)}% \u2014 auto-paused`
+      };
+    }
+    if (rolling7dPct < -10 || drawdownPct > 20) {
+      return {
+        name: "Circuit Breaker",
+        status: "warn",
+        detail: `Approaching circuit breaker \u2014 7d P&L: ${rolling7dPct.toFixed(1)}%, drawdown: ${drawdownPct.toFixed(1)}%`
+      };
+    }
+    return {
+      name: "Circuit Breaker",
+      status: "ok",
+      detail: `7d P&L: ${rolling7dPct.toFixed(1)}%, drawdown: ${drawdownPct.toFixed(1)}% \u2014 OK`
+    };
+  } catch {
+    return { name: "Circuit Breaker", status: "warn", detail: "Could not evaluate circuit breaker" };
+  }
+}
+async function checkDataFreshness(pool2, now) {
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scout_latest_brief'`);
+    if (res.rows.length === 0) {
+      return { name: "Scout Data", status: "warn", detail: "No scout brief data available" };
+    }
+    const brief = res.rows[0].value;
+    const briefTs = brief?.timestamp || brief?.created_at;
+    if (briefTs) {
+      const hoursSince = (now - briefTs) / (3600 * 1e3);
+      if (hoursSince > 12) {
+        return {
+          name: "Scout Data",
+          status: "warn",
+          detail: `Scout brief is ${Math.floor(hoursSince)}h old (stale >12h)`
+        };
+      }
+    }
+    return { name: "Scout Data", status: "ok", detail: "Scout brief data available" };
+  } catch {
+    return { name: "Scout Data", status: "warn", detail: "Could not check scout data" };
+  }
+}
+async function checkRecentJobFailures(pool2) {
+  try {
+    const res = await pool2.query(
+      `SELECT job_id, status FROM job_history
+       WHERE agent_id IN ('scout', 'bankr', 'polymarket-scout')
+       AND created_at > NOW() - INTERVAL '24 hours'
+       ORDER BY created_at DESC LIMIT 20`
+    );
+    const failures = res.rows.filter((r) => r.status === "error");
+    if (failures.length >= 5) {
+      return {
+        name: "Job Failures",
+        status: "critical",
+        detail: `${failures.length} WE job failures in last 24h`,
+        value: failures.length,
+        threshold: 5
+      };
+    }
+    if (failures.length >= 2) {
+      return {
+        name: "Job Failures",
+        status: "warn",
+        detail: `${failures.length} WE job failures in last 24h`,
+        value: failures.length,
+        threshold: 5
+      };
+    }
+    return {
+      name: "Job Failures",
+      status: "ok",
+      detail: `${failures.length} failures in last 24h \u2014 OK`
+    };
+  } catch {
+    return { name: "Job Failures", status: "warn", detail: "Could not check job failures" };
+  }
+}
+async function enforceCircuitBreaker(rolling7dPct, drawdownPct) {
+  const pool2 = getPool();
+  const alreadyPaused = await getConfigValue2("wealth_engines_paused", false);
+  if (!alreadyPaused) {
+    await pool2.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_paused', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(true), Date.now()]
+    );
+    console.log(`[oversight] CIRCUIT BREAKER ENFORCED \u2014 auto-paused all Wealth Engines`);
+  }
+  const alertMsg = [
+    `\u{1F6A8} *CIRCUIT BREAKER TRIGGERED*`,
+    "",
+    `\u26D4 All Wealth Engine agents have been *AUTO-PAUSED*`,
+    `\u{1F4C9} 7-day P&L: ${rolling7dPct.toFixed(1)}%${rolling7dPct < -15 ? " (limit: -15%)" : ""}`,
+    `\u{1F4C9} Peak drawdown: ${drawdownPct.toFixed(1)}%${drawdownPct > 25 ? " (limit: 25%)" : ""}`,
+    "",
+    `Use /resume to manually restart after reviewing positions.`
+  ].join("\n");
+  await notifyTelegram(alertMsg);
+  await captureImprovement({
+    source: "circuit_breaker",
+    category: "risk",
+    severity: "critical",
+    domain: "system",
+    priority: 1,
+    title: `Circuit breaker: 7d ${rolling7dPct.toFixed(1)}%, DD ${drawdownPct.toFixed(1)}%`,
+    description: `Auto-paused due to circuit breaker. Rolling 7d P&L: ${rolling7dPct.toFixed(1)}%, peak drawdown: ${drawdownPct.toFixed(1)}%.`,
+    pattern_description: "Sustained losses exceeding risk thresholds",
+    recommendation: "Review all open positions, evaluate thesis quality, reduce leverage/position sizing before resuming",
+    route: "manual"
+  });
+}
+async function checkApiFailureRates(pool2) {
+  try {
+    const res = await pool2.query(
+      `SELECT value FROM app_config WHERE key = 'wealth_engines_api_errors'`
+    );
+    if (res.rows.length === 0) {
+      return { name: "API Health", status: "ok", detail: "No API error tracking data" };
+    }
+    const errors = res.rows[0].value;
+    const recentErrors = Array.isArray(errors) ? errors.filter((e) => e.timestamp > Date.now() - 6 * 60 * 60 * 1e3) : [];
+    const byService = {};
+    for (const e of recentErrors) {
+      const svc = e.service || "unknown";
+      byService[svc] = (byService[svc] || 0) + 1;
+    }
+    const highFailServices = Object.entries(byService).filter(([, count]) => count >= 5);
+    if (highFailServices.length > 0) {
+      const details = highFailServices.map(([svc, count]) => `${svc}: ${count}`).join(", ");
+      return {
+        name: "API Health",
+        status: highFailServices.some(([, c]) => c >= 10) ? "critical" : "warn",
+        detail: `API failures in last 6h: ${details}`,
+        value: recentErrors.length
+      };
+    }
+    return { name: "API Health", status: "ok", detail: `${recentErrors.length} API errors in last 6h \u2014 OK` };
+  } catch {
+    return { name: "API Health", status: "ok", detail: "API error tracking not available" };
+  }
+}
+async function checkJobExecutionTrends(pool2) {
+  try {
+    const res = await pool2.query(
+      `SELECT job_id, duration_ms FROM job_history
+       WHERE agent_id IN ('scout', 'bankr', 'polymarket-scout')
+       AND created_at > NOW() - INTERVAL '48 hours'
+       AND duration_ms IS NOT NULL AND duration_ms > 0
+       ORDER BY created_at DESC LIMIT 30`
+    );
+    if (res.rows.length < 3) {
+      return { name: "Job Latency", status: "ok", detail: "Insufficient data for trend analysis" };
+    }
+    const durations = res.rows.map((r) => r.duration_ms / 1e3).filter((d) => d > 0);
+    if (durations.length === 0) {
+      return { name: "Job Latency", status: "ok", detail: "No valid durations" };
+    }
+    const avgDuration = durations.reduce((a, b) => a + b, 0) / durations.length;
+    const maxDuration = Math.max(...durations);
+    if (maxDuration > 300) {
+      return {
+        name: "Job Latency",
+        status: "warn",
+        detail: `Slow jobs detected \u2014 avg: ${avgDuration.toFixed(0)}s, max: ${maxDuration.toFixed(0)}s`,
+        value: avgDuration,
+        threshold: 120
+      };
+    }
+    return {
+      name: "Job Latency",
+      status: "ok",
+      detail: `Avg job duration: ${avgDuration.toFixed(0)}s, max: ${maxDuration.toFixed(0)}s \u2014 OK`,
+      value: avgDuration
+    };
+  } catch {
+    return { name: "Job Latency", status: "ok", detail: "Could not analyze job trends" };
+  }
+}
+async function runPerformanceReview(periodDays = 7) {
+  const now = Date.now();
+  const periodStart = now - periodDays * 24 * 60 * 60 * 1e3;
+  const history = await getConfigValue2("wealth_engines_trade_history", []);
+  const periodTrades = history.filter((t) => new Date(t.closed_at).getTime() > periodStart);
+  const wins = periodTrades.filter((t) => (t.pnl || 0) > 0);
+  const winRate = periodTrades.length > 0 ? wins.length / periodTrades.length * 100 : 0;
+  const totalPnl = periodTrades.reduce((s, t) => s + (t.pnl || 0), 0);
+  const avgPnl = periodTrades.length > 0 ? totalPnl / periodTrades.length : 0;
+  let sharpe = 0;
+  if (periodTrades.length >= 2) {
+    const pnls = periodTrades.map((t) => t.pnl || 0);
+    const mean = pnls.reduce((a, b) => a + b, 0) / pnls.length;
+    const variance = pnls.reduce((a, b) => a + (b - mean) ** 2, 0) / (pnls.length - 1);
+    const stdDev = Math.sqrt(variance);
+    sharpe = stdDev > 0 ? mean / stdDev * Math.sqrt(252 / periodDays) : 0;
+  }
+  let bestTrade = null;
+  let worstTrade = null;
+  for (const t of periodTrades) {
+    if (!bestTrade || t.pnl > bestTrade.pnl) bestTrade = { asset: t.asset, pnl: t.pnl };
+    if (!worstTrade || t.pnl < worstTrade.pnl) worstTrade = { asset: t.asset, pnl: t.pnl };
+  }
+  const holdTimes = periodTrades.map((t) => {
+    const open = new Date(t.opened_at).getTime();
+    const close = new Date(t.closed_at).getTime();
+    return (close - open) / (3600 * 1e3);
+  });
+  const avgHoldTime = holdTimes.length > 0 ? holdTimes.reduce((a, b) => a + b, 0) / holdTimes.length : 0;
+  const cryptoTheses = await getConfigValue2("scout_active_theses", []);
+  const pmTheses = await getConfigValue2("polymarket_scout_active_theses", []);
+  const totalTheses = cryptoTheses.length + pmTheses.length;
+  const tradedThesisIds = new Set(periodTrades.map((t) => t.thesis_id));
+  const allThesisIds = /* @__PURE__ */ new Set([
+    ...cryptoTheses.map((t) => t.id),
+    ...pmTheses.map((t) => t.id)
+  ]);
+  const convertedCount = [...tradedThesisIds].filter((id) => allThesisIds.has(id)).length;
+  const conversionRate = totalTheses > 0 ? convertedCount / totalTheses * 100 : 0;
+  const slippages = periodTrades.filter((t) => t.expected_entry_price && t.entry_price).map((t) => Math.abs(t.entry_price - t.expected_entry_price) / t.expected_entry_price * 100);
+  const avgSlippage = slippages.length > 0 ? slippages.reduce((a, b) => a + b, 0) / slippages.length : 0;
+  const sourceBreakdown = {};
+  for (const t of periodTrades) {
+    const src = t.source || "unknown";
+    if (!sourceBreakdown[src]) sourceBreakdown[src] = { trades: 0, pnl: 0, win_rate: 0 };
+    sourceBreakdown[src].trades++;
+    sourceBreakdown[src].pnl += t.pnl || 0;
+  }
+  for (const src of Object.keys(sourceBreakdown)) {
+    const srcTrades = periodTrades.filter((t) => (t.source || "unknown") === src);
+    const srcWins = srcTrades.filter((t) => (t.pnl || 0) > 0);
+    sourceBreakdown[src].win_rate = srcTrades.length > 0 ? srcWins.length / srcTrades.length * 100 : 0;
+  }
+  const perAssetPnl = {};
+  for (const t of periodTrades) {
+    const asset = t.asset || "unknown";
+    if (!perAssetPnl[asset]) perAssetPnl[asset] = { trades: 0, pnl: 0, cumulative_loss: 0 };
+    perAssetPnl[asset].trades++;
+    perAssetPnl[asset].pnl += t.pnl || 0;
+    if ((t.pnl || 0) < 0) perAssetPnl[asset].cumulative_loss += Math.abs(t.pnl || 0);
+  }
+  let maxDrawdownPct = 0;
+  if (periodTrades.length > 0) {
+    const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 50);
+    let equity = portfolio;
+    let peak = portfolio;
+    const sorted = [...periodTrades].sort(
+      (a, b) => new Date(a.closed_at).getTime() - new Date(b.closed_at).getTime()
+    );
+    for (const t of sorted) {
+      equity += t.pnl || 0;
+      if (equity > peak) peak = equity;
+      const dd = peak > 0 ? (peak - equity) / peak * 100 : 0;
+      if (dd > maxDrawdownPct) maxDrawdownPct = dd;
+    }
+  }
+  const signalAttribution = buildSignalAttribution(periodTrades, totalPnl);
+  const exposureAlerts = await detectCrossDomainExposure();
+  const review = {
+    id: `perf_${now}`,
+    timestamp: now,
+    period_start: periodStart,
+    period_end: now,
+    total_trades: periodTrades.length,
+    win_rate: winRate,
+    avg_pnl: avgPnl,
+    total_pnl: totalPnl,
+    max_drawdown_pct: maxDrawdownPct,
+    sharpe_ratio: sharpe,
+    best_trade: bestTrade,
+    worst_trade: worstTrade,
+    avg_hold_time_hours: avgHoldTime,
+    thesis_conversion_rate: conversionRate,
+    avg_slippage_pct: avgSlippage,
+    per_asset_pnl: perAssetPnl,
+    source_breakdown: sourceBreakdown,
+    signal_attribution: signalAttribution,
+    exposure_alerts: exposureAlerts.map((e) => e.detail)
+  };
+  if (winRate < 40 && periodTrades.length >= 3) {
+    await captureImprovement({
+      source: "performance_review",
+      category: "signal",
+      severity: "high",
+      title: `Low win rate: ${winRate.toFixed(0)}%`,
+      description: `Win rate over ${periodDays}d is ${winRate.toFixed(1)}% (${wins.length}/${periodTrades.length}). Signal quality may be degraded.`,
+      recommendation: "Review SCOUT thesis generation criteria; consider tightening confidence thresholds"
+    });
+  }
+  if (avgSlippage > 1.5 && slippages.length >= 2) {
+    await captureImprovement({
+      source: "performance_review",
+      category: "execution",
+      severity: "medium",
+      title: `High slippage: ${avgSlippage.toFixed(2)}%`,
+      description: `Average execution slippage is ${avgSlippage.toFixed(2)}% over ${slippages.length} trades.`,
+      recommendation: "Review BNKR execution timing; consider limit orders or smaller position sizes"
+    });
+  }
+  const PERF_REVIEWS_KEY = "oversight_performance_reviews";
+  const existingReviews = await getConfigValue2(PERF_REVIEWS_KEY, []);
+  existingReviews.push(review);
+  await setConfigValue2(PERF_REVIEWS_KEY, pruneByAge(existingReviews, MAX_REPORTS));
+  return review;
+}
+function buildSignalAttribution(trades, totalPnl) {
+  const groupKeys = {};
+  for (const t of trades) {
+    const source = t.source || "unknown";
+    const direction = t.direction || "unknown";
+    const key = `${source}/${direction}`;
+    if (!groupKeys[key]) groupKeys[key] = [];
+    groupKeys[key].push(t);
+    const sourceKey = source;
+    if (!groupKeys[sourceKey]) groupKeys[sourceKey] = [];
+    groupKeys[sourceKey].push(t);
+  }
+  const attrs = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const source of ["crypto_scout", "polymarket_scout", "manual"]) {
+    const sourceTrades = groupKeys[source];
+    if (!sourceTrades || seen.has(source)) continue;
+    seen.add(source);
+    const wins = sourceTrades.filter((t) => (t.pnl || 0) > 0);
+    const losses = sourceTrades.filter((t) => (t.pnl || 0) <= 0);
+    const signalPnl = sourceTrades.reduce((s, t) => s + (t.pnl || 0), 0);
+    const avgPnlPerTrade = sourceTrades.length > 0 ? signalPnl / sourceTrades.length : 0;
+    attrs.push({
+      signal_type: source,
+      trades: sourceTrades.length,
+      wins: wins.length,
+      losses: losses.length,
+      total_pnl: signalPnl,
+      avg_confidence: avgPnlPerTrade,
+      contribution_pct: totalPnl !== 0 ? signalPnl / Math.abs(totalPnl) * 100 : 0
+    });
+    for (const dir of ["LONG", "SHORT", "YES", "NO"]) {
+      const dirKey = `${source}/${dir}`;
+      const dirTrades = groupKeys[dirKey];
+      if (!dirTrades || seen.has(dirKey)) continue;
+      seen.add(dirKey);
+      const dirWins = dirTrades.filter((t) => (t.pnl || 0) > 0);
+      const dirLosses = dirTrades.filter((t) => (t.pnl || 0) <= 0);
+      const dirPnl = dirTrades.reduce((s, t) => s + (t.pnl || 0), 0);
+      attrs.push({
+        signal_type: `${source}/${dir}`,
+        trades: dirTrades.length,
+        wins: dirWins.length,
+        losses: dirLosses.length,
+        total_pnl: dirPnl,
+        avg_confidence: dirTrades.length > 0 ? dirPnl / dirTrades.length : 0,
+        contribution_pct: totalPnl !== 0 ? dirPnl / Math.abs(totalPnl) * 100 : 0
+      });
+    }
+  }
+  return attrs.sort((a, b) => b.total_pnl - a.total_pnl);
+}
+async function detectCrossDomainExposure() {
+  const positions = await getConfigValue2("wealth_engines_positions", []);
+  const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 50);
+  const alerts = [];
+  const cryptoPositions = positions.filter((p) => p.asset_class === "crypto");
+  const pmPositions = positions.filter((p) => p.asset_class === "polymarket");
+  const CRYPTO_PM_CORRELATIONS = {
+    BTC: ["bitcoin", "btc", "crypto"],
+    ETH: ["ethereum", "eth", "crypto"],
+    SOL: ["solana", "sol"],
+    DOGE: ["doge", "meme"],
+    XRP: ["xrp", "ripple"]
+  };
+  for (const cryptoPos of cryptoPositions) {
+    const asset = cryptoPos.asset.toUpperCase().replace(/USDT?$/, "");
+    const keywords = CRYPTO_PM_CORRELATIONS[asset] || [asset.toLowerCase()];
+    for (const pmPos of pmPositions) {
+      const pmAsset = pmPos.asset.toLowerCase();
+      const matched = keywords.some((kw) => pmAsset.includes(kw));
+      if (!matched) continue;
+      const cryptoExposure = (cryptoPos.size || 0) * (cryptoPos.entry_price || 0);
+      const pmExposure = (pmPos.size || 0) * (pmPos.entry_price || 0);
+      const combinedPct = portfolio > 0 ? (cryptoExposure + pmExposure) / portfolio * 100 : 0;
+      const isSameDirection = cryptoPos.direction === "LONG" && pmPos.direction === "YES" || cryptoPos.direction === "SHORT" && pmPos.direction === "NO";
+      alerts.push({
+        crypto_asset: cryptoPos.asset,
+        polymarket_question: pmPos.asset.slice(0, 80),
+        correlation_type: isSameDirection ? "direct" : "inverse",
+        combined_exposure_pct: combinedPct,
+        risk_level: combinedPct > 40 ? "high" : combinedPct > 25 ? "medium" : "low",
+        detail: `${cryptoPos.asset} ${cryptoPos.direction} + PM "${pmPos.asset.slice(0, 40)}" ${pmPos.direction} \u2014 ${combinedPct.toFixed(0)}% combined exposure (${isSameDirection ? "correlated" : "hedged"})`
+      });
+    }
+  }
+  for (let i = 0; i < pmPositions.length; i++) {
+    for (let j = i + 1; j < pmPositions.length; j++) {
+      const a = pmPositions[i];
+      const b = pmPositions[j];
+      if (a.exposure_bucket === b.exposure_bucket) {
+        const combinedExposure = a.size * a.entry_price + b.size * b.entry_price;
+        const combinedPct = portfolio > 0 ? combinedExposure / portfolio * 100 : 0;
+        alerts.push({
+          crypto_asset: `PM: ${a.asset}`,
+          polymarket_question: b.asset,
+          correlation_type: "thematic",
+          combined_exposure_pct: combinedPct,
+          risk_level: combinedPct > 30 ? "high" : "medium",
+          detail: `PM bucket overlap: "${a.asset.slice(0, 30)}" + "${b.asset.slice(0, 30)}" in bucket "${a.exposure_bucket}" \u2014 ${combinedPct.toFixed(0)}% combined`
+        });
+      }
+    }
+  }
+  const bucketExposure = {};
+  for (const pos of positions) {
+    const bucket = pos.exposure_bucket || "general";
+    const exposure = (pos.size || 0) * (pos.entry_price || 0);
+    bucketExposure[bucket] = (bucketExposure[bucket] || 0) + exposure;
+  }
+  const BUCKET_THRESHOLD_PCT = 40;
+  for (const [bucket, exposure] of Object.entries(bucketExposure)) {
+    const pct = portfolio > 0 ? exposure / portfolio * 100 : 0;
+    if (pct > BUCKET_THRESHOLD_PCT) {
+      alerts.push({
+        crypto_asset: `Bucket: ${bucket}`,
+        polymarket_question: `All positions in "${bucket}"`,
+        correlation_type: "thematic",
+        combined_exposure_pct: pct,
+        risk_level: pct > 60 ? "high" : "medium",
+        detail: `Exposure bucket "${bucket}" has ${pct.toFixed(0)}% of portfolio ($${exposure.toFixed(2)}) across ${positions.filter((p) => (p.exposure_bucket || "general") === bucket).length} positions`
+      });
+    }
+  }
+  const EXPOSURE_ALERT_THRESHOLD = 40;
+  const highExposure = alerts.filter((a) => a.combined_exposure_pct > EXPOSURE_ALERT_THRESHOLD);
+  for (const alert of highExposure) {
+    await notifyTelegram(
+      `\u26A0\uFE0F CROSS-DOMAIN RISK: ${alert.crypto_asset} + ${alert.polymarket_question.slice(0, 40)} \u2014 ${alert.combined_exposure_pct.toFixed(0)}% combined exposure (${alert.correlation_type})`
+    );
+    await captureImprovement({
+      source: "health_check",
+      category: "risk",
+      severity: alert.combined_exposure_pct > 60 ? "critical" : "high",
+      domain: "cross_domain",
+      title: `Cross-domain concentration: ${alert.combined_exposure_pct.toFixed(0)}% exposure`,
+      description: alert.detail,
+      recommendation: "Reduce correlated positions across crypto perps and Polymarket to stay under 40% combined exposure",
+      route: "bankr-config"
+    });
+  }
+  return alerts;
+}
+async function captureImprovement(params) {
+  const queue = await getConfigValue2(IMPROVEMENT_QUEUE_KEY, []);
+  const isDuplicate = queue.some(
+    (i) => i.title === params.title && i.status === "open" && Date.now() - i.created_at < 24 * 60 * 60 * 1e3
+  );
+  if (isDuplicate) {
+    return queue.find((i) => i.title === params.title && i.status === "open");
+  }
+  const severityPriority = { critical: 1, high: 2, medium: 3, low: 4 };
+  const routeMap = {
+    signal: "autoresearch",
+    execution: "bankr-config",
+    infrastructure: "manual",
+    risk: "manual",
+    strategy: "autoresearch"
+  };
+  const improvement = {
+    id: `imp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    created_at: Date.now(),
+    source: params.source,
+    category: params.category,
+    severity: params.severity,
+    domain: params.domain || inferDomain(params),
+    priority: params.priority ?? severityPriority[params.severity] ?? 3,
+    title: params.title,
+    description: params.description,
+    pattern_description: params.pattern_description,
+    recommendation: params.recommendation,
+    route: params.route || routeMap[params.category] || "manual",
+    status: "open"
+  };
+  queue.push(improvement);
+  await setConfigValue2(IMPROVEMENT_QUEUE_KEY, pruneByAge(queue, MAX_IMPROVEMENTS));
+  console.log(`[oversight] Improvement captured: [${params.severity}] ${params.title} \u2192 route:${improvement.route}`);
+  return improvement;
+}
+function inferDomain(params) {
+  const text = `${params.title} ${params.description}`.toLowerCase();
+  if (text.includes("polymarket") || text.includes("pm ")) return "polymarket";
+  if (text.includes("crypto") || text.includes("scout") || text.includes("bnkr") || text.includes("bankr")) return "crypto";
+  if (text.includes("cross") || text.includes("exposure") || text.includes("correlated")) return "cross_domain";
+  return "system";
+}
+async function updateImprovement(id, status, note) {
+  const queue = await getConfigValue2(IMPROVEMENT_QUEUE_KEY, []);
+  const idx = queue.findIndex((i) => i.id === id);
+  if (idx === -1) return null;
+  queue[idx].status = status;
+  if (status === "resolved" || status === "dismissed") {
+    queue[idx].resolved_at = Date.now();
+    if (note) queue[idx].resolution_note = note;
+  }
+  await setConfigValue2(IMPROVEMENT_QUEUE_KEY, queue);
+  return queue[idx];
+}
+async function getImprovementQueue() {
+  return getConfigValue2(IMPROVEMENT_QUEUE_KEY, []);
+}
+async function openShadowTrade(params) {
+  const shadow = {
+    id: `shadow_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    thesis_id: params.thesis_id,
+    asset: params.asset,
+    asset_class: params.asset_class,
+    source: params.source,
+    direction: params.direction,
+    entry_price: params.entry_price,
+    current_price: params.entry_price,
+    hypothetical_pnl: 0,
+    opened_at: Date.now(),
+    market_id: params.market_id,
+    status: "open",
+    stop_price: params.stop_price,
+    target_price: params.target_price
+  };
+  const trades = await getConfigValue2(SHADOW_TRADES_KEY, []);
+  trades.push(shadow);
+  await setConfigValue2(SHADOW_TRADES_KEY, pruneByAge(trades, MAX_SHADOW_TRADES));
+  console.log(`[oversight] Shadow trade opened: ${params.asset} ${params.direction} @ $${params.entry_price}`);
+  try {
+    const { sendShadowTradeNotification: sendShadowTradeNotification2 } = await Promise.resolve().then(() => (init_telegram(), telegram_exports));
+    sendShadowTradeNotification2({
+      type: "open",
+      asset: params.asset,
+      direction: params.direction,
+      entryPrice: params.entry_price,
+      source: params.source
+    }).catch((e) => console.warn("[oversight] Shadow open notification failed:", e));
+  } catch {
+  }
+  return shadow;
+}
+async function closeShadowTrade(id, exitPrice, reason) {
+  const trades = await getConfigValue2(SHADOW_TRADES_KEY, []);
+  const idx = trades.findIndex((t) => t.id === id);
+  if (idx === -1) return null;
+  const trade = trades[idx];
+  trade.status = "closed";
+  trade.exit_price = exitPrice;
+  trade.closed_at = Date.now();
+  trade.close_reason = reason;
+  const multiplier = trade.direction === "LONG" || trade.direction === "YES" ? 1 : -1;
+  trade.hypothetical_pnl = (exitPrice - trade.entry_price) * multiplier;
+  await setConfigValue2(SHADOW_TRADES_KEY, trades);
+  console.log(`[oversight] Shadow trade closed: ${trade.asset} P&L: $${trade.hypothetical_pnl.toFixed(2)}`);
+  try {
+    const { sendShadowTradeNotification: sendShadowTradeNotification2 } = await Promise.resolve().then(() => (init_telegram(), telegram_exports));
+    sendShadowTradeNotification2({
+      type: "close",
+      asset: trade.asset,
+      direction: trade.direction,
+      entryPrice: trade.entry_price,
+      exitPrice,
+      pnl: trade.hypothetical_pnl,
+      reason
+    }).catch((e) => console.warn("[oversight] Shadow close notification failed:", e));
+  } catch {
+  }
+  return trade;
+}
+async function updateShadowPrices(priceUpdates) {
+  const trades = await getConfigValue2(SHADOW_TRADES_KEY, []);
+  const openTrades = trades.filter((t) => t.status === "open");
+  for (const trade of openTrades) {
+    const newPrice = priceUpdates[trade.asset];
+    if (newPrice != null) {
+      trade.current_price = newPrice;
+      const multiplier = trade.direction === "LONG" || trade.direction === "YES" ? 1 : -1;
+      trade.hypothetical_pnl = (newPrice - trade.entry_price) * multiplier;
+    }
+  }
+  await setConfigValue2(SHADOW_TRADES_KEY, trades);
+  return openTrades;
+}
+async function refreshShadowTradesFromMarket() {
+  const trades = await getConfigValue2(SHADOW_TRADES_KEY, []);
+  const openTrades = trades.filter((t) => t.status === "open");
+  let updated = 0;
+  let closed = 0;
+  const errors = [];
+  const now = Date.now();
+  for (const trade of openTrades) {
+    const ageHours = (now - trade.opened_at) / (3600 * 1e3);
+    if (ageHours > SHADOW_MAX_AGE_HOURS) {
+      trade.status = "closed";
+      trade.closed_at = now;
+      trade.close_reason = "expired";
+      trade.exit_price = trade.current_price;
+      const multiplier = trade.direction === "LONG" || trade.direction === "YES" ? 1 : -1;
+      trade.hypothetical_pnl = (trade.current_price - trade.entry_price) * multiplier;
+      closed++;
+      try {
+        const { sendShadowTradeNotification: sendShadowTradeNotification2 } = await Promise.resolve().then(() => (init_telegram(), telegram_exports));
+        sendShadowTradeNotification2({
+          type: "close",
+          asset: trade.asset,
+          direction: trade.direction,
+          entryPrice: trade.entry_price,
+          exitPrice: trade.current_price,
+          pnl: trade.hypothetical_pnl,
+          reason: "expired (168h max age)"
+        }).catch(() => {
+        });
+      } catch {
+      }
+      continue;
+    }
+    try {
+      let latestPrice = null;
+      if (trade.asset_class === "crypto") {
+        const candles = await getHistoricalOHLCV(trade.asset, 1);
+        if (candles.length > 0) {
+          latestPrice = candles[candles.length - 1].close;
+        }
+      } else if (trade.asset_class === "polymarket" && trade.market_id) {
+        const market = await getMarketDetails(trade.market_id);
+        if (market && market.outcome_prices && market.outcome_prices.length > 0) {
+          const parsed = parseFloat(String(market.outcome_prices[0]));
+          latestPrice = Number.isFinite(parsed) ? parsed : null;
+        }
+      }
+      if (latestPrice != null) {
+        trade.current_price = latestPrice;
+        const isLong = trade.direction === "LONG" || trade.direction === "YES";
+        const multiplier = isLong ? 1 : -1;
+        trade.hypothetical_pnl = (latestPrice - trade.entry_price) * multiplier;
+        updated++;
+        if (trade.stop_price != null) {
+          const stopHit = isLong ? latestPrice <= trade.stop_price : latestPrice >= trade.stop_price;
+          if (stopHit) {
+            trade.status = "closed";
+            trade.closed_at = now;
+            trade.close_reason = "stop_hit";
+            trade.exit_price = latestPrice;
+            closed++;
+            console.log(`[oversight] Shadow stop hit: ${trade.asset} ${trade.direction} @ $${latestPrice} (stop=$${trade.stop_price}) P&L: $${trade.hypothetical_pnl.toFixed(4)}`);
+            try {
+              const { sendShadowTradeNotification: sendShadowTradeNotification2 } = await Promise.resolve().then(() => (init_telegram(), telegram_exports));
+              sendShadowTradeNotification2({
+                type: "close",
+                asset: trade.asset,
+                direction: trade.direction,
+                entryPrice: trade.entry_price,
+                exitPrice: latestPrice,
+                pnl: trade.hypothetical_pnl,
+                reason: `stop hit ($${trade.stop_price})`
+              }).catch(() => {
+              });
+            } catch {
+            }
+            continue;
+          }
+        }
+        if (trade.target_price != null) {
+          const targetHit = isLong ? latestPrice >= trade.target_price : latestPrice <= trade.target_price;
+          if (targetHit) {
+            trade.status = "closed";
+            trade.closed_at = now;
+            trade.close_reason = "target_hit";
+            trade.exit_price = latestPrice;
+            closed++;
+            console.log(`[oversight] Shadow target hit: ${trade.asset} ${trade.direction} @ $${latestPrice} (target=$${trade.target_price}) P&L: $${trade.hypothetical_pnl.toFixed(4)}`);
+            try {
+              const { sendShadowTradeNotification: sendShadowTradeNotification2 } = await Promise.resolve().then(() => (init_telegram(), telegram_exports));
+              sendShadowTradeNotification2({
+                type: "close",
+                asset: trade.asset,
+                direction: trade.direction,
+                entryPrice: trade.entry_price,
+                exitPrice: latestPrice,
+                pnl: trade.hypothetical_pnl,
+                reason: `target hit ($${trade.target_price})`
+              }).catch(() => {
+              });
+            } catch {
+            }
+            continue;
+          }
+        }
+      }
+    } catch (e) {
+      errors.push(`${trade.asset}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  await setConfigValue2(SHADOW_TRADES_KEY, trades);
+  console.log(`[oversight] Shadow refresh: ${updated} updated, ${closed} expired, ${errors.length} errors`);
+  return { updated, closed, errors };
+}
+async function getShadowTrades(statusFilter) {
+  const trades = await getConfigValue2(SHADOW_TRADES_KEY, []);
+  if (statusFilter) return trades.filter((t) => t.status === statusFilter);
+  return trades;
+}
+async function getShadowPerformance() {
+  const trades = await getConfigValue2(SHADOW_TRADES_KEY, []);
+  const closed = trades.filter((t) => t.status === "closed");
+  const open = trades.filter((t) => t.status === "open");
+  const wins = closed.filter((t) => t.hypothetical_pnl > 0);
+  const totalPnl = closed.reduce((s, t) => s + t.hypothetical_pnl, 0);
+  const openPnl = open.reduce((s, t) => s + t.hypothetical_pnl, 0);
+  return {
+    total_trades: trades.length,
+    open_trades: open.length,
+    closed_trades: closed.length,
+    total_pnl: totalPnl + openPnl,
+    win_rate: closed.length > 0 ? wins.length / closed.length * 100 : 0,
+    avg_pnl: closed.length > 0 ? totalPnl / closed.length : 0,
+    trades
+  };
+}
+async function getLatestHealthReport() {
+  const reports = await getConfigValue2(HEALTH_REPORTS_KEY, []);
+  return reports.length > 0 ? reports[reports.length - 1] : null;
+}
+async function getOversightSummary() {
+  const health = await getLatestHealthReport();
+  const queue = await getConfigValue2(IMPROVEMENT_QUEUE_KEY, []);
+  const openItems = queue.filter((i) => i.status === "open");
+  const criticalItems = openItems.filter((i) => i.severity === "critical");
+  const shadowPerf = await getShadowPerformance();
+  const lastCheck = await getConfigValue2(LAST_HEALTH_CHECK_KEY, null);
+  const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 50);
+  const peak = await getConfigValue2("wealth_engines_peak_portfolio", 50);
+  const history = await getConfigValue2("wealth_engines_trade_history", []);
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1e3;
+  const recentTrades = history.filter((t) => new Date(t.closed_at).getTime() > sevenDaysAgo);
+  const rolling7d = recentTrades.reduce((s, t) => s + (t.pnl || 0), 0);
+  const rolling7dPct = portfolio > 0 ? rolling7d / portfolio * 100 : 0;
+  const drawdownPct = peak > 0 ? (peak - portfolio) / peak * 100 : 0;
+  return {
+    health,
+    drawdown: { portfolio_value: portfolio, peak_value: peak, drawdown_pct: drawdownPct, rolling_7d_pnl_pct: rolling7dPct },
+    improvements: {
+      open: openItems.length,
+      total: queue.length,
+      critical: criticalItems.length,
+      active_items: openItems.slice(0, 10).map((i) => ({
+        id: i.id,
+        severity: i.severity,
+        title: i.title,
+        domain: i.domain || "system",
+        route: i.route || "manual",
+        created_at: i.created_at
+      }))
+    },
+    shadow: { open: shadowPerf.open_trades, total_pnl: shadowPerf.total_pnl },
+    last_check: lastCheck
+  };
+}
+function formatHealthReport(report) {
+  const statusIcons = { ok: "\u{1F7E2}", warn: "\u{1F7E1}", critical: "\u{1F534}" };
+  const overallIcon = statusIcons[report.overall_status] || "\u26AA";
+  const lines = [
+    `${overallIcon} *Oversight Health Report*`,
+    `Status: ${report.overall_status.toUpperCase()}`,
+    `_${new Date(report.timestamp).toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`,
+    ""
+  ];
+  for (const check of report.checks) {
+    const icon = statusIcons[check.status] || "\u26AA";
+    lines.push(`${icon} *${check.name}*: ${check.detail}`);
+  }
+  lines.push("");
+  lines.push(`_${report.summary}_`);
+  return lines.join("\n");
+}
+function formatPerformanceReview(review) {
+  const periodDays = Math.round((review.period_end - review.period_start) / (24 * 60 * 60 * 1e3));
+  const lines = [
+    `\u{1F4CA} *Performance Review (${periodDays}d)*`,
+    "",
+    `*Trades:* ${review.total_trades}`,
+    `*Win Rate:* ${review.win_rate.toFixed(1)}%`,
+    `*Total P&L:* ${review.total_pnl >= 0 ? "+" : ""}$${review.total_pnl.toFixed(2)}`,
+    `*Avg P&L:* ${review.avg_pnl >= 0 ? "+" : ""}$${review.avg_pnl.toFixed(2)}`,
+    `*Max Drawdown:* ${review.max_drawdown_pct.toFixed(1)}%`,
+    `*Sharpe:* ${review.sharpe_ratio.toFixed(2)}`,
+    `*Avg Hold:* ${review.avg_hold_time_hours.toFixed(1)}h`,
+    `*Slippage:* ${review.avg_slippage_pct.toFixed(2)}%`,
+    `*Thesis Conv:* ${review.thesis_conversion_rate.toFixed(0)}%`
+  ];
+  if (review.best_trade) {
+    lines.push(`*Best:* ${review.best_trade.asset} +$${review.best_trade.pnl.toFixed(2)}`);
+  }
+  if (review.worst_trade) {
+    lines.push(`*Worst:* ${review.worst_trade.asset} $${review.worst_trade.pnl.toFixed(2)}`);
+  }
+  if (Object.keys(review.source_breakdown).length > 0) {
+    lines.push("");
+    lines.push("*By Source:*");
+    for (const [src, data] of Object.entries(review.source_breakdown)) {
+      lines.push(`  ${src}: ${data.trades} trades, $${data.pnl.toFixed(2)}, ${data.win_rate.toFixed(0)}% win`);
+    }
+  }
+  if (review.exposure_alerts.length > 0) {
+    lines.push("");
+    lines.push("*\u26A0\uFE0F Exposure Alerts:*");
+    for (const alert of review.exposure_alerts) {
+      lines.push(`  \u2022 ${alert}`);
+    }
+  }
+  if (review.signal_attribution.length > 0) {
+    lines.push("");
+    lines.push("*\u{1F4E1} Signal Attribution:*");
+    for (const sa of review.signal_attribution) {
+      lines.push(`  ${sa.signal_type}: ${sa.wins}W/${sa.losses}L, $${sa.total_pnl.toFixed(2)} (${sa.contribution_pct.toFixed(0)}% contrib)`);
+    }
+  }
+  return lines.join("\n");
+}
+async function reviewTheses() {
+  const cryptoTheses = await getConfigValue2("scout_active_theses", []);
+  const pmTheses = await getConfigValue2("polymarket_scout_active_theses", []);
+  const history = await getConfigValue2("wealth_engines_trade_history", []);
+  const reviews = [];
+  const allTheses = [
+    ...cryptoTheses.filter((t) => t.status === "active").map((t) => ({ ...t, _source: "crypto_scout" })),
+    ...pmTheses.filter((t) => t.status === "active").map((t) => ({ ...t, _source: "polymarket_scout" }))
+  ];
+  for (const thesis of allTheses) {
+    const asset = thesis.asset || thesis.question || "unknown";
+    const assetHistory = history.filter((t) => t.thesis_id === thesis.id);
+    const assetPnl = assetHistory.reduce((s, t) => s + (t.pnl || 0), 0);
+    const assetWins = assetHistory.filter((t) => (t.pnl || 0) > 0).length;
+    const assetLosses = assetHistory.filter((t) => (t.pnl || 0) <= 0).length;
+    const confidence = thesis.confidence || thesis.score || 0;
+    const direction = thesis.direction || "LONG";
+    const bullFactors = [];
+    const bearFactors = [];
+    if (confidence >= 0.7 || confidence >= 3.5) bullFactors.push(`High confidence: ${confidence}`);
+    else bearFactors.push(`Low confidence: ${confidence}`);
+    if (assetWins > assetLosses) bullFactors.push(`Positive track record: ${assetWins}W/${assetLosses}L`);
+    else if (assetLosses > 0) bearFactors.push(`Negative track record: ${assetWins}W/${assetLosses}L`);
+    if (assetPnl > 0) bullFactors.push(`Cumulative profit: $${assetPnl.toFixed(2)}`);
+    else if (assetPnl < 0) bearFactors.push(`Cumulative loss: $${assetPnl.toFixed(2)}`);
+    if (thesis.reasoning) bullFactors.push(`Thesis reasoning documented`);
+    if (thesis.age_hours && thesis.age_hours > 72) bearFactors.push(`Thesis aging: ${thesis.age_hours.toFixed(0)}h old`);
+    if (thesis.invalidation_criteria) bullFactors.push(`Clear invalidation criteria defined`);
+    if (thesis._source === "polymarket_scout") {
+      if ((thesis.whale_count ?? 0) >= 3) bullFactors.push(`Strong whale consensus: ${thesis.whale_count} whales`);
+      else bearFactors.push(`Weak whale consensus: ${thesis.whale_count || 0} whales`);
+      if (thesis.odds && (thesis.odds > 85 || thesis.odds < 15)) bearFactors.push(`Extreme odds: ${thesis.odds}% \u2014 limited edge`);
+    }
+    const verdict = bullFactors.length > bearFactors.length + 1 ? "bull_favored" : bearFactors.length > bullFactors.length + 1 ? "bear_favored" : "neutral";
+    let recommendation = "Continue monitoring";
+    if (verdict === "bear_favored") {
+      recommendation = "Consider reducing position size or tightening stops";
+    }
+    reviews.push({
+      thesis_id: thesis.id,
+      asset: typeof asset === "string" ? asset.slice(0, 50) : "unknown",
+      source: thesis._source || "unknown",
+      direction: direction || "unknown",
+      bull_case: bullFactors.join("; ") || "No strong bull factors",
+      bear_case: bearFactors.join("; ") || "No significant bear factors",
+      verdict,
+      recommendation
+    });
+    if (verdict === "bear_favored") {
+      await captureImprovement({
+        source: "performance_review",
+        category: "signal",
+        severity: "medium",
+        domain: thesis._source === "polymarket_scout" ? "polymarket" : "crypto",
+        title: `Bear-favored thesis: ${typeof asset === "string" ? asset.slice(0, 30) : "unknown"}`,
+        description: `Adversarial review found bear case stronger: ${bearFactors.join("; ")}`,
+        pattern_description: `Thesis ${thesis.id} has more bear factors (${bearFactors.length}) than bull (${bullFactors.length})`,
+        recommendation,
+        route: "autoresearch"
+      });
+    }
+  }
+  return reviews;
+}
+async function checkPerAssetLosses() {
+  const history = await getConfigValue2("wealth_engines_trade_history", []);
+  const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 50);
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1e3;
+  const recent = history.filter((t) => new Date(t.closed_at).getTime() > sevenDaysAgo);
+  const byAsset = {};
+  for (const t of recent) {
+    const asset = t.asset || "unknown";
+    byAsset[asset] = (byAsset[asset] || 0) + (t.pnl || 0);
+  }
+  for (const [asset, pnl] of Object.entries(byAsset)) {
+    const lossPct = portfolio > 0 ? Math.abs(pnl) / portfolio * 100 : 0;
+    if (pnl < 0 && lossPct > 10) {
+      await captureImprovement({
+        source: "performance_review",
+        category: "risk",
+        severity: lossPct > 20 ? "critical" : "high",
+        domain: "crypto",
+        title: `Per-asset loss: ${asset} -${lossPct.toFixed(1)}%`,
+        description: `${asset} has accumulated $${Math.abs(pnl).toFixed(2)} loss (${lossPct.toFixed(1)}% of portfolio) in 7 days.`,
+        pattern_description: `Concentrated losses in single asset ${asset}`,
+        recommendation: `Review ${asset} thesis quality; consider blacklisting or reducing position limits`,
+        route: "bankr-config"
+      });
+    }
+  }
+}
+async function generateDailyPerformanceSummary() {
+  const review = await runPerformanceReview(1);
+  const health = await getLatestHealthReport();
+  const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 50);
+  const peak = await getConfigValue2("wealth_engines_peak_portfolio", 50);
+  const drawdownPct = peak > 0 ? (peak - portfolio) / peak * 100 : 0;
+  const queue = await getConfigValue2(IMPROVEMENT_QUEUE_KEY, []);
+  const openItems = queue.filter((i) => i.status === "open");
+  const lines = [
+    `\u{1F4CB} *Daily Performance Summary*`,
+    `_${(/* @__PURE__ */ new Date()).toLocaleDateString("en-US", { timeZone: "America/New_York", weekday: "long", month: "short", day: "numeric" })}_`,
+    "",
+    `\u{1F4B0} *Portfolio:* $${portfolio.toFixed(2)} (peak: $${peak.toFixed(2)}, DD: ${drawdownPct.toFixed(1)}%)`,
+    `\u{1F4CA} *Today:* ${review.total_trades} trades, ${review.total_pnl >= 0 ? "+" : ""}$${review.total_pnl.toFixed(2)}`,
+    `\u{1F3AF} *Win Rate:* ${review.win_rate.toFixed(0)}%`
+  ];
+  if (health) {
+    const icons = { healthy: "\u{1F7E2}", degraded: "\u{1F7E1}", critical: "\u{1F534}" };
+    lines.push(`${icons[health.overall_status] || "\u26AA"} *System:* ${health.overall_status}`);
+  }
+  if (openItems.length > 0) {
+    const critical = openItems.filter((i) => i.severity === "critical");
+    lines.push(`\u{1F4CB} *Open Issues:* ${openItems.length}${critical.length > 0 ? ` (${critical.length} critical)` : ""}`);
+  }
+  return lines.join("\n");
+}
+async function sendDailyPerformanceSummary() {
+  const summary = await generateDailyPerformanceSummary();
+  await notifyTelegram(summary);
+  console.log("[oversight] Daily performance summary sent");
+}
+async function autoTrackShadowTrade(params) {
+  const existing = await getShadowTrades("open");
+  const match = existing.find((t) => t.asset === params.asset && t.direction === params.direction);
+  if (match) {
+    const ageHours = (Date.now() - new Date(match.opened_at).getTime()) / 36e5;
+    if (ageHours < 24) return null;
+    await closeShadowTrade(match.id, match.entry_price, "replaced_by_newer_thesis");
+  }
+  let stopPrice = params.stop_price;
+  let targetPrice = params.target_price;
+  if (!stopPrice || !targetPrice) {
+    try {
+      const { getActiveTheses: getActiveTheses3 } = await Promise.resolve().then(() => (init_crypto_scout(), crypto_scout_exports));
+      const theses = await getActiveTheses3();
+      const thesis = theses.find((t) => t.id === params.thesis_id || t.asset === params.asset && t.direction === params.direction);
+      if (thesis) {
+        if (!stopPrice && thesis.stop_price) stopPrice = thesis.stop_price;
+        if (!targetPrice && thesis.exit_price) targetPrice = thesis.exit_price;
+      }
+    } catch (e) {
+      console.warn(`[oversight] Thesis lookup for shadow levels failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  const shadow = await openShadowTrade({
+    thesis_id: params.thesis_id,
+    asset: params.asset,
+    asset_class: params.asset_class,
+    source: params.source,
+    direction: params.direction,
+    entry_price: params.entry_price,
+    market_id: params.market_id,
+    stop_price: stopPrice,
+    target_price: targetPrice
+  });
+  console.log(`[oversight] Auto-shadow: ${params.asset} ${params.direction} @ $${params.entry_price} | stop=$${stopPrice ?? "none"} target=$${targetPrice ?? "none"} \u2014 ${params.reason}`);
+  return shadow;
+}
+var telegramNotifier, HEALTH_REPORTS_KEY, IMPROVEMENT_QUEUE_KEY, SHADOW_TRADES_KEY, LAST_HEALTH_CHECK_KEY, MAX_REPORTS, MAX_IMPROVEMENTS, MAX_SHADOW_TRADES, THIRTY_DAYS_MS, SHADOW_MAX_AGE_HOURS;
+var init_oversight = __esm({
+  "src/oversight.ts"() {
+    "use strict";
+    init_db();
+    init_coingecko();
+    init_polymarket();
+    telegramNotifier = null;
+    HEALTH_REPORTS_KEY = "oversight_health_reports";
+    IMPROVEMENT_QUEUE_KEY = "oversight_improvement_queue";
+    SHADOW_TRADES_KEY = "oversight_shadow_trades";
+    LAST_HEALTH_CHECK_KEY = "oversight_last_health_check";
+    MAX_REPORTS = 200;
+    MAX_IMPROVEMENTS = 100;
+    MAX_SHADOW_TRADES = 200;
+    THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1e3;
+    SHADOW_MAX_AGE_HOURS = 168;
   }
 });
 
@@ -7218,162 +8748,7 @@ function runBacktest(candles, assetName, config3) {
 
 // server.ts
 init_crypto_scout();
-
-// src/polymarket.ts
-init_db();
-var GAMMA_API = "https://gamma-api.polymarket.com";
-var cache = /* @__PURE__ */ new Map();
-var MARKET_TTL = 5 * 60 * 1e3;
-var WALLET_TTL = 15 * 60 * 1e3;
-function getCached2(key, ttl) {
-  const entry = cache.get(key);
-  if (entry && Date.now() - entry.ts < ttl) return entry.data;
-  return null;
-}
-function setCache2(key, data) {
-  cache.set(key, { data, ts: Date.now() });
-}
-async function fetchJson(url, options) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15e3);
-  try {
-    const res = await fetch(url, { ...options, signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-    return await res.json();
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-async function searchMarkets(query, limit = 20) {
-  const cacheKey = `markets_search_${query}_${limit}`;
-  const cached2 = getCached2(cacheKey, MARKET_TTL);
-  if (cached2) return cached2;
-  try {
-    const url = `${GAMMA_API}/markets?closed=false&limit=${limit}&order=volume&ascending=false${query ? `&tag=${encodeURIComponent(query)}` : ""}`;
-    const data = await fetchJson(url);
-    const markets = Array.isArray(data) ? data : [];
-    const result = markets.map(normalizeMarket);
-    setCache2(cacheKey, result);
-    return result;
-  } catch (err) {
-    console.error("[polymarket] searchMarkets error:", err);
-    return [];
-  }
-}
-async function getTrendingMarkets(limit = 20) {
-  const cacheKey = `markets_trending_${limit}`;
-  const cached2 = getCached2(cacheKey, MARKET_TTL);
-  if (cached2) return cached2;
-  try {
-    const url = `${GAMMA_API}/markets?closed=false&limit=${limit}&order=volume24hr&ascending=false`;
-    const data = await fetchJson(url);
-    const markets = Array.isArray(data) ? data : [];
-    const result = markets.map(normalizeMarket);
-    setCache2(cacheKey, result);
-    return result;
-  } catch (err) {
-    console.error("[polymarket] getTrendingMarkets error:", err);
-    return [];
-  }
-}
-async function getMarketDetails(conditionId) {
-  const cacheKey = `market_${conditionId}`;
-  const cached2 = getCached2(cacheKey, MARKET_TTL);
-  if (cached2) return cached2;
-  try {
-    const url = `${GAMMA_API}/markets/${conditionId}`;
-    const data = await fetchJson(url);
-    const result = normalizeMarket(data);
-    setCache2(cacheKey, result);
-    return result;
-  } catch (err) {
-    console.error("[polymarket] getMarketDetails error:", err);
-    return null;
-  }
-}
-function normalizeMarket(raw) {
-  const outcomes = raw.outcomes ? typeof raw.outcomes === "string" ? JSON.parse(raw.outcomes) : raw.outcomes : ["Yes", "No"];
-  const outcomePrices = raw.outcomePrices ? typeof raw.outcomePrices === "string" ? JSON.parse(raw.outcomePrices) : raw.outcomePrices : [];
-  const tokens = [];
-  if (raw.tokens && Array.isArray(raw.tokens)) {
-    for (const t of raw.tokens) {
-      tokens.push({ token_id: t.token_id, outcome: t.outcome, price: parseFloat(t.price || "0") });
-    }
-  } else if (outcomePrices.length > 0) {
-    for (let i = 0; i < outcomes.length; i++) {
-      tokens.push({ token_id: `${raw.condition_id || raw.id}_${i}`, outcome: outcomes[i], price: parseFloat(outcomePrices[i] || "0") });
-    }
-  }
-  return {
-    condition_id: raw.condition_id || raw.id || "",
-    question: raw.question || "",
-    description: raw.description || "",
-    market_slug: raw.market_slug || raw.slug || "",
-    outcomes,
-    outcome_prices: outcomePrices,
-    tokens,
-    volume: parseFloat(raw.volume || "0"),
-    volume_24h: parseFloat(raw.volume24hr || raw.volume_24h || "0"),
-    liquidity: parseFloat(raw.liquidity || "0"),
-    end_date_iso: raw.end_date_iso || raw.endDate || "",
-    active: raw.active !== false,
-    closed: raw.closed === true,
-    category: raw.category || raw.groupItemTitle || "",
-    tags: raw.tags ? typeof raw.tags === "string" ? JSON.parse(raw.tags) : raw.tags : []
-  };
-}
-async function getWhaleWatchlist() {
-  const pool2 = getPool();
-  try {
-    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'polymarket_whale_watchlist'`);
-    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
-      return res.rows[0].value;
-    }
-  } catch (err) {
-    console.error("[polymarket] getWhaleWatchlist error:", err);
-  }
-  return [];
-}
-async function getWhaleActivities() {
-  const pool2 = getPool();
-  try {
-    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'polymarket_whale_activities'`);
-    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
-      const now = Date.now();
-      const recentCutoff = 24 * 60 * 60 * 1e3;
-      return res.rows[0].value.filter((a) => now - a.detected_at < recentCutoff);
-    }
-  } catch {
-  }
-  return [];
-}
-async function detectConsensus(activities) {
-  const byMarket = {};
-  for (const a of activities) {
-    if (a.activity_type === "position_exit") continue;
-    if (!byMarket[a.market_id]) byMarket[a.market_id] = { yes: [], no: [] };
-    if (a.direction === "YES") byMarket[a.market_id].yes.push(a);
-    else byMarket[a.market_id].no.push(a);
-  }
-  const results = [];
-  for (const [marketId, sides] of Object.entries(byMarket)) {
-    for (const [dir, acts] of [["YES", sides.yes], ["NO", sides.no]]) {
-      if (acts.length >= 2) {
-        const totalAmount = acts.reduce((s, a) => s + a.amount_usd, 0);
-        const avgScore = acts.reduce((s, a) => s + a.wallet_score, 0) / acts.length;
-        results.push({
-          market_id: marketId,
-          question: acts[0].market_question,
-          direction: dir,
-          whale_count: acts.length,
-          total_amount: totalAmount,
-          avg_score: parseFloat(avgScore.toFixed(3))
-        });
-      }
-    }
-  }
-  return results.sort((a, b) => b.whale_count - a.whale_count || b.avg_score - a.avg_score);
-}
+init_polymarket();
 
 // src/polymarket-scout.ts
 init_db();
@@ -7510,97 +8885,8 @@ async function meetsThesisThresholds(params) {
 init_db();
 init_technical_signals();
 init_coingecko();
-
-// src/bnkr.ts
-var BNKR_API_KEY = process.env.BANKR_API_KEY || "";
-var BNKR_WALLET = process.env.BANKR_WALLET_ADDRESS || "";
-var BNKR_BASE_URL = process.env.BANKR_API_URL || "https://api.bnkr.com/v1";
-function isConfigured6() {
-  return BNKR_API_KEY.length > 0 && BNKR_WALLET.length > 0;
-}
-async function bnkrFetch(path8, body) {
-  const url = `${BNKR_BASE_URL}${path8}`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15e3);
-  try {
-    const opts = {
-      method: body ? "POST" : "GET",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${BNKR_API_KEY}`,
-        "X-Wallet-Address": BNKR_WALLET
-      },
-      signal: controller.signal
-    };
-    if (body) opts.body = JSON.stringify(body);
-    const res = await fetch(url, opts);
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`BNKR API ${path8} failed (${res.status}): ${text}`);
-    }
-    return res.json();
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-async function openCryptoPosition(params) {
-  if (!isConfigured6()) {
-    console.log(`[bnkr] SHADOW: openCryptoPosition ${params.asset} ${params.direction} ${params.leverage}x size=${params.size}`);
-    return {
-      order_id: `shadow_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      asset: params.asset,
-      direction: params.direction,
-      leverage: params.leverage,
-      size: params.size,
-      entry_price: 0,
-      status: "filled",
-      tx_hash: null
-    };
-  }
-  const result = await bnkrFetch("/crypto/open", {
-    asset: params.asset,
-    direction: params.direction,
-    leverage: params.leverage,
-    size: params.size,
-    stop_price: params.stop_price,
-    wallet: BNKR_WALLET
-  });
-  return result;
-}
-async function closeCryptoPosition(orderId) {
-  if (!isConfigured6()) {
-    console.log(`[bnkr] SHADOW: closeCryptoPosition ${orderId}`);
-    return { tx_hash: "", exit_price: 0 };
-  }
-  return bnkrFetch("/crypto/close", { order_id: orderId, wallet: BNKR_WALLET });
-}
-async function openPolymarketPosition(params) {
-  if (!isConfigured6()) {
-    console.log(`[bnkr] SHADOW: openPolymarketPosition market=${params.market_id} ${params.direction} $${params.amount_usd}`);
-    return {
-      order_id: `shadow_pm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      market_id: params.market_id,
-      direction: params.direction,
-      amount_usd: params.amount_usd,
-      entry_odds: 0,
-      status: "filled",
-      tx_hash: null
-    };
-  }
-  return bnkrFetch("/polymarket/open", {
-    market_id: params.market_id,
-    direction: params.direction,
-    amount_usd: params.amount_usd,
-    wallet: BNKR_WALLET
-  });
-}
-async function closePolymarketPosition(orderId) {
-  if (!isConfigured6()) {
-    console.log(`[bnkr] SHADOW: closePolymarketPosition ${orderId}`);
-    return { tx_hash: "", exit_odds: 0 };
-  }
-  return bnkrFetch("/polymarket/close", { order_id: orderId, wallet: BNKR_WALLET });
-}
+init_polymarket();
+init_bnkr();
 
 // src/coinbase-wallet.ts
 var COINBASE_API_KEY = process.env.COINBASE_API_KEY || "";
@@ -7723,1157 +9009,8 @@ async function findAccountId(asset) {
   }
 }
 
-// src/oversight.ts
-init_db();
-init_coingecko();
-var telegramNotifier = null;
-function setTelegramNotifier(fn) {
-  telegramNotifier = fn;
-}
-async function notifyTelegram(msg) {
-  if (telegramNotifier) {
-    try {
-      await telegramNotifier(msg);
-    } catch (e) {
-      console.error("[oversight] Telegram notification failed:", e instanceof Error ? e.message : e);
-    }
-  }
-}
-var HEALTH_REPORTS_KEY = "oversight_health_reports";
-var IMPROVEMENT_QUEUE_KEY = "oversight_improvement_queue";
-var SHADOW_TRADES_KEY = "oversight_shadow_trades";
-var LAST_HEALTH_CHECK_KEY = "oversight_last_health_check";
-var MAX_REPORTS = 200;
-var MAX_IMPROVEMENTS = 100;
-var MAX_SHADOW_TRADES = 200;
-var THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1e3;
-async function getConfigValue2(key, fallback) {
-  const pool2 = getPool();
-  try {
-    const res = await pool2.query(`SELECT value FROM app_config WHERE key = $1`, [key]);
-    if (res.rows.length > 0) return res.rows[0].value;
-  } catch (err) {
-    console.warn(`[oversight] Failed to read ${key}:`, err instanceof Error ? err.message : err);
-  }
-  return fallback;
-}
-async function setConfigValue2(key, value) {
-  const pool2 = getPool();
-  await pool2.query(
-    `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
-     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
-    [key, JSON.stringify(value), Date.now()]
-  );
-}
-function pruneByAge(items, maxItems) {
-  const cutoff = Date.now() - THIRTY_DAYS_MS;
-  const filtered = items.filter((i) => {
-    const rec = i;
-    const ts = rec.timestamp || rec.created_at || rec.opened_at || 0;
-    return ts > cutoff;
-  });
-  return filtered.slice(-maxItems);
-}
-async function runHealthCheck() {
-  const pool2 = getPool();
-  const checks = [];
-  const now = Date.now();
-  const scoutCheck = await checkAgentFreshness(pool2, "scout", "SCOUT", 6);
-  checks.push(scoutCheck);
-  const bankrCheck = await checkAgentFreshness(pool2, "bankr", "BANKR", 8);
-  checks.push(bankrCheck);
-  const polyScoutCheck = await checkAgentFreshness(pool2, "polymarket-scout", "Polymarket SCOUT", 6);
-  checks.push(polyScoutCheck);
-  const monitorCheck = await checkMonitorHeartbeat(pool2, now);
-  checks.push(monitorCheck);
-  const killCheck = await checkKillSwitch(pool2);
-  checks.push(killCheck);
-  const pauseCheck = await checkPauseState(pool2);
-  checks.push(pauseCheck);
-  const circuitCheck = await checkCircuitBreakerState(pool2);
-  checks.push(circuitCheck);
-  const dataCheck = await checkDataFreshness(pool2, now);
-  checks.push(dataCheck);
-  const jobFailCheck = await checkRecentJobFailures(pool2);
-  checks.push(jobFailCheck);
-  const apiCheck = await checkApiFailureRates(pool2);
-  checks.push(apiCheck);
-  const latencyCheck = await checkJobExecutionTrends(pool2);
-  checks.push(latencyCheck);
-  const criticalCount = checks.filter((c) => c.status === "critical").length;
-  const warnCount = checks.filter((c) => c.status === "warn").length;
-  const overall = criticalCount > 0 ? "critical" : warnCount >= 2 ? "degraded" : "healthy";
-  const summaryParts = [];
-  if (criticalCount > 0) summaryParts.push(`${criticalCount} critical`);
-  if (warnCount > 0) summaryParts.push(`${warnCount} warnings`);
-  const okCount = checks.length - criticalCount - warnCount;
-  if (okCount > 0) summaryParts.push(`${okCount} ok`);
-  const report = {
-    id: `health_${now}`,
-    timestamp: now,
-    checks,
-    overall_status: overall,
-    summary: `${overall.toUpperCase()}: ${summaryParts.join(", ")} (${checks.length} checks)`
-  };
-  const existing = await getConfigValue2(HEALTH_REPORTS_KEY, []);
-  existing.push(report);
-  await setConfigValue2(HEALTH_REPORTS_KEY, pruneByAge(existing, MAX_REPORTS));
-  await setConfigValue2(LAST_HEALTH_CHECK_KEY, now);
-  if (criticalCount > 0 || warnCount >= 2) {
-    const issues = checks.filter((c) => c.status !== "ok");
-    const alertLines = issues.map((i) => `\u2022 ${i.name}: ${i.detail}`).join("\n");
-    await notifyTelegram(
-      `\u{1F534} HEALTH ${overall.toUpperCase()}
-${alertLines}
-(${checks.length} checks, ${criticalCount} critical, ${warnCount} warn)`
-    );
-    for (const issue of issues) {
-      await captureImprovement({
-        source: "health_check",
-        category: "infrastructure",
-        severity: issue.status === "critical" ? "critical" : "medium",
-        title: `Health: ${issue.name}`,
-        description: issue.detail,
-        recommendation: `Investigate ${issue.name} \u2014 status: ${issue.status}`
-      });
-    }
-  }
-  return report;
-}
-async function checkAgentFreshness(pool2, agentId, label, thresholdHours) {
-  try {
-    const res = await pool2.query(
-      `SELECT created_at, status FROM job_history WHERE agent_id = $1 ORDER BY created_at DESC LIMIT 1`,
-      [agentId]
-    );
-    if (res.rows.length === 0) {
-      return { name: `${label} Freshness`, status: "warn", detail: `${label} has never run` };
-    }
-    const lastRun = new Date(res.rows[0].created_at).getTime();
-    const hoursSince = (Date.now() - lastRun) / (3600 * 1e3);
-    if (hoursSince > thresholdHours * 2) {
-      return {
-        name: `${label} Freshness`,
-        status: "critical",
-        detail: `${label} last ran ${Math.floor(hoursSince)}h ago (threshold: ${thresholdHours}h)`,
-        value: hoursSince,
-        threshold: thresholdHours
-      };
-    }
-    if (hoursSince > thresholdHours) {
-      return {
-        name: `${label} Freshness`,
-        status: "warn",
-        detail: `${label} last ran ${Math.floor(hoursSince)}h ago (threshold: ${thresholdHours}h)`,
-        value: hoursSince,
-        threshold: thresholdHours
-      };
-    }
-    const lastStatus = res.rows[0].status;
-    if (lastStatus === "error") {
-      return {
-        name: `${label} Freshness`,
-        status: "warn",
-        detail: `${label} ran ${Math.floor(hoursSince)}h ago but last status was error`
-      };
-    }
-    return {
-      name: `${label} Freshness`,
-      status: "ok",
-      detail: `${label} ran ${Math.floor(hoursSince)}h ago \u2014 OK`
-    };
-  } catch {
-    return { name: `${label} Freshness`, status: "warn", detail: `Could not check ${label} status` };
-  }
-}
-async function checkMonitorHeartbeat(pool2, now) {
-  try {
-    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'bankr_monitor_last_tick'`);
-    if (res.rows.length === 0) {
-      return { name: "Position Monitor", status: "warn", detail: "Monitor has never ticked" };
-    }
-    const lastTick = typeof res.rows[0].value === "number" ? res.rows[0].value : parseInt(String(res.rows[0].value));
-    const minsSince = (now - lastTick) / (60 * 1e3);
-    if (minsSince > 30) {
-      return {
-        name: "Position Monitor",
-        status: "critical",
-        detail: `Monitor last ticked ${Math.floor(minsSince)} min ago (threshold: 30 min)`,
-        value: minsSince,
-        threshold: 30
-      };
-    }
-    if (minsSince > 15) {
-      return {
-        name: "Position Monitor",
-        status: "warn",
-        detail: `Monitor last ticked ${Math.floor(minsSince)} min ago`,
-        value: minsSince,
-        threshold: 30
-      };
-    }
-    return {
-      name: "Position Monitor",
-      status: "ok",
-      detail: `Monitor ticked ${Math.floor(minsSince)} min ago \u2014 OK`
-    };
-  } catch {
-    return { name: "Position Monitor", status: "warn", detail: "Could not check monitor heartbeat" };
-  }
-}
-async function checkKillSwitch(pool2) {
-  try {
-    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_kill_switch'`);
-    if (res.rows.length > 0 && res.rows[0].value === true) {
-      return { name: "Kill Switch", status: "critical", detail: "Kill switch is ACTIVE \u2014 all trading halted" };
-    }
-  } catch {
-  }
-  return { name: "Kill Switch", status: "ok", detail: "Kill switch inactive" };
-}
-async function checkPauseState(pool2) {
-  try {
-    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_paused'`);
-    if (res.rows.length > 0 && res.rows[0].value === true) {
-      return { name: "System Paused", status: "warn", detail: "System is PAUSED \u2014 jobs will not execute" };
-    }
-  } catch {
-  }
-  return { name: "System Paused", status: "ok", detail: "System is running" };
-}
-async function checkCircuitBreakerState(pool2) {
-  try {
-    const history = await getConfigValue2("wealth_engines_trade_history", []);
-    const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 50);
-    const peak = await getConfigValue2("wealth_engines_peak_portfolio", 50);
-    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1e3;
-    const recentTrades = history.filter((t) => new Date(t.closed_at).getTime() > sevenDaysAgo);
-    const rolling7d = recentTrades.reduce((s, t) => s + (t.pnl || 0), 0);
-    const rolling7dPct = portfolio > 0 ? rolling7d / portfolio * 100 : 0;
-    const drawdownPct = peak > 0 ? (peak - portfolio) / peak * 100 : 0;
-    if (rolling7dPct < -15 || drawdownPct > 25) {
-      await enforceCircuitBreaker(rolling7dPct, drawdownPct);
-      return {
-        name: "Circuit Breaker",
-        status: "critical",
-        detail: `Circuit breaker TRIGGERED & ENFORCED \u2014 7d P&L: ${rolling7dPct.toFixed(1)}%, drawdown: ${drawdownPct.toFixed(1)}% \u2014 auto-paused`
-      };
-    }
-    if (rolling7dPct < -10 || drawdownPct > 20) {
-      return {
-        name: "Circuit Breaker",
-        status: "warn",
-        detail: `Approaching circuit breaker \u2014 7d P&L: ${rolling7dPct.toFixed(1)}%, drawdown: ${drawdownPct.toFixed(1)}%`
-      };
-    }
-    return {
-      name: "Circuit Breaker",
-      status: "ok",
-      detail: `7d P&L: ${rolling7dPct.toFixed(1)}%, drawdown: ${drawdownPct.toFixed(1)}% \u2014 OK`
-    };
-  } catch {
-    return { name: "Circuit Breaker", status: "warn", detail: "Could not evaluate circuit breaker" };
-  }
-}
-async function checkDataFreshness(pool2, now) {
-  try {
-    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scout_latest_brief'`);
-    if (res.rows.length === 0) {
-      return { name: "Scout Data", status: "warn", detail: "No scout brief data available" };
-    }
-    const brief = res.rows[0].value;
-    const briefTs = brief?.timestamp || brief?.created_at;
-    if (briefTs) {
-      const hoursSince = (now - briefTs) / (3600 * 1e3);
-      if (hoursSince > 12) {
-        return {
-          name: "Scout Data",
-          status: "warn",
-          detail: `Scout brief is ${Math.floor(hoursSince)}h old (stale >12h)`
-        };
-      }
-    }
-    return { name: "Scout Data", status: "ok", detail: "Scout brief data available" };
-  } catch {
-    return { name: "Scout Data", status: "warn", detail: "Could not check scout data" };
-  }
-}
-async function checkRecentJobFailures(pool2) {
-  try {
-    const res = await pool2.query(
-      `SELECT job_id, status FROM job_history
-       WHERE agent_id IN ('scout', 'bankr', 'polymarket-scout')
-       AND created_at > NOW() - INTERVAL '24 hours'
-       ORDER BY created_at DESC LIMIT 20`
-    );
-    const failures = res.rows.filter((r) => r.status === "error");
-    if (failures.length >= 5) {
-      return {
-        name: "Job Failures",
-        status: "critical",
-        detail: `${failures.length} WE job failures in last 24h`,
-        value: failures.length,
-        threshold: 5
-      };
-    }
-    if (failures.length >= 2) {
-      return {
-        name: "Job Failures",
-        status: "warn",
-        detail: `${failures.length} WE job failures in last 24h`,
-        value: failures.length,
-        threshold: 5
-      };
-    }
-    return {
-      name: "Job Failures",
-      status: "ok",
-      detail: `${failures.length} failures in last 24h \u2014 OK`
-    };
-  } catch {
-    return { name: "Job Failures", status: "warn", detail: "Could not check job failures" };
-  }
-}
-async function enforceCircuitBreaker(rolling7dPct, drawdownPct) {
-  const pool2 = getPool();
-  const alreadyPaused = await getConfigValue2("wealth_engines_paused", false);
-  if (!alreadyPaused) {
-    await pool2.query(
-      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_paused', $1, $2)
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
-      [JSON.stringify(true), Date.now()]
-    );
-    console.log(`[oversight] CIRCUIT BREAKER ENFORCED \u2014 auto-paused all Wealth Engines`);
-  }
-  const alertMsg = [
-    `\u{1F6A8} *CIRCUIT BREAKER TRIGGERED*`,
-    "",
-    `\u26D4 All Wealth Engine agents have been *AUTO-PAUSED*`,
-    `\u{1F4C9} 7-day P&L: ${rolling7dPct.toFixed(1)}%${rolling7dPct < -15 ? " (limit: -15%)" : ""}`,
-    `\u{1F4C9} Peak drawdown: ${drawdownPct.toFixed(1)}%${drawdownPct > 25 ? " (limit: 25%)" : ""}`,
-    "",
-    `Use /resume to manually restart after reviewing positions.`
-  ].join("\n");
-  await notifyTelegram(alertMsg);
-  await captureImprovement({
-    source: "circuit_breaker",
-    category: "risk",
-    severity: "critical",
-    domain: "system",
-    priority: 1,
-    title: `Circuit breaker: 7d ${rolling7dPct.toFixed(1)}%, DD ${drawdownPct.toFixed(1)}%`,
-    description: `Auto-paused due to circuit breaker. Rolling 7d P&L: ${rolling7dPct.toFixed(1)}%, peak drawdown: ${drawdownPct.toFixed(1)}%.`,
-    pattern_description: "Sustained losses exceeding risk thresholds",
-    recommendation: "Review all open positions, evaluate thesis quality, reduce leverage/position sizing before resuming",
-    route: "manual"
-  });
-}
-async function checkApiFailureRates(pool2) {
-  try {
-    const res = await pool2.query(
-      `SELECT value FROM app_config WHERE key = 'wealth_engines_api_errors'`
-    );
-    if (res.rows.length === 0) {
-      return { name: "API Health", status: "ok", detail: "No API error tracking data" };
-    }
-    const errors = res.rows[0].value;
-    const recentErrors = Array.isArray(errors) ? errors.filter((e) => e.timestamp > Date.now() - 6 * 60 * 60 * 1e3) : [];
-    const byService = {};
-    for (const e of recentErrors) {
-      const svc = e.service || "unknown";
-      byService[svc] = (byService[svc] || 0) + 1;
-    }
-    const highFailServices = Object.entries(byService).filter(([, count]) => count >= 5);
-    if (highFailServices.length > 0) {
-      const details = highFailServices.map(([svc, count]) => `${svc}: ${count}`).join(", ");
-      return {
-        name: "API Health",
-        status: highFailServices.some(([, c]) => c >= 10) ? "critical" : "warn",
-        detail: `API failures in last 6h: ${details}`,
-        value: recentErrors.length
-      };
-    }
-    return { name: "API Health", status: "ok", detail: `${recentErrors.length} API errors in last 6h \u2014 OK` };
-  } catch {
-    return { name: "API Health", status: "ok", detail: "API error tracking not available" };
-  }
-}
-async function checkJobExecutionTrends(pool2) {
-  try {
-    const res = await pool2.query(
-      `SELECT job_id, duration_ms FROM job_history
-       WHERE agent_id IN ('scout', 'bankr', 'polymarket-scout')
-       AND created_at > NOW() - INTERVAL '48 hours'
-       AND duration_ms IS NOT NULL AND duration_ms > 0
-       ORDER BY created_at DESC LIMIT 30`
-    );
-    if (res.rows.length < 3) {
-      return { name: "Job Latency", status: "ok", detail: "Insufficient data for trend analysis" };
-    }
-    const durations = res.rows.map((r) => r.duration_ms / 1e3).filter((d) => d > 0);
-    if (durations.length === 0) {
-      return { name: "Job Latency", status: "ok", detail: "No valid durations" };
-    }
-    const avgDuration = durations.reduce((a, b) => a + b, 0) / durations.length;
-    const maxDuration = Math.max(...durations);
-    if (maxDuration > 300) {
-      return {
-        name: "Job Latency",
-        status: "warn",
-        detail: `Slow jobs detected \u2014 avg: ${avgDuration.toFixed(0)}s, max: ${maxDuration.toFixed(0)}s`,
-        value: avgDuration,
-        threshold: 120
-      };
-    }
-    return {
-      name: "Job Latency",
-      status: "ok",
-      detail: `Avg job duration: ${avgDuration.toFixed(0)}s, max: ${maxDuration.toFixed(0)}s \u2014 OK`,
-      value: avgDuration
-    };
-  } catch {
-    return { name: "Job Latency", status: "ok", detail: "Could not analyze job trends" };
-  }
-}
-async function runPerformanceReview(periodDays = 7) {
-  const now = Date.now();
-  const periodStart = now - periodDays * 24 * 60 * 60 * 1e3;
-  const history = await getConfigValue2("wealth_engines_trade_history", []);
-  const periodTrades = history.filter((t) => new Date(t.closed_at).getTime() > periodStart);
-  const wins = periodTrades.filter((t) => (t.pnl || 0) > 0);
-  const winRate = periodTrades.length > 0 ? wins.length / periodTrades.length * 100 : 0;
-  const totalPnl = periodTrades.reduce((s, t) => s + (t.pnl || 0), 0);
-  const avgPnl = periodTrades.length > 0 ? totalPnl / periodTrades.length : 0;
-  let sharpe = 0;
-  if (periodTrades.length >= 2) {
-    const pnls = periodTrades.map((t) => t.pnl || 0);
-    const mean = pnls.reduce((a, b) => a + b, 0) / pnls.length;
-    const variance = pnls.reduce((a, b) => a + (b - mean) ** 2, 0) / (pnls.length - 1);
-    const stdDev = Math.sqrt(variance);
-    sharpe = stdDev > 0 ? mean / stdDev * Math.sqrt(252 / periodDays) : 0;
-  }
-  let bestTrade = null;
-  let worstTrade = null;
-  for (const t of periodTrades) {
-    if (!bestTrade || t.pnl > bestTrade.pnl) bestTrade = { asset: t.asset, pnl: t.pnl };
-    if (!worstTrade || t.pnl < worstTrade.pnl) worstTrade = { asset: t.asset, pnl: t.pnl };
-  }
-  const holdTimes = periodTrades.map((t) => {
-    const open = new Date(t.opened_at).getTime();
-    const close = new Date(t.closed_at).getTime();
-    return (close - open) / (3600 * 1e3);
-  });
-  const avgHoldTime = holdTimes.length > 0 ? holdTimes.reduce((a, b) => a + b, 0) / holdTimes.length : 0;
-  const cryptoTheses = await getConfigValue2("scout_active_theses", []);
-  const pmTheses = await getConfigValue2("polymarket_scout_active_theses", []);
-  const totalTheses = cryptoTheses.length + pmTheses.length;
-  const tradedThesisIds = new Set(periodTrades.map((t) => t.thesis_id));
-  const allThesisIds = /* @__PURE__ */ new Set([
-    ...cryptoTheses.map((t) => t.id),
-    ...pmTheses.map((t) => t.id)
-  ]);
-  const convertedCount = [...tradedThesisIds].filter((id) => allThesisIds.has(id)).length;
-  const conversionRate = totalTheses > 0 ? convertedCount / totalTheses * 100 : 0;
-  const slippages = periodTrades.filter((t) => t.expected_entry_price && t.entry_price).map((t) => Math.abs(t.entry_price - t.expected_entry_price) / t.expected_entry_price * 100);
-  const avgSlippage = slippages.length > 0 ? slippages.reduce((a, b) => a + b, 0) / slippages.length : 0;
-  const sourceBreakdown = {};
-  for (const t of periodTrades) {
-    const src = t.source || "unknown";
-    if (!sourceBreakdown[src]) sourceBreakdown[src] = { trades: 0, pnl: 0, win_rate: 0 };
-    sourceBreakdown[src].trades++;
-    sourceBreakdown[src].pnl += t.pnl || 0;
-  }
-  for (const src of Object.keys(sourceBreakdown)) {
-    const srcTrades = periodTrades.filter((t) => (t.source || "unknown") === src);
-    const srcWins = srcTrades.filter((t) => (t.pnl || 0) > 0);
-    sourceBreakdown[src].win_rate = srcTrades.length > 0 ? srcWins.length / srcTrades.length * 100 : 0;
-  }
-  const perAssetPnl = {};
-  for (const t of periodTrades) {
-    const asset = t.asset || "unknown";
-    if (!perAssetPnl[asset]) perAssetPnl[asset] = { trades: 0, pnl: 0, cumulative_loss: 0 };
-    perAssetPnl[asset].trades++;
-    perAssetPnl[asset].pnl += t.pnl || 0;
-    if ((t.pnl || 0) < 0) perAssetPnl[asset].cumulative_loss += Math.abs(t.pnl || 0);
-  }
-  let maxDrawdownPct = 0;
-  if (periodTrades.length > 0) {
-    const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 50);
-    let equity = portfolio;
-    let peak = portfolio;
-    const sorted = [...periodTrades].sort(
-      (a, b) => new Date(a.closed_at).getTime() - new Date(b.closed_at).getTime()
-    );
-    for (const t of sorted) {
-      equity += t.pnl || 0;
-      if (equity > peak) peak = equity;
-      const dd = peak > 0 ? (peak - equity) / peak * 100 : 0;
-      if (dd > maxDrawdownPct) maxDrawdownPct = dd;
-    }
-  }
-  const signalAttribution = buildSignalAttribution(periodTrades, totalPnl);
-  const exposureAlerts = await detectCrossDomainExposure();
-  const review = {
-    id: `perf_${now}`,
-    timestamp: now,
-    period_start: periodStart,
-    period_end: now,
-    total_trades: periodTrades.length,
-    win_rate: winRate,
-    avg_pnl: avgPnl,
-    total_pnl: totalPnl,
-    max_drawdown_pct: maxDrawdownPct,
-    sharpe_ratio: sharpe,
-    best_trade: bestTrade,
-    worst_trade: worstTrade,
-    avg_hold_time_hours: avgHoldTime,
-    thesis_conversion_rate: conversionRate,
-    avg_slippage_pct: avgSlippage,
-    per_asset_pnl: perAssetPnl,
-    source_breakdown: sourceBreakdown,
-    signal_attribution: signalAttribution,
-    exposure_alerts: exposureAlerts.map((e) => e.detail)
-  };
-  if (winRate < 40 && periodTrades.length >= 3) {
-    await captureImprovement({
-      source: "performance_review",
-      category: "signal",
-      severity: "high",
-      title: `Low win rate: ${winRate.toFixed(0)}%`,
-      description: `Win rate over ${periodDays}d is ${winRate.toFixed(1)}% (${wins.length}/${periodTrades.length}). Signal quality may be degraded.`,
-      recommendation: "Review SCOUT thesis generation criteria; consider tightening confidence thresholds"
-    });
-  }
-  if (avgSlippage > 1.5 && slippages.length >= 2) {
-    await captureImprovement({
-      source: "performance_review",
-      category: "execution",
-      severity: "medium",
-      title: `High slippage: ${avgSlippage.toFixed(2)}%`,
-      description: `Average execution slippage is ${avgSlippage.toFixed(2)}% over ${slippages.length} trades.`,
-      recommendation: "Review BNKR execution timing; consider limit orders or smaller position sizes"
-    });
-  }
-  const PERF_REVIEWS_KEY = "oversight_performance_reviews";
-  const existingReviews = await getConfigValue2(PERF_REVIEWS_KEY, []);
-  existingReviews.push(review);
-  await setConfigValue2(PERF_REVIEWS_KEY, pruneByAge(existingReviews, MAX_REPORTS));
-  return review;
-}
-function buildSignalAttribution(trades, totalPnl) {
-  const groupKeys = {};
-  for (const t of trades) {
-    const source = t.source || "unknown";
-    const direction = t.direction || "unknown";
-    const key = `${source}/${direction}`;
-    if (!groupKeys[key]) groupKeys[key] = [];
-    groupKeys[key].push(t);
-    const sourceKey = source;
-    if (!groupKeys[sourceKey]) groupKeys[sourceKey] = [];
-    groupKeys[sourceKey].push(t);
-  }
-  const attrs = [];
-  const seen = /* @__PURE__ */ new Set();
-  for (const source of ["crypto_scout", "polymarket_scout", "manual"]) {
-    const sourceTrades = groupKeys[source];
-    if (!sourceTrades || seen.has(source)) continue;
-    seen.add(source);
-    const wins = sourceTrades.filter((t) => (t.pnl || 0) > 0);
-    const losses = sourceTrades.filter((t) => (t.pnl || 0) <= 0);
-    const signalPnl = sourceTrades.reduce((s, t) => s + (t.pnl || 0), 0);
-    const avgPnlPerTrade = sourceTrades.length > 0 ? signalPnl / sourceTrades.length : 0;
-    attrs.push({
-      signal_type: source,
-      trades: sourceTrades.length,
-      wins: wins.length,
-      losses: losses.length,
-      total_pnl: signalPnl,
-      avg_confidence: avgPnlPerTrade,
-      contribution_pct: totalPnl !== 0 ? signalPnl / Math.abs(totalPnl) * 100 : 0
-    });
-    for (const dir of ["LONG", "SHORT", "YES", "NO"]) {
-      const dirKey = `${source}/${dir}`;
-      const dirTrades = groupKeys[dirKey];
-      if (!dirTrades || seen.has(dirKey)) continue;
-      seen.add(dirKey);
-      const dirWins = dirTrades.filter((t) => (t.pnl || 0) > 0);
-      const dirLosses = dirTrades.filter((t) => (t.pnl || 0) <= 0);
-      const dirPnl = dirTrades.reduce((s, t) => s + (t.pnl || 0), 0);
-      attrs.push({
-        signal_type: `${source}/${dir}`,
-        trades: dirTrades.length,
-        wins: dirWins.length,
-        losses: dirLosses.length,
-        total_pnl: dirPnl,
-        avg_confidence: dirTrades.length > 0 ? dirPnl / dirTrades.length : 0,
-        contribution_pct: totalPnl !== 0 ? dirPnl / Math.abs(totalPnl) * 100 : 0
-      });
-    }
-  }
-  return attrs.sort((a, b) => b.total_pnl - a.total_pnl);
-}
-async function detectCrossDomainExposure() {
-  const positions = await getConfigValue2("wealth_engines_positions", []);
-  const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 50);
-  const alerts = [];
-  const cryptoPositions = positions.filter((p) => p.asset_class === "crypto");
-  const pmPositions = positions.filter((p) => p.asset_class === "polymarket");
-  const CRYPTO_PM_CORRELATIONS = {
-    BTC: ["bitcoin", "btc", "crypto"],
-    ETH: ["ethereum", "eth", "crypto"],
-    SOL: ["solana", "sol"],
-    DOGE: ["doge", "meme"],
-    XRP: ["xrp", "ripple"]
-  };
-  for (const cryptoPos of cryptoPositions) {
-    const asset = cryptoPos.asset.toUpperCase().replace(/USDT?$/, "");
-    const keywords = CRYPTO_PM_CORRELATIONS[asset] || [asset.toLowerCase()];
-    for (const pmPos of pmPositions) {
-      const pmAsset = pmPos.asset.toLowerCase();
-      const matched = keywords.some((kw) => pmAsset.includes(kw));
-      if (!matched) continue;
-      const cryptoExposure = (cryptoPos.size || 0) * (cryptoPos.entry_price || 0);
-      const pmExposure = (pmPos.size || 0) * (pmPos.entry_price || 0);
-      const combinedPct = portfolio > 0 ? (cryptoExposure + pmExposure) / portfolio * 100 : 0;
-      const isSameDirection = cryptoPos.direction === "LONG" && pmPos.direction === "YES" || cryptoPos.direction === "SHORT" && pmPos.direction === "NO";
-      alerts.push({
-        crypto_asset: cryptoPos.asset,
-        polymarket_question: pmPos.asset.slice(0, 80),
-        correlation_type: isSameDirection ? "direct" : "inverse",
-        combined_exposure_pct: combinedPct,
-        risk_level: combinedPct > 40 ? "high" : combinedPct > 25 ? "medium" : "low",
-        detail: `${cryptoPos.asset} ${cryptoPos.direction} + PM "${pmPos.asset.slice(0, 40)}" ${pmPos.direction} \u2014 ${combinedPct.toFixed(0)}% combined exposure (${isSameDirection ? "correlated" : "hedged"})`
-      });
-    }
-  }
-  for (let i = 0; i < pmPositions.length; i++) {
-    for (let j = i + 1; j < pmPositions.length; j++) {
-      const a = pmPositions[i];
-      const b = pmPositions[j];
-      if (a.exposure_bucket === b.exposure_bucket) {
-        const combinedExposure = a.size * a.entry_price + b.size * b.entry_price;
-        const combinedPct = portfolio > 0 ? combinedExposure / portfolio * 100 : 0;
-        alerts.push({
-          crypto_asset: `PM: ${a.asset}`,
-          polymarket_question: b.asset,
-          correlation_type: "thematic",
-          combined_exposure_pct: combinedPct,
-          risk_level: combinedPct > 30 ? "high" : "medium",
-          detail: `PM bucket overlap: "${a.asset.slice(0, 30)}" + "${b.asset.slice(0, 30)}" in bucket "${a.exposure_bucket}" \u2014 ${combinedPct.toFixed(0)}% combined`
-        });
-      }
-    }
-  }
-  const bucketExposure = {};
-  for (const pos of positions) {
-    const bucket = pos.exposure_bucket || "general";
-    const exposure = (pos.size || 0) * (pos.entry_price || 0);
-    bucketExposure[bucket] = (bucketExposure[bucket] || 0) + exposure;
-  }
-  const BUCKET_THRESHOLD_PCT = 40;
-  for (const [bucket, exposure] of Object.entries(bucketExposure)) {
-    const pct = portfolio > 0 ? exposure / portfolio * 100 : 0;
-    if (pct > BUCKET_THRESHOLD_PCT) {
-      alerts.push({
-        crypto_asset: `Bucket: ${bucket}`,
-        polymarket_question: `All positions in "${bucket}"`,
-        correlation_type: "thematic",
-        combined_exposure_pct: pct,
-        risk_level: pct > 60 ? "high" : "medium",
-        detail: `Exposure bucket "${bucket}" has ${pct.toFixed(0)}% of portfolio ($${exposure.toFixed(2)}) across ${positions.filter((p) => (p.exposure_bucket || "general") === bucket).length} positions`
-      });
-    }
-  }
-  const EXPOSURE_ALERT_THRESHOLD = 40;
-  const highExposure = alerts.filter((a) => a.combined_exposure_pct > EXPOSURE_ALERT_THRESHOLD);
-  for (const alert of highExposure) {
-    await notifyTelegram(
-      `\u26A0\uFE0F CROSS-DOMAIN RISK: ${alert.crypto_asset} + ${alert.polymarket_question.slice(0, 40)} \u2014 ${alert.combined_exposure_pct.toFixed(0)}% combined exposure (${alert.correlation_type})`
-    );
-    await captureImprovement({
-      source: "health_check",
-      category: "risk",
-      severity: alert.combined_exposure_pct > 60 ? "critical" : "high",
-      domain: "cross_domain",
-      title: `Cross-domain concentration: ${alert.combined_exposure_pct.toFixed(0)}% exposure`,
-      description: alert.detail,
-      recommendation: "Reduce correlated positions across crypto perps and Polymarket to stay under 40% combined exposure",
-      route: "bankr-config"
-    });
-  }
-  return alerts;
-}
-async function captureImprovement(params) {
-  const queue = await getConfigValue2(IMPROVEMENT_QUEUE_KEY, []);
-  const isDuplicate = queue.some(
-    (i) => i.title === params.title && i.status === "open" && Date.now() - i.created_at < 24 * 60 * 60 * 1e3
-  );
-  if (isDuplicate) {
-    return queue.find((i) => i.title === params.title && i.status === "open");
-  }
-  const severityPriority = { critical: 1, high: 2, medium: 3, low: 4 };
-  const routeMap = {
-    signal: "autoresearch",
-    execution: "bankr-config",
-    infrastructure: "manual",
-    risk: "manual",
-    strategy: "autoresearch"
-  };
-  const improvement = {
-    id: `imp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-    created_at: Date.now(),
-    source: params.source,
-    category: params.category,
-    severity: params.severity,
-    domain: params.domain || inferDomain(params),
-    priority: params.priority ?? severityPriority[params.severity] ?? 3,
-    title: params.title,
-    description: params.description,
-    pattern_description: params.pattern_description,
-    recommendation: params.recommendation,
-    route: params.route || routeMap[params.category] || "manual",
-    status: "open"
-  };
-  queue.push(improvement);
-  await setConfigValue2(IMPROVEMENT_QUEUE_KEY, pruneByAge(queue, MAX_IMPROVEMENTS));
-  console.log(`[oversight] Improvement captured: [${params.severity}] ${params.title} \u2192 route:${improvement.route}`);
-  return improvement;
-}
-function inferDomain(params) {
-  const text = `${params.title} ${params.description}`.toLowerCase();
-  if (text.includes("polymarket") || text.includes("pm ")) return "polymarket";
-  if (text.includes("crypto") || text.includes("scout") || text.includes("bnkr") || text.includes("bankr")) return "crypto";
-  if (text.includes("cross") || text.includes("exposure") || text.includes("correlated")) return "cross_domain";
-  return "system";
-}
-async function updateImprovement(id, status, note) {
-  const queue = await getConfigValue2(IMPROVEMENT_QUEUE_KEY, []);
-  const idx = queue.findIndex((i) => i.id === id);
-  if (idx === -1) return null;
-  queue[idx].status = status;
-  if (status === "resolved" || status === "dismissed") {
-    queue[idx].resolved_at = Date.now();
-    if (note) queue[idx].resolution_note = note;
-  }
-  await setConfigValue2(IMPROVEMENT_QUEUE_KEY, queue);
-  return queue[idx];
-}
-async function getImprovementQueue() {
-  return getConfigValue2(IMPROVEMENT_QUEUE_KEY, []);
-}
-async function openShadowTrade(params) {
-  const shadow = {
-    id: `shadow_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-    thesis_id: params.thesis_id,
-    asset: params.asset,
-    asset_class: params.asset_class,
-    source: params.source,
-    direction: params.direction,
-    entry_price: params.entry_price,
-    current_price: params.entry_price,
-    hypothetical_pnl: 0,
-    opened_at: Date.now(),
-    market_id: params.market_id,
-    status: "open",
-    stop_price: params.stop_price,
-    target_price: params.target_price
-  };
-  const trades = await getConfigValue2(SHADOW_TRADES_KEY, []);
-  trades.push(shadow);
-  await setConfigValue2(SHADOW_TRADES_KEY, pruneByAge(trades, MAX_SHADOW_TRADES));
-  console.log(`[oversight] Shadow trade opened: ${params.asset} ${params.direction} @ $${params.entry_price}`);
-  try {
-    const { sendShadowTradeNotification: sendShadowTradeNotification2 } = await Promise.resolve().then(() => (init_telegram(), telegram_exports));
-    sendShadowTradeNotification2({
-      type: "open",
-      asset: params.asset,
-      direction: params.direction,
-      entryPrice: params.entry_price,
-      source: params.source
-    }).catch((e) => console.warn("[oversight] Shadow open notification failed:", e));
-  } catch {
-  }
-  return shadow;
-}
-async function closeShadowTrade(id, exitPrice, reason) {
-  const trades = await getConfigValue2(SHADOW_TRADES_KEY, []);
-  const idx = trades.findIndex((t) => t.id === id);
-  if (idx === -1) return null;
-  const trade = trades[idx];
-  trade.status = "closed";
-  trade.exit_price = exitPrice;
-  trade.closed_at = Date.now();
-  trade.close_reason = reason;
-  const multiplier = trade.direction === "LONG" || trade.direction === "YES" ? 1 : -1;
-  trade.hypothetical_pnl = (exitPrice - trade.entry_price) * multiplier;
-  await setConfigValue2(SHADOW_TRADES_KEY, trades);
-  console.log(`[oversight] Shadow trade closed: ${trade.asset} P&L: $${trade.hypothetical_pnl.toFixed(2)}`);
-  try {
-    const { sendShadowTradeNotification: sendShadowTradeNotification2 } = await Promise.resolve().then(() => (init_telegram(), telegram_exports));
-    sendShadowTradeNotification2({
-      type: "close",
-      asset: trade.asset,
-      direction: trade.direction,
-      entryPrice: trade.entry_price,
-      exitPrice,
-      pnl: trade.hypothetical_pnl,
-      reason
-    }).catch((e) => console.warn("[oversight] Shadow close notification failed:", e));
-  } catch {
-  }
-  return trade;
-}
-async function updateShadowPrices(priceUpdates) {
-  const trades = await getConfigValue2(SHADOW_TRADES_KEY, []);
-  const openTrades = trades.filter((t) => t.status === "open");
-  for (const trade of openTrades) {
-    const newPrice = priceUpdates[trade.asset];
-    if (newPrice != null) {
-      trade.current_price = newPrice;
-      const multiplier = trade.direction === "LONG" || trade.direction === "YES" ? 1 : -1;
-      trade.hypothetical_pnl = (newPrice - trade.entry_price) * multiplier;
-    }
-  }
-  await setConfigValue2(SHADOW_TRADES_KEY, trades);
-  return openTrades;
-}
-var SHADOW_MAX_AGE_HOURS = 168;
-async function refreshShadowTradesFromMarket() {
-  const trades = await getConfigValue2(SHADOW_TRADES_KEY, []);
-  const openTrades = trades.filter((t) => t.status === "open");
-  let updated = 0;
-  let closed = 0;
-  const errors = [];
-  const now = Date.now();
-  for (const trade of openTrades) {
-    const ageHours = (now - trade.opened_at) / (3600 * 1e3);
-    if (ageHours > SHADOW_MAX_AGE_HOURS) {
-      trade.status = "closed";
-      trade.closed_at = now;
-      trade.close_reason = "expired";
-      trade.exit_price = trade.current_price;
-      const multiplier = trade.direction === "LONG" || trade.direction === "YES" ? 1 : -1;
-      trade.hypothetical_pnl = (trade.current_price - trade.entry_price) * multiplier;
-      closed++;
-      try {
-        const { sendShadowTradeNotification: sendShadowTradeNotification2 } = await Promise.resolve().then(() => (init_telegram(), telegram_exports));
-        sendShadowTradeNotification2({
-          type: "close",
-          asset: trade.asset,
-          direction: trade.direction,
-          entryPrice: trade.entry_price,
-          exitPrice: trade.current_price,
-          pnl: trade.hypothetical_pnl,
-          reason: "expired (168h max age)"
-        }).catch(() => {
-        });
-      } catch {
-      }
-      continue;
-    }
-    try {
-      let latestPrice = null;
-      if (trade.asset_class === "crypto") {
-        const candles = await getHistoricalOHLCV(trade.asset, 1);
-        if (candles.length > 0) {
-          latestPrice = candles[candles.length - 1].close;
-        }
-      } else if (trade.asset_class === "polymarket" && trade.market_id) {
-        const market = await getMarketDetails(trade.market_id);
-        if (market && market.outcome_prices && market.outcome_prices.length > 0) {
-          const parsed = parseFloat(String(market.outcome_prices[0]));
-          latestPrice = Number.isFinite(parsed) ? parsed : null;
-        }
-      }
-      if (latestPrice != null) {
-        trade.current_price = latestPrice;
-        const isLong = trade.direction === "LONG" || trade.direction === "YES";
-        const multiplier = isLong ? 1 : -1;
-        trade.hypothetical_pnl = (latestPrice - trade.entry_price) * multiplier;
-        updated++;
-        if (trade.stop_price != null) {
-          const stopHit = isLong ? latestPrice <= trade.stop_price : latestPrice >= trade.stop_price;
-          if (stopHit) {
-            trade.status = "closed";
-            trade.closed_at = now;
-            trade.close_reason = "stop_hit";
-            trade.exit_price = latestPrice;
-            closed++;
-            console.log(`[oversight] Shadow stop hit: ${trade.asset} ${trade.direction} @ $${latestPrice} (stop=$${trade.stop_price}) P&L: $${trade.hypothetical_pnl.toFixed(4)}`);
-            try {
-              const { sendShadowTradeNotification: sendShadowTradeNotification2 } = await Promise.resolve().then(() => (init_telegram(), telegram_exports));
-              sendShadowTradeNotification2({
-                type: "close",
-                asset: trade.asset,
-                direction: trade.direction,
-                entryPrice: trade.entry_price,
-                exitPrice: latestPrice,
-                pnl: trade.hypothetical_pnl,
-                reason: `stop hit ($${trade.stop_price})`
-              }).catch(() => {
-              });
-            } catch {
-            }
-            continue;
-          }
-        }
-        if (trade.target_price != null) {
-          const targetHit = isLong ? latestPrice >= trade.target_price : latestPrice <= trade.target_price;
-          if (targetHit) {
-            trade.status = "closed";
-            trade.closed_at = now;
-            trade.close_reason = "target_hit";
-            trade.exit_price = latestPrice;
-            closed++;
-            console.log(`[oversight] Shadow target hit: ${trade.asset} ${trade.direction} @ $${latestPrice} (target=$${trade.target_price}) P&L: $${trade.hypothetical_pnl.toFixed(4)}`);
-            try {
-              const { sendShadowTradeNotification: sendShadowTradeNotification2 } = await Promise.resolve().then(() => (init_telegram(), telegram_exports));
-              sendShadowTradeNotification2({
-                type: "close",
-                asset: trade.asset,
-                direction: trade.direction,
-                entryPrice: trade.entry_price,
-                exitPrice: latestPrice,
-                pnl: trade.hypothetical_pnl,
-                reason: `target hit ($${trade.target_price})`
-              }).catch(() => {
-              });
-            } catch {
-            }
-            continue;
-          }
-        }
-      }
-    } catch (e) {
-      errors.push(`${trade.asset}: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-  await setConfigValue2(SHADOW_TRADES_KEY, trades);
-  console.log(`[oversight] Shadow refresh: ${updated} updated, ${closed} expired, ${errors.length} errors`);
-  return { updated, closed, errors };
-}
-async function getShadowTrades(statusFilter) {
-  const trades = await getConfigValue2(SHADOW_TRADES_KEY, []);
-  if (statusFilter) return trades.filter((t) => t.status === statusFilter);
-  return trades;
-}
-async function getShadowPerformance() {
-  const trades = await getConfigValue2(SHADOW_TRADES_KEY, []);
-  const closed = trades.filter((t) => t.status === "closed");
-  const open = trades.filter((t) => t.status === "open");
-  const wins = closed.filter((t) => t.hypothetical_pnl > 0);
-  const totalPnl = closed.reduce((s, t) => s + t.hypothetical_pnl, 0);
-  const openPnl = open.reduce((s, t) => s + t.hypothetical_pnl, 0);
-  return {
-    total_trades: trades.length,
-    open_trades: open.length,
-    closed_trades: closed.length,
-    total_pnl: totalPnl + openPnl,
-    win_rate: closed.length > 0 ? wins.length / closed.length * 100 : 0,
-    avg_pnl: closed.length > 0 ? totalPnl / closed.length : 0,
-    trades
-  };
-}
-async function getLatestHealthReport() {
-  const reports = await getConfigValue2(HEALTH_REPORTS_KEY, []);
-  return reports.length > 0 ? reports[reports.length - 1] : null;
-}
-async function getOversightSummary() {
-  const health = await getLatestHealthReport();
-  const queue = await getConfigValue2(IMPROVEMENT_QUEUE_KEY, []);
-  const openItems = queue.filter((i) => i.status === "open");
-  const criticalItems = openItems.filter((i) => i.severity === "critical");
-  const shadowPerf = await getShadowPerformance();
-  const lastCheck = await getConfigValue2(LAST_HEALTH_CHECK_KEY, null);
-  const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 50);
-  const peak = await getConfigValue2("wealth_engines_peak_portfolio", 50);
-  const history = await getConfigValue2("wealth_engines_trade_history", []);
-  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1e3;
-  const recentTrades = history.filter((t) => new Date(t.closed_at).getTime() > sevenDaysAgo);
-  const rolling7d = recentTrades.reduce((s, t) => s + (t.pnl || 0), 0);
-  const rolling7dPct = portfolio > 0 ? rolling7d / portfolio * 100 : 0;
-  const drawdownPct = peak > 0 ? (peak - portfolio) / peak * 100 : 0;
-  return {
-    health,
-    drawdown: { portfolio_value: portfolio, peak_value: peak, drawdown_pct: drawdownPct, rolling_7d_pnl_pct: rolling7dPct },
-    improvements: {
-      open: openItems.length,
-      total: queue.length,
-      critical: criticalItems.length,
-      active_items: openItems.slice(0, 10).map((i) => ({
-        id: i.id,
-        severity: i.severity,
-        title: i.title,
-        domain: i.domain || "system",
-        route: i.route || "manual",
-        created_at: i.created_at
-      }))
-    },
-    shadow: { open: shadowPerf.open_trades, total_pnl: shadowPerf.total_pnl },
-    last_check: lastCheck
-  };
-}
-async function reviewTheses() {
-  const cryptoTheses = await getConfigValue2("scout_active_theses", []);
-  const pmTheses = await getConfigValue2("polymarket_scout_active_theses", []);
-  const history = await getConfigValue2("wealth_engines_trade_history", []);
-  const reviews = [];
-  const allTheses = [
-    ...cryptoTheses.filter((t) => t.status === "active").map((t) => ({ ...t, _source: "crypto_scout" })),
-    ...pmTheses.filter((t) => t.status === "active").map((t) => ({ ...t, _source: "polymarket_scout" }))
-  ];
-  for (const thesis of allTheses) {
-    const asset = thesis.asset || thesis.question || "unknown";
-    const assetHistory = history.filter((t) => t.thesis_id === thesis.id);
-    const assetPnl = assetHistory.reduce((s, t) => s + (t.pnl || 0), 0);
-    const assetWins = assetHistory.filter((t) => (t.pnl || 0) > 0).length;
-    const assetLosses = assetHistory.filter((t) => (t.pnl || 0) <= 0).length;
-    const confidence = thesis.confidence || thesis.score || 0;
-    const direction = thesis.direction || "LONG";
-    const bullFactors = [];
-    const bearFactors = [];
-    if (confidence >= 0.7 || confidence >= 3.5) bullFactors.push(`High confidence: ${confidence}`);
-    else bearFactors.push(`Low confidence: ${confidence}`);
-    if (assetWins > assetLosses) bullFactors.push(`Positive track record: ${assetWins}W/${assetLosses}L`);
-    else if (assetLosses > 0) bearFactors.push(`Negative track record: ${assetWins}W/${assetLosses}L`);
-    if (assetPnl > 0) bullFactors.push(`Cumulative profit: $${assetPnl.toFixed(2)}`);
-    else if (assetPnl < 0) bearFactors.push(`Cumulative loss: $${assetPnl.toFixed(2)}`);
-    if (thesis.reasoning) bullFactors.push(`Thesis reasoning documented`);
-    if (thesis.age_hours && thesis.age_hours > 72) bearFactors.push(`Thesis aging: ${thesis.age_hours.toFixed(0)}h old`);
-    if (thesis.invalidation_criteria) bullFactors.push(`Clear invalidation criteria defined`);
-    if (thesis._source === "polymarket_scout") {
-      if ((thesis.whale_count ?? 0) >= 3) bullFactors.push(`Strong whale consensus: ${thesis.whale_count} whales`);
-      else bearFactors.push(`Weak whale consensus: ${thesis.whale_count || 0} whales`);
-      if (thesis.odds && (thesis.odds > 85 || thesis.odds < 15)) bearFactors.push(`Extreme odds: ${thesis.odds}% \u2014 limited edge`);
-    }
-    const verdict = bullFactors.length > bearFactors.length + 1 ? "bull_favored" : bearFactors.length > bullFactors.length + 1 ? "bear_favored" : "neutral";
-    let recommendation = "Continue monitoring";
-    if (verdict === "bear_favored") {
-      recommendation = "Consider reducing position size or tightening stops";
-    }
-    reviews.push({
-      thesis_id: thesis.id,
-      asset: typeof asset === "string" ? asset.slice(0, 50) : "unknown",
-      source: thesis._source || "unknown",
-      direction: direction || "unknown",
-      bull_case: bullFactors.join("; ") || "No strong bull factors",
-      bear_case: bearFactors.join("; ") || "No significant bear factors",
-      verdict,
-      recommendation
-    });
-    if (verdict === "bear_favored") {
-      await captureImprovement({
-        source: "performance_review",
-        category: "signal",
-        severity: "medium",
-        domain: thesis._source === "polymarket_scout" ? "polymarket" : "crypto",
-        title: `Bear-favored thesis: ${typeof asset === "string" ? asset.slice(0, 30) : "unknown"}`,
-        description: `Adversarial review found bear case stronger: ${bearFactors.join("; ")}`,
-        pattern_description: `Thesis ${thesis.id} has more bear factors (${bearFactors.length}) than bull (${bullFactors.length})`,
-        recommendation,
-        route: "autoresearch"
-      });
-    }
-  }
-  return reviews;
-}
-async function checkPerAssetLosses() {
-  const history = await getConfigValue2("wealth_engines_trade_history", []);
-  const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 50);
-  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1e3;
-  const recent = history.filter((t) => new Date(t.closed_at).getTime() > sevenDaysAgo);
-  const byAsset = {};
-  for (const t of recent) {
-    const asset = t.asset || "unknown";
-    byAsset[asset] = (byAsset[asset] || 0) + (t.pnl || 0);
-  }
-  for (const [asset, pnl] of Object.entries(byAsset)) {
-    const lossPct = portfolio > 0 ? Math.abs(pnl) / portfolio * 100 : 0;
-    if (pnl < 0 && lossPct > 10) {
-      await captureImprovement({
-        source: "performance_review",
-        category: "risk",
-        severity: lossPct > 20 ? "critical" : "high",
-        domain: "crypto",
-        title: `Per-asset loss: ${asset} -${lossPct.toFixed(1)}%`,
-        description: `${asset} has accumulated $${Math.abs(pnl).toFixed(2)} loss (${lossPct.toFixed(1)}% of portfolio) in 7 days.`,
-        pattern_description: `Concentrated losses in single asset ${asset}`,
-        recommendation: `Review ${asset} thesis quality; consider blacklisting or reducing position limits`,
-        route: "bankr-config"
-      });
-    }
-  }
-}
-async function generateDailyPerformanceSummary() {
-  const review = await runPerformanceReview(1);
-  const health = await getLatestHealthReport();
-  const portfolio = await getConfigValue2("wealth_engines_portfolio_value", 50);
-  const peak = await getConfigValue2("wealth_engines_peak_portfolio", 50);
-  const drawdownPct = peak > 0 ? (peak - portfolio) / peak * 100 : 0;
-  const queue = await getConfigValue2(IMPROVEMENT_QUEUE_KEY, []);
-  const openItems = queue.filter((i) => i.status === "open");
-  const lines = [
-    `\u{1F4CB} *Daily Performance Summary*`,
-    `_${(/* @__PURE__ */ new Date()).toLocaleDateString("en-US", { timeZone: "America/New_York", weekday: "long", month: "short", day: "numeric" })}_`,
-    "",
-    `\u{1F4B0} *Portfolio:* $${portfolio.toFixed(2)} (peak: $${peak.toFixed(2)}, DD: ${drawdownPct.toFixed(1)}%)`,
-    `\u{1F4CA} *Today:* ${review.total_trades} trades, ${review.total_pnl >= 0 ? "+" : ""}$${review.total_pnl.toFixed(2)}`,
-    `\u{1F3AF} *Win Rate:* ${review.win_rate.toFixed(0)}%`
-  ];
-  if (health) {
-    const icons = { healthy: "\u{1F7E2}", degraded: "\u{1F7E1}", critical: "\u{1F534}" };
-    lines.push(`${icons[health.overall_status] || "\u26AA"} *System:* ${health.overall_status}`);
-  }
-  if (openItems.length > 0) {
-    const critical = openItems.filter((i) => i.severity === "critical");
-    lines.push(`\u{1F4CB} *Open Issues:* ${openItems.length}${critical.length > 0 ? ` (${critical.length} critical)` : ""}`);
-  }
-  return lines.join("\n");
-}
-async function sendDailyPerformanceSummary() {
-  const summary = await generateDailyPerformanceSummary();
-  await notifyTelegram(summary);
-  console.log("[oversight] Daily performance summary sent");
-}
-async function autoTrackShadowTrade(params) {
-  const existing = await getShadowTrades("open");
-  const match = existing.find((t) => t.asset === params.asset && t.direction === params.direction);
-  if (match) {
-    const ageHours = (Date.now() - new Date(match.opened_at).getTime()) / 36e5;
-    if (ageHours < 24) return null;
-    await closeShadowTrade(match.id, match.entry_price, "replaced_by_newer_thesis");
-  }
-  let stopPrice = params.stop_price;
-  let targetPrice = params.target_price;
-  if (!stopPrice || !targetPrice) {
-    try {
-      const { getActiveTheses: getActiveTheses3 } = await Promise.resolve().then(() => (init_crypto_scout(), crypto_scout_exports));
-      const theses = await getActiveTheses3();
-      const thesis = theses.find((t) => t.id === params.thesis_id || t.asset === params.asset && t.direction === params.direction);
-      if (thesis) {
-        if (!stopPrice && thesis.stop_price) stopPrice = thesis.stop_price;
-        if (!targetPrice && thesis.exit_price) targetPrice = thesis.exit_price;
-      }
-    } catch (e) {
-      console.warn(`[oversight] Thesis lookup for shadow levels failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-  const shadow = await openShadowTrade({
-    thesis_id: params.thesis_id,
-    asset: params.asset,
-    asset_class: params.asset_class,
-    source: params.source,
-    direction: params.direction,
-    entry_price: params.entry_price,
-    market_id: params.market_id,
-    stop_price: stopPrice,
-    target_price: targetPrice
-  });
-  console.log(`[oversight] Auto-shadow: ${params.asset} ${params.direction} @ $${params.entry_price} | stop=$${stopPrice ?? "none"} target=$${targetPrice ?? "none"} \u2014 ${params.reason}`);
-  return shadow;
-}
-
 // src/bankr.ts
+init_oversight();
 var PORTFOLIO_VALUE_KEY = "wealth_engines_portfolio_value";
 var PEAK_PORTFOLIO_KEY = "wealth_engines_peak_portfolio";
 var CONSECUTIVE_LOSSES_KEY = "wealth_engines_consecutive_losses";
@@ -14311,6 +14448,7 @@ ${backlinkHeading}${backlinkLine}`);
 }
 
 // server.ts
+init_oversight();
 init_autoresearch();
 var PORT = parseInt(process.env.PORT || "5000", 10);
 var ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
@@ -21739,7 +21877,10 @@ app.use((err, _req, res, _next) => {
 process.on("uncaughtException", (err) => console.error("Uncaught exception:", err));
 process.on("unhandledRejection", (reason) => console.error("Unhandled rejection:", reason));
 var server = createServer(app);
+var isShuttingDown = false;
 async function gracefulShutdown(signal) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
   console.error(`Got ${signal} \u2014 closing server...`);
   if (obSyncProcess) {
     try {
@@ -21759,11 +21900,13 @@ async function gracefulShutdown(signal) {
     console.error(`[shutdown] Sessions saved: ${saved}, failed: ${failed}`);
   }
   server.close(() => {
-    process.exit(0);
+    console.error("[shutdown] Server closed cleanly");
+    setTimeout(() => process.exit(0), 500);
   });
   setTimeout(() => {
+    console.error("[shutdown] Forced exit after timeout");
     process.exit(1);
-  }, 5e3);
+  }, 8e3);
 }
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
@@ -21774,14 +21917,22 @@ function killPort(port) {
   } catch {
   }
   try {
-    execSync(`lsof -ti :${port} | xargs kill -9`, { stdio: "ignore" });
+    execSync(`lsof -ti :${port} | xargs kill -9 2>/dev/null`, { stdio: "ignore" });
   } catch {
   }
 }
-function isPortInUse(port) {
+function getPortPids(port) {
   try {
-    const out = execSync(`fuser ${port}/tcp 2>/dev/null`, { encoding: "utf-8" });
-    return out.trim().length > 0;
+    const out = execSync(`lsof -t -iTCP:${port} -sTCP:LISTEN 2>/dev/null`, { encoding: "utf-8" });
+    return out.trim().split(/\s+/).map((s) => parseInt(s)).filter((n) => !isNaN(n) && n > 0 && n !== port);
+  } catch {
+    return [];
+  }
+}
+function isPidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
   } catch {
     return false;
   }
@@ -21790,15 +21941,93 @@ async function waitForPort(port, maxWaitMs = 3e4) {
   const start = Date.now();
   let attempt = 0;
   killPort(port);
-  await new Promise((r) => setTimeout(r, 500));
+  await new Promise((r) => setTimeout(r, 1e3));
   while (Date.now() - start < maxWaitMs) {
-    if (!isPortInUse(port)) return true;
+    const pids = getPortPids(port);
+    if (pids.length === 0) return true;
     attempt++;
-    console.warn(`[boot] Port ${port} still in use \u2014 waiting... (attempt ${attempt})`);
+    const alivePids = pids.filter(isPidAlive);
+    if (alivePids.length === 0) {
+      await new Promise((r) => setTimeout(r, 500));
+      return true;
+    }
+    console.warn(`[boot] Port ${port} still held by PIDs: ${alivePids.join(", ")} \u2014 killing (attempt ${attempt})`);
+    for (const pid of alivePids) {
+      try {
+        process.kill(pid, 9);
+      } catch {
+      }
+    }
     killPort(port);
     await new Promise((r) => setTimeout(r, 2e3));
   }
   return false;
+}
+async function runStartupRecovery() {
+  const startupTime = Date.now();
+  console.log("[recovery] Running startup recovery checks...");
+  let previousLastTick = 0;
+  try {
+    const pool2 = getPool();
+    const lastMonitorRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'bankr_monitor_last_tick'`);
+    if (lastMonitorRes.rows.length > 0) {
+      previousLastTick = typeof lastMonitorRes.rows[0].value === "number" ? lastMonitorRes.rows[0].value : parseInt(String(lastMonitorRes.rows[0].value));
+    }
+  } catch {
+  }
+  if (previousLastTick > 0) {
+    const downMinutes = Math.floor((startupTime - previousLastTick) / 6e4);
+    if (downMinutes > 10) {
+      console.warn(`[recovery] System was down for ~${downMinutes} minutes (last monitor tick: ${new Date(previousLastTick).toISOString()})`);
+    }
+  }
+  try {
+    const monitorResult = await runPositionMonitor();
+    const monitorPool = getPool();
+    await monitorPool.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('bankr_monitor_last_tick', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(Date.now()), Date.now()]
+    );
+    console.log(`[recovery] Position monitor: ${monitorResult.checked} checked, ${monitorResult.closed.length} closed`);
+    if (monitorResult.closed.length > 0) {
+      for (const trade of monitorResult.closed) {
+        await sendTradeAlert({
+          type: trade.close_reason === "kill_switch" ? "emergency" : "stopped",
+          asset: trade.asset,
+          direction: trade.direction,
+          exitPrice: trade.exit_price.toFixed(2),
+          pnl: trade.pnl,
+          reason: trade.close_reason
+        });
+      }
+    }
+  } catch (err) {
+    console.error("[recovery] Position monitor failed:", err instanceof Error ? err.message : err);
+  }
+  try {
+    const { refreshShadowTradesFromMarket: refreshShadowTradesFromMarket2 } = await Promise.resolve().then(() => (init_oversight(), oversight_exports));
+    const shadowResult = await refreshShadowTradesFromMarket2();
+    console.log(`[recovery] Shadow prices refreshed: ${shadowResult.updated} updated, ${shadowResult.closed} closed`);
+  } catch (err) {
+    console.error("[recovery] Shadow price refresh failed:", err instanceof Error ? err.message : err);
+  }
+}
+async function sendStartupNotification(googleStatus) {
+  const jobs = getJobs();
+  const enabledJobs = jobs.filter((j) => j.enabled).length;
+  const bnkrStatus = (await Promise.resolve().then(() => (init_bnkr(), bnkr_exports))).isConfigured() ? "Live" : "Shadow";
+  const googleLine = googleStatus.connected ? `\u2705 ${googleStatus.email}` : `\u274C Disconnected`;
+  const now = (/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York" });
+  const msg = [
+    `\u{1F7E2} *DarkNode Online*`,
+    ``,
+    `\u23F0 ${now} ET`,
+    `\u{1F4CB} Jobs: ${enabledJobs} active`,
+    `\u{1F3E6} BNKR: ${bnkrStatus}`,
+    `\u{1F4E7} Google: ${googleLine}`
+  ].join("\n");
+  await sendMessage(msg);
 }
 async function startServer(maxRetries = 5) {
   await init2();
@@ -21821,21 +22050,51 @@ async function startServer(maxRetries = 5) {
   } catch {
   }
   console.log("[boot] PostgreSQL ready (shared pool, 4 tables)");
-  checkConnectionStatus().then((status) => {
-    if (status.connected) console.log(`[boot] Google connected: ${status.email} (Gmail, Calendar, Drive, Sheets)`);
-    else console.warn(`[boot] Google not connected: ${status.error}`);
-  }).catch(() => {
-  });
+  let googleStatus = { connected: false };
+  try {
+    googleStatus = await checkConnectionStatus();
+    if (googleStatus.connected) {
+      console.log(`[boot] Google connected: ${googleStatus.email} (Gmail, Calendar, Drive, Sheets)`);
+    } else {
+      console.warn(`[boot] Google not connected: ${googleStatus.error}`);
+      sendMessage(`\u26A0\uFE0F *Google Disconnected*
+
+Gmail, Calendar, Drive, Sheets are offline.
+Reconnect: /api/gmail/auth`).catch(() => {
+      });
+    }
+  } catch {
+  }
+  let lastGoogleAlertSent = 0;
   setInterval(async () => {
     try {
       const token = await getAccessToken();
       if (token) {
         console.log("[google-health] Token valid \u2014 auto-refreshed successfully");
+        lastGoogleAlertSent = 0;
       } else {
         console.warn("[google-health] Token refresh failed \u2014 Google auth needs reconnection at /api/gmail/auth");
+        const now = Date.now();
+        if (now - lastGoogleAlertSent > 12 * 60 * 60 * 1e3) {
+          lastGoogleAlertSent = now;
+          sendMessage(`\u26A0\uFE0F *Google Auth Failed*
+
+Token refresh failed. Gmail jobs are silently failing.
+Reconnect: /api/gmail/auth`).catch(() => {
+          });
+        }
       }
     } catch (err) {
       console.error("[google-health] Auth check failed:", err.message);
+      const now = Date.now();
+      if (now - lastGoogleAlertSent > 12 * 60 * 60 * 1e3) {
+        lastGoogleAlertSent = now;
+        sendMessage(`\u26A0\uFE0F *Google Auth Error*
+
+${err.message}
+Reconnect: /api/gmail/auth`).catch(() => {
+        });
+      }
     }
   }, 6 * 60 * 60 * 1e3);
   const portReady = await waitForPort(PORT);
@@ -21877,7 +22136,7 @@ async function startServer(maxRetries = 5) {
             process.exit(1);
           }
         });
-        server.listen(PORT, "0.0.0.0", () => {
+        server.listen({ port: PORT, host: "0.0.0.0", exclusive: false }, () => {
           console.log(`[ready] pi-replit listening on http://localhost:${PORT}`);
           startObSync();
           startAlertSystem(broadcastToAll, async (briefPath, content) => {
@@ -21943,6 +22202,12 @@ async function startServer(maxRetries = 5) {
             }
           }, 5 * 60 * 1e3);
           console.log("[boot] BANKR position monitor started (5-min interval)");
+          runStartupRecovery().catch((err) => {
+            console.error("[recovery] Startup recovery failed:", err instanceof Error ? err.message : err);
+          });
+          sendStartupNotification(googleStatus).catch((err) => {
+            console.error("[boot] Startup notification failed:", err instanceof Error ? err.message : err);
+          });
           resolve();
         });
       });

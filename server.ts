@@ -7518,8 +7518,11 @@ process.on("uncaughtException", (err) => console.error("Uncaught exception:", er
 process.on("unhandledRejection", (reason) => console.error("Unhandled rejection:", reason));
 
 let server = createServer(app);
+let isShuttingDown = false;
 
 async function gracefulShutdown(signal: string) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
   console.error(`Got ${signal} — closing server...`);
   if (obSyncProcess) {
     try { obSyncProcess.kill(); } catch {}
@@ -7535,8 +7538,14 @@ async function gracefulShutdown(signal: string) {
     const failed = results.filter(r => r.status === "rejected").length;
     console.error(`[shutdown] Sessions saved: ${saved}, failed: ${failed}`);
   }
-  server.close(() => { process.exit(0); });
-  setTimeout(() => { process.exit(1); }, 5000);
+  server.close(() => {
+    console.error("[shutdown] Server closed cleanly");
+    setTimeout(() => process.exit(0), 500);
+  });
+  setTimeout(() => {
+    console.error("[shutdown] Forced exit after timeout");
+    process.exit(1);
+  }, 8000);
 }
 
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
@@ -7548,14 +7557,23 @@ function killPort(port: number) {
     execSync(`fuser -k -9 ${port}/tcp`, { stdio: "ignore" });
   } catch {}
   try {
-    execSync(`lsof -ti :${port} | xargs kill -9`, { stdio: "ignore" });
+    execSync(`lsof -ti :${port} | xargs kill -9 2>/dev/null`, { stdio: "ignore" });
   } catch {}
 }
 
-function isPortInUse(port: number): boolean {
+function getPortPids(port: number): number[] {
   try {
-    const out = execSync(`fuser ${port}/tcp 2>/dev/null`, { encoding: "utf-8" });
-    return out.trim().length > 0;
+    const out = execSync(`lsof -t -iTCP:${port} -sTCP:LISTEN 2>/dev/null`, { encoding: "utf-8" });
+    return out.trim().split(/\s+/).map(s => parseInt(s)).filter(n => !isNaN(n) && n > 0 && n !== port);
+  } catch {
+    return [];
+  }
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
   } catch {
     return false;
   }
@@ -7565,15 +7583,97 @@ async function waitForPort(port: number, maxWaitMs = 30000) {
   const start = Date.now();
   let attempt = 0;
   killPort(port);
-  await new Promise(r => setTimeout(r, 500));
+  await new Promise(r => setTimeout(r, 1000));
   while (Date.now() - start < maxWaitMs) {
-    if (!isPortInUse(port)) return true;
+    const pids = getPortPids(port);
+    if (pids.length === 0) return true;
     attempt++;
-    console.warn(`[boot] Port ${port} still in use — waiting... (attempt ${attempt})`);
+    const alivePids = pids.filter(isPidAlive);
+    if (alivePids.length === 0) {
+      await new Promise(r => setTimeout(r, 500));
+      return true;
+    }
+    console.warn(`[boot] Port ${port} still held by PIDs: ${alivePids.join(", ")} — killing (attempt ${attempt})`);
+    for (const pid of alivePids) {
+      try { process.kill(pid, 9); } catch {}
+    }
     killPort(port);
     await new Promise(r => setTimeout(r, 2000));
   }
   return false;
+}
+
+async function runStartupRecovery() {
+  const startupTime = Date.now();
+  console.log("[recovery] Running startup recovery checks...");
+
+  let previousLastTick = 0;
+  try {
+    const pool = db.getPool();
+    const lastMonitorRes = await pool.query(`SELECT value FROM app_config WHERE key = 'bankr_monitor_last_tick'`);
+    if (lastMonitorRes.rows.length > 0) {
+      previousLastTick = typeof lastMonitorRes.rows[0].value === "number" ? lastMonitorRes.rows[0].value : parseInt(String(lastMonitorRes.rows[0].value));
+    }
+  } catch {}
+
+  if (previousLastTick > 0) {
+    const downMinutes = Math.floor((startupTime - previousLastTick) / 60000);
+    if (downMinutes > 10) {
+      console.warn(`[recovery] System was down for ~${downMinutes} minutes (last monitor tick: ${new Date(previousLastTick).toISOString()})`);
+    }
+  }
+
+  try {
+    const monitorResult = await bankr.runPositionMonitor();
+    const monitorPool = db.getPool();
+    await monitorPool.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('bankr_monitor_last_tick', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(Date.now()), Date.now()]
+    );
+    console.log(`[recovery] Position monitor: ${monitorResult.checked} checked, ${monitorResult.closed.length} closed`);
+    if (monitorResult.closed.length > 0) {
+      for (const trade of monitorResult.closed) {
+        await telegram.sendTradeAlert({
+          type: trade.close_reason === "kill_switch" ? "emergency" : "stopped",
+          asset: trade.asset,
+          direction: trade.direction,
+          exitPrice: trade.exit_price.toFixed(2),
+          pnl: trade.pnl,
+          reason: trade.close_reason,
+        });
+      }
+    }
+  } catch (err) {
+    console.error("[recovery] Position monitor failed:", err instanceof Error ? err.message : err);
+  }
+
+  try {
+    const { refreshShadowTradesFromMarket } = await import("./src/oversight.js");
+    const shadowResult = await refreshShadowTradesFromMarket();
+    console.log(`[recovery] Shadow prices refreshed: ${shadowResult.updated} updated, ${shadowResult.closed} closed`);
+  } catch (err) {
+    console.error("[recovery] Shadow price refresh failed:", err instanceof Error ? err.message : err);
+  }
+}
+
+async function sendStartupNotification(googleStatus: { connected: boolean; email?: string; error?: string }) {
+  const jobs = scheduledJobs.getJobs();
+  const enabledJobs = jobs.filter(j => j.enabled).length;
+  const bnkrStatus = (await import("./src/bnkr.js")).isConfigured() ? "Live" : "Shadow";
+  const googleLine = googleStatus.connected ? `✅ ${googleStatus.email}` : `❌ Disconnected`;
+  const now = new Date().toLocaleString("en-US", { timeZone: "America/New_York" });
+
+  const msg = [
+    `🟢 *DarkNode Online*`,
+    ``,
+    `⏰ ${now} ET`,
+    `📋 Jobs: ${enabledJobs} active`,
+    `🏦 BNKR: ${bnkrStatus}`,
+    `📧 Google: ${googleLine}`,
+  ].join("\n");
+
+  await telegram.sendMessage(msg);
 }
 
 async function startServer(maxRetries = 5) {
@@ -7597,21 +7697,39 @@ async function startServer(maxRetries = 5) {
   } catch {}
   console.log("[boot] PostgreSQL ready (shared pool, 4 tables)");
 
-  gmail.checkConnectionStatus().then(status => {
-    if (status.connected) console.log(`[boot] Google connected: ${status.email} (Gmail, Calendar, Drive, Sheets)`);
-    else console.warn(`[boot] Google not connected: ${status.error}`);
-  }).catch(() => {});
+  let googleStatus: { connected: boolean; email?: string; error?: string } = { connected: false };
+  try {
+    googleStatus = await gmail.checkConnectionStatus();
+    if (googleStatus.connected) {
+      console.log(`[boot] Google connected: ${googleStatus.email} (Gmail, Calendar, Drive, Sheets)`);
+    } else {
+      console.warn(`[boot] Google not connected: ${googleStatus.error}`);
+      telegram.sendMessage(`⚠️ *Google Disconnected*\n\nGmail, Calendar, Drive, Sheets are offline.\nReconnect: /api/gmail/auth`).catch(() => {});
+    }
+  } catch {}
 
+  let lastGoogleAlertSent = 0;
   setInterval(async () => {
     try {
       const token = await gmail.getAccessToken();
       if (token) {
         console.log("[google-health] Token valid — auto-refreshed successfully");
+        lastGoogleAlertSent = 0;
       } else {
         console.warn("[google-health] Token refresh failed — Google auth needs reconnection at /api/gmail/auth");
+        const now = Date.now();
+        if (now - lastGoogleAlertSent > 12 * 60 * 60 * 1000) {
+          lastGoogleAlertSent = now;
+          telegram.sendMessage(`⚠️ *Google Auth Failed*\n\nToken refresh failed. Gmail jobs are silently failing.\nReconnect: /api/gmail/auth`).catch(() => {});
+        }
       }
     } catch (err: any) {
       console.error("[google-health] Auth check failed:", err.message);
+      const now = Date.now();
+      if (now - lastGoogleAlertSent > 12 * 60 * 60 * 1000) {
+        lastGoogleAlertSent = now;
+        telegram.sendMessage(`⚠️ *Google Auth Error*\n\n${err.message}\nReconnect: /api/gmail/auth`).catch(() => {});
+      }
     }
   }, 6 * 60 * 60 * 1000);
 
@@ -7654,7 +7772,7 @@ async function startServer(maxRetries = 5) {
             process.exit(1);
           }
         });
-        server.listen(PORT, "0.0.0.0", () => {
+        server.listen({ port: PORT, host: "0.0.0.0", exclusive: false }, () => {
           console.log(`[ready] pi-replit listening on http://localhost:${PORT}`);
           startObSync();
           alerts.startAlertSystem(broadcastToAll, async (briefPath, content) => {
@@ -7717,6 +7835,14 @@ async function startServer(maxRetries = 5) {
             }
           }, 5 * 60 * 1000);
           console.log("[boot] BANKR position monitor started (5-min interval)");
+
+          runStartupRecovery().catch(err => {
+            console.error("[recovery] Startup recovery failed:", err instanceof Error ? err.message : err);
+          });
+
+          sendStartupNotification(googleStatus).catch(err => {
+            console.error("[boot] Startup notification failed:", err instanceof Error ? err.message : err);
+          });
 
           resolve();
         });
