@@ -4265,12 +4265,15 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
   let monitorLastTick: string | null = null;
   let pmLastRun: string | null = null;
 
+  let scoutRegime: string | null = null;
   try {
     const scoutRes = await pool.query(`SELECT created_at, summary FROM job_history WHERE job_id IN ('scout-micro-scan', 'scout-full-cycle') ORDER BY created_at DESC LIMIT 1`);
     if (scoutRes.rows.length > 0) {
       scoutLastRun = scoutRes.rows[0].created_at;
       const raw = scoutRes.rows[0].summary || "";
       scoutSummary = raw.length > 300 ? raw.slice(0, 300) + "..." : raw;
+      const regimeMatch = raw.match(/(?:Regime\s*[:\|]\s*|[\|]\s*)(TRENDING|RANGING|VOLATILE|BEARISH|BULLISH)(?:\s*[\|])/i);
+      if (regimeMatch) scoutRegime = regimeMatch[1].toUpperCase();
     }
   } catch {}
 
@@ -4290,6 +4293,12 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
 
   const topThesis = theses.length > 0 ? (theses[0].question || theses[0].market_question || "").slice(0, 100) : null;
 
+  const now24h = now - 24 * 60 * 60_000;
+  const dailyTrades = tradeHistory.filter((t: any) => new Date(t.closed_at).getTime() > now24h);
+  const dailyPnl = dailyTrades.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
+  const availableUsdc = Math.max(0, summary.portfolio_value - summary.total_exposure);
+  const deadmanHealthy = monitorHealthy;
+
   return {
     timestamp: new Date().toISOString(),
     portfolio_value: summary.portfolio_value,
@@ -4299,6 +4308,8 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
     total_exposure: summary.total_exposure,
     unrealized_pnl: summary.unrealized_pnl,
     total_realized_pnl: totalRealizedPnl,
+    daily_pnl: parseFloat(dailyPnl.toFixed(4)),
+    available_usdc: parseFloat(availableUsdc.toFixed(2)),
     initial_capital: 50,
     mode: summary.mode,
     paused: summary.paused,
@@ -4307,7 +4318,7 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
     recent_trades: recentTrades,
     scout: {
       crypto_last_run: scoutLastRun,
-      crypto_regime: null,
+      crypto_regime: scoutRegime,
       crypto_summary: scoutSummary,
       pm_theses_count: theses.length,
       pm_top_thesis: topThesis,
@@ -4321,6 +4332,7 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
       scout_healthy: scoutHealthy,
       monitor_last_tick: monitorLastTick,
       monitor_healthy: monitorHealthy,
+      deadman_healthy: deadmanHealthy,
       bnkr_configured: summary.bnkr_configured,
       coinbase_configured: summary.coinbase_configured,
     },
@@ -5386,6 +5398,8 @@ app.post("/api/pages/:slug/share", async (req: Request, res: Response) => {
       }
       html = html.replace(/setInterval\(function\(\)\s*\{\s*fetchData\(\);\s*\}\s*,\s*\d+\);/, "");
       html = html.replace(/<button[^>]*onclick="fetchData\(true\)"[^>]*>Refresh<\/button>/g, "");
+      html = html.replace(/<button[^>]*onclick="shareSnapshot\(\)"[^>]*>Share<\/button>/g, "");
+      html = html.replace(/<div class="share-overlay"[\s\S]*?<\/div>\s*<\/div>\s*<\/div>/, "");
     } else if (slug === "x-intelligence") {
       let xData: any = xIntelCache?.data || dailyBriefCache?.data?.xIntel;
       if (!xData) {
