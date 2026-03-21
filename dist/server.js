@@ -17613,10 +17613,14 @@ app.get("/api/wealth-engines/oversight", async (_req, res) => {
 var weDashboardCache = null;
 var WE_DASHBOARD_TTL = 3e4;
 async function buildWealthEnginesDashboardData() {
-  const [summary, tradeHistory, theses] = await Promise.all([
+  const [summary, tradeHistory, pmTheses, cryptoTheses, oversightData, shadowPerf, researchStatus] = await Promise.all([
     getPortfolioSummary(),
     getTradeHistory(),
-    getActiveTheses2().catch(() => [])
+    getActiveTheses2().catch(() => []),
+    getActiveTheses().catch(() => []),
+    getOversightSummary().catch(() => null),
+    getShadowPerformance().catch(() => ({ total_trades: 0, open_trades: 0, closed_trades: 0, total_pnl: 0, win_rate: 0, avg_pnl: 0, trades: [] })),
+    getResearchStatus().catch(() => null)
   ]);
   const recentTrades = tradeHistory.slice(-20).reverse();
   const totalRealizedPnl = tradeHistory.reduce((sum, t) => sum + (t.pnl || 0), 0);
@@ -17631,7 +17635,7 @@ async function buildWealthEnginesDashboardData() {
     if (scoutRes.rows.length > 0) {
       scoutLastRun = scoutRes.rows[0].created_at;
       const raw = scoutRes.rows[0].summary || "";
-      scoutSummary = raw.length > 300 ? raw.slice(0, 300) + "..." : raw;
+      scoutSummary = raw.length > 500 ? raw.slice(0, 500) + "..." : raw;
       const regimeMatch = raw.match(/(?:Regime\s*[:\|]\s*|[\|]\s*)(TRENDING|RANGING|VOLATILE|BEARISH|BULLISH)(?:\s*[\|])/i);
       if (regimeMatch) scoutRegime = regimeMatch[1].toUpperCase();
     }
@@ -17650,15 +17654,32 @@ async function buildWealthEnginesDashboardData() {
   } catch (err) {
     console.warn("[wealth-engines] monitor tick query failed:", err instanceof Error ? err.message : err);
   }
+  let oversightLastRun = null;
+  try {
+    const osRes = await pool2.query(`SELECT created_at FROM job_history WHERE job_id = 'oversight-health-check' ORDER BY created_at DESC LIMIT 1`);
+    if (osRes.rows.length > 0) oversightLastRun = osRes.rows[0].created_at;
+  } catch {
+  }
+  let agentActivity = [];
+  try {
+    const actRes = await pool2.query(`SELECT job_id, created_at, summary FROM job_history ORDER BY created_at DESC LIMIT 15`);
+    agentActivity = actRes.rows.map((r) => ({ job_id: r.job_id, created_at: r.created_at, summary: (r.summary || "").slice(0, 200) }));
+  } catch {
+  }
   const now = Date.now();
   const scoutHealthy = scoutLastRun ? now - new Date(scoutLastRun).getTime() < 6 * 60 * 6e4 : false;
   const monitorHealthy = monitorLastTick ? now - new Date(monitorLastTick).getTime() < 30 * 6e4 : false;
-  const topThesis = theses.length > 0 ? (theses[0].question || theses[0].market_question || "").slice(0, 100) : null;
+  const oversightHealthy = oversightLastRun ? now - new Date(oversightLastRun).getTime() < 8 * 60 * 6e4 : false;
+  const topPmThesis = pmTheses.length > 0 ? (pmTheses[0].question || pmTheses[0].market_question || "").slice(0, 100) : null;
   const now24h = now - 24 * 60 * 6e4;
+  const now7d = now - 7 * 24 * 60 * 6e4;
   const dailyTrades = tradeHistory.filter((t) => new Date(t.closed_at).getTime() > now24h);
+  const weeklyTrades = tradeHistory.filter((t) => new Date(t.closed_at).getTime() > now7d);
   const dailyPnl = dailyTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
+  const weeklyPnl = weeklyTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
+  const totalWins = tradeHistory.filter((t) => (t.pnl || 0) > 0).length;
+  const winRate = tradeHistory.length > 0 ? totalWins / tradeHistory.length * 100 : 0;
   const availableUsdc = Math.max(0, summary.portfolio_value - summary.total_exposure);
-  const deadmanHealthy = monitorHealthy;
   return {
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     portfolio_value: summary.portfolio_value,
@@ -17669,21 +17690,74 @@ async function buildWealthEnginesDashboardData() {
     unrealized_pnl: summary.unrealized_pnl,
     total_realized_pnl: totalRealizedPnl,
     daily_pnl: parseFloat(dailyPnl.toFixed(4)),
+    weekly_pnl: parseFloat(weeklyPnl.toFixed(4)),
     available_usdc: parseFloat(availableUsdc.toFixed(2)),
-    initial_capital: 50,
+    initial_capital: summary.initial_capital || 50,
+    total_trades: tradeHistory.length,
+    win_rate: parseFloat(winRate.toFixed(1)),
     mode: summary.mode,
     paused: summary.paused,
     kill_switch: summary.kill_switch,
     positions: summary.positions,
     recent_trades: recentTrades,
+    crypto_theses: cryptoTheses.slice(0, 10).map((t) => ({
+      id: t.id,
+      asset: t.asset,
+      direction: t.direction,
+      confidence: t.confidence,
+      entry_price: t.entry_price,
+      stop_loss: t.stop_loss,
+      take_profit: t.take_profit,
+      reasoning: (t.reasoning || "").slice(0, 150),
+      created_at: t.created_at,
+      status: t.status
+    })),
+    polymarket_theses: pmTheses.slice(0, 10).map((t) => ({
+      id: t.id,
+      question: t.question || t.market_question,
+      direction: t.direction,
+      confidence: t.confidence,
+      whale_consensus: t.whale_consensus,
+      entry_price: t.entry_price,
+      current_price: t.current_price,
+      created_at: t.created_at,
+      expires_at: t.expires_at,
+      status: t.status
+    })),
     scout: {
       crypto_last_run: scoutLastRun,
       crypto_regime: scoutRegime,
       crypto_summary: scoutSummary,
-      pm_theses_count: theses.length,
-      pm_top_thesis: topThesis,
+      crypto_theses_count: cryptoTheses.length,
+      pm_theses_count: pmTheses.length,
+      pm_top_thesis: topPmThesis,
       pm_last_run: pmLastRun
     },
+    oversight: oversightData ? {
+      health_status: oversightData.health?.overall_status || "unknown",
+      health_checks: oversightData.health?.checks || [],
+      drawdown: oversightData.drawdown,
+      improvements: oversightData.improvements,
+      last_check: oversightData.last_check,
+      last_run: oversightLastRun
+    } : null,
+    shadow: {
+      total_trades: shadowPerf.total_trades,
+      open_trades: shadowPerf.open_trades,
+      closed_trades: shadowPerf.closed_trades,
+      total_pnl: shadowPerf.total_pnl,
+      win_rate: shadowPerf.win_rate,
+      avg_pnl: shadowPerf.avg_pnl,
+      trades: shadowPerf.trades.slice(-10).reverse()
+    },
+    autoresearch: researchStatus ? {
+      crypto_params: researchStatus.crypto_params,
+      polymarket_params: researchStatus.polymarket_params,
+      recent_experiments: researchStatus.recent_experiments.slice(-5),
+      crypto_history_count: researchStatus.crypto_history_count,
+      polymarket_history_count: researchStatus.polymarket_history_count
+    } : null,
+    agent_activity: agentActivity,
     health: {
       kill_switch: summary.kill_switch,
       paused: summary.paused,
@@ -17692,7 +17766,9 @@ async function buildWealthEnginesDashboardData() {
       scout_healthy: scoutHealthy,
       monitor_last_tick: monitorLastTick,
       monitor_healthy: monitorHealthy,
-      deadman_healthy: deadmanHealthy,
+      oversight_last_run: oversightLastRun,
+      oversight_healthy: oversightHealthy,
+      deadman_healthy: monitorHealthy,
       bnkr_configured: summary.bnkr_configured,
       coinbase_configured: summary.coinbase_configured
     }
@@ -17711,6 +17787,66 @@ app.get("/api/wealth-engines/data", async (req, res) => {
   } catch (err) {
     console.error("[wealth-engines] dashboard data error:", err);
     res.status(500).json({ error: "Failed to fetch dashboard data" });
+  }
+});
+var WE_CONTROL_USERS = /* @__PURE__ */ new Set(["rickin", "darknode"]);
+app.post("/api/wealth-engines/pause", async (req, res) => {
+  if (!WE_CONTROL_USERS.has(req.user)) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  try {
+    const pool2 = (await Promise.resolve().then(() => (init_db(), db_exports))).getPool();
+    await pool2.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_paused', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(true), Date.now()]
+    );
+    weDashboardCache = null;
+    res.json({ ok: true, paused: true });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+app.post("/api/wealth-engines/resume", async (req, res) => {
+  if (!WE_CONTROL_USERS.has(req.user)) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  try {
+    const pool2 = (await Promise.resolve().then(() => (init_db(), db_exports))).getPool();
+    await pool2.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_paused', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(false), Date.now()]
+    );
+    await pool2.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_kill_switch', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(false), Date.now()]
+    );
+    weDashboardCache = null;
+    res.json({ ok: true, paused: false, kill_switch: false });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+app.post("/api/wealth-engines/kill", async (req, res) => {
+  if (!WE_CONTROL_USERS.has(req.user)) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  try {
+    const pool2 = (await Promise.resolve().then(() => (init_db(), db_exports))).getPool();
+    await pool2.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_kill_switch', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(true), Date.now()]
+    );
+    weDashboardCache = null;
+    res.json({ ok: true, kill_switch: true });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
   }
 });
 app.get("/api/x-intelligence/data", async (_req, res) => {
