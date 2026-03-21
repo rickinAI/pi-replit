@@ -4892,7 +4892,7 @@ async function openPosition(params) {
     unrealized_pnl: 0,
     peak_price: params.entry_price,
     atr_value: params.atr_value,
-    atr_stop_price: params.entry_price - params.atr_value * 5.5,
+    atr_stop_price: params.direction === "SHORT" || params.direction === "NO" ? params.entry_price + params.atr_value * 5.5 : params.entry_price - params.atr_value * 5.5,
     opened_at: (/* @__PURE__ */ new Date()).toISOString(),
     venue: params.venue,
     exposure_bucket: getExposureBucket(params.asset, params.asset_class)
@@ -5003,6 +5003,8 @@ async function runPositionMonitor() {
     try {
       if (pos.asset_class === "crypto") {
         await monitorCryptoPosition(pos, closed);
+      } else if (pos.asset_class === "polymarket") {
+        await monitorPolymarketPosition(pos, closed);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -5069,6 +5071,77 @@ async function monitorCryptoPosition(pos, closed) {
       if (!isLong && result.votes.rsi_oversold) {
         console.log(`[bankr] RSI exit (oversold) for ${pos.asset} SHORT`);
         const record = await closePosition(pos.id, currentPrice, "rsi_exit");
+        if (record) closed.push(record);
+        return;
+      }
+    }
+  } catch {
+  }
+}
+async function monitorPolymarketPosition(pos, closed) {
+  let marketId = "";
+  try {
+    const pool2 = getPool();
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'polymarket_scout_active_theses'`);
+    const allTheses = res.rows.length > 0 && Array.isArray(res.rows[0].value) ? res.rows[0].value : [];
+    const thesis = allTheses.find((t) => t.id === pos.thesis_id);
+    if (thesis) marketId = thesis.market_id;
+  } catch {
+  }
+  if (!marketId) return;
+  const market = await getMarketDetails(marketId);
+  if (!market) return;
+  const yesPrice = market.tokens.find((t) => t.outcome === "Yes")?.price || 0;
+  const noPrice = market.tokens.find((t) => t.outcome === "No")?.price || 0;
+  const currentOdds = pos.direction === "YES" ? yesPrice : noPrice;
+  const positions = await getPositions();
+  const livePos = positions.find((p) => p.id === pos.id);
+  if (!livePos) return;
+  livePos.current_price = currentOdds;
+  const isYes = livePos.direction === "YES";
+  const priceDiff = isYes ? currentOdds - livePos.entry_price : livePos.entry_price - currentOdds;
+  livePos.unrealized_pnl = parseFloat((priceDiff * livePos.size).toFixed(4));
+  if (isYes && currentOdds > livePos.peak_price || !isYes && currentOdds < livePos.peak_price) {
+    livePos.peak_price = currentOdds;
+  }
+  await savePositions(positions);
+  if (market.closed) {
+    console.log(`[bankr] Polymarket resolved for ${pos.asset.slice(0, 60)}`);
+    const record = await closePosition(pos.id, currentOdds, "market_resolved");
+    if (record) closed.push(record);
+    return;
+  }
+  const endDate = new Date(market.end_date_iso);
+  const hoursToResolution = (endDate.getTime() - Date.now()) / (60 * 60 * 1e3);
+  if (hoursToResolution < 4 && hoursToResolution > 0) {
+    console.log(`[bankr] Polymarket near resolution (${hoursToResolution.toFixed(1)}h) for ${pos.asset.slice(0, 60)}`);
+    const record = await closePosition(pos.id, currentOdds, "resolution_proximity");
+    if (record) closed.push(record);
+    return;
+  }
+  const exitOdds = livePos.atr_stop_price;
+  if (isYes && currentOdds >= exitOdds && exitOdds > 0) {
+    console.log(`[bankr] Polymarket target reached (${(currentOdds * 100).toFixed(0)}%) for ${pos.asset.slice(0, 60)}`);
+    const record = await closePosition(pos.id, currentOdds, "odds_target");
+    if (record) closed.push(record);
+    return;
+  }
+  if (!isYes && currentOdds <= exitOdds && exitOdds > 0) {
+    console.log(`[bankr] Polymarket target reached (${(currentOdds * 100).toFixed(0)}%) for ${pos.asset.slice(0, 60)}`);
+    const record = await closePosition(pos.id, currentOdds, "odds_target");
+    if (record) closed.push(record);
+    return;
+  }
+  try {
+    const activities = await getWhaleActivities();
+    const marketActivities = activities.filter((a) => a.market_question === pos.asset);
+    if (marketActivities.length >= 2) {
+      const flipped = marketActivities.filter(
+        (a) => a.activity_type !== "position_exit" && a.direction !== pos.direction
+      );
+      if (flipped.length >= 2) {
+        console.log(`[bankr] Polymarket whale consensus flipped for ${pos.asset.slice(0, 60)}`);
+        const record = await closePosition(pos.id, currentOdds, "whale_consensus_flip");
         if (record) closed.push(record);
         return;
       }
@@ -14016,6 +14089,10 @@ function authMiddleware(req, res, next) {
     return;
   }
   if (req.path === "/api/gmail/auth") {
+    next();
+    return;
+  }
+  if (req.path === "/api/telegram/webhook") {
     next();
     return;
   }

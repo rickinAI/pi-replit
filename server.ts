@@ -3599,6 +3599,7 @@ function authMiddleware(req: Request, res: Response, next: NextFunction) {
   if (req.path === "/api/config/tunnel-url") { next(); return; }
   if (req.path === "/api/gmail/callback") { next(); return; }
   if (req.path === "/api/gmail/auth") { next(); return; }
+  if (req.path === "/api/telegram/webhook") { next(); return; }
 
   const token = req.signedCookies?.auth;
   if (token && USERS[token]) { (req as any).user = token; next(); return; }
