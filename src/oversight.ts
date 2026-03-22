@@ -272,7 +272,7 @@ export async function runHealthCheck(): Promise<HealthReport> {
       fmt.buildCategoryHeader(fmt.CATEGORY_BADGES.OVERSIGHT, `Health Check ⚠️`),
       "",
       `${issues.length} issue${issues.length !== 1 ? "s" : ""} detected:`,
-      ...issues.map(i => `  ${i.status === "critical" ? "🔴" : "🟡"} ${i.name}: ${i.detail}`),
+      ...issues.map(i => `  ${i.status === "critical" ? "🔴" : "🟡"} ${fmt.escapeHtml(i.name)}: ${fmt.escapeHtml(i.detail)}`),
       "",
       `Action: Check scheduled-jobs status`,
       `[/oversight for full report]`,
@@ -352,7 +352,7 @@ async function checkWalletHealth(): Promise<HealthCheck> {
               const wdLines = [
                 fmtW.buildCategoryHeader(fmtW.CATEGORY_BADGES.WHALE_INTEL, "Wallet Auto-Disabled"),
                 "",
-                `${fmtW.getNicheEmoji(wallet.niche)} ${wallet.alias} (${wallet.niche})`,
+                `${fmtW.getNicheEmoji(wallet.niche)} ${fmtW.escapeHtml(wallet.alias)} (${fmtW.escapeHtml(wallet.niche)})`,
                 `Win rate: ${(winRate * 100).toFixed(0)}% (30d, ${resolved.length} resolved)`,
                 `Degraded ${wallet.degraded_count} consecutive checks`,
                 "",
