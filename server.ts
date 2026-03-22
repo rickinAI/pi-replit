@@ -4366,7 +4366,8 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
 
   const closedShadowTrades = buildClosedShadowTrades(shadowPerf);
   const allTradesCombined = [...tradeHistory, ...closedShadowTrades]
-    .filter((t: any) => !t.asset_class || t.asset_class === "polymarket");
+    .map((t: any) => { if (!t.asset_class) t.asset_class = "polymarket"; return t; })
+    .filter((t: any) => t.asset_class === "polymarket");
   allTradesCombined.sort((a: any, b: any) => new Date(b.closed_at || 0).getTime() - new Date(a.closed_at || 0).getTime());
   const taxSummary = await bankr.getTaxSummary(closedShadowTrades).catch(() => null);
 
@@ -4453,7 +4454,7 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
         if (thesis && thesis.expires_at) p.expires_at = thesis.expires_at;
         return p;
       };
-      const bankrPositions = (summary.positions || []).filter((p: any) => (p.size || 0) > 0.0001 && (!p.asset_class || p.asset_class === "polymarket")).map(enrichPosition);
+      const bankrPositions = (summary.positions || []).filter((p: any) => (p.size || 0) > 0.0001).map((p: any) => { if (!p.asset_class) p.asset_class = "polymarket"; return p; }).filter((p: any) => p.asset_class === "polymarket").map(enrichPosition);
       const seen = new Set(bankrPositions.map((p: any) => `${p.asset}_${p.direction}`));
       const openShadows = (shadowPerf.trades || [])
         .filter((t: any) => t.status === "open" && !seen.has(`${t.asset}_${t.direction}`));
@@ -4669,7 +4670,8 @@ async function buildPnlDashboardData(): Promise<any> {
 
   const closedShadowTrades = buildClosedShadowTrades(shadowPerf);
   const allTradesCombined = [...tradeHistory, ...closedShadowTrades]
-    .filter((t: any) => !t.asset_class || t.asset_class === "polymarket");
+    .map((t: any) => { if (!t.asset_class) t.asset_class = "polymarket"; return t; })
+    .filter((t: any) => t.asset_class === "polymarket");
   allTradesCombined.sort((a: any, b: any) => new Date(b.closed_at || 0).getTime() - new Date(a.closed_at || 0).getTime());
   const taxSummary = await bankr.getTaxSummary(closedShadowTrades).catch(() => null);
 
