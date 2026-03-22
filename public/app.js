@@ -4062,3 +4062,11 @@ function formatTime(date) {
     removeSwipeHint();
   }, { passive: true });
 })();
+
+window.darknode = {
+  openAgentsPanel: () => toggleJobsPanel(),
+  openCostOverlay: () => openCostOverlay(),
+  openSettings: () => toggleSettings(),
+  newSession: () => { if (typeof startNewSession === "function") startNewSession(); },
+  navigate: (path) => { window.location.href = path; },
+};

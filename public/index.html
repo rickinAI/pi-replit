@@ -145,14 +145,15 @@
     <a href="/pages/wealth-engines" data-nav="darknode-wealth-engines">DarkNode Wealth Engines — Wealth engine dashboards and analytics</a>
     <a href="/api/logout" data-nav="logout">Log Out — End session and return to login</a>
     <a href="/api/sitemap" data-nav="sitemap">API Sitemap — JSON manifest of all pages, panels, and API endpoints</a>
-    <button data-nav="open-agents-panel" data-selector="#landing-jobs-btn">Open Agents Panel — Manage scheduled agents, view dashboard/history/schedule, create custom agents</button>
-    <button data-nav="open-cost-overlay" data-selector="#landing-cost-btn">Open Cost Overlay — View API usage costs</button>
-    <button data-nav="open-settings" data-selector="#landing-settings-btn">Open Settings — Application settings</button>
-    <button data-nav="new-session" data-selector="#new-session-btn">New Session — Start a new conversation</button>
+    <button data-nav="open-agents-panel" data-action="window.darknode.openAgentsPanel()">Open Agents Panel — Manage scheduled agents, view dashboard/history/schedule, create custom agents</button>
+    <button data-nav="open-cost-overlay" data-action="window.darknode.openCostOverlay()">Open Cost Overlay — View API usage costs</button>
+    <button data-nav="open-settings" data-action="window.darknode.openSettings()">Open Settings — Application settings</button>
+    <button data-nav="new-session" data-action="window.darknode.newSession()">New Session — Start a new conversation</button>
     <button data-nav="voice-input" data-selector="#mic-btn">Voice Input — Speak a command</button>
     <a href="/api/agents" data-nav="api-agents">GET /api/agents — List all available agent types</a>
     <a href="/api/scheduled-jobs" data-nav="api-scheduled-jobs">GET /api/scheduled-jobs — List all scheduled jobs</a>
     <span data-nav="api-create-job">POST /api/scheduled-jobs — Create a custom agent job (requires: name, agentId, prompt; optional: schedule, enabled)</span>
+    <span data-nav="js-api">window.darknode API — openAgentsPanel(), openCostOverlay(), openSettings(), newSession(), navigate(path)</span>
   </nav>
 
   <script src="app.js"></script>

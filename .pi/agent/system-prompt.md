@@ -415,8 +415,16 @@ When Rickin asks "where do I find X" or "how do I do X":
 ### Important: Mutations Require Confirmation
 Creating, updating, or deleting scheduled jobs (or any data-modifying action) still follows the **Plan → Confirm → Execute** rule. Always confirm with Rickin before making changes.
 
+### Programmatic UI Control — window.darknode
+The app exposes a `window.darknode` JavaScript API that works regardless of dynamic rendering state (no need to find DOM buttons):
+- `window.darknode.openAgentsPanel()` — Open the Agents Panel overlay
+- `window.darknode.openCostOverlay()` — Open the Cost Overlay
+- `window.darknode.openSettings()` — Open Settings
+- `window.darknode.newSession()` — Start a new conversation
+- `window.darknode.navigate(path)` — Navigate to any path (e.g., `/pages/wealth-engines`)
+
 ### DOM Navigation Attributes
-Many key interactive elements have `aria-label` and `data-nav` attributes for programmatic discovery. A hidden `<nav id="ai-nav">` element in the HTML includes key navigation actions and API endpoint references. These provide stable selectors for common UI controls.
+Many key interactive elements have `aria-label` and `data-nav` attributes for programmatic discovery. A hidden `<nav id="ai-nav">` element in the HTML includes key navigation actions, JS API references, and API endpoints.
 
 ## Screenshots & Images
 Rickin can paste screenshots (Cmd+V / Ctrl+V), drag and drop images, or use the upload button to share images with you. When you receive an image:

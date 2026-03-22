@@ -4049,9 +4049,9 @@ app.get("/api/sitemap", (_req: Request, res: Response) => {
       { path: "/login.html", title: "Login", description: "Authentication page" }
     ],
     panels: [
-      { name: "Agents Panel", openSelector: "#landing-jobs-btn", description: "Manage scheduled agents — view dashboard, history, schedule, and create custom agents", tabs: ["Dashboard", "History", "Schedule", "+ Custom"] },
-      { name: "Cost Overlay", openSelector: "#landing-cost-btn", description: "View API usage costs" },
-      { name: "Settings", openSelector: "#landing-settings-btn", description: "Application settings" }
+      { name: "Agents Panel", jsAction: "window.darknode.openAgentsPanel()", description: "Manage scheduled agents — view dashboard, history, schedule, and create custom agents", tabs: ["Dashboard", "History", "Schedule", "+ Custom"] },
+      { name: "Cost Overlay", jsAction: "window.darknode.openCostOverlay()", description: "View API usage costs" },
+      { name: "Settings", jsAction: "window.darknode.openSettings()", description: "Application settings" }
     ],
     api: [
       {
@@ -4128,6 +4128,16 @@ app.get("/api/sitemap", (_req: Request, res: Response) => {
         "2. POST /api/scheduled-jobs — create the job with name, agentId, prompt, schedule, and enabled fields",
         "3. GET /api/scheduled-jobs — verify the job was created"
       ]
+    },
+    jsApi: {
+      description: "window.darknode — global JavaScript API for programmatic UI control. Works regardless of dynamic rendering state.",
+      methods: {
+        "openAgentsPanel()": "Open the Agents Panel overlay",
+        "openCostOverlay()": "Open the Cost Overlay",
+        "openSettings()": "Open the Settings panel",
+        "newSession()": "Start a new conversation session",
+        "navigate(path)": "Navigate to any path (e.g., '/pages/wealth-engines')"
+      }
     }
   });
 });
