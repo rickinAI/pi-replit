@@ -4039,6 +4039,99 @@ app.get("/api/logout", (_req: Request, res: Response) => {
   res.redirect("/login.html");
 });
 
+app.get("/api/sitemap", (_req: Request, res: Response) => {
+  res.json({
+    name: "rickin.live",
+    description: "Mission Control — AI agent management dashboard",
+    pages: [
+      { path: "/", title: "Mission Control", description: "Landing page with conversation history, vault inbox, and agent status" },
+      { path: "/pages/wealth-engines", title: "DarkNode Wealth Engines", description: "Wealth engine dashboards and analytics" },
+      { path: "/login.html", title: "Login", description: "Authentication page" }
+    ],
+    panels: [
+      { name: "Agents Panel", openSelector: "#landing-jobs-btn", description: "Manage scheduled agents — view dashboard, history, schedule, and create custom agents", tabs: ["Dashboard", "History", "Schedule", "+ Custom"] },
+      { name: "Cost Overlay", openSelector: "#landing-cost-btn", description: "View API usage costs" },
+      { name: "Settings", openSelector: "#landing-settings-btn", description: "Application settings" }
+    ],
+    api: [
+      {
+        method: "GET",
+        path: "/api/agents",
+        description: "List all available agent types. Use this to discover valid agentId values before creating a scheduled job.",
+        response: { agents: [{ id: "string", name: "string", description: "string", enabled: "boolean", tools: "string[]", timeout: "number", model: "string" }] }
+      },
+      {
+        method: "GET",
+        path: "/api/scheduled-jobs",
+        description: "List all scheduled jobs (custom agents)"
+      },
+      {
+        method: "POST",
+        path: "/api/scheduled-jobs",
+        description: "Create a new custom scheduled agent job",
+        requiredParams: { name: "string (max 100 chars)", agentId: "string (from GET /api/agents)", prompt: "string (max 5000 chars)" },
+        optionalParams: { schedule: "{ type: 'daily'|'weekly', hour: 0-23, minute: 0-59, daysOfWeek?: number[] }", enabled: "boolean (default false)" },
+        examplePayload: {
+          name: "Daily Market Summary",
+          agentId: "darknode",
+          prompt: "Analyze today's market movements and provide a summary",
+          schedule: { type: "daily", hour: 8, minute: 0 },
+          enabled: true
+        }
+      },
+      {
+        method: "PUT",
+        path: "/api/scheduled-jobs/:id",
+        description: "Update an existing scheduled job by ID"
+      },
+      {
+        method: "DELETE",
+        path: "/api/scheduled-jobs/:id",
+        description: "Delete a scheduled job by ID"
+      },
+      {
+        method: "GET",
+        path: "/api/conversations",
+        description: "List all conversations"
+      },
+      {
+        method: "POST",
+        path: "/api/vault-inbox",
+        description: "Submit a URL to the vault inbox for processing",
+        requiredParams: { url: "string" }
+      },
+      {
+        method: "GET",
+        path: "/api/glance",
+        description: "Get the day-at-a-glance summary"
+      },
+      {
+        method: "GET",
+        path: "/api/agents/status",
+        description: "Get current agent execution status"
+      },
+      {
+        method: "GET",
+        path: "/api/me",
+        description: "Get current authenticated user info"
+      },
+      {
+        method: "GET",
+        path: "/api/sitemap",
+        description: "This endpoint — returns the navigation manifest"
+      }
+    ],
+    agentCreationFlow: {
+      description: "To create a custom agent via API (no UI navigation needed):",
+      steps: [
+        "1. GET /api/agents — discover available agent types and pick an agentId",
+        "2. POST /api/scheduled-jobs — create the job with name, agentId, prompt, schedule, and enabled fields",
+        "3. GET /api/scheduled-jobs — verify the job was created"
+      ]
+    }
+  });
+});
+
 app.use(express.static(PUBLIC_DIR));
 
 const PAGES_DIR = path.join(PROJECT_ROOT, "data", "pages");

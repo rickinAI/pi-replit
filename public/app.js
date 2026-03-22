@@ -384,28 +384,28 @@ async function showLanding() {
   landing.innerHTML = `<div class="landing-header">
     <h2>[MISSION CONTROL]</h2>
     <div class="landing-header-actions">
-      <button class="landing-header-btn" id="landing-cost-btn" title="Cost">
+      <button class="landing-header-btn" id="landing-cost-btn" title="Cost" aria-label="View costs" data-nav="open-cost-overlay">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
         </svg>
       </button>
-      <button class="landing-header-btn" id="landing-jobs-btn" title="Agents">
+      <button class="landing-header-btn" id="landing-jobs-btn" title="Agents" aria-label="Open Agents Panel" data-nav="open-agents-panel">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="11" width="18" height="10" rx="2"/><line x1="12" y1="2" x2="12" y2="6"/><circle cx="12" cy="6" r="2"/><circle cx="9" cy="16" r="1"/><circle cx="15" cy="16" r="1"/>
         </svg>
       </button>
-      <a href="/pages/wealth-engines" class="landing-header-btn" id="landing-darknode-btn" title="DarkNode Wealth Engines">
+      <a href="/pages/wealth-engines" class="landing-header-btn" id="landing-darknode-btn" title="DarkNode Wealth Engines" aria-label="DarkNode Wealth Engines" data-nav="darknode-wealth-engines">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
         </svg>
       </a>
-      <button class="landing-header-btn" id="landing-settings-btn" title="Settings">
+      <button class="landing-header-btn" id="landing-settings-btn" title="Settings" aria-label="Open Settings" data-nav="open-settings">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
           <circle cx="12" cy="12" r="3"/>
         </svg>
       </button>
-      <a href="/api/logout" class="landing-header-btn landing-off-btn" title="Log out">
+      <a href="/api/logout" class="landing-header-btn landing-off-btn" title="Log out" aria-label="Log out" data-nav="logout">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/>
           <line x1="12" y1="2" x2="12" y2="12"/>
@@ -486,8 +486,8 @@ async function showLanding() {
       <span class="vault-inbox-label">VAULT INBOX</span>
     </div>
     <div class="vault-inbox-input-wrap">
-      <input type="url" class="vault-inbox-input" id="vault-inbox-url" placeholder="Paste a YouTube, article, or tweet URL..." autocomplete="off" autocorrect="off" />
-      <button class="vault-inbox-submit" id="vault-inbox-btn">→</button>
+      <input type="url" class="vault-inbox-input" id="vault-inbox-url" placeholder="Paste a YouTube, article, or tweet URL..." autocomplete="off" autocorrect="off" aria-label="Vault inbox URL input" data-nav="vault-inbox-input" />
+      <button class="vault-inbox-submit" id="vault-inbox-btn" aria-label="Submit URL to vault inbox" data-nav="vault-inbox-submit">→</button>
     </div>
     <div class="vault-inbox-status" id="vault-inbox-status"></div>
     ${historyHtml}
@@ -889,7 +889,7 @@ async function showLanding() {
       <div class="landing-last-title">${escapeHtml(last.title)}</div>
       <div class="landing-last-meta">${relativeTime(last.updatedAt || last.createdAt)} · ${last.messageCount} msgs</div>
       ${previewHtml ? `<div class="landing-last-preview">${previewHtml}</div>` : ""}
-      <button class="landing-resume-btn">[RESUME]</button>
+      <button class="landing-resume-btn" aria-label="Resume last conversation" data-nav="resume-conversation">[RESUME]</button>
     `;
     lastCardEl.querySelector(".landing-resume-btn").addEventListener("click", (e) => {
       e.stopPropagation();
@@ -2406,17 +2406,17 @@ function createJobsPanel() {
   panel.innerHTML = `
     <div class="jobs-panel-header">
       <h3>AGENTS</h3>
-      <button class="jobs-panel-close">\u2715</button>
+      <button class="jobs-panel-close" aria-label="Close Agents Panel" data-nav="close-agents-panel">\u2715</button>
     </div>
     <div class="jobs-live-banner" id="jobs-live-banner">
       <span class="jobs-live-dot"></span>
       <span class="jobs-live-text">All agents idle</span>
     </div>
     <div class="jobs-panel-tabs">
-      <button class="jobs-tab active" data-tab="dashboard">Dashboard</button>
-      <button class="jobs-tab" data-tab="history">History</button>
-      <button class="jobs-tab" data-tab="schedule">Schedule</button>
-      <button class="jobs-tab" data-tab="custom">+ Custom</button>
+      <button class="jobs-tab active" data-tab="dashboard" aria-label="Dashboard tab" data-nav="agents-tab-dashboard">Dashboard</button>
+      <button class="jobs-tab" data-tab="history" aria-label="History tab" data-nav="agents-tab-history">History</button>
+      <button class="jobs-tab" data-tab="schedule" aria-label="Schedule tab" data-nav="agents-tab-schedule">Schedule</button>
+      <button class="jobs-tab" data-tab="custom" aria-label="Custom agent tab" data-nav="agents-tab-custom">+ Custom</button>
     </div>
     <div class="jobs-panel-body">
       <div class="jobs-tab-content active" id="jobs-tab-dashboard">
@@ -2435,9 +2435,9 @@ function createJobsPanel() {
     <div class="jobs-report-overlay hidden" id="jobs-report-overlay">
       <div class="jobs-report-modal">
         <div class="jobs-report-header">
-          <button class="jobs-report-back">\u2190 Back</button>
+          <button class="jobs-report-back" aria-label="Back to agents list" data-nav="agents-report-back">\u2190 Back</button>
           <span id="jobs-report-title"></span>
-          <button class="jobs-report-close">\u2715</button>
+          <button class="jobs-report-close" aria-label="Close report" data-nav="agents-report-close">\u2715</button>
         </div>
         <div class="jobs-report-body" id="jobs-report-body"></div>
       </div>
@@ -2861,29 +2861,29 @@ function renderJobsSchedule() {
           <span class="job-card-name">${escapeHtml(job.name)}</span>
           <span class="job-card-agent">${escapeHtml(job.agentId)}</span>
         </div>
-        <input type="checkbox" class="job-card-toggle" ${job.enabled ? "checked" : ""}>
+        <input type="checkbox" class="job-card-toggle" ${job.enabled ? "checked" : ""} aria-label="Enable or disable job ${escapeHtml(job.name)}" data-nav="job-toggle">
       </div>
       <div class="job-card-body">
         <div class="job-card-schedule">
           <span class="job-card-schedule-label">${job.schedule.type === "daily" ? "Daily" : job.schedule.daysOfWeek ? job.schedule.daysOfWeek.map(d => ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d]).join("/") : "Weekly"} at</span>
-          <select class="job-card-hour-select"></select>
+          <select class="job-card-hour-select" aria-label="Schedule hour for ${escapeHtml(job.name)}" data-nav="job-schedule-hour"></select>
           <span class="job-card-time-sep">:</span>
-          <select class="job-card-min-select"></select>
+          <select class="job-card-min-select" aria-label="Schedule minute for ${escapeHtml(job.name)}" data-nav="job-schedule-minute"></select>
         </div>
         <div class="job-card-actions">
           ${statusHtml}
-          <button class="job-run-btn" title="Run now">Run</button>
+          <button class="job-run-btn" title="Run now" aria-label="Run job ${escapeHtml(job.name)} now" data-nav="job-run">Run</button>
         </div>
       </div>
       <div class="job-card-prompt-section">
-        <button class="job-prompt-toggle">Prompt \u25B8</button>
+        <button class="job-prompt-toggle" aria-label="Toggle prompt editor for ${escapeHtml(job.name)}" data-nav="job-prompt-toggle">Prompt \u25B8</button>
         <div class="job-prompt-editor hidden">
-          <textarea class="job-prompt-textarea" rows="4">${escapeHtml(job.prompt || '')}</textarea>
-          <button class="job-prompt-save">Save</button>
+          <textarea class="job-prompt-textarea" rows="4" aria-label="Prompt for ${escapeHtml(job.name)}" data-nav="job-prompt-textarea">${escapeHtml(job.prompt || '')}</textarea>
+          <button class="job-prompt-save" aria-label="Save prompt for ${escapeHtml(job.name)}" data-nav="job-prompt-save">Save</button>
         </div>
       </div>
       <div class="job-card-footer">
-        <button class="job-delete-btn" title="Delete job">\uD83D\uDDD1 Delete</button>
+        <button class="job-delete-btn" title="Delete job" aria-label="Delete job ${escapeHtml(job.name)}" data-nav="job-delete">\uD83D\uDDD1 Delete</button>
       </div>
     `;
     const hourSel = card.querySelector(".job-card-hour-select");
@@ -2974,14 +2974,14 @@ function renderCustomJobForm() {
   if (!wrap || wrap.querySelector(".job-add-custom-form")) return;
   wrap.innerHTML = `
     <div class="job-add-custom-form">
-      <div class="job-form-row"><label>Name</label><input type="text" class="job-form-input" id="custom-job-name" placeholder="My custom job"></div>
-      <div class="job-form-row"><label>Agent</label><select class="job-form-select" id="custom-job-agent"></select></div>
-      <div class="job-form-row"><label>Frequency</label><select class="job-form-select" id="custom-job-freq"><option value="daily">Daily</option><option value="weekly">Weekly</option></select></div>
-      <div class="job-form-row" id="custom-job-days-row" style="display:none"><label>Days</label><div class="job-day-picker" id="custom-job-days"></div></div>
-      <div class="job-form-row"><label>Time</label><select class="job-form-select" id="custom-job-hour"></select><span class="job-card-time-sep">:</span><select class="job-form-select" id="custom-job-min"></select></div>
-      <div class="job-form-row"><label>Prompt</label><textarea class="job-form-textarea" id="custom-job-prompt" rows="4" placeholder="What should the agent do?"></textarea></div>
+      <div class="job-form-row"><label>Name</label><input type="text" class="job-form-input" id="custom-job-name" placeholder="My custom job" aria-label="Job name" data-nav="custom-job-name"></div>
+      <div class="job-form-row"><label>Agent</label><select class="job-form-select" id="custom-job-agent" aria-label="Agent type" data-nav="custom-job-agent"></select></div>
+      <div class="job-form-row"><label>Frequency</label><select class="job-form-select" id="custom-job-freq" aria-label="Job frequency" data-nav="custom-job-frequency"><option value="daily">Daily</option><option value="weekly">Weekly</option></select></div>
+      <div class="job-form-row" id="custom-job-days-row" style="display:none"><label>Days</label><div class="job-day-picker" id="custom-job-days" aria-label="Days of week" data-nav="custom-job-days"></div></div>
+      <div class="job-form-row"><label>Time</label><select class="job-form-select" id="custom-job-hour" aria-label="Hour" data-nav="custom-job-hour"></select><span class="job-card-time-sep">:</span><select class="job-form-select" id="custom-job-min" aria-label="Minute" data-nav="custom-job-minute"></select></div>
+      <div class="job-form-row"><label>Prompt</label><textarea class="job-form-textarea" id="custom-job-prompt" rows="4" placeholder="What should the agent do?" aria-label="Job prompt" data-nav="custom-job-prompt"></textarea></div>
       <div class="job-form-row job-form-actions">
-        <button class="job-form-submit">Add Job</button>
+        <button class="job-form-submit" aria-label="Submit new custom job" data-nav="custom-job-submit">Add Job</button>
       </div>
     </div>
   `;
