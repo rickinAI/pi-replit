@@ -4984,6 +4984,12 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
   const winRate = tradeHistory.length > 0 ? (totalWins / tradeHistory.length * 100) : 0;
   const availableUsdc = Math.max(0, summary.portfolio_value - summary.total_exposure);
 
+  let eoyTarget = 50000;
+  try {
+    const eoyRes = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_eoy_target'`);
+    if (eoyRes.rows.length > 0 && typeof eoyRes.rows[0].value === "number") eoyTarget = eoyRes.rows[0].value;
+  } catch {}
+
   return {
     timestamp: new Date().toISOString(),
     portfolio_value: summary.portfolio_value,
@@ -4997,6 +5003,7 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
     weekly_pnl: parseFloat(weeklyPnl.toFixed(4)),
     available_usdc: parseFloat(availableUsdc.toFixed(2)),
     initial_capital: summary.initial_capital || 1000,
+    eoy_target: eoyTarget,
     total_trades: tradeHistory.length,
     win_rate: parseFloat(winRate.toFixed(1)),
     mode: summary.mode,
@@ -5304,8 +5311,9 @@ app.post("/api/wealth-engine/config", async (req: Request, res: Response) => {
 app.post("/api/wealth-engine/portfolio", async (req: Request, res: Response) => {
   if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
   try {
-    const { value, reset_peak } = req.body;
+    const { value, reset_peak, peak_value } = req.body;
     const pool = db.getPool();
+    const oldPortfolio = await bankr.getPortfolioValue();
     if (typeof value === "number" && value > 0) {
       await pool.query(
         `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
@@ -5313,7 +5321,13 @@ app.post("/api/wealth-engine/portfolio", async (req: Request, res: Response) => 
         ["wealth_engines_portfolio_value", JSON.stringify(value), Date.now()]
       );
     }
-    if (reset_peak) {
+    if (typeof peak_value === "number" && peak_value > 0) {
+      await pool.query(
+        `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+        ["wealth_engines_peak_portfolio", JSON.stringify(peak_value), Date.now()]
+      );
+    } else if (reset_peak) {
       const currentPortfolio = await bankr.getPortfolioValue();
       await pool.query(
         `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
@@ -5321,8 +5335,37 @@ app.post("/api/wealth-engine/portfolio", async (req: Request, res: Response) => 
         ["wealth_engines_peak_portfolio", JSON.stringify(currentPortfolio), Date.now()]
       );
     }
+    const newPortfolio = await bankr.getPortfolioValue();
+    const newPeak = await bankr.getPeakPortfolioValue();
     weDashboardCache = null;
-    res.json({ ok: true, portfolio: await bankr.getPortfolioValue(), peak: await bankr.getPeakPortfolioValue() });
+
+    if (typeof value === "number" && value !== oldPortfolio) {
+      const rc = await bankr.getRiskConfig();
+      const multiplier = oldPortfolio > 0 ? (value / oldPortfolio).toFixed(0) + "x" : "";
+      const modeRes = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_mode'`);
+      const mode = modeRes.rows.length > 0 ? String(modeRes.rows[0].value).replace(/"/g, "") : "SHADOW";
+      const exposureCeiling = (value * (rc.exposure_cap_pct / 100)).toFixed(0);
+      const perTrade = (value * (rc.risk_per_trade_pct / 100)).toFixed(0);
+      const fmtD = (n: number) => n >= 1000 ? `$${(n/1000).toFixed(n%1000===0?0:1)}K` : `$${n.toFixed(2)}`;
+      const lines = [
+        `💰 *Portfolio Updated*`,
+        ``,
+        `Capital: ${fmtD(oldPortfolio)} → ${fmtD(value)} (${multiplier})`,
+        `Mode: ${mode}${mode === "SHADOW" ? " (BNKR wallet pending)" : ""}`,
+        ``,
+        `Exposure ceiling: $${exposureCeiling} (${rc.exposure_cap_pct}%)`,
+        `Position sizing: $${perTrade}/trade (${rc.risk_per_trade_pct}%)`,
+      ];
+      try {
+        const eoyRes = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_eoy_target'`);
+        if (eoyRes.rows.length > 0 && typeof eoyRes.rows[0].value === "number") {
+          lines.push(`EOY Target: ${fmtD(eoyRes.rows[0].value)} (${(eoyRes.rows[0].value / value).toFixed(0)}x from here)`);
+        }
+      } catch {}
+      telegram.sendMessage(lines.join("\n")).catch(() => {});
+    }
+
+    res.json({ ok: true, portfolio: newPortfolio, peak: newPeak });
   } catch (err: any) {
     res.status(500).json({ error: String(err) });
   }
@@ -7904,20 +7947,28 @@ async function runStartupRecovery() {
   try {
     const migPool = db.getPool();
     const portfolioRes = await migPool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_portfolio_value'`);
-    if (portfolioRes.rows.length > 0 && portfolioRes.rows[0].value === 50) {
+    if (portfolioRes.rows.length > 0 && (portfolioRes.rows[0].value === 50 || portfolioRes.rows[0].value === 1000)) {
       await migPool.query(
         `UPDATE app_config SET value = $1, updated_at = $2 WHERE key = 'wealth_engines_portfolio_value'`,
-        [JSON.stringify(1000), Date.now()]
+        [JSON.stringify(10000), Date.now()]
       );
-      console.log("[recovery] Migrated portfolio value: $50 → $1,000");
+      console.log(`[recovery] Migrated portfolio value: $${portfolioRes.rows[0].value} → $10,000`);
     }
     const peakRes = await migPool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_peak_portfolio'`);
-    if (peakRes.rows.length > 0 && peakRes.rows[0].value === 50) {
+    if (peakRes.rows.length > 0 && (peakRes.rows[0].value === 50 || peakRes.rows[0].value === 1000)) {
       await migPool.query(
         `UPDATE app_config SET value = $1, updated_at = $2 WHERE key = 'wealth_engines_peak_portfolio'`,
-        [JSON.stringify(1000), Date.now()]
+        [JSON.stringify(10000), Date.now()]
       );
-      console.log("[recovery] Migrated peak portfolio: $50 → $1,000");
+      console.log(`[recovery] Migrated peak portfolio: $${peakRes.rows[0].value} → $10,000`);
+    }
+    const eoyRes = await migPool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_eoy_target'`);
+    if (eoyRes.rows.length === 0) {
+      await migPool.query(
+        `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_eoy_target', $1, $2)`,
+        [JSON.stringify(50000), Date.now()]
+      );
+      console.log("[recovery] Seeded EOY target: $50,000");
     }
   } catch (migErr) {
     console.error("[recovery] Portfolio migration check failed:", migErr instanceof Error ? migErr.message : migErr);

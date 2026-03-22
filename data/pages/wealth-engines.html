@@ -73,6 +73,32 @@
   .alert-banner.kill { background:var(--red-dim); border:1px solid rgba(239,68,68,0.25); color:var(--red); }
   .alert-banner.pause { background:var(--amber-dim); border:1px solid rgba(245,158,11,0.2); color:var(--amber); }
 
+  .eoy-progress {
+    background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    padding:0.55rem 0.7rem; margin-bottom:0.4rem;
+  }
+  .eoy-header { display:flex; align-items:center; gap:0.4rem; margin-bottom:0.35rem; }
+  .eoy-label { font-size:0.62rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; }
+  .eoy-values { font-size:0.72rem; color:var(--text); font-weight:600; flex:1; text-align:center; }
+  .eoy-pct { font-size:0.72rem; font-weight:700; }
+  .eoy-pct.green { color:var(--green); }
+  .eoy-pct.amber { color:var(--amber); }
+  .eoy-pct.red { color:var(--red); }
+  .eoy-bar-bg {
+    height:6px; background:rgba(255,255,255,0.06); border-radius:3px; position:relative; overflow:hidden;
+  }
+  .eoy-bar-fill {
+    height:100%; border-radius:3px; transition:width 0.5s ease; position:absolute; left:0; top:0;
+  }
+  .eoy-bar-fill.green { background:var(--green); }
+  .eoy-bar-fill.amber { background:var(--amber); }
+  .eoy-bar-fill.red { background:var(--red); }
+  .eoy-bar-pace {
+    position:absolute; top:-2px; width:2px; height:10px; background:rgba(255,255,255,0.3);
+    border-radius:1px; transition:left 0.5s ease;
+  }
+  .eoy-sub { font-size:0.58rem; color:var(--muted); margin-top:0.25rem; }
+
   .kpi-strip {
     display:grid; grid-template-columns:1fr 1fr 1fr; gap:0.4rem; margin-bottom:0.4rem;
   }
@@ -311,6 +337,19 @@
         <div class="kpi-val" id="kpiTotalPnl">$0.00</div>
         <div class="kpi-sub" id="kpiReturn">0% return</div>
       </div>
+    </div>
+
+    <div class="eoy-progress" id="eoyProgressRow" style="display:none">
+      <div class="eoy-header">
+        <span class="eoy-label">EOY Target</span>
+        <span class="eoy-values" id="eoyValues">$0 / $50K</span>
+        <span class="eoy-pct" id="eoyPct">0%</span>
+      </div>
+      <div class="eoy-bar-bg">
+        <div class="eoy-bar-fill" id="eoyFill"></div>
+        <div class="eoy-bar-pace" id="eoyPace"></div>
+      </div>
+      <div class="eoy-sub" id="eoySub"></div>
     </div>
 
     <div class="kpi-strip">
@@ -609,6 +648,25 @@ function render(data){
   var pv=data.portfolio_value||0;
   document.getElementById('kpiPortfolio').textContent=fmt$(pv);
   document.getElementById('kpiATH').textContent='ATH '+fmt$(data.peak_portfolio_value||pv);
+
+  var eoyTarget=data.eoy_target||0;
+  if(eoyTarget>0){
+    var eoyRow=document.getElementById('eoyProgressRow');eoyRow.style.display='';
+    var pct=Math.min((pv/eoyTarget)*100,100);
+    var fmtK=function(n){return n>=1000?'$'+(n/1000).toFixed(n%1000===0?0:1)+'K':'$'+n.toFixed(0);};
+    document.getElementById('eoyValues').textContent=fmtK(pv)+' / '+fmtK(eoyTarget);
+    var pctEl=document.getElementById('eoyPct');pctEl.textContent=pct.toFixed(0)+'%';
+    var now=new Date();var aprilStart=new Date(now.getFullYear(),3,1);var decEnd=new Date(now.getFullYear(),11,31);
+    var totalDays=(decEnd-aprilStart)/(86400000);var elapsed=Math.max(0,(now-aprilStart)/(86400000));
+    var expectedPct=Math.min((elapsed/totalDays)*100,100);
+    var paceEl=document.getElementById('eoyPace');paceEl.style.left=Math.min(expectedPct,100)+'%';
+    var fillColor=pct>=expectedPct?'green':pct>=expectedPct*0.8?'amber':'red';
+    var fillEl=document.getElementById('eoyFill');fillEl.style.width=pct+'%';fillEl.className='eoy-bar-fill '+fillColor;
+    pctEl.className='eoy-pct '+fillColor;
+    var mult=(eoyTarget/Math.max(pv,1)).toFixed(1);
+    var subText=pct>=expectedPct?'On track — '+mult+'x to go':'Behind pace — expected '+expectedPct.toFixed(0)+'% by now';
+    document.getElementById('eoySub').textContent=subText;
+  }
 
   var tp=(data.total_realized_pnl||0)+(data.unrealized_pnl||0);
   var tpEl=document.getElementById('kpiTotalPnl');
