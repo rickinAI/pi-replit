@@ -8013,7 +8013,7 @@ async function runStartupRecovery() {
 }
 
 async function sendStartupNotification(googleStatus: { connected: boolean; email?: string; error?: string }) {
-  const DEBOUNCE_MINUTES = 30;
+  const DEBOUNCE_MINUTES = 240;
   try {
     const pool = (await import("./src/db.js")).getPool();
     const result = await pool.query(
