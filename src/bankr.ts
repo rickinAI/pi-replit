@@ -1091,7 +1091,20 @@ export async function getSignalQuality(): Promise<SignalQualityRecord[]> {
   try {
     const res = await pool.query(`SELECT value FROM app_config WHERE key = $1`, [SIGNAL_QUALITY_KEY]);
     if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
-      return res.rows[0].value;
+      const records: SignalQualityRecord[] = res.rows[0].value;
+      const cutoff = Date.now() - SIGNAL_QUALITY_DECAY_MS;
+      for (const record of records) {
+        const before = record.recent_results.length;
+        record.recent_results = record.recent_results.filter(r => r.ts > cutoff);
+        if (record.recent_results.length !== before) {
+          const recentWins = record.recent_results.filter(r => r.pnl > 0).length;
+          const recentTotal = record.recent_results.length;
+          const recentPnl = record.recent_results.reduce((s, r) => s + r.pnl, 0);
+          record.win_rate = recentTotal > 0 ? parseFloat((recentWins / recentTotal * 100).toFixed(1)) : 0;
+          record.avg_pnl = recentTotal > 0 ? parseFloat((recentPnl / recentTotal).toFixed(4)) : 0;
+        }
+      }
+      return records;
     }
   } catch (err) {
     console.error("[bankr] getSignalQuality failed:", err instanceof Error ? err.message : err);
