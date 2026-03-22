@@ -1991,9 +1991,13 @@ function buildCoinGeckoTools(): ToolDefinition[] {
             type: "closed",
             asset: record.asset,
             direction: record.direction,
+            entryPrice: record.entry_price.toFixed(2),
             exitPrice: params.exit_price.toFixed(2),
             pnl: record.pnl,
+            pnlPct: record.pnl_pct,
             reason: params.close_reason,
+            openedAt: record.opened_at,
+            closedAt: record.closed_at,
           });
           return { content: [{ type: "text" as const, text: JSON.stringify({ closed: true, trade_id: record.id, pnl: record.pnl, pnl_pct: record.pnl_pct }) }], details: {} };
         } catch (err) {
@@ -7950,9 +7954,13 @@ async function runStartupRecovery() {
           type: trade.close_reason === "kill_switch" ? "emergency" : "stopped",
           asset: trade.asset,
           direction: trade.direction,
+          entryPrice: trade.entry_price.toFixed(2),
           exitPrice: trade.exit_price.toFixed(2),
           pnl: trade.pnl,
+          pnlPct: trade.pnl_pct,
           reason: trade.close_reason,
+          openedAt: trade.opened_at,
+          closedAt: trade.closed_at,
         });
       }
     }
@@ -8174,9 +8182,13 @@ async function startServer(maxRetries = 5) {
                     type: trade.close_reason === "kill_switch" ? "emergency" : "stopped",
                     asset: trade.asset,
                     direction: trade.direction,
+                    entryPrice: trade.entry_price.toFixed(2),
                     exitPrice: trade.exit_price.toFixed(2),
                     pnl: trade.pnl,
+                    pnlPct: trade.pnl_pct,
                     reason: trade.close_reason,
+                    openedAt: trade.opened_at,
+                    closedAt: trade.closed_at,
                   });
                 }
               }

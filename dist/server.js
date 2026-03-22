@@ -3339,7 +3339,8 @@ async function sendTradeAlert(params) {
     executed: "\u{1F4C8}",
     stopped: "\u{1F6D1}",
     emergency: "\u{1F6A8}",
-    closed: "\u2705"
+    closed: "\u2705",
+    flagged: "\u26A0\uFE0F"
   };
   const icon = icons[params.type] || "\u{1F4CA}";
   const lines = [`${mode} ${icon} *Trade ${params.type.toUpperCase()}*`, ""];
@@ -3352,8 +3353,28 @@ async function sendTradeAlert(params) {
     const pnlStr = params.pnl >= 0 ? `+$${params.pnl.toFixed(2)}` : `-$${Math.abs(params.pnl).toFixed(2)}`;
     lines.push(`*P&L:* ${pnlStr}`);
   }
-  if (params.reason) lines.push(`
-_${params.reason}_`);
+  if (params.pnlPct != null) {
+    const sign = params.pnlPct >= 0 ? "+" : "";
+    lines.push(`*Return:* ${sign}${params.pnlPct.toFixed(2)}%`);
+  } else if (params.pnl != null && params.entryPrice) {
+    const entry = parseFloat(params.entryPrice);
+    if (entry > 0) {
+      const pct = params.pnl / entry * 100;
+      const sign = pct >= 0 ? "+" : "";
+      lines.push(`*Return:* ${sign}${pct.toFixed(2)}%`);
+    }
+  }
+  if (params.openedAt && params.closedAt) {
+    const openMs = new Date(params.openedAt).getTime();
+    const closeMs = new Date(params.closedAt).getTime();
+    if (openMs > 0 && closeMs > openMs) {
+      const holdMs = closeMs - openMs;
+      const holdH = Math.floor(holdMs / 36e5);
+      const holdM = Math.floor(holdMs % 36e5 / 6e4);
+      lines.push(`*Hold:* ${holdH}h ${holdM}m`);
+    }
+  }
+  if (params.reason) lines.push(`*Reason:* ${params.reason}`);
   await sendMessage(lines.join("\n"));
 }
 async function sendScoutBrief(brief) {
@@ -16603,9 +16624,13 @@ ${sqNote}`
             type: "closed",
             asset: record.asset,
             direction: record.direction,
+            entryPrice: record.entry_price.toFixed(2),
             exitPrice: params.exit_price.toFixed(2),
             pnl: record.pnl,
-            reason: params.close_reason
+            pnlPct: record.pnl_pct,
+            reason: params.close_reason,
+            openedAt: record.opened_at,
+            closedAt: record.closed_at
           });
           return { content: [{ type: "text", text: JSON.stringify({ closed: true, trade_id: record.id, pnl: record.pnl, pnl_pct: record.pnl_pct }) }], details: {} };
         } catch (err) {
@@ -22611,9 +22636,13 @@ async function runStartupRecovery() {
           type: trade.close_reason === "kill_switch" ? "emergency" : "stopped",
           asset: trade.asset,
           direction: trade.direction,
+          entryPrice: trade.entry_price.toFixed(2),
           exitPrice: trade.exit_price.toFixed(2),
           pnl: trade.pnl,
-          reason: trade.close_reason
+          pnlPct: trade.pnl_pct,
+          reason: trade.close_reason,
+          openedAt: trade.opened_at,
+          closedAt: trade.closed_at
         });
       }
     }
@@ -22848,9 +22877,13 @@ Reconnect: /api/gmail/auth`).catch(() => {
                     type: trade.close_reason === "kill_switch" ? "emergency" : "stopped",
                     asset: trade.asset,
                     direction: trade.direction,
+                    entryPrice: trade.entry_price.toFixed(2),
                     exitPrice: trade.exit_price.toFixed(2),
                     pnl: trade.pnl,
-                    reason: trade.close_reason
+                    pnlPct: trade.pnl_pct,
+                    reason: trade.close_reason,
+                    openedAt: trade.opened_at,
+                    closedAt: trade.closed_at
                   });
                 }
               }

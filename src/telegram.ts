@@ -1037,14 +1037,17 @@ async function checkDeadManSwitches(): Promise<void> {
 }
 
 export async function sendTradeAlert(params: {
-  type: "executed" | "stopped" | "emergency" | "closed";
+  type: "executed" | "stopped" | "emergency" | "closed" | "flagged";
   asset: string;
   direction?: string;
   leverage?: string;
   entryPrice?: string;
   exitPrice?: string;
   pnl?: number;
+  pnlPct?: number;
   reason?: string;
+  openedAt?: string;
+  closedAt?: string;
 }): Promise<void> {
   const mode = await getMode();
   const icons: Record<string, string> = {
@@ -1052,6 +1055,7 @@ export async function sendTradeAlert(params: {
     stopped: "🛑",
     emergency: "🚨",
     closed: "✅",
+    flagged: "⚠️",
   };
   const icon = icons[params.type] || "📊";
 
@@ -1065,7 +1069,28 @@ export async function sendTradeAlert(params: {
     const pnlStr = params.pnl >= 0 ? `+$${params.pnl.toFixed(2)}` : `-$${Math.abs(params.pnl).toFixed(2)}`;
     lines.push(`*P&L:* ${pnlStr}`);
   }
-  if (params.reason) lines.push(`\n_${params.reason}_`);
+  if (params.pnlPct != null) {
+    const sign = params.pnlPct >= 0 ? "+" : "";
+    lines.push(`*Return:* ${sign}${params.pnlPct.toFixed(2)}%`);
+  } else if (params.pnl != null && params.entryPrice) {
+    const entry = parseFloat(params.entryPrice);
+    if (entry > 0) {
+      const pct = (params.pnl / entry) * 100;
+      const sign = pct >= 0 ? "+" : "";
+      lines.push(`*Return:* ${sign}${pct.toFixed(2)}%`);
+    }
+  }
+  if (params.openedAt && params.closedAt) {
+    const openMs = new Date(params.openedAt).getTime();
+    const closeMs = new Date(params.closedAt).getTime();
+    if (openMs > 0 && closeMs > openMs) {
+      const holdMs = closeMs - openMs;
+      const holdH = Math.floor(holdMs / 3600000);
+      const holdM = Math.floor((holdMs % 3600000) / 60000);
+      lines.push(`*Hold:* ${holdH}h ${holdM}m`);
+    }
+  }
+  if (params.reason) lines.push(`*Reason:* ${params.reason}`);
 
   await sendMessage(lines.join("\n"));
 }
