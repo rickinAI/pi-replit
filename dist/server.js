@@ -12146,7 +12146,7 @@ init_telegram();
 // src/scheduled-jobs.ts
 init_db();
 init_telegram();
-init_bnkr();
+init_crypto_scout();
 function getJobSavePath(jobId, dateStr, safeName) {
   if (jobId === "moodys-daily-intel") return `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief.md`;
   if (jobId === "moodys-profile-updates") return `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Profile-Updates.md`;
@@ -13991,39 +13991,18 @@ ${result}`);
               const chartUrls = [];
               const urlMatches = result.match(/https?:\/\/[^\s)]+\.(?:png|jpg|jpeg|webp|gif)/gi);
               if (urlMatches) chartUrls.push(...urlMatches.slice(0, 5));
-              if (isPromptConfigured()) {
-                try {
-                  const trending = await getTrendingTokens();
-                  if (trending.tokens && trending.tokens.length > 0) {
-                    const trendingLine = trending.tokens.slice(0, 5).map((t) => `${t.symbol}${t.change24h ? ` (${t.change24h > 0 ? "+" : ""}${t.change24h.toFixed(1)}%)` : ""}`).join(", ");
-                    enrichedBrief += `
+              const trendingCandidates = await getBnkrTrendingCandidates();
+              if (trendingCandidates.length > 0) {
+                enrichedBrief += `
 
-\u{1F4CA} *BNKR Trending Cross-Ref:* ${trendingLine}`;
-                  }
-                } catch (err) {
-                  console.warn(`[scheduled-jobs] BNKR trending enrichment failed:`, err instanceof Error ? err.message : err);
-                }
-                const assetMatches = result.match(/\*\*?([A-Z]{2,10})\*\*?\s*—\s*(?:📈|📉|LONG|SHORT)/g);
-                if (assetMatches) {
-                  for (const match of assetMatches.slice(0, 3)) {
-                    const symbol = match.match(/\*\*?([A-Z]{2,10})\*\*?/)?.[1];
-                    if (!symbol) continue;
-                    try {
-                      const research = await researchToken(symbol);
-                      if (research.analysis) {
-                        const summary = research.analysis.length > 200 ? research.analysis.slice(0, 200) + "..." : research.analysis;
-                        enrichedBrief += `
-
-\u{1F52C} *BNKR Research \u2014 ${symbol}:* ${summary}`;
-                      }
-                      if (research.chartUrl && !chartUrls.includes(research.chartUrl)) {
-                        chartUrls.push(research.chartUrl);
-                      }
-                    } catch (err) {
-                      console.warn(`[scheduled-jobs] BNKR research for ${symbol} failed:`, err instanceof Error ? err.message : err);
-                    }
-                  }
-                }
+\u{1F4CA} *BNKR Trending Cross-Ref:* ${trendingCandidates.slice(0, 8).join(", ")}`;
+              }
+              const activeTheses = await getActiveTheses();
+              if (activeTheses.length > 0) {
+                const { theses: enrichedTheses, chartUrls: thesisCharts } = await enrichThesesWithBnkr(activeTheses);
+                await saveTheses(enrichedTheses);
+                chartUrls.push(...thesisCharts);
+                console.log(`[scheduled-jobs] BNKR-enriched ${enrichedTheses.length} theses, ${thesisCharts.length} charts`);
               }
               await sendScoutBrief(enrichedBrief, chartUrls.length > 0 ? chartUrls : void 0);
               console.log(`[scheduled-jobs] Sent SCOUT brief via Telegram with ${chartUrls.length} charts`);
@@ -17319,33 +17298,14 @@ ${sqNote}`
           if (mode === "SHADOW") {
             return { content: [{ type: "text", text: JSON.stringify({ executed: false, tier: riskCheck.tier, reason: "SHADOW mode \u2014 trade logged but not executed", checks: riskCheck.checks }) }], details: {} };
           }
-          if (riskCheck.tier === "human_required") {
-            const portfolio = await getPortfolioValue();
-            const rc = await getRiskConfig();
-            const riskAmount = portfolio * (rc.risk_per_trade_pct / 100);
-            let chartUrl;
-            try {
-              const chart = await getChart(params.asset);
-              if (chart.chartUrl) chartUrl = chart.chartUrl;
-            } catch (chartErr) {
-              console.warn(`[bankr] Chart fetch for approval failed: ${chartErr instanceof Error ? chartErr.message : chartErr}`);
-            }
-            const approval = await requestTradeApproval({
-              thesisId: params.thesis_id,
-              asset: params.asset,
-              direction: params.direction,
-              leverage: `${params.leverage}x`,
-              entryPrice: params.entry_price.toFixed(2),
-              stopLoss: params.stop_price.toFixed(2),
-              takeProfit: "TBD",
-              riskAmount: riskAmount.toFixed(2),
-              reason: `Tier: HUMAN REQUIRED. Mode: ${mode}`,
-              chartUrl
-            });
-            if (approval !== "approve") {
-              return { content: [{ type: "text", text: JSON.stringify({ executed: false, tier: "human_required", reason: `Trade ${approval} via Telegram` }) }], details: {} };
-            }
-          } else if (riskCheck.tier === "dead_zone") {
+          let chartUrl;
+          try {
+            const chart = await getChart(params.asset);
+            if (chart.chartUrl) chartUrl = chart.chartUrl;
+          } catch (chartErr) {
+            console.warn(`[bankr] Chart fetch failed: ${chartErr instanceof Error ? chartErr.message : chartErr}`);
+          }
+          if (riskCheck.tier === "dead_zone") {
             await sendTradeAlert({
               type: "flagged",
               asset: params.asset,
@@ -17356,6 +17316,13 @@ ${sqNote}`
             });
           }
           const result = await openPosition({ ...params, source: params.source });
+          if (chartUrl) {
+            try {
+              await sendPhoto(chartUrl, `\u{1F4CA} ${params.asset} ${params.direction} \u2014 Chart at entry`);
+            } catch (photoErr) {
+              console.warn(`[bankr] Chart photo send failed: ${photoErr instanceof Error ? photoErr.message : photoErr}`);
+            }
+          }
           await sendTradeAlert({
             type: "executed",
             asset: params.asset,
