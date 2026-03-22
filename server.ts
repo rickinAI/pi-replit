@@ -2026,10 +2026,6 @@ function buildCoinGeckoTools(): ToolDefinition[] {
           if (!riskCheck.passed) {
             return { content: [{ type: "text" as const, text: JSON.stringify({ executed: false, tier: riskCheck.tier, reason: riskCheck.rejection_reason, checks: riskCheck.checks }) }], details: {} };
           }
-          const mode = await bankr.getMode();
-          if (mode === "SHADOW") {
-            return { content: [{ type: "text" as const, text: JSON.stringify({ executed: false, tier: riskCheck.tier, reason: "SHADOW mode — trade logged but not executed", checks: riskCheck.checks }) }], details: {} };
-          }
           let chartUrl: string | undefined;
           try {
             const chart = await bnkr.getChart(params.asset);
