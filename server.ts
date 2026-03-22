@@ -51,6 +51,7 @@ import { cleanHtmlToMarkdown, looksLikeHtml } from "./src/defuddle.js";
 import * as vaultGraph from "./src/vault-graph.js";
 import * as hindsight from "./src/hindsight.js";
 import * as oversight from "./src/oversight.js";
+import * as vaultEmbeddings from "./src/vault-embeddings.js";
 
 const PORT = parseInt(process.env.PORT || "5000", 10);
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
@@ -3055,6 +3056,279 @@ function buildMemoryTools(): ToolDefinition[] {
         }
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }], details: {} };
+      },
+    },
+  ];
+}
+
+function buildSemanticVaultTools(): ToolDefinition[] {
+  return [
+    {
+      name: "vault_semantic_search",
+      label: "Vault Semantic Search",
+      description: "Search the vault using natural language semantic similarity. Unlike keyword search (notes_search), this finds notes by meaning — e.g. searching 'data strategy' will find notes about 'intelligence moat' or 'competitive advantage in data'. Returns ranked results with file path, similarity score, and matched excerpt.",
+      parameters: Type.Object({
+        query: Type.String({ description: "Natural language search query" }),
+        top_k: Type.Optional(Type.Number({ description: "Number of results to return (default 10, max 25)" })),
+        folder_filter: Type.Optional(Type.String({ description: "Optional folder path prefix to filter results (e.g. 'Projects/Moody\\'s')" })),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        if (!vaultEmbeddings.isConfigured()) {
+          return { content: [{ type: "text" as const, text: "Vault semantic search is not configured. Embedding provider API keys (CF_ACCOUNT_ID + CF_API_TOKEN or OPENAI_API_KEY) are required." }], details: {} };
+        }
+        const topK = Math.min(params.top_k || 10, 25);
+        try {
+          const results = await vaultEmbeddings.semanticSearch(params.query, topK, params.folder_filter);
+          if (results.length === 0) {
+            return { content: [{ type: "text" as const, text: `No semantic matches found for "${params.query}".` }], details: {} };
+          }
+          const formatted = results.map((r, i) => {
+            const score = (r.similarity * 100).toFixed(1);
+            const heading = r.heading ? ` > ${r.heading}` : "";
+            return `${i + 1}. **${r.filePath}**${heading} (${score}% match)\n   ${r.excerpt.slice(0, 300)}`;
+          }).join("\n\n");
+          console.log(`[vault-semantic] search OK: "${params.query}" (${results.length} results)`);
+          return { content: [{ type: "text" as const, text: `Found ${results.length} semantically similar notes:\n\n${formatted}` }], details: {} };
+        } catch (err: any) {
+          console.error(`[vault-semantic] search FAILED: "${params.query}" — ${err.message}`);
+          throw err;
+        }
+      },
+    },
+    {
+      name: "vault_reindex",
+      label: "Vault Re-index",
+      description: "Trigger a re-index of the vault's semantic embeddings. Use 'incremental' (default) to only update changed/new files, or 'full' to rebuild the entire index from scratch.",
+      parameters: Type.Object({
+        mode: Type.Optional(Type.String({ description: "'incremental' (default) or 'full'" })),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        if (!vaultEmbeddings.isConfigured()) {
+          return { content: [{ type: "text" as const, text: "Vault embedding is not configured. Embedding provider API keys are required." }], details: {} };
+        }
+        const force = params.mode === "full";
+        try {
+          const result = await vaultEmbeddings.indexVault(force);
+          const stats = await vaultEmbeddings.getIndexStats();
+          const summary = `Re-index complete (${params.mode || "incremental"}):\n- Files scanned: ${result.total}\n- Chunks indexed: ${result.indexed}\n- Chunks skipped (unchanged): ${result.skipped}\n- Errors: ${result.errors}\n\nIndex status: ${stats.totalFiles} files, ${stats.totalChunks} chunks. Last updated: ${stats.lastUpdated}`;
+          console.log(`[vault-semantic] reindex OK: ${result.indexed} indexed, ${result.skipped} skipped`);
+          return { content: [{ type: "text" as const, text: summary }], details: {} };
+        } catch (err: any) {
+          console.error(`[vault-semantic] reindex FAILED: ${err.message}`);
+          throw err;
+        }
+      },
+    },
+    {
+      name: "vault_contradictions",
+      label: "Vault Contradictions",
+      description: "Analyze a note for contradictions against its semantic neighbors. Takes a note path, finds semantically similar notes, and uses Claude to detect conflicting statements, outdated decisions, or drift between related notes.",
+      parameters: Type.Object({
+        path: Type.String({ description: "Path to the note to analyze (e.g. 'Projects/Strategy.md')" }),
+        top_k: Type.Optional(Type.Number({ description: "Number of semantic neighbors to compare against (default 5)" })),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        if (!vaultEmbeddings.isConfigured()) {
+          return { content: [{ type: "text" as const, text: "Vault semantic layer not configured." }], details: {} };
+        }
+        if (!ANTHROPIC_KEY) {
+          return { content: [{ type: "text" as const, text: "ANTHROPIC_API_KEY required for contradiction analysis." }], details: {} };
+        }
+
+        const topK = Math.min(params.top_k || 5, 10);
+        try {
+          let sourceContent: string;
+          try {
+            sourceContent = await kbRead(params.path);
+          } catch {
+            return { content: [{ type: "text" as const, text: `Note not found: ${params.path}` }], details: {} };
+          }
+
+          const neighbors = await vaultEmbeddings.getSemanticNeighbors(params.path, topK);
+          if (neighbors.length === 0) {
+            return { content: [{ type: "text" as const, text: `No semantic neighbors found for ${params.path}. Run vault_reindex first.` }], details: {} };
+          }
+
+          const Anthropic = (await import("@anthropic-ai/sdk")).default;
+          const client = new Anthropic({ apiKey: ANTHROPIC_KEY });
+
+          const neighborTexts = neighbors.map(n =>
+            `--- ${n.filePath} (${(n.similarity * 100).toFixed(0)}% similar) ---\n${n.excerpt}`
+          ).join("\n\n");
+
+          const response = await client.messages.create({
+            model: "claude-haiku-4-5-20251001",
+            max_tokens: 1000,
+            messages: [{
+              role: "user",
+              content: `Compare this source note against its semantic neighbors. Flag any contradictions, conflicting decisions, outdated information, or significant drift.
+
+SOURCE NOTE (${params.path}):
+${sourceContent.slice(0, 2000)}
+
+SEMANTIC NEIGHBORS:
+${neighborTexts.slice(0, 3000)}
+
+Respond with JSON:
+{
+  "contradictions": [
+    {
+      "source_claim": "brief quote or paraphrase from source note",
+      "neighbor_claim": "brief quote or paraphrase from neighbor",
+      "neighbor_file": "file path of the conflicting neighbor",
+      "explanation": "why these conflict",
+      "severity": "high|medium|low"
+    }
+  ],
+  "summary": "Brief overall assessment"
+}
+
+If no contradictions found, return empty contradictions array with a summary saying the notes are consistent. Return ONLY JSON, no markdown fencing.`
+            }],
+          });
+
+          const text = response.content[0]?.type === "text" ? response.content[0].text : "{}";
+          const cleaned = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+          let parsed;
+          try { parsed = JSON.parse(cleaned); } catch { parsed = { contradictions: [], summary: text }; }
+
+          const contradictions = parsed.contradictions || [];
+          let output = `**Contradiction Analysis: ${params.path}**\n\nCompared against ${neighbors.length} semantic neighbors.\n\n`;
+
+          if (contradictions.length === 0) {
+            output += `✅ ${parsed.summary || "No contradictions detected."}`;
+          } else {
+            output += `⚠️ Found ${contradictions.length} contradiction(s):\n\n`;
+            for (const c of contradictions) {
+              output += `**[${(c.severity || "medium").toUpperCase()}]** ${c.explanation}\n`;
+              output += `- Source: "${c.source_claim}"\n`;
+              output += `- Conflicts with: ${c.neighbor_file} — "${c.neighbor_claim}"\n\n`;
+            }
+            if (parsed.summary) output += `\n**Summary:** ${parsed.summary}`;
+          }
+
+          console.log(`[vault-semantic] contradictions OK: ${params.path} (${contradictions.length} found)`);
+          return { content: [{ type: "text" as const, text: output }], details: {} };
+        } catch (err: any) {
+          console.error(`[vault-semantic] contradictions FAILED: ${params.path} — ${err.message}`);
+          throw err;
+        }
+      },
+    },
+    {
+      name: "vault_insights",
+      label: "Vault Insights Report",
+      description: "Generate a comprehensive vault insights report: recurring themes, topic clusters, orphaned notes (semantically isolated), and potential contradictions. Provides a high-level view of vault health and knowledge patterns.",
+      parameters: Type.Object({}),
+      async execute() {
+        if (!vaultEmbeddings.isConfigured()) {
+          return { content: [{ type: "text" as const, text: "Vault semantic layer not configured." }], details: {} };
+        }
+
+        try {
+          const stats = await vaultEmbeddings.getIndexStats();
+          if (stats.totalChunks === 0) {
+            return { content: [{ type: "text" as const, text: "Vault index is empty. Run vault_reindex first." }], details: {} };
+          }
+
+          const [clusters, orphanedNotes] = await Promise.all([
+            vaultEmbeddings.getTopClusters(8),
+            vaultEmbeddings.getOrphanedNotes(),
+          ]);
+
+          let report = `# Vault Insights Report\n\n`;
+          report += `**Index:** ${stats.totalFiles} files, ${stats.totalChunks} chunks indexed\n`;
+          report += `**Last updated:** ${stats.lastUpdated || "never"}\n\n`;
+
+          report += `## Topic Clusters\n`;
+          if (clusters.length === 0) {
+            report += `No strong clusters detected.\n\n`;
+          } else {
+            for (const c of clusters) {
+              report += `\n### ${c.theme}\n`;
+              report += c.files.map(f => `- ${f}`).join("\n") + "\n";
+            }
+          }
+
+          report += `\n## Orphaned Notes (low semantic connectivity)\n`;
+          if (orphanedNotes.length === 0) {
+            report += `All notes have semantic neighbors.\n`;
+          } else {
+            const shown = orphanedNotes.slice(0, 20);
+            report += shown.map(f => `- ${f}`).join("\n") + "\n";
+            if (orphanedNotes.length > 20) {
+              report += `\n...and ${orphanedNotes.length - 20} more\n`;
+            }
+          }
+
+          if (ANTHROPIC_KEY) {
+            try {
+              const topResults = await vaultEmbeddings.semanticSearch("strategy decisions plans priorities", 15);
+              const noteList = topResults.map(r => `${r.filePath}: ${r.excerpt.slice(0, 150)}`).join("\n");
+
+              const Anthropic = (await import("@anthropic-ai/sdk")).default;
+              const client = new Anthropic({ apiKey: ANTHROPIC_KEY });
+              const response = await client.messages.create({
+                model: "claude-haiku-4-5-20251001",
+                max_tokens: 600,
+                messages: [{
+                  role: "user",
+                  content: `Analyze these vault notes and identify 3-5 recurring themes or patterns. Be concise.\n\nNotes:\n${noteList}\n\nRespond with a brief bullet list of themes/patterns you see.`
+                }],
+              });
+              const themes = response.content[0]?.type === "text" ? response.content[0].text : "";
+              report += `\n## Recurring Themes (AI Analysis)\n${themes}\n`;
+            } catch (err) {
+              console.warn("[vault-semantic] Theme analysis failed:", err);
+            }
+
+            try {
+              const candidateNotes = clusters
+                .flatMap(c => c.files)
+                .filter((f, i, arr) => arr.indexOf(f) === i)
+                .slice(0, 5);
+
+              if (candidateNotes.length >= 2) {
+                const pairTexts: string[] = [];
+                for (const notePath of candidateNotes) {
+                  try {
+                    const neighbors = await vaultEmbeddings.getSemanticNeighbors(notePath, 3);
+                    if (neighbors.length > 0) {
+                      let sourceContent: string;
+                      try { sourceContent = await kbRead(notePath); } catch { continue; }
+                      const neighborExcerpts = neighbors.map(n =>
+                        `${n.filePath}: ${n.excerpt.slice(0, 200)}`
+                      ).join("\n");
+                      pairTexts.push(`SOURCE: ${notePath}\n${sourceContent.slice(0, 500)}\nNEIGHBORS:\n${neighborExcerpts}`);
+                    }
+                  } catch {}
+                }
+
+                if (pairTexts.length > 0) {
+                  const contradictionClient = new (await import("@anthropic-ai/sdk")).default({ apiKey: ANTHROPIC_KEY });
+                  const contradictionResponse = await contradictionClient.messages.create({
+                    model: "claude-haiku-4-5-20251001",
+                    max_tokens: 800,
+                    messages: [{
+                      role: "user",
+                      content: `Review these vault note clusters for contradictions, conflicting decisions, or outdated information. Flag any inconsistencies.\n\n${pairTexts.join("\n\n---\n\n")}\n\nRespond with a concise bullet list of contradictions found (source file vs neighbor file + explanation). If none found, say "No contradictions detected." Return plain text, no JSON.`
+                    }],
+                  });
+                  const contradictions = contradictionResponse.content[0]?.type === "text" ? contradictionResponse.content[0].text : "";
+                  report += `\n## Potential Contradictions (AI Analysis)\n${contradictions}\n`;
+                }
+              }
+            } catch (err) {
+              console.warn("[vault-semantic] Contradiction analysis in insights failed:", err);
+            }
+          }
+
+          console.log(`[vault-semantic] insights report generated`);
+          return { content: [{ type: "text" as const, text: report }], details: {} };
+        } catch (err: any) {
+          console.error(`[vault-semantic] insights FAILED: ${err.message}`);
+          throw err;
+        }
       },
     },
   ];
@@ -6192,6 +6466,7 @@ const cachedStaticTools: ToolDefinition[] = [
   ...buildMemoryTools(),
   ...buildWebPublishTools(),
   ...buildOversightTools(),
+  ...buildSemanticVaultTools(),
 ];
 
 {
@@ -6334,7 +6609,24 @@ app.post("/api/session", async (req: Request, res: Response) => {
       }).join("\n\n");
       const resumeContext = `[RESUMED CONVERSATION: "${conv.title}"]\nRickin is picking up exactly where you left off. This is a continuation — treat any references like "it", "that", "this" as referring to the topic below. Here are the last ${lastN.length} messages:\n\n${formatted}\n\nIMPORTANT: When Rickin says something brief like "test it", "try again", "do it", etc., it refers to whatever you were last discussing above. Do NOT start a new unrelated topic.`;
       const vaultIndex = await getVaultIndex();
-      combinedContext = [resumeContext, vaultIndex].filter(Boolean).join("\n\n---\n\n");
+
+      let resumeSemanticContext: string | null = null;
+      if (vaultEmbeddings.isConfigured()) {
+        try {
+          const enrichmentQuery = formatted.slice(-600);
+          const semanticResults = await vaultEmbeddings.semanticSearch(enrichmentQuery, 5);
+          if (semanticResults.length > 0) {
+            const semanticLines = semanticResults.map(r =>
+              `- **${r.filePath}** (${(r.similarity * 100).toFixed(0)}% match): ${r.excerpt.slice(0, 150)}`
+            ).join("\n");
+            resumeSemanticContext = `[Vault Semantic Context]\nMost relevant vault notes based on resumed conversation:\n${semanticLines}`;
+          }
+        } catch (err) {
+          console.warn("[session] Semantic vault context for resume failed:", err);
+        }
+      }
+
+      combinedContext = [resumeContext, resumeSemanticContext, vaultIndex].filter(Boolean).join("\n\n---\n\n");
     } else {
       const recentSummary = await conversations.getRecentSummary(5);
       const lastConvoContext = await conversations.getLastConversationContext(10);
@@ -6353,7 +6645,31 @@ app.post("/api/session", async (req: Request, res: Response) => {
         }
       }
 
-      combinedContext = [lastConvoContext, recentSummary, hindsightContext, vaultIndex].filter(Boolean).join("\n\n---\n\n") || null;
+      let semanticContext: string | null = null;
+      if (vaultEmbeddings.isConfigured()) {
+        try {
+          const contextParts: string[] = [];
+          if (lastConvoContext) contextParts.push(lastConvoContext.slice(0, 400));
+          if (hindsightContext) {
+            const memExcerpt = hindsightContext.slice(0, 300);
+            contextParts.push(memExcerpt);
+          }
+          const enrichmentQuery = contextParts.length > 0
+            ? contextParts.join(" ")
+            : "recent projects, decisions, and priorities";
+          const semanticResults = await vaultEmbeddings.semanticSearch(enrichmentQuery, 5);
+          if (semanticResults.length > 0) {
+            const semanticLines = semanticResults.map(r =>
+              `- **${r.filePath}** (${(r.similarity * 100).toFixed(0)}% match): ${r.excerpt.slice(0, 150)}`
+            ).join("\n");
+            semanticContext = `[Vault Semantic Context]\nMost relevant vault notes based on recent topics and memories:\n${semanticLines}`;
+          }
+        } catch (err) {
+          console.warn("[session] Semantic vault context for greeting failed:", err);
+        }
+      }
+
+      combinedContext = [lastConvoContext, recentSummary, hindsightContext, semanticContext, vaultIndex].filter(Boolean).join("\n\n---\n\n") || null;
     }
     entry.startupContext = combinedContext || undefined;
 
@@ -7428,6 +7744,37 @@ app.get("/api/vault-tree", async (_req, res) => {
   }
 });
 
+app.get("/api/vault/smart-connections", async (req: Request, res: Response) => {
+  try {
+    const notePath = req.query.path as string;
+    const topK = Math.min(parseInt(req.query.top_k as string) || 10, 25);
+
+    if (!vaultEmbeddings.isConfigured()) {
+      res.status(503).json({ error: "Vault semantic layer not configured", configured: false });
+      return;
+    }
+
+    if (notePath) {
+      try {
+        const neighbors = await vaultEmbeddings.getSemanticNeighbors(notePath, topK);
+        res.json({ note: notePath, connections: neighbors, status: vaultEmbeddings.getStatus() });
+      } catch (neighborErr: any) {
+        if (neighborErr.message?.includes("No embeddings found")) {
+          res.status(404).json({ error: `Note "${notePath}" not found in semantic index. Run vault_reindex to index vault files.`, notePath });
+          return;
+        }
+        throw neighborErr;
+      }
+    } else {
+      const stats = await vaultEmbeddings.getIndexStats();
+      res.json({ stats, status: vaultEmbeddings.getStatus() });
+    }
+  } catch (err: any) {
+    console.error("[api] smart-connections error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post("/api/telegram/webhook", express.json(), async (req, res) => {
   const secretHeader = req.headers["x-telegram-bot-api-secret-token"];
   if (secretHeader !== telegram.getWebhookSecret()) {
@@ -7469,6 +7816,7 @@ async function gracefulShutdown(signal: string) {
     obSyncProcess = null;
   }
   scheduledJobs.stopJobSystem();
+  vaultEmbeddings.stopScheduledReindex();
   telegram.stop();
   const ids = [...sessions.keys()];
   if (ids.length > 0) {
@@ -7730,7 +8078,26 @@ async function startServer(maxRetries = 5) {
       [JSON.stringify(false), Date.now()]
     );
   } catch {}
-  console.log("[boot] PostgreSQL ready (shared pool, 4 tables)");
+  try {
+    const dbPool = db.getPool();
+    vaultEmbeddings.init(dbPool, {
+      listRecursive: kbListRecursive,
+      read: kbRead,
+    });
+    await vaultEmbeddings.ensureTable();
+    if (vaultEmbeddings.isConfigured()) {
+      console.log(`[boot] Vault semantic layer: ${vaultEmbeddings.getStatus().provider} embeddings`);
+      vaultEmbeddings.startScheduledReindex(6);
+      vaultEmbeddings.indexVault(false).catch(err =>
+        console.error("[boot] Initial vault index failed:", err)
+      );
+    } else {
+      console.warn("[boot] Vault semantic layer: no embedding provider configured (set CF_ACCOUNT_ID+CF_API_TOKEN or OPENAI_API_KEY)");
+    }
+  } catch (err) {
+    console.error("[boot] Vault semantic layer init failed:", err);
+  }
+  console.log("[boot] PostgreSQL ready (shared pool, 8 tables + pgvector)");
 
   let googleStatus: { connected: boolean; email?: string; error?: string } = { connected: false };
   try {

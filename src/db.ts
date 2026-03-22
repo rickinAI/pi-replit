@@ -106,7 +106,13 @@ export async function init(): Promise<pg.Pool> {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_vault_inbox_created ON vault_inbox(created_at DESC)`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_vault_inbox_url ON vault_inbox(url)`);
 
-  console.log("[db] PostgreSQL initialized (shared pool, 7 tables)");
+  try {
+    await pool.query(`CREATE EXTENSION IF NOT EXISTS vector`);
+  } catch (err) {
+    console.warn("[db] pgvector extension not available (semantic features will be disabled):", err);
+  }
+
+  console.log("[db] PostgreSQL initialized (shared pool, 7 tables + pgvector)");
   return pool;
 }
 
