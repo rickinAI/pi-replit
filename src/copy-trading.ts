@@ -72,6 +72,7 @@ const MIN_ODDS = 0.15;
 const MAX_ODDS = 0.85;
 const MIN_HOURS_TO_RESOLUTION = 24;
 const MIN_VOLUME = 10000;
+const MIN_LIQUIDITY = 10000;
 const MIN_WALLET_WIN_RATE = 65;
 
 export async function getTrackedWallets(): Promise<TrackedWallet[]> {
@@ -291,6 +292,10 @@ export async function evaluateCopyTradeSignal(signal: CopyTradeSignal): Promise<
     failures.push(`Volume $${market.volume.toFixed(0)} < $${MIN_VOLUME} minimum`);
   }
 
+  if (market.liquidity < MIN_LIQUIDITY) {
+    failures.push(`Liquidity $${market.liquidity.toFixed(0)} < $${MIN_LIQUIDITY} minimum`);
+  }
+
   if (currentOdds < MIN_ODDS || currentOdds > MAX_ODDS) {
     failures.push(`Odds ${(currentOdds * 100).toFixed(0)}% outside ${MIN_ODDS * 100}-${MAX_ODDS * 100}% range`);
   }
@@ -339,6 +344,19 @@ export async function executeCopyTrade(signal: CopyTradeSignal): Promise<{
 
     const paused = await bankr.isPaused();
     if (paused) return { success: false, error: "System paused" };
+
+    const rc = await bankr.getRiskConfig();
+    const portfolio = await bankr.getPortfolioValue();
+    const peak = await bankr.getPeakPortfolioValue();
+    const peakDrawdownPct = peak > 0 ? ((portfolio - peak) / peak) * 100 : 0;
+    if (peakDrawdownPct < rc.circuit_breaker_drawdown_pct) {
+      return { success: false, error: `Circuit breaker: drawdown ${peakDrawdownPct.toFixed(1)}% exceeds ${rc.circuit_breaker_drawdown_pct}% limit` };
+    }
+
+    const positions = await bankr.getPositions();
+    if (positions.length >= rc.max_positions) {
+      return { success: false, error: `Max positions reached (${positions.length}/${rc.max_positions})` };
+    }
 
     const mode = await bankr.getMode();
 
