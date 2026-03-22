@@ -23092,8 +23092,8 @@ Reconnect: /api/gmail/auth`).catch(() => {
             } catch (err) {
               console.error("[bankr-monitor] Position monitor error:", err);
             }
-          }, 5 * 60 * 1e3);
-          console.log("[boot] BANKR position monitor started (5-min interval)");
+          }, 2 * 60 * 1e3);
+          console.log("[boot] BANKR position monitor started (2-min interval)");
           runStartupRecovery().catch((err) => {
             console.error("[recovery] Startup recovery failed:", err instanceof Error ? err.message : err);
           });
