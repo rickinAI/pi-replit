@@ -30,24 +30,6 @@ export interface PipelineStats {
   last_event_at: number | null;
 }
 
-export async function ensurePipelineTable(): Promise<void> {
-  const pool = getPool();
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS email_pipeline (
-      id SERIAL PRIMARY KEY,
-      inbox TEXT NOT NULL,
-      category TEXT NOT NULL,
-      sender TEXT NOT NULL,
-      subject TEXT,
-      status TEXT NOT NULL,
-      metadata JSONB NOT NULL DEFAULT '{}',
-      created_at BIGINT NOT NULL
-    )
-  `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_email_pipeline_inbox ON email_pipeline(inbox)`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_email_pipeline_created ON email_pipeline(created_at DESC)`);
-}
-
 function validateMetadataEnvelope(meta: any): PipelineEventMetadata {
   return {
     inbox: typeof meta.inbox === "string" ? meta.inbox : "unknown",
