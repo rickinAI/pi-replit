@@ -5677,6 +5677,11 @@ async function openPosition(params) {
     } catch (e) {
       console.error("[bankr] Shadow tracking in SHADOW mode:", e instanceof Error ? e.message : e);
     }
+    const portfolio2 = await getPortfolioValue();
+    const rc2 = await getRiskConfig();
+    const maxRisk2 = portfolio2 * (rc2.risk_per_trade_pct / 100);
+    const riskDistance2 = Math.abs(params.entry_price - params.stop_price);
+    const shadowSize = riskDistance2 > 0 ? maxRisk2 / riskDistance2 : 0;
     const shadowPosId = `shadow_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const shadowTradeId = `shadow_trade_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const shadowPosition = {
@@ -5689,15 +5694,20 @@ async function openPosition(params) {
       leverage: String(params.leverage),
       entry_price: params.entry_price,
       current_price: params.entry_price,
-      size: 0,
+      size: shadowSize,
       unrealized_pnl: 0,
       peak_price: params.entry_price,
       atr_value: params.atr_value,
       atr_stop_price: params.stop_price,
       venue: params.venue,
       opened_at: (/* @__PURE__ */ new Date()).toISOString(),
-      exposure_bucket: "shadow"
+      exposure_bucket: getExposureBucket(params.asset, params.asset_class)
     };
+    const positions2 = await getPositions();
+    positions2.push(shadowPosition);
+    await savePositions(positions2);
+    recordSignal(params.asset.toLowerCase(), "entry");
+    console.log(`[bankr] SHADOW position opened: ${params.asset} ${params.direction} size=${shadowSize.toFixed(4)} entry=$${params.entry_price}`);
     return { position: shadowPosition, trade_id: shadowTradeId };
   }
   const portfolio = await getPortfolioValue();
