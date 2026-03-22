@@ -440,6 +440,13 @@ export async function openPosition(params: {
 }): Promise<{ position: Position; trade_id: string; bnkr_order_id?: string }> {
   const mode = await getMode();
   if (mode === "SHADOW") {
+    const existingPositions = await getPositions();
+    const alreadyOpen = existingPositions.find(p => p.thesis_id === params.thesis_id && p.asset === params.asset && p.direction === params.direction);
+    if (alreadyOpen) {
+      console.log(`[bankr] SHADOW skip duplicate: ${params.asset} ${params.direction} already open (${alreadyOpen.id})`);
+      return { position: alreadyOpen, trade_id: `dup_${alreadyOpen.id}` };
+    }
+
     const source: "crypto_scout" | "polymarket_scout" = params.source === "polymarket_scout" ? "polymarket_scout" : "crypto_scout";
     try {
       await autoTrackShadowTrade({
@@ -461,7 +468,6 @@ export async function openPosition(params: {
     const maxRisk = portfolio * (rc.risk_per_trade_pct / 100);
     const riskDistance = Math.abs(params.entry_price - params.stop_price);
     const rawSize = riskDistance > 0 ? maxRisk / riskDistance : 0;
-    const existingPositions = await getPositions();
     const totalExposure = existingPositions.reduce((sum, p) => sum + (p.size * p.entry_price), 0);
     const exposureLimit = portfolio * (rc.exposure_cap_pct / 100);
     const remainingExposure = Math.max(0, exposureLimit - totalExposure);

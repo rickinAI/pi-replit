@@ -2046,6 +2046,11 @@ function buildCoinGeckoTools(): ToolDefinition[] {
           }
           const result = await bankr.openPosition({ ...params, source: params.source });
 
+          const isDuplicate = result.trade_id.startsWith("dup_");
+          if (isDuplicate) {
+            return { content: [{ type: "text" as const, text: JSON.stringify({ executed: false, reason: "Position already open for this thesis", existing_position_id: result.position?.id }) }], details: {} };
+          }
+
           if (chartUrl) {
             try {
               await telegram.sendPhoto(chartUrl, `📊 ${params.asset} ${params.direction} — Chart at entry`);
