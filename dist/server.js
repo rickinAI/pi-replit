@@ -11782,7 +11782,7 @@ After the Market Overview, append any notable new listings to the corresponding 
 
 If no properties are found in an area, note "No new listings matching criteria" rather than omitting the section.`,
     schedule: { type: "daily", hour: 7, minute: 30 },
-    enabled: true
+    enabled: false
   },
   {
     id: "life-audit",
@@ -12599,10 +12599,9 @@ async function init8() {
         await saveConfig2();
       }
       const scanJob = config2.jobs.find((j) => j.id === "real-estate-daily-scan");
-      if (scanJob && (scanJob.prompt.includes("minPrice=1500000") || scanJob.prompt.includes("$1.5M\u2013$2M") || scanJob.prompt.includes("minBeds=5"))) {
-        const preset = DEFAULT_JOBS.find((j) => j.id === "real-estate-daily-scan");
-        scanJob.prompt = preset.prompt;
-        console.log("[scheduled-jobs] Migrated real-estate-daily-scan: updated budget to $1.3M\u2013$1.8M, 4+ bed, added commute/market-overview steps");
+      if (scanJob && scanJob.enabled !== false) {
+        scanJob.enabled = false;
+        console.log("[scheduled-jobs] Migrated real-estate-daily-scan: disabled to save costs (paused)");
         await saveConfig2();
       }
       const pmFullCycle = config2.jobs.find((j) => j.id === "polymarket-full-cycle");
