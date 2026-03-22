@@ -5073,11 +5073,43 @@ app.get("/api/wealth-engines/oversight", async (_req: Request, res: Response) =>
   }
 });
 
+function buildClosedShadowTrades(shadowPerf: any): any[] {
+  const closedShadows = (shadowPerf.trades || []).filter((t: any) => t.status === "closed");
+  const dedupedClosed: any[] = [];
+  const closedSeen = new Set<string>();
+  for (const t of closedShadows) {
+    const key = `${t.asset}_${t.direction}_${t.entry_price}`;
+    if (!closedSeen.has(key)) { closedSeen.add(key); dedupedClosed.push(t); }
+  }
+  return dedupedClosed.map((t: any) => {
+    const isLong = (t.direction || "").toUpperCase() === "LONG" || (t.direction || "").toUpperCase() === "YES";
+    const priceDiff = isLong ? ((t.current_price || t.exit_price || t.entry_price) - t.entry_price) : (t.entry_price - (t.current_price || t.exit_price || t.entry_price));
+    return {
+      id: t.id || t.thesis_id,
+      asset: t.asset,
+      asset_class: t.asset_class || "crypto",
+      source: t.source || "shadow",
+      direction: t.direction,
+      leverage: "1x",
+      entry_price: t.entry_price,
+      exit_price: t.current_price || t.exit_price || t.entry_price,
+      size: t.size || 1,
+      pnl: t.hypothetical_pnl || priceDiff,
+      pnl_pct: t.entry_price > 0 ? (priceDiff / t.entry_price * 100) : 0,
+      fees: 0,
+      opened_at: t.opened_at || t.created_at,
+      closed_at: t.closed_at || new Date().toISOString(),
+      close_reason: t.close_reason || "shadow_closed",
+      is_shadow: true,
+    };
+  });
+}
+
 let weDashboardCache: { data: any; ts: number } | null = null;
 const WE_DASHBOARD_TTL = 30_000;
 
 async function buildWealthEnginesDashboardData(): Promise<any> {
-  const [summary, tradeHistory, pmTheses, cryptoTheses, oversightData, shadowPerf, researchStatus, fearGreed, taxSummary] = await Promise.all([
+  const [summary, tradeHistory, pmTheses, cryptoTheses, oversightData, shadowPerf, researchStatus, fearGreed] = await Promise.all([
     bankr.getPortfolioSummary(),
     bankr.getTradeHistory(),
     polymarketScout.getActiveTheses().catch(() => []),
@@ -5086,11 +5118,15 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
     oversight.getShadowPerformance().catch(() => ({ total_trades: 0, open_trades: 0, closed_trades: 0, total_pnl: 0, win_rate: 0, avg_pnl: 0, trades: [] })),
     autoresearch.getResearchStatus().catch(() => null),
     signalSources.getFearGreedIndex().catch(() => null),
-    bankr.getTaxSummary().catch(() => null),
   ]);
 
-  const recentTrades = tradeHistory.slice(-20).reverse();
-  const totalRealizedPnl = tradeHistory.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
+  const closedShadowTrades = buildClosedShadowTrades(shadowPerf);
+  const allTradesCombined = [...tradeHistory, ...closedShadowTrades];
+  allTradesCombined.sort((a: any, b: any) => new Date(b.closed_at || 0).getTime() - new Date(a.closed_at || 0).getTime());
+  const taxSummary = await bankr.getTaxSummary(closedShadowTrades).catch(() => null);
+
+  const recentTrades = allTradesCombined.slice(0, 20);
+  const totalRealizedPnl = allTradesCombined.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
 
   const pool = (await import("./src/db.js")).getPool();
   let scoutLastRun: string | null = null;
@@ -5141,12 +5177,12 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
 
   const now24h = now - 24 * 60 * 60_000;
   const now7d = now - 7 * 24 * 60 * 60_000;
-  const dailyTrades = tradeHistory.filter((t: any) => new Date(t.closed_at).getTime() > now24h);
-  const weeklyTrades = tradeHistory.filter((t: any) => new Date(t.closed_at).getTime() > now7d);
+  const dailyTrades = allTradesCombined.filter((t: any) => new Date(t.closed_at).getTime() > now24h);
+  const weeklyTrades = allTradesCombined.filter((t: any) => new Date(t.closed_at).getTime() > now7d);
   const dailyPnl = dailyTrades.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
   const weeklyPnl = weeklyTrades.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
-  const totalWins = tradeHistory.filter((t: any) => (t.pnl || 0) > 0).length;
-  const winRate = tradeHistory.length > 0 ? (totalWins / tradeHistory.length * 100) : 0;
+  const totalWins = allTradesCombined.filter((t: any) => (t.pnl || 0) > 0).length;
+  const winRate = allTradesCombined.length > 0 ? (totalWins / allTradesCombined.length * 100) : 0;
   const availableUsdc = Math.max(0, summary.portfolio_value - summary.total_exposure);
 
   let eoyTarget = 50000;
@@ -5202,40 +5238,7 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
       }));
       return [...bankrPositions, ...shadowAsPositions];
     })(),
-    recent_trades: (() => {
-      const closedShadows = (shadowPerf.trades || []).filter((t: any) => t.status === "closed");
-      const dedupedClosed: any[] = [];
-      const closedSeen = new Set<string>();
-      for (const t of closedShadows) {
-        const key = `${t.asset}_${t.direction}_${t.entry_price}`;
-        if (!closedSeen.has(key)) { closedSeen.add(key); dedupedClosed.push(t); }
-      }
-      const shadowAsTrades = dedupedClosed.map((t: any) => {
-        const isLong = (t.direction || "").toUpperCase() === "LONG" || (t.direction || "").toUpperCase() === "YES";
-        const priceDiff = isLong ? (t.current_price - t.entry_price) : (t.entry_price - t.current_price);
-        return {
-          id: t.id || t.thesis_id,
-          asset: t.asset,
-          asset_class: t.asset_class || "crypto",
-          source: t.source || "shadow",
-          direction: t.direction,
-          leverage: "1x",
-          entry_price: t.entry_price,
-          exit_price: t.current_price || t.exit_price,
-          size: t.size || 1,
-          pnl: t.hypothetical_pnl || priceDiff,
-          pnl_pct: t.entry_price > 0 ? (priceDiff / t.entry_price * 100) : 0,
-          fees: 0,
-          opened_at: t.opened_at || t.created_at,
-          closed_at: t.closed_at || new Date().toISOString(),
-          close_reason: t.close_reason || "shadow_closed",
-          is_shadow: true,
-        };
-      });
-      const allTrades = [...recentTrades, ...shadowAsTrades];
-      allTrades.sort((a: any, b: any) => new Date(b.closed_at || 0).getTime() - new Date(a.closed_at || 0).getTime());
-      return allTrades.slice(0, 30);
-    })(),
+    recent_trades: recentTrades,
     crypto_theses: cryptoTheses.slice(0, 10).map((t: any) => ({
       id: t.id, asset: t.asset, direction: t.direction, confidence: t.confidence,
       entry_price: t.entry_price, stop_loss: t.stop_price || t.stop_loss, take_profit: t.exit_price || t.take_profit,
@@ -5344,22 +5347,27 @@ let wePnlCache: { data: any; ts: number } | null = null;
 const WE_PNL_TTL = 30_000;
 
 async function buildPnlDashboardData(): Promise<any> {
-  const [summary, tradeHistory, taxSummary] = await Promise.all([
+  const [summary, tradeHistory, shadowPerf] = await Promise.all([
     bankr.getPortfolioSummary(),
     bankr.getTradeHistory(),
-    bankr.getTaxSummary(),
+    oversight.getShadowPerformance().catch(() => ({ total_trades: 0, open_trades: 0, closed_trades: 0, total_pnl: 0, win_rate: 0, avg_pnl: 0, trades: [] })),
   ]);
 
-  const totalRealizedPnl = tradeHistory.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
+  const closedShadowTrades = buildClosedShadowTrades(shadowPerf);
+  const allTradesCombined = [...tradeHistory, ...closedShadowTrades];
+  allTradesCombined.sort((a: any, b: any) => new Date(b.closed_at || 0).getTime() - new Date(a.closed_at || 0).getTime());
+  const taxSummary = await bankr.getTaxSummary(closedShadowTrades).catch(() => null);
+
+  const totalRealizedPnl = allTradesCombined.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
   const now = Date.now();
   const now24h = now - 24 * 60 * 60_000;
   const now7d = now - 7 * 24 * 60 * 60_000;
-  const dailyTrades = tradeHistory.filter((t: any) => new Date(t.closed_at).getTime() > now24h);
-  const weeklyTrades = tradeHistory.filter((t: any) => new Date(t.closed_at).getTime() > now7d);
+  const dailyTrades = allTradesCombined.filter((t: any) => new Date(t.closed_at).getTime() > now24h);
+  const weeklyTrades = allTradesCombined.filter((t: any) => new Date(t.closed_at).getTime() > now7d);
   const dailyPnl = dailyTrades.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
   const weeklyPnl = weeklyTrades.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
-  const totalWins = tradeHistory.filter((t: any) => (t.pnl || 0) > 0).length;
-  const winRate = tradeHistory.length > 0 ? (totalWins / tradeHistory.length * 100) : 0;
+  const totalWins = allTradesCombined.filter((t: any) => (t.pnl || 0) > 0).length;
+  const winRate = allTradesCombined.length > 0 ? (totalWins / allTradesCombined.length * 100) : 0;
 
   return {
     timestamp: new Date().toISOString(),
@@ -5370,18 +5378,19 @@ async function buildPnlDashboardData(): Promise<any> {
     daily_pnl: parseFloat(dailyPnl.toFixed(4)),
     weekly_pnl: parseFloat(weeklyPnl.toFixed(4)),
     initial_capital: summary.initial_capital || 10000,
-    total_trades: tradeHistory.length,
+    total_trades: allTradesCombined.length,
     win_rate: parseFloat(winRate.toFixed(1)),
-    all_trades: tradeHistory.map((t: any) => ({
+    all_trades: allTradesCombined.map((t: any) => ({
       id: t.id, asset: t.asset, asset_class: t.asset_class, source: t.source,
-      direction: t.direction, leverage: t.leverage,
+      direction: t.direction, leverage: t.leverage || "1x",
       entry_price: t.entry_price, exit_price: t.exit_price,
-      size: t.size, pnl: t.pnl, pnl_pct: t.pnl_pct, fees: t.fees,
+      size: t.size, pnl: t.pnl, pnl_pct: t.pnl_pct, fees: t.fees || 0,
       opened_at: t.opened_at, closed_at: t.closed_at,
       close_reason: t.close_reason,
       tax_lot: t.tax_lot,
+      is_shadow: t.is_shadow || false,
     })),
-    recent_trades: tradeHistory.slice(-20).reverse(),
+    recent_trades: allTradesCombined.slice(0, 20),
     tax_summary: taxSummary,
   };
 }

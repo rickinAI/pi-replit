@@ -1104,7 +1104,7 @@ export async function getPortfolioSummary(): Promise<{
   };
 }
 
-export async function getTaxSummary(): Promise<{
+export async function getTaxSummary(extraTrades?: Array<{ pnl: number; closed_at: string; tax_lot?: any }>): Promise<{
   year: number;
   total_trades: number;
   realized_pnl: number;
@@ -1119,7 +1119,7 @@ export async function getTaxSummary(): Promise<{
   total_estimated_tax: number;
   quarterly: Record<string, { trades: number; pnl: number }>;
 }> {
-  const history = await getTradeHistory();
+  const history = [...(await getTradeHistory()), ...(extraTrades || [])];
   const year = new Date().getFullYear();
   const yearStart = new Date(year, 0, 1).getTime();
 
