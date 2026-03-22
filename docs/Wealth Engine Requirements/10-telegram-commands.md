@@ -1,73 +1,93 @@
 # Telegram Command Reference
 
+> **Updated:** March 22, 2026 — Post Notification Overhaul
+
+## Two-Bot Architecture
+
+| Bot | Purpose |
+|-----|---------|
+| **DarkNode** (@Darknode_trading_bot) | Trading events, WE commands, copy trade signals |
+| **Mission Control** (@MissionControl_alerts_bot) | Personal alerts, calendar, status digests |
+
 ## Command Inventory
 
 ### System Control
 
 | Command | Action | Status |
 |---------|--------|--------|
-| `/status` | System health: mode, kill switch, pause state, agent last-run times | Built |
-| `/pause` | Halt all Wealth Engine scheduled jobs | Built |
-| `/resume` | Resume after pause or circuit breaker trigger | Built |
-| `/kill` | Emergency: activate kill switch, close ALL positions | To build (BANKR) |
-| `/public on\|off` | Toggle dashboard public access | Built |
+| `/status` | System health: mode, kill switch, pause, shadow P&L, notify mode | Built ✅ |
+| `/pause` | Halt all Wealth Engine scheduled jobs | Built ✅ |
+| `/resume` | Resume after pause or circuit breaker trigger | Built ✅ |
+| `/kill` | Emergency: activate kill switch, close ALL positions | Built ✅ |
+| `/public on\|off` | Toggle dashboard public access | Built ✅ |
+| `/notify [smart\|immediate\|digest]` | Set notification mode | Built ✅ |
+| `/reset [capital]` | Full portfolio reset (default $10K) | Built ✅ |
 
 ### Portfolio & Trading
 
 | Command | Action | Status |
 |---------|--------|--------|
-| `/portfolio` | Open positions with live P&L | Built (shell) |
-| `/trades [n]` | Last N closed trades (default 5, max 20) | Built (shell) |
-| `/tax` | YTD tax summary with estimated liability | To build |
+| `/portfolio` | Open positions with live P&L | Built ✅ |
+| `/trades [n]` | Last N closed trades (default 5, max 20) | Built ✅ |
+| `/tax` | YTD tax summary with estimated liability | Built ✅ |
+| `/risk` | Current risk metrics: exposure %, drawdown, open risk | Built ✅ |
+| `/shadow` | Shadow portfolio performance (paper trading) | Built ✅ |
 
-### Intelligence
+### Intelligence & Whales
 
 | Command | Action | Status |
 |---------|--------|--------|
-| `/scout` | Active crypto theses with vote counts and confidence | Built (shell, needs enrichment) |
-| `/intel` | Latest SCOUT full-cycle brief | Built (shell, needs enrichment) |
-| `/polymarket` | Active prediction market theses with whale consensus | To build |
-| `/watchlist` | Current SCOUT watchlist assets | To build |
+| `/intel` | Latest SCOUT brief with active theses | Built ✅ |
+| `/polymarket` | Active prediction market theses with whale consensus | Built ✅ |
+| `/wallets` | Tracked whale registry with top performers + niche breakdown | Built ✅ |
+| `/walletstatus` | Wallet health dashboard (aggregate counts) | Built ✅ |
+| `/copytrades` | Active copy positions with unrealized P&L | Built ✅ |
+| `/seedwallets` | Manual wallet seed from trade stream | Built ✅ |
+| `/goal [amount]` | View/set wealth target (default $50K) | Built ✅ |
+
+### Wallet Management
+
+| Command | Action | Status |
+|---------|--------|--------|
+| `/add-wallet <addr> [alias] [niche]` | Add wallet to tracking registry | Built ✅ |
+| `/remove-wallet <addr\|alias>` | Remove wallet from registry | Built ✅ |
+| `/blacklist-wallet <addr\|alias>` | Permanently blacklist a wallet | Built ✅ |
 
 ### Oversight & Research
 
 | Command | Action | Status |
 |---------|--------|--------|
-| `/oversight` | Latest health report + active improvement requests | To build |
-| `/shadow` | Shadow portfolio performance (paper trading) | To build |
-| `/risk` | Current risk metrics: exposure %, drawdown, open risk | To build |
-| `/research` | Trigger autoresearch (both domains) | To build |
-| `/research crypto` | Trigger crypto-only autoresearch | To build |
-| `/research polymarket` | Trigger polymarket-only autoresearch | To build |
-| `/research rollback crypto` | Revert to previous crypto parameters | To build |
-| `/research rollback polymarket` | Revert to previous PM parameters | To build |
+| `/oversight` | Latest health report + active improvement requests | Built ✅ |
+| `/alerts` | Bot connection status | Built ✅ |
+| `/help` | Command list | Built ✅ |
 
-### Interactive
+## Notification Categories (HTML Parse Mode)
 
-| Feature | Action | Status |
-|---------|--------|--------|
-| Trade approval buttons | Approve / Skip / Hold inline keyboard | Built |
-| Callback handling | Process approval decisions, record to DB | Built |
-| Approval timeout | Auto-skip after 30 minutes | Built |
+All WE notifications use category header badges via `telegram-format.ts`:
 
-### Alerts (Outbound, No Command)
+| Badge | Category | Used For |
+|-------|----------|----------|
+| 🐋 WHALE INTEL | Whale intelligence | Wallet events, auto-disable alerts |
+| ⚡ COPY TRADE | Copy trading | New copy signals, position mirrors |
+| 👻 SHADOW BOOK | Shadow trading | Shadow open/close with streak tracking |
+| 🔍 SCOUT | Scout intelligence | Scout briefs, scan results |
+| 🛡️ OVERSIGHT | System oversight | Health checks, daily performance |
+| 🌱 DISCOVERY | Wallet discovery | Anomaly scanner, new whale candidates |
+| 📊 DAILY BRIEF | Summaries | DarkNode Summary with goal progress |
+| 🎉 AUTO-REDEEM | Redemptions | Resolved market auto-redemptions |
+| ⚠️ DEAD MAN | Dead man switch | Silent agent/monitor alerts |
+| 🔴 CIRCUIT BREAK | Circuit breaker | Risk limit triggers |
 
-| Alert | Trigger | Status |
-|-------|---------|--------|
-| Trade executed | BANKR completes a trade | Built (shell) |
-| Trade stopped | Trailing stop or RSI exit triggered | Built (shell) |
-| Emergency | Kill switch activated | Built (shell) |
-| Dead man switch | Agent hasn't run within threshold | Built |
-| Drawdown breaker | Rolling 7-day P&L < -15% | To build |
-| Daily performance | Automated end-of-day summary | To build |
-| Exposure warning | Correlation/concentration limit approached | To build |
-| API failure | Error rate > 10% | To build |
+## Notification Features
+
+- **Copy trade signals**: Niche emoji, market badge, confidence bar, whale one-liner
+- **Shadow trades**: Win/loss streak persistence (`shadow_streak` DB key), weekly reset Monday
+- **DarkNode Summary**: $50K goal progress bar, mood indicator, today's P&L
+- **Streak tracking**: currentStreak, streakType, longestStreak, weeklyWins/Losses/Pnl
+- **Wealth goal**: Configurable via `/goal`, defaults to $50K, stored in `wealth_goal` DB key
 
 ## Message Format
 
-All messages include mode prefix: `[BETA]` or `[LIVE]`
-
-Markdown formatting with:
-- Bold for headers and key values
-- Italic for timestamps and notes
-- Emoji indicators: green/red circles for P&L, warning triangles for alerts
+- Direct notifications: HTML parse mode with `escapeHtml()` for special characters
+- Command responses: Markdown (shared dispatch — no HTML tags in return strings)
+- Direct notifications truncated to 4096-char Telegram limit via `truncateToTelegramLimit()`

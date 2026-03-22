@@ -1,5 +1,12 @@
 # Phased Build Plan
 
+> **PARTIALLY ARCHIVED — March 22, 2026**
+> Phases 0-4 and 7 are complete. Phase 5 (Autoresearch) was removed in the crypto pivot.
+> Phase 6 (Mac Mini migration) is deferred. Current system architecture uses Polymarket
+> copy trading (see `00-overview.md`) instead of the original crypto SCOUT + autoresearch pipeline.
+> New features: Copy Trading Engine (Task #67), Wallet Management (Task #68),
+> Telegram Notification Overhaul (Task #69).
+
 ## Design Principle: Each Phase is Self-Contained
 
 Every phase produces a working, testable system. You can stop after any phase and have something useful. Later phases add capability without breaking earlier ones.

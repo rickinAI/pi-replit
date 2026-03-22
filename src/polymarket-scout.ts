@@ -146,11 +146,6 @@ export function formatThesis(t: PolymarketThesis): string {
   return lines.join("\n");
 }
 
-export function formatThesesSummary(theses: PolymarketThesis[]): string {
-  if (theses.length === 0) return "No active Polymarket theses.";
-  return theses.map(formatThesis).join("\n\n");
-}
-
 export type ThesisTier = "HIGH" | "MEDIUM" | "LOW" | "SPECULATIVE";
 
 export interface ThresholdResult {

@@ -1,5 +1,10 @@
 # Data Layer: Storage, Schema & API Design
 
+> **PARTIALLY OUTDATED — March 22, 2026**
+> Some keys below (crypto_signal_parameters, autoresearch_*) are no longer used after the crypto pivot.
+> New keys added: `polymarket_whale_watchlist`, `shadow_streak`, `wealth_goal`, `signal_quality_scores`.
+> See `Wealth Engines Status.md` in vault for the current key inventory.
+
 ## Storage Strategy
 
 All persistent state lives in PostgreSQL via the `app_config` table (key-value JSONB). This keeps the system simple — no migrations for schema changes, easy to inspect, and naturally supports the evolving data structures of an early-stage system.

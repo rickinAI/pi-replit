@@ -1234,32 +1234,3 @@ export function getSignalQualityModifier(scores: SignalQualityRecord[], source: 
   return { modifier: "neutral", winRate: wr, sampleSize: record.recent_results.length, profitFactor: pf };
 }
 
-export async function detectWashSales(): Promise<TaxLot[]> {
-  const history = await getTradeHistory();
-  const flagged: TaxLot[] = [];
-  const thirtyDays = 30 * 24 * 60 * 60 * 1000;
-
-  for (let i = 0; i < history.length; i++) {
-    const trade = history[i];
-    if (trade.pnl >= 0) continue;
-
-    const closedAt = new Date(trade.closed_at).getTime();
-
-    for (let j = 0; j < history.length; j++) {
-      if (i === j) continue;
-      const other = history[j];
-      if (other.asset !== trade.asset) continue;
-
-      const otherOpened = new Date(other.opened_at).getTime();
-      if (Math.abs(otherOpened - closedAt) <= thirtyDays) {
-        const lot = { ...trade.tax_lot };
-        lot.wash_sale_flagged = true;
-        lot.wash_sale_disallowed = Math.abs(trade.pnl);
-        flagged.push(lot);
-        break;
-      }
-    }
-  }
-
-  return flagged;
-}

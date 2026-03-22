@@ -1,8 +1,14 @@
 # OVERSIGHT AGENT: Operational Risk & Feedback Loop
 
+> **PARTIALLY OUTDATED — March 22, 2026**
+> References to autoresearch, Nansen weighting, and dual scout pipelines (crypto + polymarket)
+> are no longer applicable. System now operates on Polymarket copy trading only.
+> Oversight notifications now use category header badges via telegram-format.ts (HTML parse mode).
+> See `src/oversight.ts` for current implementation.
+
 ## Purpose
 
-Monitor the entire Wealth Engines system — both scout pipelines and BANKR execution. Identify bottlenecks, surface blind spots, and generate structured improvement requests that feed back into autoresearch and manual review. The oversight agent is the "risk manager" that watches the machine, not individual trades.
+Monitor the entire Wealth Engines system — the copy trading pipeline and BANKR execution. Identify bottlenecks, surface blind spots, and generate structured improvement requests. The oversight agent is the "risk manager" that watches the machine, not individual trades.
 
 ## Operating Frequencies
 

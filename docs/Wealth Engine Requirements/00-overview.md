@@ -1,68 +1,74 @@
 # Wealth Engines: System Overview
 
+> **Updated:** March 22, 2026 — Prediction Markets Only
+
 ## Mission
 
-Build an autonomous trading system that generates $5,000/month in profit through AI-driven intelligence and disciplined execution across crypto and prediction markets.
+Build an autonomous copy trading system targeting $50,000 by December 31, 2026 from $10,000 virtual shadow capital through Polymarket whale tracking and position mirroring.
 
 ## First Principles
 
-### 1. Intelligence Over Speed
-We don't compete on latency. We compete on *information synthesis* — combining technical signals, smart money flows, social sentiment, and prediction market whale consensus into higher-conviction trades than any single data source can produce.
+### 1. Follow Smart Money, Don't Compete
+We don't run our own signal models. We track proven Polymarket whale wallets and mirror their high-conviction positions through an 8-signal scoring engine.
 
-### 2. Deterministic Code, LLM for Judgment
-Quantitative signals (EMA, RSI, MACD, vote counting, backtesting) are deterministic code — fast, free, reproducible. LLMs are used only where human-like judgment is needed: thesis synthesis, adversarial review, improvement hypothesis generation.
+### 2. Deterministic Code, Minimal LLM Usage
+Signal scoring (VPIN, z-score, whale consensus, niche match, NOAA weather) is deterministic code. LLMs are used only for oversight reviews and thesis synthesis. All automated jobs use Haiku for cost efficiency.
 
-### 3. Simplicity Over Sophistication
-Every component does one thing well. Scouts generate theses. BANKR executes them. Oversight reviews outcomes. Autoresearch tunes parameters. No component crosses its boundary.
+### 3. Zero Human Intervention
+The system runs autonomously — 5-minute copy trade scanning, automatic position mirroring, whale exit tracking, market resolution auto-redemption, and wallet health decay with auto-disable.
 
 ### 4. Test Before You Trade
 Shadow mode validates the system on paper before real capital is at risk. Every phase has acceptance criteria that must pass before advancing.
 
 ### 5. NY Compliant, No Exceptions
-No Hyperliquid. No offshore platforms. BNKR (Avantis perps on Base) is the single execution venue. Coinbase is a manual funding-only rail. Full tax tracking from day one.
+No Hyperliquid. No offshore platforms. BNKR (Polymarket execution on Base) is the single execution venue. Full tax tracking from day one.
 
 ### 6. Cost-Aware Compute
-Batch analysis (oversight, autoresearch, backtesting) runs on local hardware (Mac Mini + OpenClaw + Ollama). Latency-sensitive operations (scouts, execution, monitoring) run on Replit. Cloud LLMs are used sparingly and only when local model quality is insufficient.
+Agent-driven jobs (activity scan, BANKR execute) use Haiku with toolSubset filtering. High-frequency operations (copy-trade-scan, anomaly scanner, DarkNode summary) are code-only — no LLM calls. Intervals optimized: copy-trade-scan every 5min, activity scan 2h, BANKR execute 1h.
 
-## Beta Constraints
+## Operating Parameters
 
 | Parameter | Value |
 |-----------|-------|
-| Starting capital | $1,000 |
-| Max leverage | 5x |
-| Max risk per trade | 5% of portfolio ($50) |
-| Max positions | 3 |
-| Total exposure cap | 60% of portfolio |
-| Correlation limit | 1 per bucket |
-| Execution venue | BNKR (Avantis perps on Base) — single venue |
+| Starting capital | $10,000 (virtual shadow) |
+| Target | $50,000 by Dec 31, 2026 |
+| Copy trade size | $50 (score≥8) / $25 (score 4-7) |
+| Max concurrent copies | 3 |
+| Wallet win rate minimum | 65% |
+| Odds range | 15-85¢ |
+| Min volume/liquidity | $10K each |
+| Resolution buffer | >24h to resolution |
+| Portfolio drawdown hard stop | $100 |
+| Circuit breaker | -15% rolling 7-day OR -25% peak drawdown |
+| Execution venue | BNKR (Polymarket on Base) |
 | Compliance | NY state — no Hyperliquid, no offshore |
-| Drawdown breaker | -15% rolling 7-day P&L → auto-pause |
-| Margin buffer | 20% above liquidation price |
 
 ## System Components
 
-| Component | Role | Runs On |
-|-----------|------|---------|
-| CRYPTO SCOUT | Scan crypto markets, generate trading theses | Replit |
-| POLYMARKET SCOUT | Track whale wallets, generate prediction market theses | Replit |
-| BANKR | Execute trades, manage positions, track taxes | Replit |
-| OVERSIGHT AGENT | Monitor system health, review performance, generate improvements | Phase 1: Replit, Phase 2: Mac Mini |
-| AUTORESEARCH | Evolve signal parameters through backtesting | Phase 1: Replit, Phase 2: Mac Mini |
-| TELEGRAM | Command center for monitoring and control | Replit |
-| DASHBOARD | Web UI for portfolio and performance visualization | Replit |
+| Component | Role | Status |
+|-----------|------|--------|
+| COPY TRADING ENGINE | 5-min whale snapshot diffing + 8-signal scoring | Built ✅ |
+| POLYMARKET SCOUT | Whale discovery, anomaly scanning, thesis generation | Built ✅ |
+| BANKR | Execute trades, manage positions, track taxes | Built ✅ |
+| OVERSIGHT AGENT | Health monitoring, performance review, shadow trading | Built ✅ |
+| TELEGRAM | Command center + categorized notifications | Built ✅ |
+| DASHBOARD | Web UI for portfolio visualization | Built ✅ |
 
 ## Data Flow
 
 ```
-Data Sources → Intelligence (Scouts) → Theses → Execution (BANKR) → Results → Oversight → Autoresearch
-                                                                                    ↓
-                                                                              Parameter Updates → Scouts
+Whale Wallets → Snapshot Diffing (5min) → Signal Engine (8 signals) → BANKR Execution → OVERSIGHT → Telegram
+                                                                                          ↓
+                                                                                   Wallet Health Decay
 ```
 
-## Key Design Decisions
+## Removed Components (Crypto Pivot — March 22, 2026)
 
-1. **Vote-based entries, not score thresholds** — Binary 4/6 vote gate from Nunchi research (Sharpe 2.7 → 21.4 across 103 experiments)
-2. **Unified thesis format** — Both scouts produce the same interface so BANKR consumes them identically
-3. **Adversarial review via oversight, not debate agents** — One structured prompt, not multiple expensive LLM calls
-4. **Oversight before autoresearch** — Hypotheses from real trade outcomes are smarter than random parameter mutation
-5. **Shadow mode before live scaling** — Validate on paper, then deploy with real capital
+The following were removed as DarkNode pivoted to prediction-markets-only copy trading:
+- CRYPTO SCOUT (6-signal Nunchi voting ensemble)
+- AUTORESEARCH (parameter evolution via backtesting)
+- All crypto data sources (CoinGecko, DexScreener, Nansen)
+- Backtesting engine
+- Signal aggregator (Fear & Greed, Binance funding)
+
+See `03-crypto-scout.md` and `07-autoresearch.md` for archive notices.

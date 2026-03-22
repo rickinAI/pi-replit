@@ -262,14 +262,14 @@ async function handlePortfolioCommand(): Promise<string> {
   for (const pos of positions) {
     const pnl = pos.unrealized_pnl || 0;
     totalPnl += pnl;
-    const pnlStr = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
+    const { formatPnl } = await import("./telegram-format.js");
     const arrow = pnl >= 0 ? "🟢" : "🔴";
     lines.push(`${arrow} *${pos.asset}* ${pos.direction} ${pos.leverage || "1x"}`);
-    lines.push(`   Entry: $${pos.entry_price} | P&L: ${pnlStr}`);
+    lines.push(`   Entry: $${pos.entry_price} | P&L: ${formatPnl(pnl)}`);
   }
   lines.push("");
-  const totalStr = totalPnl >= 0 ? `+$${totalPnl.toFixed(2)}` : `-$${Math.abs(totalPnl).toFixed(2)}`;
-  lines.push(`*Total P&L:* ${totalStr}`);
+  const { formatPnl: fmtPnl } = await import("./telegram-format.js");
+  lines.push(`*Total P&L:* ${fmtPnl(totalPnl)}`);
 
   return lines.join("\n");
 }
@@ -350,10 +350,10 @@ async function handleTradesCommand(args: string): Promise<string> {
       const lines = [`${mode} *Recent Trades* (last ${trades.length})`, ""];
       for (const t of trades) {
         const pnl = t.pnl || 0;
-        const pnlStr = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
+        const { formatPnl } = await import("./telegram-format.js");
         const icon = pnl >= 0 ? "🟢" : "🔴";
         const date = t.closed_at ? new Date(t.closed_at).toLocaleDateString("en-US", { timeZone: "America/New_York" }) : "open";
-        lines.push(`${icon} *${t.asset}* ${t.direction} ${t.leverage || "1x"} — ${pnlStr} (${date})`);
+        lines.push(`${icon} *${t.asset}* ${t.direction} ${t.leverage || "1x"} — ${formatPnl(pnl)} (${date})`);
       }
       return lines.join("\n");
     }
@@ -726,8 +726,8 @@ async function handleShadowCommand(): Promise<string> {
       lines.push("");
       lines.push("*Open Positions:*");
       for (const t of openTrades.slice(0, 5)) {
-        const pnlStr = t.hypothetical_pnl >= 0 ? `+$${t.hypothetical_pnl.toFixed(2)}` : `-$${Math.abs(t.hypothetical_pnl).toFixed(2)}`;
-        lines.push(`  • ${t.asset} ${t.direction} — ${pnlStr}`);
+        const { formatPnl } = await import("./telegram-format.js");
+        lines.push(`  • ${t.asset} ${t.direction} — ${formatPnl(t.hypothetical_pnl)}`);
       }
     }
 
@@ -1468,8 +1468,7 @@ export async function sendTradeAlert(params: {
   if (params.entryPrice) lines.push(`Entry: $${fmt.escapeHtml(params.entryPrice)}`);
   if (params.exitPrice) lines.push(`Exit: $${fmt.escapeHtml(params.exitPrice)}`);
   if (params.pnl != null) {
-    const pnlStr = params.pnl >= 0 ? `+$${params.pnl.toFixed(2)}` : `-$${Math.abs(params.pnl).toFixed(2)}`;
-    lines.push(`PnL: ${pnlStr}`);
+    lines.push(`PnL: ${fmt.formatPnl(params.pnl)}`);
   }
   if (params.pnlPct != null) {
     const sign = params.pnlPct >= 0 ? "+" : "";

@@ -1,5 +1,10 @@
 # Architecture: Compute Split & Infrastructure
 
+> **PARTIALLY OUTDATED — March 22, 2026**
+> The two-environment split (Replit + Mac Mini) is deferred. Current system runs entirely on Replit.
+> Crypto SCOUT, backtesting, and autoresearch components referenced below have been removed.
+> See `00-overview.md` for the current architecture (Polymarket copy trading).
+
 ## Two-Environment Architecture
 
 The system is split across two compute environments based on workload characteristics.
