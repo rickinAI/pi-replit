@@ -1297,6 +1297,38 @@ DO NOT call signal_quality — it is informational only and must not affect exec
       await saveConfig();
     }
 
+    const WE_PAUSE_IDS = new Set([
+      "scout-micro-scan", "scout-full-cycle",
+      "polymarket-activity-scan", "polymarket-full-cycle",
+      "bankr-execute",
+      "oversight-health", "oversight-weekly", "oversight-daily-summary", "oversight-shadow-refresh",
+      "autoresearch-weekly",
+    ]);
+    let wePauseNeeded = false;
+    for (const j of config.jobs) {
+      if (WE_PAUSE_IDS.has(j.id) && j.enabled) {
+        j.enabled = false;
+        wePauseNeeded = true;
+      }
+    }
+    if (wePauseNeeded) {
+      console.log("[scheduled-jobs] WE PAUSE: Disabled Wealth Engine jobs for cost savings (~$510/month)");
+      await saveConfig();
+    }
+    try {
+      const weCheck = await getPool().query(`SELECT value FROM app_config WHERE key = 'wealth_engines_paused'`);
+      if (weCheck.rows.length === 0 || weCheck.rows[0].value !== true) {
+        await getPool().query(
+          `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_paused', $1, $2)
+           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+          [JSON.stringify(true), Date.now()]
+        );
+        console.log("[scheduled-jobs] WE PAUSE: Set wealth_engines_paused=true in app_config");
+      }
+    } catch (e) {
+      console.error("[scheduled-jobs] WE PAUSE: Failed to set wealth_engines_paused flag:", e);
+    }
+
     const alertsResult = await getPool().query(`SELECT value FROM app_config WHERE key = 'alerts'`);
     if (alertsResult.rows.length > 0) {
       config.timezone = alertsResult.rows[0].value.timezone || "America/New_York";
@@ -1823,7 +1855,7 @@ After processing, briefly confirm what you did.`;
   }
 }
 
-const WEALTH_ENGINE_AGENTS = new Set(["scout", "bankr", "polymarket-scout", "oversight"]);
+const WEALTH_ENGINE_AGENTS = new Set(["scout", "bankr", "polymarket-scout", "oversight", "autoresearch"]);
 
 async function isWealthEnginesPaused(): Promise<boolean> {
   try {
@@ -2066,11 +2098,23 @@ export function stopJobSystem(): void {
   console.log("[scheduled-jobs] System stopped");
 }
 
+const WE_JOB_IDS = new Set([
+  "scout-micro-scan", "scout-full-cycle",
+  "polymarket-activity-scan", "polymarket-full-cycle",
+  "bankr-execute",
+  "oversight-health", "oversight-weekly", "oversight-daily-summary", "oversight-shadow-refresh",
+  "autoresearch-weekly",
+]);
+
 export async function triggerJob(jobId: string): Promise<string> {
   const job = config.jobs.find(j => j.id === jobId);
   if (!job) throw new Error(`Job not found: ${jobId}`);
   if (!runAgentFn) throw new Error("Job system not started");
   if (jobRunning) throw new Error("Another job is currently running");
+
+  if (WE_JOB_IDS.has(jobId) && await isWealthEnginesPaused()) {
+    throw new Error(`Job ${jobId} blocked — Wealth Engines are paused`);
+  }
 
   jobRunning = true;
   currentRunningJobId = job.id;

@@ -5313,6 +5313,12 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
     })(),
     tax_summary: taxSummary,
     agent_activity: agentActivity,
+    wealth_engines_paused: await (async () => {
+      try {
+        const weRes = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_paused'`);
+        return weRes.rows.length > 0 && weRes.rows[0].value === true;
+      } catch { return false; }
+    })(),
     health: {
       kill_switch: summary.kill_switch,
       paused: summary.paused,

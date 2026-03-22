@@ -310,6 +310,7 @@
   <div class="container">
     <div id="killBanner" class="alert-banner kill">KILL SWITCH ACTIVE — ALL TRADING HALTED</div>
     <div id="pauseBanner" class="alert-banner pause">SYSTEM PAUSED — CIRCUIT BREAKER TRIGGERED</div>
+    <div id="wePausedBanner" class="alert-banner pause" style="display:none;background:rgba(167,139,250,0.08);border:1px solid rgba(167,139,250,0.2);color:#a78bfa">⏸ WEALTH ENGINES PAUSED — Resuming with new architecture (Mac Mini migration)</div>
 
     <div class="kpi-strip">
       <div class="kpi wide">
@@ -620,6 +621,7 @@ function render(data){
   }else{document.getElementById('killBanner').style.display='none';var er=document.getElementById('btnResume');if(er)er.remove();document.getElementById('btnPause').style.display='';document.getElementById('btnKill').style.display='';}
   if(data.paused&&!data.kill_switch){document.getElementById('pauseBanner').style.display='';document.getElementById('btnPause').textContent='RESUME';document.getElementById('btnPause').className='ctrl-btn success';document.getElementById('btnPause').onclick=function(){confirmAction('resume');};}
   else if(!data.kill_switch){document.getElementById('pauseBanner').style.display='none';document.getElementById('btnPause').textContent='PAUSE';document.getElementById('btnPause').className='ctrl-btn';document.getElementById('btnPause').onclick=function(){confirmAction('pause');};}
+  document.getElementById('wePausedBanner').style.display=data.wealth_engines_paused?'':'none';
 
   var pv=data.portfolio_value||0;
   document.getElementById('kpiPortfolio').textContent=fmt$(pv);
