@@ -29,6 +29,21 @@ export interface PolymarketThesis {
 
 const PM_THESIS_EXPIRY_MS = 72 * 60 * 60 * 1000;
 
+let lastDiscoveryNotification: { hash: string; timestamp: number } = { hash: "", timestamp: 0 };
+const DISCOVERY_DEDUP_MS = 120_000;
+
+export function shouldSuppressDiscoveryNotification(walletAddresses: string[]): boolean {
+  const hash = walletAddresses.map(a => a.toLowerCase()).sort().join(",");
+  if (hash === lastDiscoveryNotification.hash && Date.now() - lastDiscoveryNotification.timestamp < DISCOVERY_DEDUP_MS) {
+    return true;
+  }
+  return false;
+}
+
+export function markDiscoveryNotificationSent(walletAddresses: string[]): void {
+  lastDiscoveryNotification = { hash: walletAddresses.map(a => a.toLowerCase()).sort().join(","), timestamp: Date.now() };
+}
+
 export function createPMThesisId(marketSlug: string): string {
   const date = new Date().toISOString().slice(0, 10).replace(/-/g, "_");
   const rand = Math.random().toString(36).slice(2, 8);
@@ -400,16 +415,23 @@ export async function runAnomalyScanner(): Promise<{
     }
 
     if (walletsAdded > 0) {
-      try {
-        const { sendMessage } = await import("./telegram.js");
-        const fmt = await import("./telegram-format.js");
-        const anomalyLines = [
-          fmt.buildCategoryHeader(fmt.CATEGORY_BADGES.DISCOVERY, "New Whale Candidate"),
-          "",
-          ...details.map(d => fmt.escapeHtml(d)),
-        ];
-        sendMessage(fmt.truncateToTelegramLimit(anomalyLines.join("\n")), "HTML").catch(() => {});
-      } catch {}
+      const addedAddresses = anomalies.filter(([addr]) => details.some(d => d.includes("Added") && d.includes(addr.slice(0, 10)))).map(([addr]) => addr);
+
+      if (!shouldSuppressDiscoveryNotification(addedAddresses)) {
+        try {
+          const { sendMessage } = await import("./telegram.js");
+          const fmt = await import("./telegram-format.js");
+          const anomalyLines = [
+            fmt.buildCategoryHeader(fmt.CATEGORY_BADGES.DISCOVERY, "New Whale Candidate"),
+            "",
+            ...details.map(d => fmt.escapeHtml(d)),
+          ];
+          sendMessage(fmt.truncateToTelegramLimit(anomalyLines.join("\n")), "HTML").catch(() => {});
+        } catch {}
+        markDiscoveryNotificationSent(addedAddresses);
+      } else {
+        console.log(`[anomaly-scanner] Suppressed duplicate DISCOVERY notification (${addedAddresses.length} wallets, last sent ${Math.round((Date.now() - lastDiscoveryNotification.timestamp) / 1000)}s ago)`);
+      }
     }
   } catch (err) {
     details.push(`Error: ${err instanceof Error ? err.message : String(err)}`);

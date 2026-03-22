@@ -1964,17 +1964,27 @@ async function runSeedWallets(job: ScheduledJob): Promise<void> {
     await writeJobHistory(job.id, job.name, "success", summary.slice(0, 500), null, Date.now() - jobStartMs);
 
     if (result.added > 0) {
-      const { sendMessage } = await import("./telegram.js");
-      const fmt = await import("./telegram-format.js");
-      const seedLines = [
-        fmt.buildCategoryHeader(fmt.CATEGORY_BADGES.DISCOVERY, "Seed Complete"),
-        "",
-        `${result.added} wallets added · ${result.rejected} rejected`,
-        ...result.details.filter(d => d.startsWith("✅")).map(d => fmt.escapeHtml(d)),
-        "",
-        `Registry total: ${result.candidates_found} candidates`,
-      ];
-      sendMessage(fmt.truncateToTelegramLimit(seedLines.join("\n")), "HTML").catch(() => {});
+      const addedWallets = result.details.filter(d => d.startsWith("✅")).map(d => {
+        const match = d.match(/Added\s+(\S+)/);
+        return match ? match[1] : "";
+      }).filter(Boolean);
+
+      if (!pmScout.shouldSuppressDiscoveryNotification(addedWallets)) {
+        const { sendMessage } = await import("./telegram.js");
+        const fmt = await import("./telegram-format.js");
+        const seedLines = [
+          fmt.buildCategoryHeader(fmt.CATEGORY_BADGES.DISCOVERY, "Seed Complete"),
+          "",
+          `${result.added} wallets added · ${result.rejected} rejected`,
+          ...result.details.filter(d => d.startsWith("✅")).map(d => fmt.escapeHtml(d)),
+          "",
+          `Registry total: ${result.candidates_found} candidates`,
+        ];
+        sendMessage(fmt.truncateToTelegramLimit(seedLines.join("\n")), "HTML").catch(() => {});
+        pmScout.markDiscoveryNotificationSent(addedWallets);
+      } else {
+        console.log(`[seed-wallets] Suppressed duplicate DISCOVERY notification (${addedWallets.length} wallets)`);
+      }
     }
 
     console.log(`[seed-wallets] Complete — ${result.added} added, ${result.rejected} rejected`);
