@@ -101,6 +101,35 @@ let briefRunning = false;
 let alertRunning = false;
 let lastDedupeReset = "";
 
+async function loadPersistedAlertDedup(): Promise<void> {
+  try {
+    const { getPool } = await import("./db.js");
+    const pool = getPool();
+    const res = await pool.query(`SELECT value FROM app_config WHERE key = 'alerted_calendar_events'`);
+    if (res.rows.length > 0 && res.rows[0].value) {
+      const data = res.rows[0].value;
+      if (data.date === getTodayKey() && Array.isArray(data.events)) {
+        for (const e of data.events) alertedCalendarEvents.add(e);
+      }
+    }
+  } catch {}
+}
+
+async function persistAlertDedup(): Promise<void> {
+  try {
+    const { getPool } = await import("./db.js");
+    const pool = getPool();
+    const data = { date: getTodayKey(), events: [...alertedCalendarEvents] };
+    await pool.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('alerted_calendar_events', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(data), Date.now()]
+    );
+  } catch {}
+}
+
+const ACTIONABLE_EMAIL_CATEGORIES = new Set(["Travel", "Financial", "Documents", "Calendar"]);
+
 export async function init(): Promise<void> {
   const existing = await getPool().query(`SELECT value FROM app_config WHERE key = 'alerts'`);
   if (existing.rows.length === 0) {
@@ -494,8 +523,11 @@ function flushEmailBatch() {
   pendingEmailAlerts = [];
   emailBatchTimeout = null;
 
-  if (emails.length === 1) {
-    const e = emails[0];
+  const actionable = emails.filter(e => ACTIONABLE_EMAIL_CATEGORIES.has(e.category));
+  if (actionable.length === 0) return;
+
+  if (actionable.length === 1) {
+    const e = actionable[0];
     broadcastFn?.({
       type: "alert",
       alertType: "email",
@@ -506,23 +538,15 @@ function flushEmailBatch() {
     return;
   }
 
-  const grouped: Record<string, typeof emails> = {};
-  for (const e of emails) {
-    if (!grouped[e.category]) grouped[e.category] = [];
-    grouped[e.category].push(e);
-  }
-
   const lines: string[] = [];
-  for (const [category, items] of Object.entries(grouped)) {
-    for (const item of items) {
-      lines.push(`${item.icon} ${item.subject} — ${item.sender}`);
-    }
+  for (const item of actionable) {
+    lines.push(`${item.icon} ${item.subject} — ${item.sender}`);
   }
 
   broadcastFn?.({
     type: "alert",
     alertType: "email",
-    title: `New Emails (${emails.length})`,
+    title: `New Emails (${actionable.length})`,
     content: lines.join("\n"),
     timestamp: new Date().toISOString(),
   });
@@ -545,6 +569,7 @@ async function doCheckAlerts() {
             const eventContent = line.trim().replace(/^\d+\.\s*/, "");
             if (isCalendarSystemEvent(eventContent)) continue;
             alertedCalendarEvents.add(eventKey);
+            persistAlertDedup();
             broadcastFn?.({
               type: "alert",
               alertType: "calendar",
@@ -663,7 +688,7 @@ async function doCheckAlerts() {
   }
 }
 
-export function startAlertSystem(broadcast: BroadcastFn, saveBrief?: SaveBriefFn) {
+export async function startAlertSystem(broadcast: BroadcastFn, saveBrief?: SaveBriefFn) {
   broadcastFn = broadcast;
   saveBriefFn = saveBrief || null;
 
@@ -673,14 +698,15 @@ export function startAlertSystem(broadcast: BroadcastFn, saveBrief?: SaveBriefFn
 
   alertInterval = setInterval(() => {
     checkAlerts().catch(err => console.error("[alerts] Alert check error:", err));
-  }, 15 * 60_000);
+  }, 60 * 60_000);
 
   console.log(`[alerts] System started — briefs: morning=${config.briefs.morning.enabled}/${config.briefs.morning.hour}:${String(config.briefs.morning.minute).padStart(2, "0")}, afternoon=${config.briefs.afternoon.enabled}/${config.briefs.afternoon.hour}:${String(config.briefs.afternoon.minute).padStart(2, "0")}, evening=${config.briefs.evening.enabled}/${config.briefs.evening.hour}:${String(config.briefs.evening.minute).padStart(2, "0")} (${config.timezone})`);
   console.log(`[alerts] Watchlist: ${config.watchlist.map(w => w.displaySymbol || w.symbol).join(", ")}`);
 
-  alertedCalendarEvents.clear();
   alertedEmailIds.clear();
   initialAlertCheckDone = false;
+
+  await loadPersistedAlertDedup();
 
   setTimeout(async () => {
     try {
