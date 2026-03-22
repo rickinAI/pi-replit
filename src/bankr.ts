@@ -80,7 +80,7 @@ const PORTFOLIO_VALUE_KEY = "wealth_engines_portfolio_value";
 const PEAK_PORTFOLIO_KEY = "wealth_engines_peak_portfolio";
 const CONSECUTIVE_LOSSES_KEY = "wealth_engines_consecutive_losses";
 const RISK_CONFIG_KEY = "wealth_engine_config";
-const DEFAULT_PORTFOLIO = 1000;
+const DEFAULT_PORTFOLIO = 10000;
 
 export interface RiskConfig {
   max_leverage: number;

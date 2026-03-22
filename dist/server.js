@@ -6342,7 +6342,7 @@ var init_bankr = __esm({
     PEAK_PORTFOLIO_KEY = "wealth_engines_peak_portfolio";
     CONSECUTIVE_LOSSES_KEY = "wealth_engines_consecutive_losses";
     RISK_CONFIG_KEY = "wealth_engine_config";
-    DEFAULT_PORTFOLIO = 1e3;
+    DEFAULT_PORTFOLIO = 1e4;
     DEFAULT_RISK_CONFIG = {
       max_leverage: 5,
       risk_per_trade_pct: 5,
@@ -19736,7 +19736,7 @@ async function buildWealthEnginesDashboardData() {
     daily_pnl: parseFloat(dailyPnl.toFixed(4)),
     weekly_pnl: parseFloat(weeklyPnl.toFixed(4)),
     available_usdc: parseFloat(availableUsdc.toFixed(2)),
-    initial_capital: summary.initial_capital || 1e3,
+    initial_capital: summary.initial_capital || 1e4,
     eoy_target: eoyTarget,
     total_trades: tradeHistory.length,
     win_rate: parseFloat(winRate.toFixed(1)),
@@ -19892,7 +19892,7 @@ async function buildPnlDashboardData() {
     total_realized_pnl: totalRealizedPnl,
     daily_pnl: parseFloat(dailyPnl.toFixed(4)),
     weekly_pnl: parseFloat(weeklyPnl.toFixed(4)),
-    initial_capital: summary.initial_capital || 1e3,
+    initial_capital: summary.initial_capital || 1e4,
     total_trades: tradeHistory.length,
     win_rate: parseFloat(winRate.toFixed(1)),
     all_trades: tradeHistory.map((t) => ({

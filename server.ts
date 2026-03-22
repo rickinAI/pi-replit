@@ -5002,7 +5002,7 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
     daily_pnl: parseFloat(dailyPnl.toFixed(4)),
     weekly_pnl: parseFloat(weeklyPnl.toFixed(4)),
     available_usdc: parseFloat(availableUsdc.toFixed(2)),
-    initial_capital: summary.initial_capital || 1000,
+    initial_capital: summary.initial_capital || 10000,
     eoy_target: eoyTarget,
     total_trades: tradeHistory.length,
     win_rate: parseFloat(winRate.toFixed(1)),
@@ -5144,7 +5144,7 @@ async function buildPnlDashboardData(): Promise<any> {
     total_realized_pnl: totalRealizedPnl,
     daily_pnl: parseFloat(dailyPnl.toFixed(4)),
     weekly_pnl: parseFloat(weeklyPnl.toFixed(4)),
-    initial_capital: summary.initial_capital || 1000,
+    initial_capital: summary.initial_capital || 10000,
     total_trades: tradeHistory.length,
     win_rate: parseFloat(winRate.toFixed(1)),
     all_trades: tradeHistory.map((t: any) => ({
