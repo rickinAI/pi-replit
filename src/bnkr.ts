@@ -89,7 +89,7 @@ async function submitPrompt(prompt: string): Promise<string> {
   return result.jobId || result.job_id || result.id;
 }
 
-async function pollJob(jobId: string, maxAttempts: number = 30, intervalMs: number = 2000): Promise<BnkrPromptResponse> {
+async function pollJob(jobId: string, maxAttempts: number = 45, intervalMs: number = 2000): Promise<BnkrPromptResponse> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const result = await promptFetch(`/agent/job/${jobId}`);
     const status = result.status || "pending";
@@ -125,37 +125,47 @@ function extractRichData(result: any): BnkrRichData | null {
   const richData: BnkrRichData = {};
   const rd = result.richData || result.rich_data || result.data || {};
 
-  if (rd.chartUrl || rd.chart_url) {
-    richData.chartUrl = rd.chartUrl || rd.chart_url;
-  }
-  if (rd.chartUrls || rd.chart_urls) {
-    richData.chartUrls = rd.chartUrls || rd.chart_urls;
-  }
-  if (rd.trendingTokens || rd.trending_tokens) {
-    richData.trendingTokens = rd.trendingTokens || rd.trending_tokens;
-  }
-  if (rd.tokenResearch || rd.token_research) {
-    richData.tokenResearch = rd.tokenResearch || rd.token_research;
-  }
-  if (rd.orderDetails || rd.order_details) {
-    richData.orderDetails = rd.orderDetails || rd.order_details;
+  if (Array.isArray(rd)) {
+    const charts = rd.filter((item: any) => item?.type === "chart" && item?.url);
+    if (charts.length > 0) {
+      richData.chartUrl = charts[0].url;
+      richData.chartUrls = charts.map((c: any) => c.url);
+    }
+  } else {
+    if (rd.chartUrl || rd.chart_url) {
+      richData.chartUrl = rd.chartUrl || rd.chart_url;
+    }
+    if (rd.chartUrls || rd.chart_urls) {
+      richData.chartUrls = rd.chartUrls || rd.chart_urls;
+    }
+    if (rd.trendingTokens || rd.trending_tokens) {
+      richData.trendingTokens = rd.trendingTokens || rd.trending_tokens;
+    }
+    if (rd.tokenResearch || rd.token_research) {
+      richData.tokenResearch = rd.tokenResearch || rd.token_research;
+    }
+    if (rd.orderDetails || rd.order_details) {
+      richData.orderDetails = rd.orderDetails || rd.order_details;
+    }
+    for (const key of Object.keys(rd)) {
+      if (!(key in richData)) {
+        richData[key] = rd[key];
+      }
+    }
   }
 
   const responseText = result.response || result.result || "";
   if (!richData.chartUrl && typeof responseText === "string") {
-    const chartMatch = responseText.match(/https?:\/\/[^\s)]+\.(png|jpg|jpeg|gif|webp|svg)(\?[^\s)]*)?/i);
-    if (chartMatch) {
-      richData.chartUrl = chartMatch[0];
+    const ipfsMatch = responseText.match(/https?:\/\/[^\s)]*mypinata\.cloud\/ipfs\/[^\s)]+/i);
+    const imgMatch = responseText.match(/https?:\/\/[^\s)]+\.(png|jpg|jpeg|gif|webp|svg)(\?[^\s)]*)?/i);
+    if (ipfsMatch) {
+      richData.chartUrl = ipfsMatch[0];
+    } else if (imgMatch) {
+      richData.chartUrl = imgMatch[0];
     }
   }
 
   if (Object.keys(richData).length === 0) return null;
-
-  for (const key of Object.keys(rd)) {
-    if (!(key in richData)) {
-      richData[key] = rd[key];
-    }
-  }
 
   return richData;
 }
