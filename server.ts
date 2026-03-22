@@ -1606,11 +1606,24 @@ function buildCoinGeckoTools(): ToolDefinition[] {
       }),
       async execute(_toolCallId: string, params: any) {
         try {
+          const scores = await bankr.getSignalQuality();
+          const sqMod = bankr.getSignalQualityModifier(scores, "crypto_scout", "crypto");
+          const CONFIDENCE_TIERS: Record<string, number> = { HIGH: 3, MEDIUM: 2, LOW: 1 };
+          const TIER_FROM_RANK: Record<number, string> = { 3: "HIGH", 2: "MEDIUM", 1: "LOW" };
+          let finalConfidence = params.confidence as string;
+          if (sqMod.sampleSize >= 3) {
+            let rank = CONFIDENCE_TIERS[finalConfidence] || 2;
+            if (sqMod.modifier === "boost") rank = Math.min(rank + 1, 3);
+            else if (sqMod.modifier === "penalty") rank = Math.max(rank - 1, 1);
+            finalConfidence = TIER_FROM_RANK[rank] || finalConfidence;
+          }
+          const sqNote = `[signal_quality: ${sqMod.modifier}, win_rate=${sqMod.winRate}%, n=${sqMod.sampleSize}${finalConfidence !== params.confidence ? `, adjusted ${params.confidence}→${finalConfidence}` : ""}]`;
+
           const thesis = cryptoScout.buildThesis({
             asset: params.asset,
             asset_id: params.asset_id,
             direction: params.direction,
-            confidence: params.confidence,
+            confidence: finalConfidence as "HIGH" | "MEDIUM" | "LOW",
             technical_score: params.technical_score,
             vote_count: params.vote_count,
             market_regime: params.market_regime,
@@ -1619,14 +1632,15 @@ function buildCoinGeckoTools(): ToolDefinition[] {
             stop_price: params.stop_price,
             atr_value: params.atr_value,
             sources: params.sources,
-            reasoning: params.reasoning,
+            reasoning: `${params.reasoning}\n${sqNote}`,
             backtest_score: params.backtest_score,
             nansen_flow_direction: params.nansen_flow_direction,
             time_horizon: params.time_horizon,
           });
           await cryptoScout.saveTheses([thesis]);
           recordSignal(params.asset_id, "entry");
-          return { content: [{ type: "text" as const, text: JSON.stringify({ saved: true, thesis_id: thesis.id, expires_at: new Date(thesis.expires_at).toISOString() }) }], details: {} };
+          console.log(`[save_thesis] ${params.asset} ${params.direction} confidence=${params.confidence}→${finalConfidence} ${sqNote}`);
+          return { content: [{ type: "text" as const, text: JSON.stringify({ saved: true, thesis_id: thesis.id, expires_at: new Date(thesis.expires_at).toISOString(), signal_quality_modifier: sqMod.modifier, original_confidence: params.confidence, final_confidence: finalConfidence }) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
         }
@@ -1812,19 +1826,33 @@ function buildCoinGeckoTools(): ToolDefinition[] {
 
           const resolvedConfidence = thresholdResult.tier || params.confidence;
 
+          const scores = await bankr.getSignalQuality();
+          const sqMod = bankr.getSignalQualityModifier(scores, "polymarket_scout", "polymarket");
+          const PM_TIERS: Record<string, number> = { HIGH: 4, MEDIUM: 3, LOW: 2, SPECULATIVE: 1 };
+          const PM_FROM_RANK: Record<number, string> = { 4: "HIGH", 3: "MEDIUM", 2: "LOW", 1: "SPECULATIVE" };
+          let finalConfidence = resolvedConfidence as string;
+          if (sqMod.sampleSize >= 3) {
+            let rank = PM_TIERS[finalConfidence] || 2;
+            if (sqMod.modifier === "boost") rank = Math.min(rank + 1, 4);
+            else if (sqMod.modifier === "penalty") rank = Math.max(rank - 1, 1);
+            finalConfidence = PM_FROM_RANK[rank] || finalConfidence;
+          }
+          const sqNote = `[signal_quality: ${sqMod.modifier}, win_rate=${sqMod.winRate}%, n=${sqMod.sampleSize}${finalConfidence !== resolvedConfidence ? `, adjusted ${resolvedConfidence}→${finalConfidence}` : ""}]`;
+
           const thesis = polymarketScout.buildThesis({
             market,
             direction: params.direction,
-            confidence: resolvedConfidence,
+            confidence: finalConfidence,
             whale_consensus: params.whale_wallets.length,
             whale_wallets: params.whale_wallets,
             whale_avg_score: params.whale_avg_score,
             total_whale_amount: params.total_whale_amount,
             sources: ["polymarket_clob", "whale_tracker"],
-            reasoning: params.reasoning,
+            reasoning: `${params.reasoning}\n${sqNote}`,
           });
           await polymarketScout.saveTheses([thesis]);
-          return { content: [{ type: "text" as const, text: JSON.stringify({ saved: true, thesis_id: thesis.id, threshold: thresholdResult }) }], details: {} };
+          console.log(`[save_pm_thesis] ${market.question?.slice(0, 50)} confidence=${resolvedConfidence}→${finalConfidence} ${sqNote}`);
+          return { content: [{ type: "text" as const, text: JSON.stringify({ saved: true, thesis_id: thesis.id, threshold: thresholdResult, signal_quality_modifier: sqMod.modifier, original_confidence: resolvedConfidence, final_confidence: finalConfidence }) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
         }

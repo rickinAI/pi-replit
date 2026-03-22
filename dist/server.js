@@ -16056,11 +16056,23 @@ function buildCoinGeckoTools() {
       }),
       async execute(_toolCallId, params) {
         try {
+          const scores = await getSignalQuality();
+          const sqMod = getSignalQualityModifier(scores, "crypto_scout", "crypto");
+          const CONFIDENCE_TIERS = { HIGH: 3, MEDIUM: 2, LOW: 1 };
+          const TIER_FROM_RANK = { 3: "HIGH", 2: "MEDIUM", 1: "LOW" };
+          let finalConfidence = params.confidence;
+          if (sqMod.sampleSize >= 3) {
+            let rank = CONFIDENCE_TIERS[finalConfidence] || 2;
+            if (sqMod.modifier === "boost") rank = Math.min(rank + 1, 3);
+            else if (sqMod.modifier === "penalty") rank = Math.max(rank - 1, 1);
+            finalConfidence = TIER_FROM_RANK[rank] || finalConfidence;
+          }
+          const sqNote = `[signal_quality: ${sqMod.modifier}, win_rate=${sqMod.winRate}%, n=${sqMod.sampleSize}${finalConfidence !== params.confidence ? `, adjusted ${params.confidence}\u2192${finalConfidence}` : ""}]`;
           const thesis = buildThesis({
             asset: params.asset,
             asset_id: params.asset_id,
             direction: params.direction,
-            confidence: params.confidence,
+            confidence: finalConfidence,
             technical_score: params.technical_score,
             vote_count: params.vote_count,
             market_regime: params.market_regime,
@@ -16069,14 +16081,16 @@ function buildCoinGeckoTools() {
             stop_price: params.stop_price,
             atr_value: params.atr_value,
             sources: params.sources,
-            reasoning: params.reasoning,
+            reasoning: `${params.reasoning}
+${sqNote}`,
             backtest_score: params.backtest_score,
             nansen_flow_direction: params.nansen_flow_direction,
             time_horizon: params.time_horizon
           });
           await saveTheses([thesis]);
           recordSignal(params.asset_id, "entry");
-          return { content: [{ type: "text", text: JSON.stringify({ saved: true, thesis_id: thesis.id, expires_at: new Date(thesis.expires_at).toISOString() }) }], details: {} };
+          console.log(`[save_thesis] ${params.asset} ${params.direction} confidence=${params.confidence}\u2192${finalConfidence} ${sqNote}`);
+          return { content: [{ type: "text", text: JSON.stringify({ saved: true, thesis_id: thesis.id, expires_at: new Date(thesis.expires_at).toISOString(), signal_quality_modifier: sqMod.modifier, original_confidence: params.confidence, final_confidence: finalConfidence }) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
         }
@@ -16255,19 +16269,33 @@ function buildCoinGeckoTools() {
             return { content: [{ type: "text", text: JSON.stringify({ saved: false, rejected: true, failures: thresholdResult.failures }) }], details: {} };
           }
           const resolvedConfidence = thresholdResult.tier || params.confidence;
+          const scores = await getSignalQuality();
+          const sqMod = getSignalQualityModifier(scores, "polymarket_scout", "polymarket");
+          const PM_TIERS = { HIGH: 4, MEDIUM: 3, LOW: 2, SPECULATIVE: 1 };
+          const PM_FROM_RANK = { 4: "HIGH", 3: "MEDIUM", 2: "LOW", 1: "SPECULATIVE" };
+          let finalConfidence = resolvedConfidence;
+          if (sqMod.sampleSize >= 3) {
+            let rank = PM_TIERS[finalConfidence] || 2;
+            if (sqMod.modifier === "boost") rank = Math.min(rank + 1, 4);
+            else if (sqMod.modifier === "penalty") rank = Math.max(rank - 1, 1);
+            finalConfidence = PM_FROM_RANK[rank] || finalConfidence;
+          }
+          const sqNote = `[signal_quality: ${sqMod.modifier}, win_rate=${sqMod.winRate}%, n=${sqMod.sampleSize}${finalConfidence !== resolvedConfidence ? `, adjusted ${resolvedConfidence}\u2192${finalConfidence}` : ""}]`;
           const thesis = buildThesis2({
             market,
             direction: params.direction,
-            confidence: resolvedConfidence,
+            confidence: finalConfidence,
             whale_consensus: params.whale_wallets.length,
             whale_wallets: params.whale_wallets,
             whale_avg_score: params.whale_avg_score,
             total_whale_amount: params.total_whale_amount,
             sources: ["polymarket_clob", "whale_tracker"],
-            reasoning: params.reasoning
+            reasoning: `${params.reasoning}
+${sqNote}`
           });
           await saveTheses2([thesis]);
-          return { content: [{ type: "text", text: JSON.stringify({ saved: true, thesis_id: thesis.id, threshold: thresholdResult }) }], details: {} };
+          console.log(`[save_pm_thesis] ${market.question?.slice(0, 50)} confidence=${resolvedConfidence}\u2192${finalConfidence} ${sqNote}`);
+          return { content: [{ type: "text", text: JSON.stringify({ saved: true, thesis_id: thesis.id, threshold: thresholdResult, signal_quality_modifier: sqMod.modifier, original_confidence: resolvedConfidence, final_confidence: finalConfidence }) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
         }
