@@ -1059,6 +1059,8 @@ export async function closeShadowTrade(
       exitPrice,
       pnl: trade.hypothetical_pnl,
       reason,
+      openedAt: trade.opened_at,
+      closedAt: trade.closed_at,
     }).catch(e => console.warn("[oversight] Shadow close notification failed:", e));
   } catch {}
 
@@ -1099,27 +1101,7 @@ export async function refreshShadowTradesFromMarket(): Promise<{
 
   const now = Date.now();
 
-  const notifyShadowClose = async (trade: ShadowTrade, reason: string) => {
-    try {
-      const { updateSignalQuality } = await import("./bankr.js");
-      await updateSignalQuality({
-        source: (trade.source as "crypto_scout" | "polymarket_scout") || "crypto_scout",
-        asset_class: trade.asset_class,
-        pnl: trade.hypothetical_pnl,
-        asset: trade.asset,
-      });
-    } catch (e) {
-      console.warn("[oversight] Signal quality update on shadow refresh close:", e instanceof Error ? e.message : e);
-    }
-    try {
-      const { sendShadowTradeNotification } = await import("./telegram.js");
-      sendShadowTradeNotification({
-        type: "close", asset: trade.asset, direction: trade.direction,
-        entryPrice: trade.entry_price, exitPrice: trade.exit_price || trade.current_price,
-        pnl: trade.hypothetical_pnl, reason,
-      }).catch(() => {});
-    } catch {}
-  };
+  const pendingCloseNotifications: Array<{ trade: ShadowTrade; reason: string }> = [];
 
   for (const trade of openTrades) {
     const ageHours = (now - trade.opened_at) / (3600 * 1000);
@@ -1131,7 +1113,7 @@ export async function refreshShadowTradesFromMarket(): Promise<{
       const multiplier = trade.direction === "LONG" || trade.direction === "YES" ? 1 : -1;
       trade.hypothetical_pnl = (trade.current_price - trade.entry_price) * multiplier;
       closed++;
-      await notifyShadowClose(trade, "expired (168h max age)");
+      pendingCloseNotifications.push({ trade, reason: "expired (168h max age)" });
       continue;
     }
 
@@ -1168,7 +1150,7 @@ export async function refreshShadowTradesFromMarket(): Promise<{
             trade.exit_price = latestPrice;
             closed++;
             console.log(`[oversight] Shadow stop hit: ${trade.asset} ${trade.direction} @ $${latestPrice} (stop=$${trade.stop_price}) P&L: $${trade.hypothetical_pnl.toFixed(4)}`);
-            await notifyShadowClose(trade, `stop hit ($${trade.stop_price})`);
+            pendingCloseNotifications.push({ trade, reason: `stop hit ($${trade.stop_price})` });
             continue;
           }
         }
@@ -1184,7 +1166,7 @@ export async function refreshShadowTradesFromMarket(): Promise<{
             trade.exit_price = latestPrice;
             closed++;
             console.log(`[oversight] Shadow target hit: ${trade.asset} ${trade.direction} @ $${latestPrice} (target=$${trade.target_price}) P&L: $${trade.hypothetical_pnl.toFixed(4)}`);
-            await notifyShadowClose(trade, `target hit ($${trade.target_price})`);
+            pendingCloseNotifications.push({ trade, reason: `target hit ($${trade.target_price})` });
             continue;
           }
         }
@@ -1195,6 +1177,29 @@ export async function refreshShadowTradesFromMarket(): Promise<{
   }
 
   await setConfigValue(SHADOW_TRADES_KEY, trades);
+
+  for (const { trade, reason } of pendingCloseNotifications) {
+    try {
+      const { updateSignalQuality } = await import("./bankr.js");
+      await updateSignalQuality({
+        source: (trade.source as "crypto_scout" | "polymarket_scout") || "crypto_scout",
+        asset_class: trade.asset_class,
+        pnl: trade.hypothetical_pnl,
+        asset: trade.asset,
+      });
+    } catch (e) {
+      console.warn("[oversight] Signal quality update on shadow refresh close:", e instanceof Error ? e.message : e);
+    }
+    try {
+      const { sendShadowTradeNotification } = await import("./telegram.js");
+      sendShadowTradeNotification({
+        type: "close", asset: trade.asset, direction: trade.direction,
+        entryPrice: trade.entry_price, exitPrice: trade.exit_price || trade.current_price,
+        pnl: trade.hypothetical_pnl, reason,
+        openedAt: trade.opened_at, closedAt: trade.closed_at,
+      }).catch(() => {});
+    } catch {}
+  }
   console.log(`[oversight] Shadow refresh: ${updated} updated, ${closed} expired, ${errors.length} errors`);
   return { updated, closed, errors };
 }

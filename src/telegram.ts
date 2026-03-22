@@ -1275,6 +1275,8 @@ export async function sendShadowTradeNotification(params: {
   pnl?: number;
   reason?: string;
   source?: string;
+  openedAt?: number;
+  closedAt?: number;
 }): Promise<void> {
   if (!isConfigured()) return;
   const mode = await getMode();
@@ -1294,6 +1296,23 @@ export async function sendShadowTradeNotification(params: {
       ? (params.pnl >= 0 ? `+$${params.pnl.toFixed(2)}` : `-$${Math.abs(params.pnl).toFixed(2)}`)
       : "N/A";
     const pnlIcon = (params.pnl ?? 0) >= 0 ? "🟢" : "🔴";
+
+    let pctReturn = "";
+    if (params.pnl != null && params.entryPrice > 0) {
+      const pct = (params.pnl / params.entryPrice) * 100;
+      pctReturn = pct >= 0 ? `+${pct.toFixed(2)}%` : `${pct.toFixed(2)}%`;
+    }
+
+    let holdDuration = "";
+    if (params.openedAt && params.closedAt) {
+      const diffMs = params.closedAt - params.openedAt;
+      const totalMins = Math.floor(diffMs / 60000);
+      const hours = Math.floor(totalMins / 60);
+      const mins = totalMins % 60;
+      if (hours > 0) holdDuration = `${hours}h ${mins}m`;
+      else holdDuration = `${mins}m`;
+    }
+
     const lines = [
       `${mode} 👻 *Shadow Trade Closed* ${pnlIcon}`,
       "",
@@ -1302,8 +1321,30 @@ export async function sendShadowTradeNotification(params: {
       `*Entry:* $${params.entryPrice.toFixed(4)}`,
     ];
     if (params.exitPrice != null) lines.push(`*Exit:* $${params.exitPrice.toFixed(4)}`);
-    lines.push(`*P&L:* ${pnlStr}`);
-    if (params.reason) lines.push(`_${params.reason}_`);
+    lines.push(`*P&L:* ${pnlStr}${pctReturn ? ` (${pctReturn})` : ""}`);
+    if (holdDuration) lines.push(`*Hold:* ${holdDuration}`);
+    if (params.reason) lines.push(`*Reason:* ${params.reason}`);
+
+    let runningLine = "";
+    try {
+      const pool = getPool();
+      const res = await pool.query(`SELECT value FROM app_config WHERE key = 'oversight_shadow_trades'`);
+      if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+        const allTrades = res.rows[0].value;
+        const closed = allTrades.filter((t: any) => t.status === "closed");
+        const wins = closed.filter((t: any) => (t.hypothetical_pnl || 0) > 0).length;
+        const losses = closed.length - wins;
+        const cumPnl = closed.reduce((s: number, t: any) => s + (t.hypothetical_pnl || 0), 0);
+        const winRate = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(0) : "0";
+        const cumStr = cumPnl >= 0 ? `+$${cumPnl.toFixed(2)}` : `-$${Math.abs(cumPnl).toFixed(2)}`;
+        runningLine = `📊 *Shadow Total:* ${cumStr} | W:${wins} L:${losses} | ${winRate}% win rate`;
+      }
+    } catch {}
+    if (runningLine) {
+      lines.push("");
+      lines.push(runningLine);
+    }
+
     await sendMessage(lines.join("\n"));
   }
 }
@@ -1364,12 +1405,18 @@ async function handleNotifyCommand(args: string): Promise<string> {
   }
 }
 
-let missionControlDigestInterval: ReturnType<typeof setInterval> | null = null;
+let darkNodeSummaryInterval: ReturnType<typeof setInterval> | null = null;
 
-export async function sendMissionControlDigest(): Promise<void> {
-  if (!isAlertsBotConfigured()) return;
+export async function sendDarkNodeSummary(): Promise<void> {
+  if (!isConfigured()) return;
   const mode = await getMode();
   const pool = getPool();
+
+  let portfolioValue = 1000;
+  try {
+    const pv = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_portfolio_value'`);
+    if (pv.rows.length > 0 && typeof pv.rows[0].value === "number") portfolioValue = pv.rows[0].value;
+  } catch {}
 
   let fgValue = "?";
   let fgClass = "";
@@ -1398,7 +1445,9 @@ export async function sendMissionControlDigest(): Promise<void> {
 
   let shadowPnl = 0;
   let shadowOpen = 0;
-  let shadowClosed = 0;
+  let shadowWins = 0;
+  let shadowLosses = 0;
+  const todayShadowTrades: string[] = [];
   try {
     const res = await pool.query(`SELECT value FROM app_config WHERE key = 'oversight_shadow_trades'`);
     if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
@@ -1406,9 +1455,24 @@ export async function sendMissionControlDigest(): Promise<void> {
       const open = trades.filter((t: any) => t.status === "open");
       const closed = trades.filter((t: any) => t.status === "closed");
       shadowOpen = open.length;
-      shadowClosed = closed.length;
+      shadowWins = closed.filter((t: any) => (t.hypothetical_pnl || 0) > 0).length;
+      shadowLosses = closed.length - shadowWins;
       shadowPnl = closed.reduce((s: number, t: any) => s + (t.hypothetical_pnl || 0), 0)
         + open.reduce((s: number, t: any) => s + (t.hypothetical_pnl || 0), 0);
+
+      const nowETStr = new Date().toLocaleString("en-US", { timeZone: "America/New_York" });
+      const todayET = new Date(nowETStr);
+      todayET.setHours(0, 0, 0, 0);
+      const todayMs = todayET.getTime();
+      const todayClosed = closed.filter((t: any) => (t.closed_at || 0) >= todayMs);
+      for (const t of todayClosed.slice(-5)) {
+        const pnl = t.hypothetical_pnl || 0;
+        const pnlS = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
+        const pctS = t.entry_price > 0 ? ` (${((pnl / t.entry_price) * 100).toFixed(1)}%)` : "";
+        const icon = pnl >= 0 ? "🟢" : "🔴";
+        const reason = t.close_reason ? ` — ${t.close_reason}` : "";
+        todayShadowTrades.push(`  ${icon} ${t.asset} ${t.direction} ${pnlS}${pctS}${reason}`);
+      }
     }
   } catch {}
 
@@ -1419,7 +1483,7 @@ export async function sendMissionControlDigest(): Promise<void> {
     if (res.rows.length > 0 && Array.isArray(res.rows[0].value) && res.rows[0].value.length > 0) {
       const latest = res.rows[0].value[res.rows[0].value.length - 1];
       healthStatus = latest.overall_status || "unknown";
-      healthIcon = { healthy: "🟢", degraded: "🟡", critical: "🔴" }[healthStatus] || "⚪";
+      healthIcon = ({ healthy: "🟢", degraded: "🟡", critical: "🔴" } as Record<string, string>)[healthStatus] || "⚪";
     }
   } catch {}
 
@@ -1434,27 +1498,56 @@ export async function sendMissionControlDigest(): Promise<void> {
     if (br.rows.length > 0) bankrLastRun = timeAgo(new Date(br.rows[0].created_at).getTime());
   } catch {}
 
+  let alerts: string[] = [];
+  let paused = false;
+  let killSwitch = false;
+  try {
+    const pa = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_paused'`);
+    paused = pa.rows.length > 0 && pa.rows[0].value === true;
+  } catch {}
+  try {
+    const ks = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_kill_switch'`);
+    killSwitch = ks.rows.length > 0 && ks.rows[0].value === true;
+  } catch {}
+  if (killSwitch) alerts.push("🚨 Kill switch ACTIVE");
+  if (paused) alerts.push("⏸️ System PAUSED");
+
   const pnlStr = shadowPnl >= 0 ? `+$${shadowPnl.toFixed(2)}` : `-$${Math.abs(shadowPnl).toFixed(2)}`;
+  const winRate = (shadowWins + shadowLosses) > 0 ? ((shadowWins / (shadowWins + shadowLosses)) * 100).toFixed(0) : "0";
 
   const lines = [
-    `${mode} 📊 *DarkNode Status Digest*`,
+    `${mode} 📊 *DarkNode Summary*`,
     "",
+    `${healthIcon} *System:* ${healthStatus}${paused ? " (PAUSED)" : ""}`,
+    `💰 *Portfolio:* $${portfolioValue.toFixed(2)}`,
     `😱 *Fear & Greed:* ${fgValue} (${fgClass})`,
-    `${healthIcon} *System:* ${healthStatus}`,
     "",
     `🔍 *Crypto Theses:* ${thesisCount} active`,
     `🎰 *PM Theses:* ${pmThesisCount} active`,
-    `👻 *Shadow Trades:* ${shadowOpen} open, ${shadowClosed} closed`,
+    `👻 *Shadow:* ${shadowOpen} open | W:${shadowWins} L:${shadowLosses} (${winRate}%)`,
     `💰 *Shadow P&L:* ${pnlStr}`,
-    "",
-    `🔍 SCOUT: ${scoutLastRun}`,
-    `💰 BANKR: ${bankrLastRun}`,
-    "",
-    `_${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`,
   ];
 
-  await sendAlertsBotMessage(lines.join("\n"));
-  console.log("[telegram] Mission Control digest sent");
+  if (todayShadowTrades.length > 0) {
+    lines.push("");
+    lines.push("*Today's Closed:*");
+    lines.push(...todayShadowTrades);
+  }
+
+  lines.push("");
+  lines.push(`🔍 SCOUT: ${scoutLastRun}`);
+  lines.push(`💰 BANKR: ${bankrLastRun}`);
+
+  if (alerts.length > 0) {
+    lines.push("");
+    lines.push(...alerts);
+  }
+
+  lines.push("");
+  lines.push(`_${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`);
+
+  await sendMessage(lines.join("\n"));
+  console.log("[telegram] DarkNode summary sent");
 }
 
 let webhookMode = false;
@@ -1649,12 +1742,18 @@ export async function init(): Promise<void> {
     checkDeadManSwitches().catch(err => console.error("[telegram] Dead man check error:", err));
   }, 60 * 60 * 1000);
 
-  if (isAlertsBotConfigured()) {
-    missionControlDigestInterval = setInterval(() => {
-      sendMissionControlDigest().catch(err => console.error("[telegram] Mission Control digest error:", err));
-    }, 4 * 60 * 60 * 1000);
-    console.log("[telegram] Mission Control status digest enabled (every 4h)");
-  }
+  let lastSummarySlot = "";
+  darkNodeSummaryInterval = setInterval(() => {
+    const nowET = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
+    const h = nowET.getHours();
+    const m = nowET.getMinutes();
+    const slotKey = `${nowET.toDateString()}-${h}`;
+    if ([9, 12, 15, 18, 21].includes(h) && m < 10 && slotKey !== lastSummarySlot) {
+      lastSummarySlot = slotKey;
+      sendDarkNodeSummary().catch(err => console.error("[telegram] DarkNode summary error:", err));
+    }
+  }, 10 * 60 * 1000);
+  console.log("[telegram] DarkNode summary enabled (9am, 12pm, 3pm, 6pm, 9pm ET)");
 
   const notifyMode = await getNotificationMode();
   if (notifyMode === "digest") {
@@ -1675,9 +1774,9 @@ export function stop(): void {
     clearInterval(deadManInterval);
     deadManInterval = null;
   }
-  if (missionControlDigestInterval) {
-    clearInterval(missionControlDigestInterval);
-    missionControlDigestInterval = null;
+  if (darkNodeSummaryInterval) {
+    clearInterval(darkNodeSummaryInterval);
+    darkNodeSummaryInterval = null;
   }
   if (digestFlushInterval) {
     clearInterval(digestFlushInterval);

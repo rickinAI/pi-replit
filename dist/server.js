@@ -2365,10 +2365,10 @@ __export(telegram_exports, {
   init: () => init6,
   isConfigured: () => isConfigured7,
   requestTradeApproval: () => requestTradeApproval,
+  sendDarkNodeSummary: () => sendDarkNodeSummary,
   sendJobCompletionNotification: () => sendJobCompletionNotification,
   sendMessage: () => sendMessage,
   sendMessageWithKeyboard: () => sendMessageWithKeyboard,
-  sendMissionControlDigest: () => sendMissionControlDigest,
   sendScoutBrief: () => sendScoutBrief,
   sendShadowTradeNotification: () => sendShadowTradeNotification,
   sendTradeAlert: () => sendTradeAlert,
@@ -3555,6 +3555,20 @@ async function sendShadowTradeNotification(params) {
   } else {
     const pnlStr = params.pnl != null ? params.pnl >= 0 ? `+$${params.pnl.toFixed(2)}` : `-$${Math.abs(params.pnl).toFixed(2)}` : "N/A";
     const pnlIcon = (params.pnl ?? 0) >= 0 ? "\u{1F7E2}" : "\u{1F534}";
+    let pctReturn = "";
+    if (params.pnl != null && params.entryPrice > 0) {
+      const pct = params.pnl / params.entryPrice * 100;
+      pctReturn = pct >= 0 ? `+${pct.toFixed(2)}%` : `${pct.toFixed(2)}%`;
+    }
+    let holdDuration = "";
+    if (params.openedAt && params.closedAt) {
+      const diffMs = params.closedAt - params.openedAt;
+      const totalMins = Math.floor(diffMs / 6e4);
+      const hours = Math.floor(totalMins / 60);
+      const mins = totalMins % 60;
+      if (hours > 0) holdDuration = `${hours}h ${mins}m`;
+      else holdDuration = `${mins}m`;
+    }
     const lines = [
       `${mode} \u{1F47B} *Shadow Trade Closed* ${pnlIcon}`,
       "",
@@ -3563,8 +3577,29 @@ async function sendShadowTradeNotification(params) {
       `*Entry:* $${params.entryPrice.toFixed(4)}`
     ];
     if (params.exitPrice != null) lines.push(`*Exit:* $${params.exitPrice.toFixed(4)}`);
-    lines.push(`*P&L:* ${pnlStr}`);
-    if (params.reason) lines.push(`_${params.reason}_`);
+    lines.push(`*P&L:* ${pnlStr}${pctReturn ? ` (${pctReturn})` : ""}`);
+    if (holdDuration) lines.push(`*Hold:* ${holdDuration}`);
+    if (params.reason) lines.push(`*Reason:* ${params.reason}`);
+    let runningLine = "";
+    try {
+      const pool2 = getPool();
+      const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_shadow_trades'`);
+      if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+        const allTrades = res.rows[0].value;
+        const closed = allTrades.filter((t) => t.status === "closed");
+        const wins = closed.filter((t) => (t.hypothetical_pnl || 0) > 0).length;
+        const losses = closed.length - wins;
+        const cumPnl = closed.reduce((s, t) => s + (t.hypothetical_pnl || 0), 0);
+        const winRate = closed.length > 0 ? (wins / closed.length * 100).toFixed(0) : "0";
+        const cumStr = cumPnl >= 0 ? `+$${cumPnl.toFixed(2)}` : `-$${Math.abs(cumPnl).toFixed(2)}`;
+        runningLine = `\u{1F4CA} *Shadow Total:* ${cumStr} | W:${wins} L:${losses} | ${winRate}% win rate`;
+      }
+    } catch {
+    }
+    if (runningLine) {
+      lines.push("");
+      lines.push(runningLine);
+    }
     await sendMessage(lines.join("\n"));
   }
 }
@@ -3620,10 +3655,16 @@ async function handleNotifyCommand(args) {
     return `${mode} \u274C Failed: ${err instanceof Error ? err.message : String(err)}`;
   }
 }
-async function sendMissionControlDigest() {
-  if (!isAlertsBotConfigured()) return;
+async function sendDarkNodeSummary() {
+  if (!isConfigured7()) return;
   const mode = await getMode();
   const pool2 = getPool();
+  let portfolioValue = 1e3;
+  try {
+    const pv = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_portfolio_value'`);
+    if (pv.rows.length > 0 && typeof pv.rows[0].value === "number") portfolioValue = pv.rows[0].value;
+  } catch {
+  }
   let fgValue = "?";
   let fgClass = "";
   try {
@@ -3651,7 +3692,9 @@ async function sendMissionControlDigest() {
   }
   let shadowPnl = 0;
   let shadowOpen = 0;
-  let shadowClosed = 0;
+  let shadowWins = 0;
+  let shadowLosses = 0;
+  const todayShadowTrades = [];
   try {
     const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_shadow_trades'`);
     if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
@@ -3659,8 +3702,22 @@ async function sendMissionControlDigest() {
       const open = trades.filter((t) => t.status === "open");
       const closed = trades.filter((t) => t.status === "closed");
       shadowOpen = open.length;
-      shadowClosed = closed.length;
+      shadowWins = closed.filter((t) => (t.hypothetical_pnl || 0) > 0).length;
+      shadowLosses = closed.length - shadowWins;
       shadowPnl = closed.reduce((s, t) => s + (t.hypothetical_pnl || 0), 0) + open.reduce((s, t) => s + (t.hypothetical_pnl || 0), 0);
+      const nowETStr = (/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York" });
+      const todayET = new Date(nowETStr);
+      todayET.setHours(0, 0, 0, 0);
+      const todayMs = todayET.getTime();
+      const todayClosed = closed.filter((t) => (t.closed_at || 0) >= todayMs);
+      for (const t of todayClosed.slice(-5)) {
+        const pnl = t.hypothetical_pnl || 0;
+        const pnlS = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
+        const pctS = t.entry_price > 0 ? ` (${(pnl / t.entry_price * 100).toFixed(1)}%)` : "";
+        const icon = pnl >= 0 ? "\u{1F7E2}" : "\u{1F534}";
+        const reason = t.close_reason ? ` \u2014 ${t.close_reason}` : "";
+        todayShadowTrades.push(`  ${icon} ${t.asset} ${t.direction} ${pnlS}${pctS}${reason}`);
+      }
     }
   } catch {
   }
@@ -3687,25 +3744,51 @@ async function sendMissionControlDigest() {
     if (br.rows.length > 0) bankrLastRun = timeAgo(new Date(br.rows[0].created_at).getTime());
   } catch {
   }
+  let alerts = [];
+  let paused = false;
+  let killSwitch = false;
+  try {
+    const pa = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_paused'`);
+    paused = pa.rows.length > 0 && pa.rows[0].value === true;
+  } catch {
+  }
+  try {
+    const ks = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_kill_switch'`);
+    killSwitch = ks.rows.length > 0 && ks.rows[0].value === true;
+  } catch {
+  }
+  if (killSwitch) alerts.push("\u{1F6A8} Kill switch ACTIVE");
+  if (paused) alerts.push("\u23F8\uFE0F System PAUSED");
   const pnlStr = shadowPnl >= 0 ? `+$${shadowPnl.toFixed(2)}` : `-$${Math.abs(shadowPnl).toFixed(2)}`;
+  const winRate = shadowWins + shadowLosses > 0 ? (shadowWins / (shadowWins + shadowLosses) * 100).toFixed(0) : "0";
   const lines = [
-    `${mode} \u{1F4CA} *DarkNode Status Digest*`,
+    `${mode} \u{1F4CA} *DarkNode Summary*`,
     "",
+    `${healthIcon} *System:* ${healthStatus}${paused ? " (PAUSED)" : ""}`,
+    `\u{1F4B0} *Portfolio:* $${portfolioValue.toFixed(2)}`,
     `\u{1F631} *Fear & Greed:* ${fgValue} (${fgClass})`,
-    `${healthIcon} *System:* ${healthStatus}`,
     "",
     `\u{1F50D} *Crypto Theses:* ${thesisCount} active`,
     `\u{1F3B0} *PM Theses:* ${pmThesisCount} active`,
-    `\u{1F47B} *Shadow Trades:* ${shadowOpen} open, ${shadowClosed} closed`,
-    `\u{1F4B0} *Shadow P&L:* ${pnlStr}`,
-    "",
-    `\u{1F50D} SCOUT: ${scoutLastRun}`,
-    `\u{1F4B0} BANKR: ${bankrLastRun}`,
-    "",
-    `_${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`
+    `\u{1F47B} *Shadow:* ${shadowOpen} open | W:${shadowWins} L:${shadowLosses} (${winRate}%)`,
+    `\u{1F4B0} *Shadow P&L:* ${pnlStr}`
   ];
-  await sendAlertsBotMessage(lines.join("\n"));
-  console.log("[telegram] Mission Control digest sent");
+  if (todayShadowTrades.length > 0) {
+    lines.push("");
+    lines.push("*Today's Closed:*");
+    lines.push(...todayShadowTrades);
+  }
+  lines.push("");
+  lines.push(`\u{1F50D} SCOUT: ${scoutLastRun}`);
+  lines.push(`\u{1F4B0} BANKR: ${bankrLastRun}`);
+  if (alerts.length > 0) {
+    lines.push("");
+    lines.push(...alerts);
+  }
+  lines.push("");
+  lines.push(`_${(/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`);
+  await sendMessage(lines.join("\n"));
+  console.log("[telegram] DarkNode summary sent");
 }
 async function registerWebhook() {
   const domain = process.env.TELEGRAM_WEBHOOK_DOMAIN || "rickin.live";
@@ -3877,12 +3960,18 @@ async function init6() {
   deadManInterval = setInterval(() => {
     checkDeadManSwitches().catch((err) => console.error("[telegram] Dead man check error:", err));
   }, 60 * 60 * 1e3);
-  if (isAlertsBotConfigured()) {
-    missionControlDigestInterval = setInterval(() => {
-      sendMissionControlDigest().catch((err) => console.error("[telegram] Mission Control digest error:", err));
-    }, 4 * 60 * 60 * 1e3);
-    console.log("[telegram] Mission Control status digest enabled (every 4h)");
-  }
+  let lastSummarySlot = "";
+  darkNodeSummaryInterval = setInterval(() => {
+    const nowET = new Date((/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York" }));
+    const h = nowET.getHours();
+    const m = nowET.getMinutes();
+    const slotKey = `${nowET.toDateString()}-${h}`;
+    if ([9, 12, 15, 18, 21].includes(h) && m < 10 && slotKey !== lastSummarySlot) {
+      lastSummarySlot = slotKey;
+      sendDarkNodeSummary().catch((err) => console.error("[telegram] DarkNode summary error:", err));
+    }
+  }, 10 * 60 * 1e3);
+  console.log("[telegram] DarkNode summary enabled (9am, 12pm, 3pm, 6pm, 9pm ET)");
   const notifyMode = await getNotificationMode();
   if (notifyMode === "digest") {
     digestFlushInterval = setInterval(() => {
@@ -3901,9 +3990,9 @@ function stop() {
     clearInterval(deadManInterval);
     deadManInterval = null;
   }
-  if (missionControlDigestInterval) {
-    clearInterval(missionControlDigestInterval);
-    missionControlDigestInterval = null;
+  if (darkNodeSummaryInterval) {
+    clearInterval(darkNodeSummaryInterval);
+    darkNodeSummaryInterval = null;
   }
   if (digestFlushInterval) {
     clearInterval(digestFlushInterval);
@@ -3953,7 +4042,7 @@ ${event.content}`);
 ${event.content}`);
   }
 }
-var BOT_TOKEN, CHAT_ID, API_BASE2, ALERTS_BOT_TOKEN, ALERTS_CHAT_ID, ALERTS_API_BASE, WEBHOOK_SECRET, pollingActive, pollingTimeout, lastUpdateId, deadManInterval, lastDeadManAlert, commands, pendingApprovals, lastScoutNotifyHash, lastPmNotifyHash, digestQueue, digestFlushInterval, missionControlDigestInterval, webhookMode;
+var BOT_TOKEN, CHAT_ID, API_BASE2, ALERTS_BOT_TOKEN, ALERTS_CHAT_ID, ALERTS_API_BASE, WEBHOOK_SECRET, pollingActive, pollingTimeout, lastUpdateId, deadManInterval, lastDeadManAlert, commands, pendingApprovals, lastScoutNotifyHash, lastPmNotifyHash, digestQueue, digestFlushInterval, darkNodeSummaryInterval, webhookMode;
 var init_telegram = __esm({
   "src/telegram.ts"() {
     "use strict";
@@ -3977,7 +4066,7 @@ var init_telegram = __esm({
     lastPmNotifyHash = "";
     digestQueue = [];
     digestFlushInterval = null;
-    missionControlDigestInterval = null;
+    darkNodeSummaryInterval = null;
     webhookMode = false;
   }
 });
@@ -4801,7 +4890,9 @@ async function closeShadowTrade(id, exitPrice, reason) {
       entryPrice: trade.entry_price,
       exitPrice,
       pnl: trade.hypothetical_pnl,
-      reason
+      reason,
+      openedAt: trade.opened_at,
+      closedAt: trade.closed_at
     }).catch((e) => console.warn("[oversight] Shadow close notification failed:", e));
   } catch {
   }
@@ -4828,33 +4919,7 @@ async function refreshShadowTradesFromMarket() {
   let closed = 0;
   const errors = [];
   const now = Date.now();
-  const notifyShadowClose = async (trade, reason) => {
-    try {
-      const { updateSignalQuality: updateSignalQuality2 } = await Promise.resolve().then(() => (init_bankr(), bankr_exports));
-      await updateSignalQuality2({
-        source: trade.source || "crypto_scout",
-        asset_class: trade.asset_class,
-        pnl: trade.hypothetical_pnl,
-        asset: trade.asset
-      });
-    } catch (e) {
-      console.warn("[oversight] Signal quality update on shadow refresh close:", e instanceof Error ? e.message : e);
-    }
-    try {
-      const { sendShadowTradeNotification: sendShadowTradeNotification2 } = await Promise.resolve().then(() => (init_telegram(), telegram_exports));
-      sendShadowTradeNotification2({
-        type: "close",
-        asset: trade.asset,
-        direction: trade.direction,
-        entryPrice: trade.entry_price,
-        exitPrice: trade.exit_price || trade.current_price,
-        pnl: trade.hypothetical_pnl,
-        reason
-      }).catch(() => {
-      });
-    } catch {
-    }
-  };
+  const pendingCloseNotifications = [];
   for (const trade of openTrades) {
     const ageHours = (now - trade.opened_at) / (3600 * 1e3);
     if (ageHours > SHADOW_MAX_AGE_HOURS) {
@@ -4865,7 +4930,7 @@ async function refreshShadowTradesFromMarket() {
       const multiplier = trade.direction === "LONG" || trade.direction === "YES" ? 1 : -1;
       trade.hypothetical_pnl = (trade.current_price - trade.entry_price) * multiplier;
       closed++;
-      await notifyShadowClose(trade, "expired (168h max age)");
+      pendingCloseNotifications.push({ trade, reason: "expired (168h max age)" });
       continue;
     }
     try {
@@ -4897,7 +4962,7 @@ async function refreshShadowTradesFromMarket() {
             trade.exit_price = latestPrice;
             closed++;
             console.log(`[oversight] Shadow stop hit: ${trade.asset} ${trade.direction} @ $${latestPrice} (stop=$${trade.stop_price}) P&L: $${trade.hypothetical_pnl.toFixed(4)}`);
-            await notifyShadowClose(trade, `stop hit ($${trade.stop_price})`);
+            pendingCloseNotifications.push({ trade, reason: `stop hit ($${trade.stop_price})` });
             continue;
           }
         }
@@ -4910,7 +4975,7 @@ async function refreshShadowTradesFromMarket() {
             trade.exit_price = latestPrice;
             closed++;
             console.log(`[oversight] Shadow target hit: ${trade.asset} ${trade.direction} @ $${latestPrice} (target=$${trade.target_price}) P&L: $${trade.hypothetical_pnl.toFixed(4)}`);
-            await notifyShadowClose(trade, `target hit ($${trade.target_price})`);
+            pendingCloseNotifications.push({ trade, reason: `target hit ($${trade.target_price})` });
             continue;
           }
         }
@@ -4920,6 +4985,35 @@ async function refreshShadowTradesFromMarket() {
     }
   }
   await setConfigValue2(SHADOW_TRADES_KEY, trades);
+  for (const { trade, reason } of pendingCloseNotifications) {
+    try {
+      const { updateSignalQuality: updateSignalQuality2 } = await Promise.resolve().then(() => (init_bankr(), bankr_exports));
+      await updateSignalQuality2({
+        source: trade.source || "crypto_scout",
+        asset_class: trade.asset_class,
+        pnl: trade.hypothetical_pnl,
+        asset: trade.asset
+      });
+    } catch (e) {
+      console.warn("[oversight] Signal quality update on shadow refresh close:", e instanceof Error ? e.message : e);
+    }
+    try {
+      const { sendShadowTradeNotification: sendShadowTradeNotification2 } = await Promise.resolve().then(() => (init_telegram(), telegram_exports));
+      sendShadowTradeNotification2({
+        type: "close",
+        asset: trade.asset,
+        direction: trade.direction,
+        entryPrice: trade.entry_price,
+        exitPrice: trade.exit_price || trade.current_price,
+        pnl: trade.hypothetical_pnl,
+        reason,
+        openedAt: trade.opened_at,
+        closedAt: trade.closed_at
+      }).catch(() => {
+      });
+    } catch {
+    }
+  }
   console.log(`[oversight] Shadow refresh: ${updated} updated, ${closed} expired, ${errors.length} errors`);
   return { updated, closed, errors };
 }
