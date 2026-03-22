@@ -86,6 +86,8 @@ async function init2() {
   await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS model_used TEXT`);
   await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS tokens_input INTEGER`);
   await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS tokens_output INTEGER`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_job_history_agent_created ON job_history(agent_id, created_at DESC)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_job_history_job_created ON job_history(job_id, created_at DESC)`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS agent_activity (
       id SERIAL PRIMARY KEY,
@@ -2480,42 +2482,51 @@ async function handleStatusCommand() {
   const mode = await getMode();
   const pool2 = getPool();
   let killSwitchActive = false;
-  try {
-    const ks = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_kill_switch'`);
-    killSwitchActive = ks.rows.length > 0 && ks.rows[0].value === true;
-  } catch {
-  }
   let pauseActive = false;
+  let healthLine = "";
+  let shadowLine = "";
   try {
-    const pa = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_paused'`);
-    pauseActive = pa.rows.length > 0 && pa.rows[0].value === true;
+    const configRes = await pool2.query(
+      `SELECT key, value FROM app_config WHERE key IN ('wealth_engines_kill_switch', 'wealth_engines_paused', 'oversight_health_reports', 'oversight_shadow_trades')`
+    );
+    const configMap = {};
+    for (const row of configRes.rows) configMap[row.key] = row.value;
+    killSwitchActive = configMap["wealth_engines_kill_switch"] === true;
+    pauseActive = configMap["wealth_engines_paused"] === true;
+    const healthReports = configMap["oversight_health_reports"];
+    if (Array.isArray(healthReports) && healthReports.length > 0) {
+      const latest = healthReports[healthReports.length - 1];
+      const icons = { healthy: "\u{1F7E2}", degraded: "\u{1F7E1}", critical: "\u{1F534}" };
+      healthLine = `${icons[latest.overall_status] || "\u26AA"} Oversight: ${latest.overall_status}`;
+    }
+    const shadowTrades = configMap["oversight_shadow_trades"];
+    if (Array.isArray(shadowTrades)) {
+      const open = shadowTrades.filter((t) => t.status === "open");
+      const closed = shadowTrades.filter((t) => t.status === "closed");
+      const totalPnl = closed.reduce((s, t) => s + (t.hypothetical_pnl || 0), 0) + open.reduce((s, t) => s + (t.hypothetical_pnl || 0), 0);
+      const pnlStr = totalPnl >= 0 ? `+$${totalPnl.toFixed(2)}` : `-$${Math.abs(totalPnl).toFixed(2)}`;
+      shadowLine = `\u{1F47B} Shadow: ${open.length} open, ${closed.length} closed | P&L: ${pnlStr}`;
+    }
   } catch {
   }
   let scoutLastRun = "never";
   let bankrLastRun = "never";
   let pmLastRun = "never";
   try {
-    const sr = await pool2.query(`SELECT created_at FROM job_history WHERE agent_id = 'scout' ORDER BY created_at DESC LIMIT 1`);
-    if (sr.rows.length > 0) scoutLastRun = timeAgo(new Date(sr.rows[0].created_at).getTime());
-  } catch {
-  }
-  try {
-    const br = await pool2.query(`SELECT created_at FROM job_history WHERE agent_id = 'bankr' ORDER BY created_at DESC LIMIT 1`);
-    if (br.rows.length > 0) bankrLastRun = timeAgo(new Date(br.rows[0].created_at).getTime());
-  } catch {
-  }
-  try {
-    const pr = await pool2.query(`SELECT created_at FROM job_history WHERE job_id IN ('polymarket-activity-scan','polymarket-full-cycle') ORDER BY created_at DESC LIMIT 1`);
-    if (pr.rows.length > 0) pmLastRun = timeAgo(new Date(pr.rows[0].created_at).getTime());
-  } catch {
-  }
-  let healthLine = "";
-  try {
-    const healthRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_health_reports'`);
-    if (healthRes.rows.length > 0 && Array.isArray(healthRes.rows[0].value) && healthRes.rows[0].value.length > 0) {
-      const latest = healthRes.rows[0].value[healthRes.rows[0].value.length - 1];
-      const icons = { healthy: "\u{1F7E2}", degraded: "\u{1F7E1}", critical: "\u{1F534}" };
-      healthLine = `${icons[latest.overall_status] || "\u26AA"} Oversight: ${latest.overall_status}`;
+    const jobRes = await pool2.query(`
+      SELECT DISTINCT ON (grp) grp, created_at FROM (
+        SELECT 'scout' AS grp, created_at FROM job_history WHERE agent_id = 'scout'
+        UNION ALL
+        SELECT 'bankr' AS grp, created_at FROM job_history WHERE agent_id = 'bankr'
+        UNION ALL
+        SELECT 'pm' AS grp, created_at FROM job_history WHERE job_id IN ('polymarket-activity-scan','polymarket-full-cycle')
+      ) sub ORDER BY grp, created_at DESC
+    `);
+    for (const row of jobRes.rows) {
+      const ts = timeAgo(new Date(row.created_at).getTime());
+      if (row.grp === "scout") scoutLastRun = ts;
+      else if (row.grp === "bankr") bankrLastRun = ts;
+      else if (row.grp === "pm") pmLastRun = ts;
     }
   } catch {
   }
@@ -2524,19 +2535,6 @@ async function handleStatusCommand() {
     const { getFearGreedIndex: getFearGreedIndex2 } = await Promise.resolve().then(() => (init_signal_sources(), signal_sources_exports));
     const fg = await getFearGreedIndex2();
     fgLine = `\u{1F631} Fear & Greed: ${fg.value} (${fg.classification})`;
-  } catch {
-  }
-  let shadowLine = "";
-  try {
-    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_shadow_trades'`);
-    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
-      const trades = res.rows[0].value;
-      const open = trades.filter((t) => t.status === "open");
-      const closed = trades.filter((t) => t.status === "closed");
-      const totalPnl = closed.reduce((s, t) => s + (t.hypothetical_pnl || 0), 0) + open.reduce((s, t) => s + (t.hypothetical_pnl || 0), 0);
-      const pnlStr = totalPnl >= 0 ? `+$${totalPnl.toFixed(2)}` : `-$${Math.abs(totalPnl).toFixed(2)}`;
-      shadowLine = `\u{1F47B} Shadow: ${open.length} open, ${closed.length} closed | P&L: ${pnlStr}`;
-    }
   } catch {
   }
   const notifyMode = await getNotificationMode();
@@ -3681,47 +3679,36 @@ async function sendDarkNodeSummary() {
   const mode = await getMode();
   const pool2 = getPool();
   let portfolioValue = 1e3;
-  try {
-    const pv = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_portfolio_value'`);
-    if (pv.rows.length > 0 && typeof pv.rows[0].value === "number") portfolioValue = pv.rows[0].value;
-  } catch {
-  }
-  let fgValue = "?";
-  let fgClass = "";
-  try {
-    const { getFearGreedIndex: getFearGreedIndex2 } = await Promise.resolve().then(() => (init_signal_sources(), signal_sources_exports));
-    const fg = await getFearGreedIndex2();
-    fgValue = String(fg.value);
-    fgClass = fg.classification;
-  } catch {
-  }
   let thesisCount = 0;
-  try {
-    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'scout_active_theses'`);
-    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
-      thesisCount = res.rows[0].value.filter((t) => !t.expires_at || t.expires_at > Date.now()).length;
-    }
-  } catch {
-  }
   let pmThesisCount = 0;
-  try {
-    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'polymarket_scout_active_theses'`);
-    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
-      pmThesisCount = res.rows[0].value.filter((t) => t.status === "active").length;
-    }
-  } catch {
-  }
   let shadowPnl = 0;
   let shadowOpen = 0;
   let shadowWins = 0;
   let shadowLosses = 0;
   const todayShadowTrades = [];
+  let healthStatus = "unknown";
+  let healthIcon = "\u26AA";
+  let paused = false;
+  let killSwitch = false;
   try {
-    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_shadow_trades'`);
-    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
-      const trades = res.rows[0].value;
-      const open = trades.filter((t) => t.status === "open");
-      const closed = trades.filter((t) => t.status === "closed");
+    const configRes = await pool2.query(
+      `SELECT key, value FROM app_config WHERE key IN ('wealth_engines_portfolio_value', 'scout_active_theses', 'polymarket_scout_active_theses', 'oversight_shadow_trades', 'oversight_health_reports', 'wealth_engines_paused', 'wealth_engines_kill_switch')`
+    );
+    const cm = {};
+    for (const row of configRes.rows) cm[row.key] = row.value;
+    if (typeof cm["wealth_engines_portfolio_value"] === "number") portfolioValue = cm["wealth_engines_portfolio_value"];
+    paused = cm["wealth_engines_paused"] === true;
+    killSwitch = cm["wealth_engines_kill_switch"] === true;
+    if (Array.isArray(cm["scout_active_theses"])) {
+      thesisCount = cm["scout_active_theses"].filter((t) => !t.expires_at || t.expires_at > Date.now()).length;
+    }
+    if (Array.isArray(cm["polymarket_scout_active_theses"])) {
+      pmThesisCount = cm["polymarket_scout_active_theses"].filter((t) => t.status === "active").length;
+    }
+    const shadowTrades = cm["oversight_shadow_trades"];
+    if (Array.isArray(shadowTrades)) {
+      const open = shadowTrades.filter((t) => t.status === "open");
+      const closed = shadowTrades.filter((t) => t.status === "closed");
       shadowOpen = open.length;
       shadowWins = closed.filter((t) => (t.hypothetical_pnl || 0) > 0).length;
       shadowLosses = closed.length - shadowWins;
@@ -3740,44 +3727,41 @@ async function sendDarkNodeSummary() {
         todayShadowTrades.push(`  ${icon} ${t.asset} ${t.direction} ${pnlS}${pctS}${reason}`);
       }
     }
-  } catch {
-  }
-  let healthStatus = "unknown";
-  let healthIcon = "\u26AA";
-  try {
-    const res = await pool2.query(`SELECT value FROM app_config WHERE key = 'oversight_health_reports'`);
-    if (res.rows.length > 0 && Array.isArray(res.rows[0].value) && res.rows[0].value.length > 0) {
-      const latest = res.rows[0].value[res.rows[0].value.length - 1];
+    const healthReports = cm["oversight_health_reports"];
+    if (Array.isArray(healthReports) && healthReports.length > 0) {
+      const latest = healthReports[healthReports.length - 1];
       healthStatus = latest.overall_status || "unknown";
       healthIcon = { healthy: "\u{1F7E2}", degraded: "\u{1F7E1}", critical: "\u{1F534}" }[healthStatus] || "\u26AA";
     }
   } catch {
   }
+  let fgValue = "?";
+  let fgClass = "";
+  try {
+    const { getFearGreedIndex: getFearGreedIndex2 } = await Promise.resolve().then(() => (init_signal_sources(), signal_sources_exports));
+    const fg = await getFearGreedIndex2();
+    fgValue = String(fg.value);
+    fgClass = fg.classification;
+  } catch {
+  }
   let scoutLastRun = "never";
   let bankrLastRun = "never";
   try {
-    const sr = await pool2.query(`SELECT created_at FROM job_history WHERE agent_id = 'scout' ORDER BY created_at DESC LIMIT 1`);
-    if (sr.rows.length > 0) scoutLastRun = timeAgo(new Date(sr.rows[0].created_at).getTime());
-  } catch {
-  }
-  try {
-    const br = await pool2.query(`SELECT created_at FROM job_history WHERE agent_id = 'bankr' ORDER BY created_at DESC LIMIT 1`);
-    if (br.rows.length > 0) bankrLastRun = timeAgo(new Date(br.rows[0].created_at).getTime());
+    const jobRes = await pool2.query(`
+      SELECT DISTINCT ON (grp) grp, created_at FROM (
+        SELECT 'scout' AS grp, created_at FROM job_history WHERE agent_id = 'scout'
+        UNION ALL
+        SELECT 'bankr' AS grp, created_at FROM job_history WHERE agent_id = 'bankr'
+      ) sub ORDER BY grp, created_at DESC
+    `);
+    for (const row of jobRes.rows) {
+      const ts = timeAgo(new Date(row.created_at).getTime());
+      if (row.grp === "scout") scoutLastRun = ts;
+      else if (row.grp === "bankr") bankrLastRun = ts;
+    }
   } catch {
   }
   let alerts = [];
-  let paused = false;
-  let killSwitch = false;
-  try {
-    const pa = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_paused'`);
-    paused = pa.rows.length > 0 && pa.rows[0].value === true;
-  } catch {
-  }
-  try {
-    const ks = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_kill_switch'`);
-    killSwitch = ks.rows.length > 0 && ks.rows[0].value === true;
-  } catch {
-  }
   if (killSwitch) alerts.push("\u{1F6A8} Kill switch ACTIVE");
   if (paused) alerts.push("\u23F8\uFE0F System PAUSED");
   const pnlStr = shadowPnl >= 0 ? `+$${shadowPnl.toFixed(2)}` : `-$${Math.abs(shadowPnl).toFixed(2)}`;
@@ -4969,6 +4953,7 @@ async function refreshShadowTradesFromMarket() {
   const errors = [];
   const now = Date.now();
   const pendingCloseNotifications = [];
+  const nonExpiredTrades = [];
   for (const trade of openTrades) {
     const ageHours = (now - trade.opened_at) / (3600 * 1e3);
     if (ageHours > SHADOW_MAX_AGE_HOURS) {
@@ -4980,15 +4965,16 @@ async function refreshShadowTradesFromMarket() {
       trade.hypothetical_pnl = (trade.current_price - trade.entry_price) * multiplier;
       closed++;
       pendingCloseNotifications.push({ trade, reason: "expired (168h max age)" });
-      continue;
+    } else {
+      nonExpiredTrades.push(trade);
     }
-    try {
+  }
+  const priceResults = await Promise.allSettled(
+    nonExpiredTrades.map(async (trade) => {
       let latestPrice = null;
       if (trade.asset_class === "crypto") {
         const candles = await getHistoricalOHLCV(trade.asset, 1);
-        if (candles.length > 0) {
-          latestPrice = candles[candles.length - 1].close;
-        }
+        if (candles.length > 0) latestPrice = candles[candles.length - 1].close;
       } else if (trade.asset_class === "polymarket" && trade.market_id) {
         const market = await getMarketDetails(trade.market_id);
         if (market && market.outcome_prices && market.outcome_prices.length > 0) {
@@ -4996,41 +4982,48 @@ async function refreshShadowTradesFromMarket() {
           latestPrice = Number.isFinite(parsed) ? parsed : null;
         }
       }
-      if (latestPrice != null) {
-        trade.current_price = latestPrice;
-        const isLong = trade.direction === "LONG" || trade.direction === "YES";
-        const multiplier = isLong ? 1 : -1;
-        trade.hypothetical_pnl = (latestPrice - trade.entry_price) * multiplier;
-        updated++;
-        if (trade.stop_price != null) {
-          const stopHit = isLong ? latestPrice <= trade.stop_price : latestPrice >= trade.stop_price;
-          if (stopHit) {
-            trade.status = "closed";
-            trade.closed_at = now;
-            trade.close_reason = "stop_hit";
-            trade.exit_price = latestPrice;
-            closed++;
-            console.log(`[oversight] Shadow stop hit: ${trade.asset} ${trade.direction} @ $${latestPrice} (stop=$${trade.stop_price}) P&L: $${trade.hypothetical_pnl.toFixed(4)}`);
-            pendingCloseNotifications.push({ trade, reason: `stop hit ($${trade.stop_price})` });
-            continue;
-          }
-        }
-        if (trade.target_price != null) {
-          const targetHit = isLong ? latestPrice >= trade.target_price : latestPrice <= trade.target_price;
-          if (targetHit) {
-            trade.status = "closed";
-            trade.closed_at = now;
-            trade.close_reason = "target_hit";
-            trade.exit_price = latestPrice;
-            closed++;
-            console.log(`[oversight] Shadow target hit: ${trade.asset} ${trade.direction} @ $${latestPrice} (target=$${trade.target_price}) P&L: $${trade.hypothetical_pnl.toFixed(4)}`);
-            pendingCloseNotifications.push({ trade, reason: `target hit ($${trade.target_price})` });
-            continue;
-          }
-        }
+      return latestPrice;
+    })
+  );
+  for (let i = 0; i < nonExpiredTrades.length; i++) {
+    const trade = nonExpiredTrades[i];
+    const result = priceResults[i];
+    if (result.status === "rejected") {
+      errors.push(`${trade.asset}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+      continue;
+    }
+    const latestPrice = result.value;
+    if (latestPrice == null) continue;
+    trade.current_price = latestPrice;
+    const isLong = trade.direction === "LONG" || trade.direction === "YES";
+    const multiplier = isLong ? 1 : -1;
+    trade.hypothetical_pnl = (latestPrice - trade.entry_price) * multiplier;
+    updated++;
+    if (trade.stop_price != null) {
+      const stopHit = isLong ? latestPrice <= trade.stop_price : latestPrice >= trade.stop_price;
+      if (stopHit) {
+        trade.status = "closed";
+        trade.closed_at = now;
+        trade.close_reason = "stop_hit";
+        trade.exit_price = latestPrice;
+        closed++;
+        console.log(`[oversight] Shadow stop hit: ${trade.asset} ${trade.direction} @ $${latestPrice} (stop=$${trade.stop_price}) P&L: $${trade.hypothetical_pnl.toFixed(4)}`);
+        pendingCloseNotifications.push({ trade, reason: `stop hit ($${trade.stop_price})` });
+        continue;
       }
-    } catch (e) {
-      errors.push(`${trade.asset}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    if (trade.target_price != null) {
+      const targetHit = isLong ? latestPrice >= trade.target_price : latestPrice <= trade.target_price;
+      if (targetHit) {
+        trade.status = "closed";
+        trade.closed_at = now;
+        trade.close_reason = "target_hit";
+        trade.exit_price = latestPrice;
+        closed++;
+        console.log(`[oversight] Shadow target hit: ${trade.asset} ${trade.direction} @ $${latestPrice} (target=$${trade.target_price}) P&L: $${trade.hypothetical_pnl.toFixed(4)}`);
+        pendingCloseNotifications.push({ trade, reason: `target hit ($${trade.target_price})` });
+        continue;
+      }
     }
   }
   await setConfigValue2(SHADOW_TRADES_KEY, trades);
@@ -5580,19 +5573,24 @@ function getExposureBucket(asset, assetClass) {
 async function runPreExecutionChecks(params) {
   const checks = [];
   let allPassed = true;
-  const killActive = await isKillSwitchActive();
+  const [killActive, paused, mode, rc, portfolio, positions, consecutiveLosses, peakPortfolio] = await Promise.all([
+    isKillSwitchActive(),
+    isPaused(),
+    getMode2(),
+    getRiskConfig(),
+    getPortfolioValue(),
+    getPositions(),
+    getConsecutiveLosses(),
+    getPeakPortfolioValue()
+  ]);
   checks.push({ name: "kill_switch", passed: !killActive, detail: killActive ? "Kill switch is ACTIVE" : "Kill switch inactive" });
   if (killActive) allPassed = false;
-  const paused = await isPaused();
   checks.push({ name: "pause_state", passed: !paused, detail: paused ? "System is PAUSED" : "System active" });
   if (paused) allPassed = false;
-  const mode = await getMode2();
   checks.push({ name: "mode_check", passed: true, detail: `Mode: ${mode}${mode === "SHADOW" ? " (shadow trades only)" : ""}` });
-  const rc = await getRiskConfig();
   const levOk = params.leverage <= rc.max_leverage;
   checks.push({ name: "leverage_cap", passed: levOk, detail: `Requested: ${params.leverage}x, Max: ${rc.max_leverage}x` });
   if (!levOk) allPassed = false;
-  const portfolio = await getPortfolioValue();
   const riskPct = rc.risk_per_trade_pct / 100;
   const maxRisk = portfolio * riskPct;
   const riskDistance = Math.abs(params.entry_price - params.stop_price);
@@ -5609,7 +5607,6 @@ async function runPreExecutionChecks(params) {
   } else {
     checks.push({ name: "margin_buffer", passed: true, detail: "No leverage \u2014 no liquidation risk" });
   }
-  const positions = await getPositions();
   const posCountOk = positions.length < rc.max_positions;
   checks.push({ name: "max_positions", passed: posCountOk, detail: `Open: ${positions.length}/${rc.max_positions}` });
   if (!posCountOk) allPassed = false;
@@ -5626,9 +5623,7 @@ async function runPreExecutionChecks(params) {
   const correlationOk = bucketCount < rc.correlation_limit;
   checks.push({ name: "correlation_limit", passed: correlationOk, detail: `Bucket "${bucket}": ${bucketCount}/${rc.correlation_limit} positions` });
   if (!correlationOk) allPassed = false;
-  const consecutiveLosses = await getConsecutiveLosses();
   checks.push({ name: "consecutive_losses", passed: consecutiveLosses < 3, detail: `Consecutive losses: ${consecutiveLosses}/3` });
-  const peakPortfolio = await getPeakPortfolioValue();
   const drawdownPct = peakPortfolio > 0 ? (portfolio - peakPortfolio) / peakPortfolio * 100 : 0;
   const drawdownOk = drawdownPct > rc.circuit_breaker_drawdown_pct;
   checks.push({ name: "peak_drawdown", passed: drawdownOk, detail: `Drawdown from peak: ${drawdownPct.toFixed(1)}% (limit: ${rc.circuit_breaker_drawdown_pct}%)` });

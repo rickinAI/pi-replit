@@ -319,24 +319,29 @@ export async function runPreExecutionChecks(params: {
   const checks: { name: string; passed: boolean; detail: string }[] = [];
   let allPassed = true;
 
-  const killActive = await isKillSwitchActive();
+  const [killActive, paused, mode, rc, portfolio, positions, consecutiveLosses, peakPortfolio] = await Promise.all([
+    isKillSwitchActive(),
+    isPaused(),
+    getMode(),
+    getRiskConfig(),
+    getPortfolioValue(),
+    getPositions(),
+    getConsecutiveLosses(),
+    getPeakPortfolioValue(),
+  ]);
+
   checks.push({ name: "kill_switch", passed: !killActive, detail: killActive ? "Kill switch is ACTIVE" : "Kill switch inactive" });
   if (killActive) allPassed = false;
 
-  const paused = await isPaused();
   checks.push({ name: "pause_state", passed: !paused, detail: paused ? "System is PAUSED" : "System active" });
   if (paused) allPassed = false;
 
-  const mode = await getMode();
   checks.push({ name: "mode_check", passed: true, detail: `Mode: ${mode}${mode === "SHADOW" ? " (shadow trades only)" : ""}` });
-
-  const rc = await getRiskConfig();
 
   const levOk = params.leverage <= rc.max_leverage;
   checks.push({ name: "leverage_cap", passed: levOk, detail: `Requested: ${params.leverage}x, Max: ${rc.max_leverage}x` });
   if (!levOk) allPassed = false;
 
-  const portfolio = await getPortfolioValue();
   const riskPct = rc.risk_per_trade_pct / 100;
   const maxRisk = portfolio * riskPct;
   const riskDistance = Math.abs(params.entry_price - params.stop_price);
@@ -355,7 +360,6 @@ export async function runPreExecutionChecks(params: {
     checks.push({ name: "margin_buffer", passed: true, detail: "No leverage — no liquidation risk" });
   }
 
-  const positions = await getPositions();
   const posCountOk = positions.length < rc.max_positions;
   checks.push({ name: "max_positions", passed: posCountOk, detail: `Open: ${positions.length}/${rc.max_positions}` });
   if (!posCountOk) allPassed = false;
@@ -375,10 +379,7 @@ export async function runPreExecutionChecks(params: {
   checks.push({ name: "correlation_limit", passed: correlationOk, detail: `Bucket "${bucket}": ${bucketCount}/${rc.correlation_limit} positions` });
   if (!correlationOk) allPassed = false;
 
-  const consecutiveLosses = await getConsecutiveLosses();
   checks.push({ name: "consecutive_losses", passed: consecutiveLosses < 3, detail: `Consecutive losses: ${consecutiveLosses}/3` });
-
-  const peakPortfolio = await getPeakPortfolioValue();
   const drawdownPct = peakPortfolio > 0 ? ((portfolio - peakPortfolio) / peakPortfolio) * 100 : 0;
   const drawdownOk = drawdownPct > rc.circuit_breaker_drawdown_pct;
   checks.push({ name: "peak_drawdown", passed: drawdownOk, detail: `Drawdown from peak: ${drawdownPct.toFixed(1)}% (limit: ${rc.circuit_breaker_drawdown_pct}%)` });

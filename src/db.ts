@@ -72,6 +72,8 @@ export async function init(): Promise<pg.Pool> {
   await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS model_used TEXT`);
   await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS tokens_input INTEGER`);
   await pool.query(`ALTER TABLE job_history ADD COLUMN IF NOT EXISTS tokens_output INTEGER`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_job_history_agent_created ON job_history(agent_id, created_at DESC)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_job_history_job_created ON job_history(job_id, created_at DESC)`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS agent_activity (

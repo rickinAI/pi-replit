@@ -1103,6 +1103,7 @@ export async function refreshShadowTradesFromMarket(): Promise<{
 
   const pendingCloseNotifications: Array<{ trade: ShadowTrade; reason: string }> = [];
 
+  const nonExpiredTrades: ShadowTrade[] = [];
   for (const trade of openTrades) {
     const ageHours = (now - trade.opened_at) / (3600 * 1000);
     if (ageHours > SHADOW_MAX_AGE_HOURS) {
@@ -1114,16 +1115,17 @@ export async function refreshShadowTradesFromMarket(): Promise<{
       trade.hypothetical_pnl = (trade.current_price - trade.entry_price) * multiplier;
       closed++;
       pendingCloseNotifications.push({ trade, reason: "expired (168h max age)" });
-      continue;
+    } else {
+      nonExpiredTrades.push(trade);
     }
+  }
 
-    try {
+  const priceResults = await Promise.allSettled(
+    nonExpiredTrades.map(async (trade) => {
       let latestPrice: number | null = null;
       if (trade.asset_class === "crypto") {
         const candles = await getHistoricalOHLCV(trade.asset, 1);
-        if (candles.length > 0) {
-          latestPrice = candles[candles.length - 1].close;
-        }
+        if (candles.length > 0) latestPrice = candles[candles.length - 1].close;
       } else if (trade.asset_class === "polymarket" && trade.market_id) {
         const market = await polymarket.getMarketDetails(trade.market_id);
         if (market && market.outcome_prices && market.outcome_prices.length > 0) {
@@ -1131,48 +1133,52 @@ export async function refreshShadowTradesFromMarket(): Promise<{
           latestPrice = Number.isFinite(parsed) ? parsed : null;
         }
       }
+      return latestPrice;
+    })
+  );
 
-      if (latestPrice != null) {
-        trade.current_price = latestPrice;
-        const isLong = trade.direction === "LONG" || trade.direction === "YES";
-        const multiplier = isLong ? 1 : -1;
-        trade.hypothetical_pnl = (latestPrice - trade.entry_price) * multiplier;
-        updated++;
+  for (let i = 0; i < nonExpiredTrades.length; i++) {
+    const trade = nonExpiredTrades[i];
+    const result = priceResults[i];
+    if (result.status === "rejected") {
+      errors.push(`${trade.asset}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+      continue;
+    }
+    const latestPrice = result.value;
+    if (latestPrice == null) continue;
 
-        if (trade.stop_price != null) {
-          const stopHit = isLong
-            ? latestPrice <= trade.stop_price
-            : latestPrice >= trade.stop_price;
-          if (stopHit) {
-            trade.status = "closed";
-            trade.closed_at = now;
-            trade.close_reason = "stop_hit";
-            trade.exit_price = latestPrice;
-            closed++;
-            console.log(`[oversight] Shadow stop hit: ${trade.asset} ${trade.direction} @ $${latestPrice} (stop=$${trade.stop_price}) P&L: $${trade.hypothetical_pnl.toFixed(4)}`);
-            pendingCloseNotifications.push({ trade, reason: `stop hit ($${trade.stop_price})` });
-            continue;
-          }
-        }
+    trade.current_price = latestPrice;
+    const isLong = trade.direction === "LONG" || trade.direction === "YES";
+    const multiplier = isLong ? 1 : -1;
+    trade.hypothetical_pnl = (latestPrice - trade.entry_price) * multiplier;
+    updated++;
 
-        if (trade.target_price != null) {
-          const targetHit = isLong
-            ? latestPrice >= trade.target_price
-            : latestPrice <= trade.target_price;
-          if (targetHit) {
-            trade.status = "closed";
-            trade.closed_at = now;
-            trade.close_reason = "target_hit";
-            trade.exit_price = latestPrice;
-            closed++;
-            console.log(`[oversight] Shadow target hit: ${trade.asset} ${trade.direction} @ $${latestPrice} (target=$${trade.target_price}) P&L: $${trade.hypothetical_pnl.toFixed(4)}`);
-            pendingCloseNotifications.push({ trade, reason: `target hit ($${trade.target_price})` });
-            continue;
-          }
-        }
+    if (trade.stop_price != null) {
+      const stopHit = isLong ? latestPrice <= trade.stop_price : latestPrice >= trade.stop_price;
+      if (stopHit) {
+        trade.status = "closed";
+        trade.closed_at = now;
+        trade.close_reason = "stop_hit";
+        trade.exit_price = latestPrice;
+        closed++;
+        console.log(`[oversight] Shadow stop hit: ${trade.asset} ${trade.direction} @ $${latestPrice} (stop=$${trade.stop_price}) P&L: $${trade.hypothetical_pnl.toFixed(4)}`);
+        pendingCloseNotifications.push({ trade, reason: `stop hit ($${trade.stop_price})` });
+        continue;
       }
-    } catch (e) {
-      errors.push(`${trade.asset}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
+    if (trade.target_price != null) {
+      const targetHit = isLong ? latestPrice >= trade.target_price : latestPrice <= trade.target_price;
+      if (targetHit) {
+        trade.status = "closed";
+        trade.closed_at = now;
+        trade.close_reason = "target_hit";
+        trade.exit_price = latestPrice;
+        closed++;
+        console.log(`[oversight] Shadow target hit: ${trade.asset} ${trade.direction} @ $${latestPrice} (target=$${trade.target_price}) P&L: $${trade.hypothetical_pnl.toFixed(4)}`);
+        pendingCloseNotifications.push({ trade, reason: `target hit ($${trade.target_price})` });
+        continue;
+      }
     }
   }
 
