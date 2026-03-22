@@ -1855,7 +1855,13 @@ After processing, briefly confirm what you did.`;
   }
 }
 
-const WEALTH_ENGINE_AGENTS = new Set(["scout", "bankr", "polymarket-scout", "oversight", "autoresearch"]);
+const WE_JOB_IDS = new Set([
+  "scout-micro-scan", "scout-full-cycle",
+  "polymarket-activity-scan", "polymarket-full-cycle",
+  "bankr-execute",
+  "oversight-health", "oversight-weekly", "oversight-daily-summary", "oversight-shadow-refresh",
+  "autoresearch-weekly",
+]);
 
 async function isWealthEnginesPaused(): Promise<boolean> {
   try {
@@ -1881,7 +1887,7 @@ async function checkJobs(): Promise<void> {
     if (!job.enabled) continue;
     if (!shouldJobRun(job, now, nowMinutes, todayKey, dayOfWeek)) continue;
 
-    if (WEALTH_ENGINE_AGENTS.has(job.agentId)) {
+    if (WE_JOB_IDS.has(job.id)) {
       if (wePaused === null) wePaused = await isWealthEnginesPaused();
       if (wePaused) {
         console.log(`[scheduled-jobs] Skipping ${job.name} — Wealth Engines paused`);
@@ -2097,14 +2103,6 @@ export function stopJobSystem(): void {
   broadcastFn = null;
   console.log("[scheduled-jobs] System stopped");
 }
-
-const WE_JOB_IDS = new Set([
-  "scout-micro-scan", "scout-full-cycle",
-  "polymarket-activity-scan", "polymarket-full-cycle",
-  "bankr-execute",
-  "oversight-health", "oversight-weekly", "oversight-daily-summary", "oversight-shadow-refresh",
-  "autoresearch-weekly",
-]);
 
 export async function triggerJob(jobId: string): Promise<string> {
   const job = config.jobs.find(j => j.id === jobId);
