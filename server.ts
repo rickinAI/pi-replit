@@ -1882,7 +1882,7 @@ function buildCoinGeckoTools(): ToolDefinition[] {
         asset: Type.String({ description: "Asset name" }),
         asset_class: Type.Union([Type.Literal("crypto"), Type.Literal("polymarket")]),
         direction: Type.String({ description: "LONG, SHORT, YES, or NO" }),
-        leverage: Type.Number({ description: "Leverage multiplier (max 2)" }),
+        leverage: Type.Number({ description: "Leverage multiplier (max 5)" }),
         entry_price: Type.Number(),
         stop_price: Type.Number(),
         confidence: Type.Optional(Type.Number({ description: "Confidence score 1-5 for tiered approval" })),
