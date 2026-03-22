@@ -756,11 +756,65 @@ async function handleAlertsCommand(): Promise<string> {
 async function handleWalletsCommand(): Promise<string> {
   const mode = await getMode();
   try {
-    const { getTrackedWallets, formatWalletList } = await import("./copy-trading.js");
-    const wallets = await getTrackedWallets();
+    const { getWhaleWatchlist } = await import("./polymarket.js");
+    const { formatWalletList } = await import("./copy-trading.js");
+    const wallets = await getWhaleWatchlist();
     return `${mode} *Tracked Wallets* (${wallets.length})\n\n${formatWalletList(wallets)}`;
   } catch (err) {
     return `${mode} ❌ Failed to fetch wallets: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+async function handleSeedWalletsCommand(): Promise<string> {
+  const mode = await getMode();
+  try {
+    const { seedWalletsFromTradeStream } = await import("./polymarket-scout.js");
+    const result = await seedWalletsFromTradeStream();
+    const lines = [
+      `${mode} 🌱 *Wallet Seed Results*`,
+      "",
+      `Candidates found: ${result.candidates_found}`,
+      `Added: ${result.added}`,
+      `Rejected: ${result.rejected}`,
+      "",
+      ...result.details.slice(0, 10),
+    ];
+    return lines.join("\n");
+  } catch (err) {
+    return `${mode} ❌ Seed failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+async function handleWalletStatusCommand(): Promise<string> {
+  const mode = await getMode();
+  try {
+    const { getWhaleWatchlist } = await import("./polymarket.js");
+    const { getWalletPerformance } = await import("./copy-trading.js");
+    const wallets = await getWhaleWatchlist();
+    const performance = await getWalletPerformance();
+
+    const active = wallets.filter(w => w.enabled && w.status === 'active');
+    const observing = wallets.filter(w => w.observation_only);
+    const disabled = wallets.filter(w => !w.enabled);
+
+    const lines = [
+      `${mode} 📊 *Wallet Status*`,
+      "",
+      `Total: ${wallets.length} | Active: ${active.length} | Observing: ${observing.length} | Disabled: ${disabled.length}`,
+      "",
+    ];
+
+    for (const w of wallets) {
+      const wp = performance.find(p => p.wallet_address === w.address);
+      const status = !w.enabled ? "🔴" : w.observation_only ? "🔍" : "🟢";
+      const lastChecked = w.last_checked > 0 ? `${Math.floor((Date.now() - w.last_checked) / 60000)}m ago` : "never";
+      const pnl = wp && wp.total_copy_trades > 0 ? ` | P&L: ${wp.total_pnl >= 0 ? '+' : ''}$${wp.total_pnl.toFixed(2)}` : "";
+      lines.push(`${status} *${w.alias}* (${w.niche}) — Score: ${w.composite_score.toFixed(2)} | Checked: ${lastChecked}${pnl}`);
+    }
+
+    return lines.join("\n");
+  } catch (err) {
+    return `${mode} ❌ Failed: ${err instanceof Error ? err.message : String(err)}`;
   }
 }
 
@@ -1723,6 +1777,8 @@ export async function init(): Promise<void> {
   registerCommand("notify", async (args) => handleNotifyCommand(args));
   registerCommand("wallets", async () => handleWalletsCommand());
   registerCommand("copytrades", async () => handleCopytradesCommand());
+  registerCommand("walletstatus", async () => handleWalletStatusCommand());
+  registerCommand("seedwallets", async () => handleSeedWalletsCommand());
   registerCommand("help", async () => handleHelpCommand());
 
   try {

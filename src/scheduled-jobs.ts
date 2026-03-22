@@ -5,6 +5,7 @@ import { findOrCreateCalendar, createRecurringEvent } from "./calendar.js";
 import { sendJobCompletionNotification, sendScoutBrief } from "./telegram.js";
 import * as bnkr from "./bnkr.js";
 import * as copyTrading from "./copy-trading.js";
+import * as pmScout from "./polymarket-scout.js";
 
 export interface ScheduledJob {
   id: string;
@@ -871,7 +872,23 @@ Keep it concise and actionable. Save to the vault automatically.`,
     name: "Copy Trade Scan",
     agentId: "system",
     prompt: "Direct execution — scans tracked whale wallets, diffs position snapshots, and mirrors new trades via BANKR.",
-    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 240 },
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 5 },
+    enabled: true,
+  },
+  {
+    id: "anomaly-scanner",
+    name: "Whale Anomaly Scanner",
+    agentId: "system",
+    prompt: "Direct execution — scans recent trade feed for unknown large wallets, auto-promotes quality candidates.",
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 30 },
+    enabled: true,
+  },
+  {
+    id: "seed-wallets",
+    name: "Seed Whale Wallets",
+    agentId: "system",
+    prompt: "Direct execution — mines trade stream to discover and seed whale wallets into the registry.",
+    schedule: { type: "weekly", hour: 9, minute: 0, daysOfWeek: [0] },
     enabled: true,
   },
   {
@@ -1289,6 +1306,21 @@ DO NOT call signal_quality — it is informational only and must not affect exec
   } catch (err) {
     console.error("[scheduled-jobs] Init error:", err);
   }
+
+  try {
+    await pmScout.migrateWalletRegistries();
+    const { initBlacklist, getWhaleWatchlist } = await import("./polymarket.js");
+    await initBlacklist();
+    const watchlist = await getWhaleWatchlist();
+    if (watchlist.length < 3) {
+      console.log(`[scheduled-jobs] Boot: registry has ${watchlist.length} wallets, auto-seeding...`);
+      const seedResult = await pmScout.seedWalletsFromTradeStream();
+      console.log(`[scheduled-jobs] Boot seed: ${seedResult.added} added, ${seedResult.rejected} rejected`);
+    }
+  } catch (err) {
+    console.error("[scheduled-jobs] Boot sequence error:", err instanceof Error ? err.message : err);
+  }
+
   console.log(`[scheduled-jobs] initialized (${config.jobs.length} jobs, ${config.jobs.filter(j => j.enabled).length} enabled)`);
 }
 
@@ -1889,6 +1921,60 @@ async function runCopyTradeScan(job: ScheduledJob): Promise<void> {
   }
 }
 
+async function runAnomalyScanner(job: ScheduledJob): Promise<void> {
+  const jobStartMs = Date.now();
+  console.log("[anomaly-scanner] Starting anomaly scan...");
+
+  try {
+    const result = await pmScout.runAnomalyScanner();
+    const summary = `Trades scanned: ${result.trades_scanned}, Anomalies: ${result.anomalies_found}, Added: ${result.wallets_added}\n${result.details.join("\n")}`;
+
+    job.lastRun = new Date().toISOString();
+    job.lastResult = summary.slice(0, 500);
+    job.lastStatus = "success";
+    await saveConfig();
+    await writeJobHistory(job.id, job.name, "success", summary.slice(0, 500), null, Date.now() - jobStartMs);
+    console.log(`[anomaly-scanner] Complete — ${result.anomalies_found} anomalies, ${result.wallets_added} added`);
+  } catch (err) {
+    job.lastRun = new Date().toISOString();
+    job.lastResult = String(err);
+    job.lastStatus = "error";
+    await saveConfig();
+    await writeJobHistory(job.id, job.name, "error", String(err).slice(0, 500), null, Date.now() - jobStartMs);
+    console.error("[anomaly-scanner] Error:", err);
+  }
+}
+
+async function runSeedWallets(job: ScheduledJob): Promise<void> {
+  const jobStartMs = Date.now();
+  console.log("[seed-wallets] Starting wallet seed from trade stream...");
+
+  try {
+    const result = await pmScout.seedWalletsFromTradeStream();
+    const summary = `Candidates: ${result.candidates_found}, Added: ${result.added}, Rejected: ${result.rejected}\n${result.details.join("\n")}`;
+
+    job.lastRun = new Date().toISOString();
+    job.lastResult = summary.slice(0, 500);
+    job.lastStatus = "success";
+    await saveConfig();
+    await writeJobHistory(job.id, job.name, "success", summary.slice(0, 500), null, Date.now() - jobStartMs);
+
+    if (result.added > 0) {
+      const { sendMessage } = await import("./telegram.js");
+      sendMessage(`🌱 *Wallet Seed Complete*\nAdded: ${result.added} | Rejected: ${result.rejected}\n${result.details.filter(d => d.startsWith("✅")).join("\n")}`).catch(() => {});
+    }
+
+    console.log(`[seed-wallets] Complete — ${result.added} added, ${result.rejected} rejected`);
+  } catch (err) {
+    job.lastRun = new Date().toISOString();
+    job.lastResult = String(err);
+    job.lastStatus = "error";
+    await saveConfig();
+    await writeJobHistory(job.id, job.name, "error", String(err).slice(0, 500), null, Date.now() - jobStartMs);
+    console.error("[seed-wallets] Error:", err);
+  }
+}
+
 async function runPredictionMarketsDigest(job: ScheduledJob): Promise<void> {
   const jobStartMs = Date.now();
   console.log("[prediction-markets-daily] Starting daily macro markets digest...");
@@ -2084,6 +2170,10 @@ async function checkJobs(): Promise<void> {
         await runBirthdayCalendarSync(job);
       } else if (job.id === "copy-trade-scan") {
         await runCopyTradeScan(job);
+      } else if (job.id === "anomaly-scanner") {
+        await runAnomalyScanner(job);
+      } else if (job.id === "seed-wallets") {
+        await runSeedWallets(job);
       } else if (job.id === "prediction-markets-daily") {
         await runPredictionMarketsDigest(job);
       } else {

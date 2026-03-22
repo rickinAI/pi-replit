@@ -132,9 +132,14 @@ export async function getMarketDetails(conditionId: string): Promise<PolymarketM
   if (cached) return cached;
 
   try {
-    const url = `${GAMMA_API}/markets/${conditionId}`;
+    const isHex = /^0x[0-9a-fA-F]+$/.test(conditionId);
+    const url = isHex
+      ? `${GAMMA_API}/markets?condition_id=${conditionId}&limit=1`
+      : `${GAMMA_API}/markets/${conditionId}`;
     const data = await fetchJson(url);
-    const result = normalizeMarket(data);
+    const raw = isHex ? (Array.isArray(data) && data.length > 0 ? data[0] : null) : data;
+    if (!raw) return null;
+    const result = normalizeMarket(raw);
     setCache(cacheKey, result);
     return result;
   } catch (err) {
@@ -185,7 +190,7 @@ export function scoreWallet(wallet: Omit<WhaleWallet, "composite_score">): numbe
   const avgCategory = categoryValues.length > 0 ? categoryValues.reduce((a, b) => a + b, 0) / categoryValues.length : 0;
   const categoryScore = Math.min(avgCategory, 1) * 0.20;
 
-  const monthsSinceAdded = Math.max(1, (Date.now() - (wallet as any).added_at) / (30 * 24 * 60 * 60 * 1000));
+  const monthsSinceAdded = Math.max(1, (Date.now() - wallet.added_at) / (30 * 24 * 60 * 60 * 1000));
   const marketsPerMonth = wallet.total_markets / monthsSinceAdded;
   const volumeScore = Math.min(marketsPerMonth / 10, 1) * 0.10;
 
@@ -385,4 +390,263 @@ ${marketsText}`,
     if (!result.has(m.condition_id)) result.set(m.condition_id, "");
   }
   return result;
+}
+
+export async function getAppConfig(key: string): Promise<any> {
+  const pool = getPool();
+  try {
+    const res = await pool.query(`SELECT value FROM app_config WHERE key = $1`, [key]);
+    if (res.rows.length > 0) return res.rows[0].value;
+  } catch {}
+  return null;
+}
+
+export async function setAppConfig(key: string, value: any): Promise<void> {
+  const pool = getPool();
+  await pool.query(
+    `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [key, JSON.stringify(value), Date.now()]
+  );
+}
+
+const DEFAULT_BLACKLIST = [
+  '0xeb25c749e9ddcbf93af9c70c7c6c2388364dcd4f',
+  '0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e',
+  '0xc5d563a36ae78145c45a50134d48a1215220f80a',
+  '0xd91e80cf2e7be2e162c6513ced06f1dd0da35296',
+  '0x4d97dcd97ec945f40cf65f87097ace5ea0476045',
+  '0xaacfeea03eb1561c4e67d661e40682bd20e3541b',
+  '0xab45c5a4b0c941a2f231c04c3f49182e1a254052',
+  '0x6a9d222616c90fca5754cd1333cfd9b7fb6a4f74',
+  '0xcb1822859cef82cd2eb4e6276c7916e692995130',
+  '0xd36ec33c8bed5a9f7b6630855f1533455b98a418',
+  '0x2791bca1f2de4661ed88a30c99a7a9449aa84174',
+];
+
+export async function getBlacklist(): Promise<string[]> {
+  return (await getAppConfig('wallet_blacklist')) || [];
+}
+
+export async function saveBlacklist(list: string[]): Promise<void> {
+  await setAppConfig('wallet_blacklist', list);
+}
+
+export async function initBlacklist(): Promise<void> {
+  const existing: string[] = (await getAppConfig('wallet_blacklist')) || [];
+  const missing = DEFAULT_BLACKLIST.filter(a => !existing.includes(a.toLowerCase()));
+  if (missing.length > 0) {
+    const updated = [...existing, ...missing.map(a => a.toLowerCase())];
+    await saveBlacklist(updated);
+    console.log(`[blacklist] Added ${missing.length} default entries. Total: ${updated.length}`);
+  }
+}
+
+export async function isBlacklisted(address: string): Promise<boolean> {
+  const bl = await getBlacklist();
+  return bl.includes(address.toLowerCase());
+}
+
+export function categorizeMarketTitle(title: string): string {
+  const t = title.toLowerCase();
+  if (/temperature|weather|rain|snow|heat|cold|°[fc]|fahrenheit|celsius/.test(t)) return 'weather';
+  if (/president|election|congress|senate|governor|political|trump|biden|vote/.test(t)) return 'politics';
+  if (/nfl|nba|mlb|nhl|soccer|football|basketball|baseball|hockey|sport|game|match/.test(t)) return 'sports';
+  if (/bitcoin|ethereum|crypto|btc|eth|token|defi|blockchain/.test(t)) return 'crypto';
+  if (/esport|league of legends|dota|csgo|valorant|gaming/.test(t)) return 'esports';
+  return 'general';
+}
+
+export function determineNiche(categoryScores: Record<string, number>): string {
+  const entries = Object.entries(categoryScores).filter(([k]) => k !== 'general');
+  if (entries.length === 0) return 'general';
+  entries.sort((a, b) => b[1] - a[1]);
+  return entries[0][1] > 0.3 ? entries[0][0] : 'general';
+}
+
+export async function fetchWalletPositionsDirect(address: string): Promise<any[]> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    try {
+      const res = await fetch(
+        `${DATA_API}/positions?user=${address}&sizeThreshold=0`,
+        { signal: controller.signal }
+      );
+      clearTimeout(timeout);
+      if (res.ok) return await res.json();
+      if (res.status === 429) {
+        console.warn(`[polymarket] Rate limited on positions for ${address.slice(0, 10)}`);
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    } catch {
+      clearTimeout(timeout);
+    }
+  } catch (err) {
+    console.error(`[polymarket] fetchWalletPositionsDirect error for ${address.slice(0, 10)}:`, err instanceof Error ? err.message : err);
+  }
+  return [];
+}
+
+export async function fetchRecentTrades(opts: { limit?: number; hoursBack?: number; conditionId?: string } = {}): Promise<any[]> {
+  const limit = opts.limit || 500;
+  const hoursBack = opts.hoursBack || 0.5;
+  const startDate = Math.floor(Date.now() / 1000) - Math.floor(hoursBack * 3600);
+  let url = `${DATA_API}/trades?limit=${limit}&startDate=${startDate}`;
+  if (opts.conditionId) url += `&market=${opts.conditionId}`;
+  try {
+    return await fetchJson(url);
+  } catch (err) {
+    console.error("[polymarket] fetchRecentTrades error:", err instanceof Error ? err.message : err);
+    return [];
+  }
+}
+
+export async function fetchWalletActivity(address: string, limit: number = 100): Promise<any[]> {
+  try {
+    return await fetchJson(`${DATA_API}/activity?user=${address}&limit=${limit}`);
+  } catch (err) {
+    console.error(`[polymarket] fetchWalletActivity error for ${address.slice(0, 10)}:`, err instanceof Error ? err.message : err);
+    return [];
+  }
+}
+
+export async function buildWalletFromActivity(address: string, source: "trade_mining" | "anomaly" | "manual" = "trade_mining"): Promise<WhaleWallet> {
+  const activities = await fetchWalletActivity(address, 100);
+  const posData = await fetchWalletPositionsDirect(address);
+
+  const trades = activities.filter((a: any) => a.type === 'TRADE' || a.type === 'BUY' || a.type === 'SELL');
+  const resolvedPositions = posData.filter((p: any) => p.redeemable || p.currentValue === 0);
+  const wins = resolvedPositions.filter((p: any) => (p.cashPnl || 0) > 0).length;
+  const winRate = resolvedPositions.length > 0 ? wins / resolvedPositions.length : 0;
+
+  const totalPnl = posData.reduce((sum: number, p: any) => sum + (p.cashPnl || 0), 0);
+  const totalVolume = posData.reduce((sum: number, p: any) => sum + (parseFloat(p.totalBought) || 0), 0);
+  const uniqueMarkets = new Set(posData.map((p: any) => p.conditionId)).size;
+
+  const categoryTrades: Record<string, { wins: number; total: number }> = {};
+  for (const p of resolvedPositions) {
+    const cat = categorizeMarketTitle(p.title || '');
+    if (!categoryTrades[cat]) categoryTrades[cat] = { wins: 0, total: 0 };
+    categoryTrades[cat].total++;
+    if ((p.cashPnl || 0) > 0) categoryTrades[cat].wins++;
+  }
+  const categoryScores: Record<string, number> = {};
+  for (const [cat, data] of Object.entries(categoryTrades)) {
+    categoryScores[cat] = data.total > 0 ? data.wins / data.total : 0;
+  }
+
+  const now = Date.now();
+  const lastActive = activities.length > 0 ? (activities[0].timestamp || 0) * 1000 || now : now;
+
+  const wallet: WhaleWallet = {
+    address: address.toLowerCase(),
+    alias: `Whale-${address.slice(2, 8)}`,
+    niche: determineNiche(categoryScores),
+    win_rate: winRate,
+    roi: totalPnl,
+    total_volume: totalVolume,
+    total_trades: trades.length,
+    total_markets: uniqueMarkets,
+    resolved_markets: resolvedPositions.length,
+    category_scores: categoryScores,
+    composite_score: 0,
+    last_active: lastActive,
+    last_checked: 0,
+    added_at: now,
+    source,
+    enabled: true,
+    observation_only: source === 'anomaly',
+    degraded_count: 0,
+    pending_eviction: false,
+    status: 'active',
+  };
+  wallet.composite_score = scoreWallet(wallet);
+  return wallet;
+}
+
+export async function calculateVPIN(conditionId: string): Promise<number> {
+  const trades = await fetchRecentTrades({ conditionId, hoursBack: 2, limit: 200 });
+  if (trades.length < 10) return 0;
+
+  let buyVol = 0, sellVol = 0;
+  for (const t of trades) {
+    const vol = parseFloat(t.size || '0') * parseFloat(t.price || '0');
+    if (t.side === 'BUY') buyVol += vol;
+    else sellVol += vol;
+  }
+  const total = buyVol + sellVol;
+  if (total === 0) return 0;
+  return Math.abs(buyVol - sellVol) / total;
+}
+
+export async function getMarketPriceStats(conditionId: string): Promise<{ mean: number; sigma: number } | null> {
+  const stats = await getAppConfig('market_price_stats');
+  if (!stats || !stats[conditionId]) return null;
+  return stats[conditionId];
+}
+
+export async function updateMarketPriceStats(conditionId: string, currentPrice: number): Promise<void> {
+  const stats = (await getAppConfig('market_price_stats')) || {};
+  const entry = stats[conditionId] || { prices: [], lastUpdated: 0 };
+  entry.prices.push(currentPrice);
+
+  const cutoff72h = Date.now() - 72 * 60 * 60 * 1000;
+  if (entry.prices.length > 864) entry.prices = entry.prices.slice(-864);
+
+  const n = entry.prices.length;
+  const mean = entry.prices.reduce((s: number, v: number) => s + v, 0) / n;
+  const variance = entry.prices.reduce((s: number, v: number) => s + (v - mean) ** 2, 0) / n;
+  const sigma = Math.sqrt(variance);
+
+  entry.mean = mean;
+  entry.sigma = sigma;
+  entry.lastUpdated = Date.now();
+  stats[conditionId] = entry;
+  await setAppConfig('market_price_stats', stats);
+}
+
+const NOAA_CITIES: Record<string, { lat: number; lon: number }> = {
+  'nyc': { lat: 40.7128, lon: -74.0060 },
+  'new york': { lat: 40.7128, lon: -74.0060 },
+  'chicago': { lat: 41.8781, lon: -87.6298 },
+  'seattle': { lat: 47.6062, lon: -122.3321 },
+  'atlanta': { lat: 33.7490, lon: -84.3880 },
+  'dallas': { lat: 32.7767, lon: -96.7970 },
+  'miami': { lat: 25.7617, lon: -80.1918 },
+};
+
+export async function checkNOAAEdge(market: PolymarketMarket): Promise<number | null> {
+  const title = market.question.toLowerCase();
+  let city: { lat: number; lon: number } | null = null;
+  for (const [name, coords] of Object.entries(NOAA_CITIES)) {
+    if (title.includes(name)) { city = coords; break; }
+  }
+  if (!city) return null;
+
+  const tempMatch = title.match(/(\d+)\s*°?\s*[fc]/);
+  if (!tempMatch) return null;
+  const threshold = parseInt(tempMatch[1]);
+
+  try {
+    const pointsRes = await fetchJson(`https://api.weather.gov/points/${city.lat},${city.lon}`);
+    const forecastUrl = pointsRes?.properties?.forecastHourly;
+    if (!forecastUrl) return null;
+
+    const forecastRes = await fetchJson(forecastUrl);
+    const periods = forecastRes?.properties?.periods;
+    if (!Array.isArray(periods) || periods.length === 0) return null;
+
+    const temps = periods.slice(0, 24).map((p: any) => p.temperature);
+    const maxTemp = Math.max(...temps);
+    const exceedProb = title.includes('exceed') || title.includes('above') || title.includes('over')
+      ? (maxTemp >= threshold ? 0.94 : maxTemp >= threshold - 3 ? 0.5 : 0.06)
+      : (maxTemp < threshold ? 0.94 : maxTemp < threshold + 3 ? 0.5 : 0.06);
+
+    const yesPrice = market.tokens.find(t => t.outcome === "Yes")?.price || 0.5;
+    return exceedProb - yesPrice;
+  } catch (err) {
+    console.error("[polymarket] NOAA check error:", err instanceof Error ? err.message : err);
+    return null;
+  }
 }

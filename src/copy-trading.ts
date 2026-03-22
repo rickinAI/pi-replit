@@ -2,17 +2,29 @@ import { getPool } from "./db.js";
 import * as polymarket from "./polymarket.js";
 import * as bankr from "./bankr.js";
 
-export interface TrackedWallet {
-  address: string;
-  alias: string;
-  niche: string;
-  win_rate: number;
-  pnl: number;
-  total_trades: number;
-  last_checked: number;
-  enabled: boolean;
-  added_at: number;
-  notes?: string;
+export async function getTrackedWallets(): Promise<polymarket.WhaleWallet[]> {
+  return polymarket.getWhaleWatchlist();
+}
+
+export async function addWallet(data: any): Promise<polymarket.WhaleWallet> {
+  const wallets = await polymarket.getWhaleWatchlist();
+  const wallet = await polymarket.buildWalletFromActivity(
+    data.address,
+    data.source || 'manual'
+  );
+  if (data.alias) wallet.alias = data.alias;
+  wallets.push(wallet);
+  await polymarket.saveWhaleWatchlist(wallets);
+  return wallet;
+}
+
+export async function removeWallet(address: string): Promise<boolean> {
+  const wallets = await polymarket.getWhaleWatchlist();
+  const idx = wallets.findIndex(w => w.address.toLowerCase() === address.toLowerCase());
+  if (idx === -1) return false;
+  wallets.splice(idx, 1);
+  await polymarket.saveWhaleWatchlist(wallets);
+  return true;
 }
 
 export interface PositionSnapshot {
@@ -60,12 +72,22 @@ export interface WalletPerformance {
   last_trade_at: number;
 }
 
-const WALLETS_KEY = "copy_trading_wallets";
+export interface SignalResult {
+  execute: boolean;
+  score: number;
+  maxScore: number;
+  confidence: "LOW" | "MEDIUM" | "HIGH";
+  positionSize: number;
+  signals: string[];
+  reason?: string;
+}
+
 const SNAPSHOTS_KEY = "copy_trading_snapshots";
 const COPY_TRADE_SIGNALS_KEY = "copy_trading_signals";
 const COPY_TRADE_DRAWDOWN_KEY = "copy_trading_drawdown";
 
 const COPY_TRADE_SIZE_USD = 50;
+const COPY_TRADE_SIZE_HALF = 25;
 const MAX_CONCURRENT_COPY_TRADES = 3;
 const PORTFOLIO_HARD_STOP_DRAWDOWN = 100;
 const MIN_ODDS = 0.15;
@@ -74,64 +96,6 @@ const MIN_HOURS_TO_RESOLUTION = 24;
 const MIN_VOLUME = 10000;
 const MIN_LIQUIDITY = 10000;
 const MIN_WALLET_WIN_RATE = 65;
-
-export async function getTrackedWallets(): Promise<TrackedWallet[]> {
-  const pool = getPool();
-  try {
-    const res = await pool.query(`SELECT value FROM app_config WHERE key = $1`, [WALLETS_KEY]);
-    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
-      return res.rows[0].value;
-    }
-  } catch (err) {
-    console.error("[copy-trading] getTrackedWallets error:", err instanceof Error ? err.message : err);
-  }
-  return [];
-}
-
-export async function saveTrackedWallets(wallets: TrackedWallet[]): Promise<void> {
-  const pool = getPool();
-  await pool.query(
-    `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
-     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
-    [WALLETS_KEY, JSON.stringify(wallets), Date.now()]
-  );
-}
-
-export async function addWallet(wallet: Omit<TrackedWallet, "last_checked" | "added_at">): Promise<TrackedWallet> {
-  const wallets = await getTrackedWallets();
-  const existing = wallets.find(w => w.address.toLowerCase() === wallet.address.toLowerCase());
-  if (existing) throw new Error(`Wallet ${wallet.address} already tracked as "${existing.alias}"`);
-
-  const newWallet: TrackedWallet = {
-    ...wallet,
-    address: wallet.address.toLowerCase(),
-    last_checked: 0,
-    added_at: Date.now(),
-  };
-  wallets.push(newWallet);
-  await saveTrackedWallets(wallets);
-  console.log(`[copy-trading] Added wallet: ${newWallet.alias} (${newWallet.address.slice(0, 10)}...)`);
-  return newWallet;
-}
-
-export async function removeWallet(address: string): Promise<boolean> {
-  const wallets = await getTrackedWallets();
-  const idx = wallets.findIndex(w => w.address.toLowerCase() === address.toLowerCase());
-  if (idx === -1) return false;
-  const removed = wallets.splice(idx, 1)[0];
-  await saveTrackedWallets(wallets);
-  console.log(`[copy-trading] Removed wallet: ${removed.alias}`);
-  return true;
-}
-
-export async function updateWallet(address: string, updates: Partial<TrackedWallet>): Promise<TrackedWallet | null> {
-  const wallets = await getTrackedWallets();
-  const wallet = wallets.find(w => w.address.toLowerCase() === address.toLowerCase());
-  if (!wallet) return null;
-  Object.assign(wallet, updates);
-  await saveTrackedWallets(wallets);
-  return wallet;
-}
 
 async function getSnapshots(): Promise<WalletSnapshot[]> {
   const pool = getPool();
@@ -178,23 +142,24 @@ export async function updateCopyTradeDrawdown(pnl: number): Promise<number> {
   return updated;
 }
 
+function mapDataApiPosition(raw: any, walletAddress: string): PositionSnapshot {
+  return {
+    wallet_address: walletAddress.toLowerCase(),
+    market_id: raw.conditionId || '',
+    market_question: raw.title || '',
+    direction: raw.outcomeIndex === 0 ? 'YES' : 'NO',
+    amount_usd: parseFloat(raw.size || '0') * parseFloat(raw.avgPrice || '0'),
+    odds: parseFloat(raw.curPrice || '0'),
+    detected_at: Date.now(),
+  };
+}
+
 export async function fetchWalletPositions(walletAddress: string): Promise<PositionSnapshot[]> {
   try {
-    const activities = await polymarket.getWhaleActivities();
-    const walletActivities = activities.filter(
-      a => a.wallet_address.toLowerCase() === walletAddress.toLowerCase()
-        && a.activity_type !== "position_exit"
-    );
-
-    return walletActivities.map(a => ({
-      wallet_address: walletAddress.toLowerCase(),
-      market_id: a.market_id,
-      market_question: a.market_question,
-      direction: a.direction,
-      amount_usd: a.amount_usd,
-      odds: a.current_odds,
-      detected_at: a.detected_at,
-    }));
+    const rawPositions = await polymarket.fetchWalletPositionsDirect(walletAddress);
+    return rawPositions
+      .filter((p: any) => parseFloat(p.size || '0') > 0)
+      .map((p: any) => mapDataApiPosition(p, walletAddress));
   } catch (err) {
     console.error(`[copy-trading] fetchWalletPositions error for ${walletAddress.slice(0, 10)}:`, err instanceof Error ? err.message : err);
     return [];
@@ -257,6 +222,94 @@ export function diffSnapshots(
   }
 
   return signals;
+}
+
+export async function runSignalEngine(
+  wallet: polymarket.WhaleWallet,
+  market: polymarket.PolymarketMarket,
+  direction: "YES" | "NO",
+  currentPrice: number
+): Promise<SignalResult> {
+  const signals: string[] = [];
+
+  if (wallet.composite_score < 0.6) {
+    return { execute: false, score: 0, maxScore: 13, confidence: "LOW", positionSize: 0, signals: ["Gate: wallet score below 0.6"], reason: "wallet_score_below_0.6" };
+  }
+  if (currentPrice < MIN_ODDS || currentPrice > MAX_ODDS) {
+    return { execute: false, score: 0, maxScore: 13, confidence: "LOW", positionSize: 0, signals: [`Gate: odds ${(currentPrice * 100).toFixed(0)}% outside 15-85%`], reason: "odds_outside_range" };
+  }
+  const endDate = new Date(market.end_date_iso);
+  const hoursToRes = (endDate.getTime() - Date.now()) / (60 * 60 * 1000);
+  if (hoursToRes < MIN_HOURS_TO_RESOLUTION) {
+    return { execute: false, score: 0, maxScore: 13, confidence: "LOW", positionSize: 0, signals: [`Gate: market expires in ${hoursToRes.toFixed(0)}h`], reason: "market_expires_soon" };
+  }
+
+  let score = 0;
+
+  const vpin = await polymarket.calculateVPIN(market.condition_id);
+  if (vpin >= 0.5) { score += 3; signals.push(`VPIN: ${vpin.toFixed(2)} (+3)`); }
+  else if (vpin >= 0.2) { score += 1; signals.push(`VPIN: ${vpin.toFixed(2)} (+1)`); }
+  else { signals.push(`VPIN: ${vpin.toFixed(2)} (thin)`); }
+
+  const watchlist = await polymarket.getWhaleWatchlist();
+  const snapshots = await getSnapshots();
+  let consensusCount = 0;
+  for (const w of watchlist) {
+    if (w.address === wallet.address) { consensusCount++; continue; }
+    const snap = snapshots.find(s => s.wallet_address === w.address);
+    if (snap?.positions.some(p => p.market_id === market.condition_id && p.direction === direction)) {
+      consensusCount++;
+    }
+  }
+  if (consensusCount >= 3) { score += 3; signals.push(`Consensus: ${consensusCount} whales (+3)`); }
+  else if (consensusCount === 2) { score += 2; signals.push(`Consensus: 2 whales (+2)`); }
+  else { signals.push(`Consensus: 1 whale (+0)`); }
+
+  const marketNiche = polymarket.categorizeMarketTitle(market.question);
+  if (wallet.niche !== 'general' && wallet.niche === marketNiche) {
+    score += 2; signals.push(`Niche match: ${wallet.niche} (+2)`);
+  } else if (wallet.niche === 'general') {
+    score += 1; signals.push(`Niche: general (+1)`);
+  } else {
+    signals.push(`Niche MISMATCH: wallet=${wallet.niche} market=${marketNiche} (+0)`);
+  }
+
+  const stats = await polymarket.getMarketPriceStats(market.condition_id);
+  if (stats && stats.sigma > 0) {
+    const z = (currentPrice - stats.mean) / stats.sigma;
+    if (Math.abs(z) >= 2.5) {
+      score += 2; signals.push(`Z-score: ${z.toFixed(1)} extreme (+2)`);
+    } else {
+      signals.push(`Z-score: ${z.toFixed(1)} normal (+0)`);
+    }
+  } else {
+    signals.push(`Z-score: no data yet (+0)`);
+  }
+
+  if (marketNiche === 'weather') {
+    const noaaEdge = await polymarket.checkNOAAEdge(market);
+    if (noaaEdge !== null) {
+      if (noaaEdge >= 0.30) { score += 3; signals.push(`NOAA: +${(noaaEdge * 100).toFixed(0)}pt gap (+3)`); }
+      else if (noaaEdge >= 0.20) { score += 2; signals.push(`NOAA: +${(noaaEdge * 100).toFixed(0)}pt gap (+2)`); }
+      else if (noaaEdge >= 0.10) { score += 1; signals.push(`NOAA: +${(noaaEdge * 100).toFixed(0)}pt gap (+1)`); }
+      else { signals.push(`NOAA: +${(noaaEdge * 100).toFixed(0)}pt weak (+0)`); }
+    }
+  }
+
+  let positionSize = 0;
+  let confidence: "LOW" | "MEDIUM" | "HIGH" = "LOW";
+  if (score >= 8) { positionSize = COPY_TRADE_SIZE_USD; confidence = "HIGH"; }
+  else if (score >= 4) { positionSize = COPY_TRADE_SIZE_HALF; confidence = "MEDIUM"; }
+
+  return {
+    execute: positionSize > 0,
+    score,
+    maxScore: 13,
+    confidence,
+    positionSize,
+    signals,
+    reason: positionSize === 0 ? `signal_score_${score}/13_below_threshold` : undefined,
+  };
 }
 
 export interface CopyTradeFilterResult {
@@ -331,12 +384,13 @@ export async function evaluateCopyTradeSignal(signal: CopyTradeSignal): Promise<
   return { passed: failures.length === 0, failures, signal };
 }
 
-export async function executeCopyTrade(signal: CopyTradeSignal): Promise<{
+export async function executeCopyTrade(signal: CopyTradeSignal, positionSize?: number): Promise<{
   success: boolean;
   position_id?: string;
   error?: string;
 }> {
   const thesisId = `copy_${signal.wallet_address.slice(0, 8)}_${signal.market_id.slice(0, 12)}_${Date.now()}`;
+  const size = positionSize || COPY_TRADE_SIZE_USD;
 
   try {
     const killActive = await bankr.isKillSwitchActive();
@@ -374,11 +428,11 @@ export async function executeCopyTrade(signal: CopyTradeSignal): Promise<{
       market_id: signal.market_id,
       is_copy_trade: true,
       source_wallet: signal.wallet_address,
-      copy_trade_size_usd: COPY_TRADE_SIZE_USD,
+      copy_trade_size_usd: size,
     });
 
     if (result.position) {
-      console.log(`[copy-trading] Copy trade opened: ${signal.market_question.slice(0, 60)} ${signal.direction} from ${signal.wallet_alias} (mode: ${mode})`);
+      console.log(`[copy-trading] Copy trade opened: ${signal.market_question.slice(0, 60)} ${signal.direction} $${size} from ${signal.wallet_alias} (mode: ${mode})`);
       return { success: true, position_id: result.position.id };
     }
     return { success: false, error: "Position returned null" };
@@ -417,6 +471,37 @@ export async function handleWhaleExit(signal: CopyTradeSignal): Promise<{ closed
   return { closed: false };
 }
 
+export async function autoRedeemResolved(): Promise<{ redeemed: number; alerts: string[] }> {
+  const positions = await bankr.getPositions();
+  const copyPositions = positions.filter(p => p.is_copy_trade && p.market_id);
+  let redeemed = 0;
+  const alerts: string[] = [];
+
+  for (const pos of copyPositions) {
+    try {
+      const posData = await polymarket.fetchWalletPositionsDirect(pos.source_wallet || '');
+      const resolved = posData.find((p: any) =>
+        p.conditionId === pos.market_id && p.redeemable === true
+      );
+
+      if (resolved) {
+        const exitPrice = parseFloat(resolved.curPrice || '0');
+        const record = await bankr.closePosition(pos.id, exitPrice, "market_resolved");
+        if (record) {
+          await updateCopyTradeDrawdown(record.pnl);
+          redeemed++;
+          const pnlStr = record.pnl >= 0 ? `+$${record.pnl.toFixed(2)}` : `-$${Math.abs(record.pnl).toFixed(2)}`;
+          alerts.push(`Redeemed: ${pos.asset.slice(0, 60)} | P&L: ${pnlStr}`);
+        }
+      }
+    } catch (err) {
+      console.error(`[copy-trading] autoRedeemResolved error for ${pos.id}:`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  return { redeemed, alerts };
+}
+
 export async function runCopyTradeScan(): Promise<{
   wallets_checked: number;
   new_entries: CopyTradeSignal[];
@@ -424,19 +509,42 @@ export async function runCopyTradeScan(): Promise<{
   trades_opened: number;
   trades_closed: number;
   errors: string[];
+  signal_results: { signal: CopyTradeSignal; result: SignalResult }[];
 }> {
-  const wallets = await getTrackedWallets();
-  const enabledWallets = wallets.filter(w => w.enabled);
+  const registry = await polymarket.getWhaleWatchlist();
+  let modified = false;
+  for (const w of registry) {
+    if (w.observation_only && (Date.now() - w.added_at) > 5 * 60 * 1000) {
+      w.observation_only = false;
+      modified = true;
+      console.log(`[copy-trade] Cleared observation for ${w.alias}`);
+    }
+  }
+  if (modified) await polymarket.saveWhaleWatchlist(registry);
+
+  const enabledWallets = registry.filter(w => w.enabled && w.status === 'active');
   const previousSnapshots = await getSnapshots();
   const newSnapshots: WalletSnapshot[] = [];
   const allSignals: CopyTradeSignal[] = [];
   const errors: string[] = [];
   let tradesOpened = 0;
   let tradesClosed = 0;
+  const signalResults: { signal: CopyTradeSignal; result: SignalResult }[] = [];
 
   for (const wallet of enabledWallets) {
     try {
       const currentPositions = await fetchWalletPositions(wallet.address);
+
+      await polymarket.updateMarketPriceStats(
+        wallet.address,
+        currentPositions.length > 0 ? currentPositions[0].odds : 0
+      );
+
+      for (const pos of currentPositions) {
+        if (pos.market_id) {
+          await polymarket.updateMarketPriceStats(pos.market_id, pos.odds);
+        }
+      }
 
       const prevSnapshot = previousSnapshots.find(
         s => s.wallet_address.toLowerCase() === wallet.address.toLowerCase()
@@ -444,13 +552,15 @@ export async function runCopyTradeScan(): Promise<{
       const prevPositions = prevSnapshot?.positions || [];
 
       if (currentPositions.length === 0 && prevPositions.length > 0) {
-        console.log(`[copy-trading] ${wallet.alias}: empty fetch with ${prevPositions.length} previous positions — skipping diff (stale data protection)`);
+        console.log(`[copy-trading] ${wallet.alias}: empty fetch with ${prevPositions.length} previous positions — skipping diff`);
         newSnapshots.push({
           wallet_address: wallet.address,
           positions: prevPositions,
           taken_at: Date.now(),
         });
-        await updateWallet(wallet.address, { last_checked: Date.now() });
+        const updatedRegistry = await polymarket.getWhaleWatchlist();
+        const w = updatedRegistry.find(r => r.address === wallet.address);
+        if (w) { w.last_checked = Date.now(); await polymarket.saveWhaleWatchlist(updatedRegistry); }
         continue;
       }
 
@@ -459,7 +569,7 @@ export async function runCopyTradeScan(): Promise<{
         currentPositions,
         wallet.address,
         wallet.alias,
-        wallet.win_rate
+        wallet.win_rate * 100
       );
 
       allSignals.push(...signals);
@@ -470,7 +580,9 @@ export async function runCopyTradeScan(): Promise<{
         taken_at: Date.now(),
       });
 
-      await updateWallet(wallet.address, { last_checked: Date.now() });
+      const updatedRegistry = await polymarket.getWhaleWatchlist();
+      const w = updatedRegistry.find(r => r.address === wallet.address);
+      if (w) { w.last_checked = Date.now(); await polymarket.saveWhaleWatchlist(updatedRegistry); }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       errors.push(`${wallet.alias}: ${msg}`);
@@ -487,15 +599,71 @@ export async function runCopyTradeScan(): Promise<{
     if (result.closed) tradesClosed++;
   }
 
-  for (const entry of newEntries) {
+  const buyEntries = newEntries.filter(e => e.direction === "YES" || e.direction === "NO");
+  for (const entry of buyEntries) {
+    if (entry.signal_type !== "new_entry") continue;
+
+    const wallet = registry.find(w => w.address === entry.wallet_address);
+    if (!wallet) continue;
+
+    if (wallet.observation_only) {
+      console.log(`[copy-trading] ${wallet.alias}: observation_only — skipping trade on ${entry.market_question.slice(0, 40)}`);
+      continue;
+    }
+
+    const market = await polymarket.getMarketDetails(entry.market_id);
+    if (!market) continue;
+
+    const yesPrice = market.tokens.find(t => t.outcome === "Yes")?.price || 0;
+    const noPrice = market.tokens.find(t => t.outcome === "No")?.price || 0;
+    const currentPrice = entry.direction === "YES" ? yesPrice : noPrice;
+
+    const signalResult = await runSignalEngine(wallet, market, entry.direction, currentPrice);
+    signalResults.push({ signal: entry, result: signalResult });
+
+    if (!signalResult.execute) {
+      console.log(`[copy-trading] Signal rejected (${signalResult.score}/${signalResult.maxScore}): ${entry.market_question.slice(0, 60)} — ${signalResult.reason}`);
+      continue;
+    }
+
     const evaluation = await evaluateCopyTradeSignal(entry);
     if (evaluation.passed) {
-      const result = await executeCopyTrade(entry);
-      if (result.success) tradesOpened++;
-      else errors.push(`Failed to copy ${entry.market_question.slice(0, 40)}: ${result.error}`);
+      const result = await executeCopyTrade(entry, signalResult.positionSize);
+      if (result.success) {
+        tradesOpened++;
+
+        try {
+          const { sendMessage } = await import("./telegram.js");
+          const lines = [
+            `⚡ *Copy Trade Signal*`,
+            `Market: ${entry.market_question.slice(0, 80)}`,
+            `Wallet: ${wallet.alias} (${wallet.niche} | Score: ${wallet.composite_score.toFixed(2)})`,
+            `Direction: ${entry.direction} @ $${currentPrice.toFixed(2)}`,
+            ``,
+            `Signal Score: ${signalResult.score}/${signalResult.maxScore} → $${signalResult.positionSize} (${signalResult.confidence}) [SHADOW]`,
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+            ...signalResult.signals.map(s => `✓ ${s}`),
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+            `→ Passed to BANKR gates`,
+          ];
+          sendMessage(lines.join("\n")).catch(() => {});
+        } catch {}
+      } else {
+        errors.push(`Failed to copy ${entry.market_question.slice(0, 40)}: ${result.error}`);
+      }
     } else {
-      console.log(`[copy-trading] Signal rejected: ${entry.market_question.slice(0, 60)} — ${evaluation.failures.join("; ")}`);
+      console.log(`[copy-trading] Evaluation rejected: ${entry.market_question.slice(0, 60)} — ${evaluation.failures.join("; ")}`);
     }
+  }
+
+  const redeemResult = await autoRedeemResolved();
+  if (redeemResult.redeemed > 0) {
+    try {
+      const { sendMessage } = await import("./telegram.js");
+      for (const alert of redeemResult.alerts) {
+        sendMessage(`✅ Auto-${alert}`).catch(() => {});
+      }
+    } catch {}
   }
 
   const pool = getPool();
@@ -514,11 +682,12 @@ export async function runCopyTradeScan(): Promise<{
     trades_opened: tradesOpened,
     trades_closed: tradesClosed,
     errors,
+    signal_results: signalResults,
   };
 }
 
 export async function getWalletPerformance(): Promise<WalletPerformance[]> {
-  const wallets = await getTrackedWallets();
+  const wallets = await polymarket.getWhaleWatchlist();
   const history = await bankr.getTradeHistory();
   const copyTrades = history.filter(t => t.source === "copy_trade");
 
@@ -586,12 +755,13 @@ export async function checkCopyTradeExits(): Promise<{ closed: number; alerts: s
   return { closed, alerts };
 }
 
-export function formatWalletList(wallets: TrackedWallet[]): string {
+export function formatWalletList(wallets: polymarket.WhaleWallet[]): string {
   if (wallets.length === 0) return "No tracked wallets.";
   return wallets.map((w, i) => {
-    const status = w.enabled ? "🟢" : "🔴";
+    const status = w.enabled ? (w.observation_only ? "🔍" : "🟢") : "🔴";
     const lastChecked = w.last_checked > 0 ? timeAgo(w.last_checked) : "never";
-    return `${status} *${i + 1}. ${w.alias}* (${w.niche})\n   Win: ${w.win_rate}% | P&L: $${w.pnl.toFixed(0)} | Last: ${lastChecked}\n   \`${w.address.slice(0, 10)}...${w.address.slice(-6)}\``;
+    const statusLabel = w.observation_only ? "Observing" : w.pending_eviction ? "Evicting" : w.status;
+    return `${status} *${i + 1}. ${w.alias}* (${w.niche})\n   Score: ${w.composite_score.toFixed(2)} | Win: ${(w.win_rate * 100).toFixed(0)}% | ${statusLabel}\n   Last: ${lastChecked} | Source: ${w.source}\n   \`${w.address.slice(0, 10)}...${w.address.slice(-6)}\``;
   }).join("\n\n");
 }
 

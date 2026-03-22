@@ -160,6 +160,263 @@ export interface ThresholdResult {
   passed: string[];
 }
 
+export async function migrateWalletRegistries(): Promise<void> {
+  const pool = getPool();
+  try {
+    const res = await pool.query(`SELECT value FROM app_config WHERE key = 'copy_trading_wallets'`);
+    if (res.rows.length === 0 || !Array.isArray(res.rows[0].value) || res.rows[0].value.length === 0) return;
+
+    const oldWallets = res.rows[0].value;
+    const current = await polymarket.getWhaleWatchlist();
+    const existingAddresses = new Set(current.map(w => w.address.toLowerCase()));
+    let migrated = 0;
+
+    for (const old of oldWallets) {
+      const addr = (old.address || '').toLowerCase();
+      if (!addr || existingAddresses.has(addr)) continue;
+
+      const wallet: polymarket.WhaleWallet = {
+        address: addr,
+        alias: old.alias || `Whale-${addr.slice(2, 8)}`,
+        niche: old.niche || 'general',
+        win_rate: old.win_rate || 0,
+        roi: old.roi || 0,
+        total_volume: old.total_volume || 0,
+        total_trades: old.total_trades || 0,
+        total_markets: old.total_markets || 0,
+        resolved_markets: old.resolved_markets || 0,
+        category_scores: old.category_scores || {},
+        composite_score: old.composite_score || 0,
+        last_active: old.last_active || Date.now(),
+        last_checked: old.last_checked || 0,
+        added_at: old.added_at || old.added_date || Date.now(),
+        source: 'migration',
+        enabled: old.enabled ?? true,
+        observation_only: false,
+        degraded_count: 0,
+        pending_eviction: false,
+        status: old.status || 'active',
+      };
+      wallet.composite_score = polymarket.scoreWallet(wallet);
+      current.push(wallet);
+      existingAddresses.add(addr);
+      migrated++;
+    }
+
+    if (migrated > 0) {
+      await polymarket.saveWhaleWatchlist(current);
+      console.log(`[scout] Migrated ${migrated} wallets from copy_trading_wallets → polymarket_whale_watchlist`);
+    }
+  } catch (err) {
+    console.error("[scout] migrateWalletRegistries error:", err instanceof Error ? err.message : err);
+  }
+}
+
+export async function detectAndBlacklistMarketMakers(): Promise<string[]> {
+  const watchlist = await polymarket.getWhaleWatchlist();
+  const blacklisted: string[] = [];
+
+  for (const wallet of watchlist) {
+    let mmScore = 0;
+
+    if (wallet.total_trades > 100) mmScore++;
+
+    const positions = await polymarket.fetchWalletPositionsDirect(wallet.address);
+    const buyCount = positions.filter((p: any) => parseFloat(p.size || '0') > 0).length;
+    const sellCount = positions.filter((p: any) => parseFloat(p.size || '0') < 0).length;
+    const total = buyCount + sellCount;
+    if (total > 0) {
+      const symmetry = Math.min(buyCount, sellCount) / Math.max(buyCount, sellCount);
+      if (symmetry < 0.15) mmScore++;
+    }
+
+    if (wallet.total_markets > 20) mmScore++;
+
+    const avgTradeSize = wallet.total_volume > 0 && wallet.total_trades > 0
+      ? wallet.total_volume / wallet.total_trades
+      : 0;
+    if (avgTradeSize < 500 && avgTradeSize > 0) mmScore++;
+
+    if (mmScore >= 3) {
+      wallet.enabled = false;
+      wallet.status = 'blacklisted';
+      const bl = await polymarket.getBlacklist();
+      if (!bl.includes(wallet.address.toLowerCase())) {
+        bl.push(wallet.address.toLowerCase());
+        await polymarket.saveBlacklist(bl);
+      }
+      blacklisted.push(`${wallet.alias} (${wallet.address.slice(0, 10)}) — MM score ${mmScore}/4`);
+      console.log(`[scout] Blacklisted MM: ${wallet.alias} (score ${mmScore}/4)`);
+    }
+  }
+
+  if (blacklisted.length > 0) {
+    await polymarket.saveWhaleWatchlist(watchlist);
+  }
+  return blacklisted;
+}
+
+export async function scoreAndPromoteCandidate(address: string, source: "trade_mining" | "anomaly" = "trade_mining"): Promise<{
+  added: boolean;
+  wallet?: polymarket.WhaleWallet;
+  reason?: string;
+}> {
+  const bl = await polymarket.getBlacklist();
+  if (bl.includes(address.toLowerCase())) {
+    return { added: false, reason: "blacklisted" };
+  }
+
+  const watchlist = await polymarket.getWhaleWatchlist();
+  if (watchlist.some(w => w.address.toLowerCase() === address.toLowerCase())) {
+    return { added: false, reason: "already_tracked" };
+  }
+
+  try {
+    const wallet = await polymarket.buildWalletFromActivity(address, source);
+
+    if (wallet.composite_score < 0.6) {
+      return { added: false, wallet, reason: `score_${wallet.composite_score.toFixed(2)}_below_0.6` };
+    }
+    if (wallet.resolved_markets < 3) {
+      return { added: false, wallet, reason: `only_${wallet.resolved_markets}_resolved_markets` };
+    }
+
+    watchlist.push(wallet);
+    await polymarket.saveWhaleWatchlist(watchlist);
+    console.log(`[scout] Added ${wallet.alias} (score: ${wallet.composite_score.toFixed(2)}, niche: ${wallet.niche}, source: ${source})`);
+
+    return { added: true, wallet };
+  } catch (err) {
+    return { added: false, reason: `error: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
+export async function seedWalletsFromTradeStream(): Promise<{
+  candidates_found: number;
+  added: number;
+  rejected: number;
+  details: string[];
+}> {
+  const details: string[] = [];
+  let added = 0, rejected = 0;
+
+  try {
+    const trades = await polymarket.fetchRecentTrades({ limit: 500, hoursBack: 2 });
+    if (trades.length === 0) {
+      details.push("No trades found in recent feed");
+      return { candidates_found: 0, added: 0, rejected: 0, details };
+    }
+
+    const walletStats: Record<string, { volume: number; trades: number; markets: Set<string> }> = {};
+    for (const trade of trades) {
+      const addr = (trade.proxyWallet || '').toLowerCase();
+      if (!addr) continue;
+      if (!walletStats[addr]) walletStats[addr] = { volume: 0, trades: 0, markets: new Set() };
+      walletStats[addr].volume += parseFloat(trade.size || '0') * parseFloat(trade.price || '0');
+      walletStats[addr].trades++;
+      if (trade.market) walletStats[addr].markets.add(trade.market);
+    }
+
+    const candidates = Object.entries(walletStats)
+      .filter(([_, s]) => s.volume >= 1000 && s.trades >= 3)
+      .sort((a, b) => b[1].volume - a[1].volume)
+      .slice(0, 20);
+
+    details.push(`Found ${candidates.length} high-volume candidates from ${trades.length} trades`);
+
+    for (const [addr, stats] of candidates) {
+      const result = await scoreAndPromoteCandidate(addr, "trade_mining");
+      if (result.added) {
+        added++;
+        details.push(`✅ Added ${result.wallet!.alias} — score: ${result.wallet!.composite_score.toFixed(2)}, niche: ${result.wallet!.niche}`);
+      } else {
+        rejected++;
+        details.push(`❌ Rejected ${addr.slice(0, 10)}: ${result.reason}`);
+      }
+
+      await new Promise(r => setTimeout(r, 500));
+
+      const watchlist = await polymarket.getWhaleWatchlist();
+      if (watchlist.length >= 10) {
+        details.push(`Registry full (${watchlist.length}/10). Stopping seed.`);
+        break;
+      }
+    }
+  } catch (err) {
+    details.push(`Error: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  return { candidates_found: added + rejected, added, rejected, details };
+}
+
+export async function runAnomalyScanner(): Promise<{
+  trades_scanned: number;
+  anomalies_found: number;
+  wallets_added: number;
+  details: string[];
+}> {
+  const details: string[] = [];
+  let anomaliesFound = 0, walletsAdded = 0;
+
+  try {
+    const trades = await polymarket.fetchRecentTrades({ limit: 500, hoursBack: 0.5 });
+    if (trades.length === 0) {
+      return { trades_scanned: 0, anomalies_found: 0, wallets_added: 0, details: ["No recent trades"] };
+    }
+
+    const watchlist = await polymarket.getWhaleWatchlist();
+    const trackedAddresses = new Set(watchlist.map(w => w.address.toLowerCase()));
+
+    const unknownLarge: Record<string, { totalVolume: number; trades: any[]; markets: Set<string> }> = {};
+    for (const trade of trades) {
+      const addr = (trade.proxyWallet || '').toLowerCase();
+      if (!addr || trackedAddresses.has(addr)) continue;
+      const vol = parseFloat(trade.size || '0') * parseFloat(trade.price || '0');
+      if (vol < 500) continue;
+
+      if (!unknownLarge[addr]) unknownLarge[addr] = { totalVolume: 0, trades: [], markets: new Set() };
+      unknownLarge[addr].totalVolume += vol;
+      unknownLarge[addr].trades.push(trade);
+      if (trade.market) unknownLarge[addr].markets.add(trade.market);
+    }
+
+    const anomalies = Object.entries(unknownLarge)
+      .filter(([_, d]) => d.totalVolume >= 2000)
+      .sort((a, b) => b[1].totalVolume - a[1].totalVolume)
+      .slice(0, 5);
+
+    anomaliesFound = anomalies.length;
+    if (anomaliesFound === 0) {
+      return { trades_scanned: trades.length, anomalies_found: 0, wallets_added: 0, details: ["No anomalies detected"] };
+    }
+
+    for (const [addr, data] of anomalies) {
+      details.push(`🔍 Anomaly: ${addr.slice(0, 10)} — $${data.totalVolume.toFixed(0)} across ${data.markets.size} market(s)`);
+
+      const result = await scoreAndPromoteCandidate(addr, "anomaly");
+      if (result.added) {
+        walletsAdded++;
+        details.push(`  → Added as ${result.wallet!.alias} (observation_only, score: ${result.wallet!.composite_score.toFixed(2)})`);
+      } else {
+        details.push(`  → Rejected: ${result.reason}`);
+      }
+
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    if (walletsAdded > 0) {
+      try {
+        const { sendMessage } = await import("./telegram.js");
+        sendMessage(`🔍 *Anomaly Scanner*\n${details.join("\n")}`).catch(() => {});
+      } catch {}
+    }
+  } catch (err) {
+    details.push(`Error: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  return { trades_scanned: 500, anomalies_found: anomaliesFound, wallets_added: walletsAdded, details };
+}
+
 export async function meetsThesisThresholds(params: {
   whale_score: number;
   whale_consensus: number;
