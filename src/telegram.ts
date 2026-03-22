@@ -868,7 +868,7 @@ async function handleAddWalletCommand(args: string): Promise<string> {
   }
 
   try {
-    const { getWhaleWatchlist, isBlacklisted, buildWalletFromActivity, scoreWallet, saveWhaleWatchlist } = await import("./polymarket.js");
+    const { getWhaleWatchlist, isBlacklisted, buildWalletFromActivity, saveWhaleWatchlist } = await import("./polymarket.js");
     const wallets = await getWhaleWatchlist();
 
     const existingIdx = wallets.findIndex(w => w.address.toLowerCase() === address.toLowerCase());
@@ -992,7 +992,8 @@ async function handleBlacklistWalletCommand(args: string): Promise<string> {
     }
 
     if (idx !== -1) {
-      wallets.splice(idx, 1);
+      wallets[idx].enabled = false;
+      wallets[idx].status = "removed";
       await saveWhaleWatchlist(wallets);
     }
 
@@ -1004,7 +1005,7 @@ async function handleBlacklistWalletCommand(args: string): Promise<string> {
       "",
       `*Alias:* ${aliasLabel}`,
       `*Address:* \`${address.slice(0, 10)}…\``,
-      idx !== -1 ? `_Removed from registry and added to blacklist._` : `_Added to blacklist (was not in registry)._`,
+      idx !== -1 ? `_Disabled in registry and added to blacklist._` : `_Added to blacklist (was not in registry)._`,
       `_Blacklist size: ${blacklist.length}_`,
     ].join("\n");
   } catch (err) {
@@ -1939,8 +1940,11 @@ export async function init(): Promise<void> {
   registerCommand("walletstatus", async () => handleWalletStatusCommand());
   registerCommand("seedwallets", async () => handleSeedWalletsCommand());
   registerCommand("addwallet", async (args) => handleAddWalletCommand(args));
+  registerCommand("add-wallet", async (args) => handleAddWalletCommand(args));
   registerCommand("removewallet", async (args) => handleRemoveWalletCommand(args));
+  registerCommand("remove-wallet", async (args) => handleRemoveWalletCommand(args));
   registerCommand("blacklistwallet", async (args) => handleBlacklistWalletCommand(args));
+  registerCommand("blacklist-wallet", async (args) => handleBlacklistWalletCommand(args));
   registerCommand("help", async () => handleHelpCommand());
 
   try {
