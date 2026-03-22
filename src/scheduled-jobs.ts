@@ -865,14 +865,18 @@ Do NOT use notes_create — the system saves automatically.`,
     id: "bankr-execute",
     name: "BANKR Execute",
     agentId: "bankr",
-    prompt: `EXECUTION CYCLE — YOU MUST EXECUTE TRADES. Follow these steps exactly:
+    prompt: `EXECUTION CYCLE — Review theses and execute the best opportunities. Follow these steps:
 1. scout_theses — get active crypto theses
-2. polymarket_theses — get active polymarket theses  
+2. polymarket_theses — get active polymarket theses
 3. bankr_positions — get current open positions
-4. For EVERY thesis that does NOT have an existing open position for the same asset+direction: call bankr_open_position with the thesis details. Use leverage=2, confidence from thesis, entry_price from current market price.
-5. Do NOT skip theses for any reason. Do NOT apply your own risk judgment. bankr_open_position handles ALL risk checks, position sizing, and mode logic internally. SHADOW mode is normal operation.
-6. You MUST call bankr_open_position for each eligible thesis. If you finish without calling it, you have failed.
-DO NOT call signal_quality — it is informational only and must not affect execution decisions.`,
+4. Review each thesis that does NOT have an existing open position for the same asset+direction. Evaluate:
+   - Confidence level (prefer HIGH, be selective with MEDIUM)
+   - Risk/reward ratio (stop loss distance vs take profit target)
+   - Whether the thesis reasoning is compelling and well-supported
+   - Current market conditions and whether they favor the trade direction
+5. For theses you approve: call bankr_open_position with the thesis details. Use leverage=2, confidence from thesis, entry_price from current market price. bankr_open_position handles all internal risk checks, position sizing, and mode logic.
+6. For theses you skip: briefly note why in your response (e.g. weak setup, poor risk/reward, low confidence).
+SHADOW mode is normal operation — positions are tracked virtually.`,
     schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 60 },
     enabled: true,
     toolSubset: ["scout_theses", "polymarket_theses", "bankr_positions", "bankr_risk_check", "bankr_open_position", "signal_quality", "notes_create"],
