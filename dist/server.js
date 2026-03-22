@@ -2775,6 +2775,15 @@ async function handleRiskCommand() {
     if (pv.rows.length > 0 && typeof pv.rows[0].value === "number") portfolio = pv.rows[0].value;
   } catch {
   }
+  const rcDefaults = { max_leverage: 5, risk_per_trade_pct: 5, max_positions: 3, exposure_cap_pct: 60, correlation_limit: 1, circuit_breaker_7d_pct: -15, circuit_breaker_drawdown_pct: -25 };
+  let rc = rcDefaults;
+  try {
+    const rcRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engine_config'`);
+    if (rcRes.rows.length > 0 && typeof rcRes.rows[0].value === "object" && rcRes.rows[0].value !== null) {
+      rc = { ...rcDefaults, ...rcRes.rows[0].value };
+    }
+  } catch {
+  }
   let positions = [];
   try {
     const pos = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_positions'`);
@@ -2799,18 +2808,27 @@ async function handleRiskCommand() {
     const b = p.exposure_bucket || "general";
     buckets[b] = (buckets[b] || 0) + 1;
   }
+  let peakPortfolio = portfolio;
+  try {
+    const peakRes = await pool2.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_peak_portfolio'`);
+    if (peakRes.rows.length > 0 && typeof peakRes.rows[0].value === "number") peakPortfolio = peakRes.rows[0].value;
+  } catch {
+  }
+  const drawdownPct = peakPortfolio > 0 ? (portfolio - peakPortfolio) / peakPortfolio * 100 : 0;
   const lines = [
     `${mode} *Risk Dashboard*`,
     "",
-    `\u{1F4B0} Portfolio: $${portfolio.toFixed(2)}`,
+    `\u{1F4B0} Portfolio: $${portfolio.toFixed(2)} (peak: $${peakPortfolio.toFixed(2)})`,
     `\u{1F4CA} Exposure: $${totalExposure.toFixed(2)} (${exposurePct.toFixed(0)}% of portfolio)`,
     `\u{1F4C8} Unrealized P&L: ${unrealizedPnl >= 0 ? "+" : ""}$${unrealizedPnl.toFixed(2)}`,
     `\u{1F4C9} 7-Day Rolling P&L: ${rolling7d >= 0 ? "+" : ""}$${rolling7d.toFixed(2)} (${rolling7dPct.toFixed(1)}%)`,
-    `\u{1F53B} Circuit Breaker: ${rolling7dPct < -15 ? "\u26A0\uFE0F TRIGGERED" : "OK"} (threshold: -15%)`,
+    `\u{1F53B} 7d Breaker: ${rolling7dPct < rc.circuit_breaker_7d_pct ? "\u26A0\uFE0F TRIGGERED" : "OK"} (${rolling7dPct.toFixed(1)}% / ${rc.circuit_breaker_7d_pct}%)`,
+    `\u{1F53B} Drawdown Breaker: ${drawdownPct < rc.circuit_breaker_drawdown_pct ? "\u26A0\uFE0F TRIGGERED" : "OK"} (${drawdownPct.toFixed(1)}% / ${rc.circuit_breaker_drawdown_pct}%)`,
     "",
-    `*Positions:* ${positions.length}/3`,
-    `*Exposure Limit:* ${exposurePct.toFixed(0)}%/60%`,
-    `*Buckets:* ${Object.entries(buckets).map(([b, c]) => `${b}: ${c}/1`).join(", ") || "none"}`
+    `*Leverage:* max ${rc.max_leverage}x | *Risk/Trade:* ${rc.risk_per_trade_pct}%`,
+    `*Positions:* ${positions.length}/${rc.max_positions}`,
+    `*Exposure Limit:* ${exposurePct.toFixed(0)}%/${rc.exposure_cap_pct}%`,
+    `*Buckets:* ${Object.entries(buckets).map(([b, c]) => `${b}: ${c}/${rc.correlation_limit}`).join(", ") || "none"}`
   ];
   return lines.join("\n");
 }
@@ -8891,7 +8909,47 @@ init_oversight();
 var PORTFOLIO_VALUE_KEY = "wealth_engines_portfolio_value";
 var PEAK_PORTFOLIO_KEY = "wealth_engines_peak_portfolio";
 var CONSECUTIVE_LOSSES_KEY = "wealth_engines_consecutive_losses";
+var RISK_CONFIG_KEY = "wealth_engine_config";
 var DEFAULT_PORTFOLIO = 1e3;
+var DEFAULT_RISK_CONFIG = {
+  max_leverage: 5,
+  risk_per_trade_pct: 5,
+  max_positions: 3,
+  exposure_cap_pct: 60,
+  correlation_limit: 1,
+  circuit_breaker_7d_pct: -15,
+  circuit_breaker_drawdown_pct: -25,
+  notification_mode: "all"
+};
+async function getRiskConfig() {
+  const pool2 = getPool();
+  try {
+    const res = await pool2.query(`SELECT value FROM app_config WHERE key = $1`, [RISK_CONFIG_KEY]);
+    if (res.rows.length > 0 && typeof res.rows[0].value === "object" && res.rows[0].value !== null) {
+      return { ...DEFAULT_RISK_CONFIG, ...res.rows[0].value };
+    }
+  } catch {
+  }
+  return { ...DEFAULT_RISK_CONFIG };
+}
+async function setRiskConfig(updates) {
+  const current = await getRiskConfig();
+  const merged = { ...current, ...updates };
+  if (merged.max_leverage < 1 || merged.max_leverage > 10) throw new Error("max_leverage must be 1-10");
+  if (merged.risk_per_trade_pct < 1 || merged.risk_per_trade_pct > 10) throw new Error("risk_per_trade_pct must be 1-10");
+  if (merged.max_positions < 1 || merged.max_positions > 10) throw new Error("max_positions must be 1-10");
+  if (merged.exposure_cap_pct < 20 || merged.exposure_cap_pct > 100) throw new Error("exposure_cap_pct must be 20-100");
+  if (merged.correlation_limit < 1 || merged.correlation_limit > 5) throw new Error("correlation_limit must be 1-5");
+  if (merged.circuit_breaker_7d_pct > -5 || merged.circuit_breaker_7d_pct < -30) throw new Error("circuit_breaker_7d_pct must be -5 to -30");
+  if (merged.circuit_breaker_drawdown_pct > -10 || merged.circuit_breaker_drawdown_pct < -50) throw new Error("circuit_breaker_drawdown_pct must be -10 to -50");
+  const pool2 = getPool();
+  await pool2.query(
+    `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [RISK_CONFIG_KEY, JSON.stringify(merged), Date.now()]
+  );
+  return merged;
+}
 async function getPortfolioValue() {
   const pool2 = getPool();
   try {
@@ -8957,7 +9015,8 @@ async function isFirstTradeForAsset(asset, assetClass) {
   return !history.some((t) => t.asset === asset && t.asset_class === assetClass);
 }
 function determineApprovalTier(params) {
-  if (params.capitalPct > 30 || params.consecutiveLosses >= 3 || params.drawdownPct < -25 || params.isFirstForAsset || params.leverageIncrease) {
+  const ddThresh = params.drawdownThreshold ?? -25;
+  if (params.capitalPct > 30 || params.consecutiveLosses >= 3 || params.drawdownPct < ddThresh || params.isFirstForAsset || params.leverageIncrease) {
     return "human_required";
   }
   if (params.capitalPct > 20 || params.confidence < 3.5) {
@@ -9055,15 +9114,17 @@ async function runPreExecutionChecks(params) {
   if (paused) allPassed = false;
   const mode = await getMode2();
   checks.push({ name: "mode_check", passed: true, detail: `Mode: ${mode}${mode === "SHADOW" ? " (shadow trades only)" : ""}` });
-  const levOk = params.leverage <= 5;
-  checks.push({ name: "leverage_cap", passed: levOk, detail: `Requested: ${params.leverage}x, Max: 5x` });
+  const rc = await getRiskConfig();
+  const levOk = params.leverage <= rc.max_leverage;
+  checks.push({ name: "leverage_cap", passed: levOk, detail: `Requested: ${params.leverage}x, Max: ${rc.max_leverage}x` });
   if (!levOk) allPassed = false;
   const portfolio = await getPortfolioValue();
-  const maxRisk = portfolio * 0.05;
+  const riskPct = rc.risk_per_trade_pct / 100;
+  const maxRisk = portfolio * riskPct;
   const riskDistance = Math.abs(params.entry_price - params.stop_price);
   const riskAmount = params.risk_amount || (riskDistance > 0 ? maxRisk : 0);
   const riskOk = riskAmount <= maxRisk;
-  checks.push({ name: "risk_per_trade", passed: riskOk, detail: `Risk: $${riskAmount.toFixed(2)}, Max: $${maxRisk.toFixed(2)} (5% of $${portfolio.toFixed(2)})` });
+  checks.push({ name: "risk_per_trade", passed: riskOk, detail: `Risk: $${riskAmount.toFixed(2)}, Max: $${maxRisk.toFixed(2)} (${rc.risk_per_trade_pct}% of $${portfolio.toFixed(2)})` });
   if (!riskOk) allPassed = false;
   if (params.leverage > 1) {
     const marginPerUnit = params.entry_price / params.leverage;
@@ -9075,28 +9136,28 @@ async function runPreExecutionChecks(params) {
     checks.push({ name: "margin_buffer", passed: true, detail: "No leverage \u2014 no liquidation risk" });
   }
   const positions = await getPositions();
-  const posCountOk = positions.length < 3;
-  checks.push({ name: "max_positions", passed: posCountOk, detail: `Open: ${positions.length}/3` });
+  const posCountOk = positions.length < rc.max_positions;
+  checks.push({ name: "max_positions", passed: posCountOk, detail: `Open: ${positions.length}/${rc.max_positions}` });
   if (!posCountOk) allPassed = false;
   const totalExposure = positions.reduce((sum, p) => sum + p.size * p.entry_price, 0);
   const newPositionSize = riskDistance > 0 ? riskAmount / riskDistance : 0;
   const newExposure = newPositionSize * params.entry_price;
   const totalAfter = totalExposure + newExposure;
-  const exposureLimit = portfolio * 0.6;
+  const exposureLimit = portfolio * (rc.exposure_cap_pct / 100);
   const exposureOk = totalAfter <= exposureLimit;
-  checks.push({ name: "total_exposure", passed: exposureOk, detail: `After: $${totalAfter.toFixed(2)} / $${exposureLimit.toFixed(2)} (60% of portfolio)` });
+  checks.push({ name: "total_exposure", passed: exposureOk, detail: `After: $${totalAfter.toFixed(2)} / $${exposureLimit.toFixed(2)} (${rc.exposure_cap_pct}% of portfolio)` });
   if (!exposureOk) allPassed = false;
   const bucket = getExposureBucket(params.asset, params.asset_class);
   const bucketCount = positions.filter((p) => p.exposure_bucket === bucket).length;
-  const correlationOk = bucketCount < 1;
-  checks.push({ name: "correlation_limit", passed: correlationOk, detail: `Bucket "${bucket}": ${bucketCount}/1 positions` });
+  const correlationOk = bucketCount < rc.correlation_limit;
+  checks.push({ name: "correlation_limit", passed: correlationOk, detail: `Bucket "${bucket}": ${bucketCount}/${rc.correlation_limit} positions` });
   if (!correlationOk) allPassed = false;
   const consecutiveLosses = await getConsecutiveLosses();
   checks.push({ name: "consecutive_losses", passed: consecutiveLosses < 3, detail: `Consecutive losses: ${consecutiveLosses}/3` });
   const peakPortfolio = await getPeakPortfolioValue();
   const drawdownPct = peakPortfolio > 0 ? (portfolio - peakPortfolio) / peakPortfolio * 100 : 0;
-  const drawdownOk = drawdownPct > -25;
-  checks.push({ name: "peak_drawdown", passed: drawdownOk, detail: `Drawdown from peak: ${drawdownPct.toFixed(1)}% (limit: -25%)` });
+  const drawdownOk = drawdownPct > rc.circuit_breaker_drawdown_pct;
+  checks.push({ name: "peak_drawdown", passed: drawdownOk, detail: `Drawdown from peak: ${drawdownPct.toFixed(1)}% (limit: ${rc.circuit_breaker_drawdown_pct}%)` });
   const capitalPct = portfolio > 0 ? newExposure / portfolio * 100 : 0;
   const firstForAsset = await isFirstTradeForAsset(params.asset, params.asset_class);
   const tier = determineApprovalTier({
@@ -9105,7 +9166,8 @@ async function runPreExecutionChecks(params) {
     consecutiveLosses,
     drawdownPct,
     isFirstForAsset: firstForAsset,
-    leverageIncrease: false
+    leverageIncrease: false,
+    drawdownThreshold: rc.circuit_breaker_drawdown_pct
   });
   checks.push({ name: "approval_tier", passed: true, detail: `Tier: ${tier} (capital: ${capitalPct.toFixed(1)}%, losses: ${consecutiveLosses}, drawdown: ${drawdownPct.toFixed(1)}%, first: ${firstForAsset})` });
   const rejectionReason = allPassed ? null : checks.filter((c) => !c.passed).map((c) => c.detail).join("; ");
@@ -9170,7 +9232,8 @@ async function openPosition(params) {
     return { position: shadowPosition, trade_id: shadowTradeId };
   }
   const portfolio = await getPortfolioValue();
-  const maxRisk = portfolio * 0.05;
+  const rc = await getRiskConfig();
+  const maxRisk = portfolio * (rc.risk_per_trade_pct / 100);
   const riskDistance = Math.abs(params.entry_price - params.stop_price);
   const size = riskDistance > 0 ? maxRisk / riskDistance : 0;
   const posId = `pos_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -9334,7 +9397,8 @@ async function checkCircuitBreaker() {
   const pnlPct = portfolio > 0 ? rolling7dayPnl / portfolio * 100 : 0;
   const peakPortfolio = await getPeakPortfolioValue();
   const peakDrawdownPct = peakPortfolio > 0 ? (portfolio - peakPortfolio) / peakPortfolio * 100 : 0;
-  const triggered = pnlPct < -15 || peakDrawdownPct < -25;
+  const rc = await getRiskConfig();
+  const triggered = pnlPct < rc.circuit_breaker_7d_pct || peakDrawdownPct < rc.circuit_breaker_drawdown_pct;
   if (triggered) {
     const pool2 = getPool();
     await pool2.query(
@@ -9342,7 +9406,7 @@ async function checkCircuitBreaker() {
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
       [JSON.stringify(true), Date.now()]
     );
-    const reason = peakDrawdownPct < -25 ? `Peak drawdown ${peakDrawdownPct.toFixed(1)}% < -25%` : `7-day P&L ${pnlPct.toFixed(1)}% < -15%`;
+    const reason = peakDrawdownPct < rc.circuit_breaker_drawdown_pct ? `Peak drawdown ${peakDrawdownPct.toFixed(1)}% < ${rc.circuit_breaker_drawdown_pct}%` : `7-day P&L ${pnlPct.toFixed(1)}% < ${rc.circuit_breaker_7d_pct}%`;
     console.log(`[bankr] Circuit breaker TRIGGERED: ${reason}`);
   }
   return {
@@ -16094,7 +16158,8 @@ function buildCoinGeckoTools() {
           }
           if (riskCheck.tier === "human_required") {
             const portfolio = await getPortfolioValue();
-            const riskAmount = portfolio * 0.05;
+            const rc = await getRiskConfig();
+            const riskAmount = portfolio * (rc.risk_per_trade_pct / 100);
             const approval = await requestTradeApproval({
               thesisId: params.thesis_id,
               asset: params.asset,
@@ -19284,6 +19349,188 @@ app.post("/api/wealth-engines/kill", async (req, res) => {
     res.status(500).json({ error: String(err) });
   }
 });
+app.get("/api/wealth-engine/config", async (req, res) => {
+  if (!WE_CONTROL_USERS.has(req.user)) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  try {
+    const config3 = await getRiskConfig();
+    const portfolio = await getPortfolioValue();
+    const peak = await getPeakPortfolioValue();
+    const mode = await getMode2();
+    const paused = await isPaused();
+    const killSwitch = await isKillSwitchActive();
+    const positions = await getPositions();
+    const pool2 = getPool();
+    let bootTime = 0;
+    try {
+      const bt = await pool2.query(`SELECT value FROM app_config WHERE key = 'system_boot_time'`);
+      if (bt.rows.length > 0) bootTime = typeof bt.rows[0].value === "number" ? bt.rows[0].value : 0;
+    } catch {
+    }
+    let monitorTick = 0;
+    try {
+      const mt = await pool2.query(`SELECT value FROM app_config WHERE key = 'bankr_monitor_last_tick'`);
+      if (mt.rows.length > 0) monitorTick = typeof mt.rows[0].value === "number" ? mt.rows[0].value : 0;
+    } catch {
+    }
+    let shadowOpen = 0, shadowClosed = 0;
+    try {
+      const { getShadowTrades: getShadowTrades2 } = await Promise.resolve().then(() => (init_oversight(), oversight_exports));
+      const openShadows = await getShadowTrades2("open");
+      const closedShadows = await getShadowTrades2("closed");
+      shadowOpen = openShadows.length;
+      shadowClosed = closedShadows.length;
+    } catch {
+    }
+    const weJobs = getJobs().filter(
+      (j) => ["scout-micro-scan", "scout-full-cycle", "polymarket-activity-scan", "polymarket-full-cycle", "bankr-execute", "oversight-health", "oversight-weekly", "oversight-daily-summary", "oversight-shadow-refresh", "autoresearch-weekly"].includes(j.id)
+    ).map((j) => ({
+      id: j.id,
+      name: j.name,
+      enabled: j.enabled,
+      schedule_type: j.schedule.type,
+      interval_minutes: j.schedule.intervalMinutes || null,
+      hour: j.schedule.hour ?? null,
+      minute: j.schedule.minute ?? null,
+      last_run: j.lastRun || null,
+      last_status: j.lastStatus || null
+    }));
+    res.json({
+      risk: config3,
+      portfolio,
+      peak,
+      mode,
+      paused,
+      kill_switch: killSwitch,
+      bnkr_configured: (await Promise.resolve().then(() => (init_bnkr(), bnkr_exports))).isConfigured(),
+      positions_count: positions.length,
+      boot_time: bootTime,
+      monitor_tick: monitorTick,
+      shadow_open: shadowOpen,
+      shadow_closed: shadowClosed,
+      jobs: weJobs
+    });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+app.post("/api/wealth-engine/config", async (req, res) => {
+  if (!WE_CONTROL_USERS.has(req.user)) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  try {
+    const updates = req.body;
+    if (!updates || typeof updates !== "object") {
+      res.status(400).json({ error: "Body must be a JSON object" });
+      return;
+    }
+    const allowed = ["max_leverage", "risk_per_trade_pct", "max_positions", "exposure_cap_pct", "correlation_limit", "circuit_breaker_7d_pct", "circuit_breaker_drawdown_pct", "notification_mode"];
+    const filtered = {};
+    for (const k of Object.keys(updates)) {
+      if (allowed.includes(k)) filtered[k] = updates[k];
+    }
+    if (Object.keys(filtered).length === 0) {
+      res.status(400).json({ error: "No valid config keys provided" });
+      return;
+    }
+    const result = await setRiskConfig(filtered);
+    if (filtered.notification_mode) {
+      const pool2 = getPool();
+      await pool2.query(
+        `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+        ["we_notification_mode", JSON.stringify(filtered.notification_mode), Date.now()]
+      );
+    }
+    weDashboardCache = null;
+    res.json({ ok: true, config: result });
+  } catch (err) {
+    res.status(400).json({ error: err.message || String(err) });
+  }
+});
+app.post("/api/wealth-engine/portfolio", async (req, res) => {
+  if (!WE_CONTROL_USERS.has(req.user)) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  try {
+    const { value, reset_peak } = req.body;
+    const pool2 = getPool();
+    if (typeof value === "number" && value > 0) {
+      await pool2.query(
+        `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+        ["wealth_engines_portfolio_value", JSON.stringify(value), Date.now()]
+      );
+    }
+    if (reset_peak) {
+      const currentPortfolio = await getPortfolioValue();
+      await pool2.query(
+        `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+        ["wealth_engines_peak_portfolio", JSON.stringify(currentPortfolio), Date.now()]
+      );
+    }
+    weDashboardCache = null;
+    res.json({ ok: true, portfolio: await getPortfolioValue(), peak: await getPeakPortfolioValue() });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+app.post("/api/wealth-engine/mode", async (req, res) => {
+  if (!WE_CONTROL_USERS.has(req.user)) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  try {
+    const { mode } = req.body;
+    if (!["SHADOW", "LIVE", "BETA"].includes(mode)) {
+      res.status(400).json({ error: "Invalid mode" });
+      return;
+    }
+    const pool2 = getPool();
+    await pool2.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      ["wealth_engines_mode", JSON.stringify(mode), Date.now()]
+    );
+    weDashboardCache = null;
+    res.json({ ok: true, mode });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+app.post("/api/wealth-engine/jobs/:jobId", async (req, res) => {
+  if (!WE_CONTROL_USERS.has(req.user)) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  const WE_JOB_IDS = /* @__PURE__ */ new Set(["scout-micro-scan", "scout-full-cycle", "polymarket-activity-scan", "polymarket-full-cycle", "bankr-execute", "oversight-health", "oversight-weekly", "oversight-daily-summary", "oversight-shadow-refresh", "autoresearch-weekly"]);
+  try {
+    const { jobId } = req.params;
+    if (!WE_JOB_IDS.has(jobId)) {
+      res.status(403).json({ error: "Not a Wealth Engine job" });
+      return;
+    }
+    const { enabled, interval_minutes } = req.body;
+    const updates = {};
+    if (typeof enabled === "boolean") updates.enabled = enabled;
+    if (typeof interval_minutes === "number" && interval_minutes >= 5) {
+      updates.schedule = { intervalMinutes: interval_minutes };
+    }
+    const result = updateJob(jobId, updates);
+    if (!result) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
+    res.json({ ok: true, job: { id: result.id, name: result.name, enabled: result.enabled, schedule: result.schedule } });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
 app.get("/api/x-intelligence/data", async (_req, res) => {
   try {
     const forceRefresh = _req.query.force === "1";
@@ -22051,8 +22298,17 @@ Reconnect: /api/gmail/auth`).catch(() => {
             process.exit(1);
           }
         });
-        server.listen({ port: PORT, host: "0.0.0.0", exclusive: false }, () => {
+        server.listen({ port: PORT, host: "0.0.0.0", exclusive: false }, async () => {
           console.log(`[ready] pi-replit listening on http://localhost:${PORT}`);
+          try {
+            const bootPool = getPool();
+            await bootPool.query(
+              `INSERT INTO app_config (key, value, updated_at) VALUES ('system_boot_time', $1, $2)
+               ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+              [JSON.stringify(Date.now()), Date.now()]
+            );
+          } catch {
+          }
           startObSync();
           startAlertSystem(broadcastToAll, async (briefPath, content) => {
             try {

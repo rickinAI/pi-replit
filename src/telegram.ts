@@ -442,6 +442,15 @@ async function handleRiskCommand(): Promise<string> {
     if (pv.rows.length > 0 && typeof pv.rows[0].value === "number") portfolio = pv.rows[0].value;
   } catch {}
 
+  const rcDefaults = { max_leverage: 5, risk_per_trade_pct: 5, max_positions: 3, exposure_cap_pct: 60, correlation_limit: 1, circuit_breaker_7d_pct: -15, circuit_breaker_drawdown_pct: -25 };
+  let rc = rcDefaults;
+  try {
+    const rcRes = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engine_config'`);
+    if (rcRes.rows.length > 0 && typeof rcRes.rows[0].value === "object" && rcRes.rows[0].value !== null) {
+      rc = { ...rcDefaults, ...rcRes.rows[0].value };
+    }
+  } catch {}
+
   let positions: any[] = [];
   try {
     const pos = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_positions'`);
@@ -469,18 +478,27 @@ async function handleRiskCommand(): Promise<string> {
     buckets[b] = (buckets[b] || 0) + 1;
   }
 
+  let peakPortfolio = portfolio;
+  try {
+    const peakRes = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_peak_portfolio'`);
+    if (peakRes.rows.length > 0 && typeof peakRes.rows[0].value === "number") peakPortfolio = peakRes.rows[0].value;
+  } catch {}
+  const drawdownPct = peakPortfolio > 0 ? ((portfolio - peakPortfolio) / peakPortfolio * 100) : 0;
+
   const lines = [
     `${mode} *Risk Dashboard*`,
     "",
-    `💰 Portfolio: $${portfolio.toFixed(2)}`,
+    `💰 Portfolio: $${portfolio.toFixed(2)} (peak: $${peakPortfolio.toFixed(2)})`,
     `📊 Exposure: $${totalExposure.toFixed(2)} (${exposurePct.toFixed(0)}% of portfolio)`,
     `📈 Unrealized P&L: ${unrealizedPnl >= 0 ? "+" : ""}$${unrealizedPnl.toFixed(2)}`,
     `📉 7-Day Rolling P&L: ${rolling7d >= 0 ? "+" : ""}$${rolling7d.toFixed(2)} (${rolling7dPct.toFixed(1)}%)`,
-    `🔻 Circuit Breaker: ${rolling7dPct < -15 ? "⚠️ TRIGGERED" : "OK"} (threshold: -15%)`,
+    `🔻 7d Breaker: ${rolling7dPct < rc.circuit_breaker_7d_pct ? "⚠️ TRIGGERED" : "OK"} (${rolling7dPct.toFixed(1)}% / ${rc.circuit_breaker_7d_pct}%)`,
+    `🔻 Drawdown Breaker: ${drawdownPct < rc.circuit_breaker_drawdown_pct ? "⚠️ TRIGGERED" : "OK"} (${drawdownPct.toFixed(1)}% / ${rc.circuit_breaker_drawdown_pct}%)`,
     "",
-    `*Positions:* ${positions.length}/3`,
-    `*Exposure Limit:* ${exposurePct.toFixed(0)}%/60%`,
-    `*Buckets:* ${Object.entries(buckets).map(([b, c]) => `${b}: ${c}/1`).join(", ") || "none"}`,
+    `*Leverage:* max ${rc.max_leverage}x | *Risk/Trade:* ${rc.risk_per_trade_pct}%`,
+    `*Positions:* ${positions.length}/${rc.max_positions}`,
+    `*Exposure Limit:* ${exposurePct.toFixed(0)}%/${rc.exposure_cap_pct}%`,
+    `*Buckets:* ${Object.entries(buckets).map(([b, c]) => `${b}: ${c}/${rc.correlation_limit}`).join(", ") || "none"}`,
   ];
   return lines.join("\n");
 }

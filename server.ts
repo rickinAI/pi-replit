@@ -1881,7 +1881,8 @@ function buildCoinGeckoTools(): ToolDefinition[] {
           }
           if (riskCheck.tier === "human_required") {
             const portfolio = await bankr.getPortfolioValue();
-            const riskAmount = portfolio * 0.05;
+            const rc = await bankr.getRiskConfig();
+            const riskAmount = portfolio * (rc.risk_per_trade_pct / 100);
             const approval = await telegram.requestTradeApproval({
               thesisId: params.thesis_id,
               asset: params.asset,
@@ -5085,6 +5086,149 @@ app.post("/api/wealth-engines/kill", async (req: Request, res: Response) => {
   }
 });
 
+app.get("/api/wealth-engine/config", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const config = await bankr.getRiskConfig();
+    const portfolio = await bankr.getPortfolioValue();
+    const peak = await bankr.getPeakPortfolioValue();
+    const mode = await bankr.getMode();
+    const paused = await bankr.isPaused();
+    const killSwitch = await bankr.isKillSwitchActive();
+    const positions = await bankr.getPositions();
+    const pool = db.getPool();
+    let bootTime = 0;
+    try {
+      const bt = await pool.query(`SELECT value FROM app_config WHERE key = 'system_boot_time'`);
+      if (bt.rows.length > 0) bootTime = typeof bt.rows[0].value === "number" ? bt.rows[0].value : 0;
+    } catch {}
+    let monitorTick = 0;
+    try {
+      const mt = await pool.query(`SELECT value FROM app_config WHERE key = 'bankr_monitor_last_tick'`);
+      if (mt.rows.length > 0) monitorTick = typeof mt.rows[0].value === "number" ? mt.rows[0].value : 0;
+    } catch {}
+    let shadowOpen = 0, shadowClosed = 0;
+    try {
+      const { getShadowTrades } = await import("./src/oversight.js");
+      const openShadows = await getShadowTrades("open");
+      const closedShadows = await getShadowTrades("closed");
+      shadowOpen = openShadows.length;
+      shadowClosed = closedShadows.length;
+    } catch {}
+    const weJobs = scheduledJobs.getJobs().filter((j: any) =>
+      ["scout-micro-scan", "scout-full-cycle", "polymarket-activity-scan", "polymarket-full-cycle", "bankr-execute", "oversight-health", "oversight-weekly", "oversight-daily-summary", "oversight-shadow-refresh", "autoresearch-weekly"].includes(j.id)
+    ).map((j: any) => ({
+      id: j.id, name: j.name, enabled: j.enabled,
+      schedule_type: j.schedule.type,
+      interval_minutes: j.schedule.intervalMinutes || null,
+      hour: j.schedule.hour ?? null, minute: j.schedule.minute ?? null,
+      last_run: j.lastRun || null, last_status: j.lastStatus || null,
+    }));
+    res.json({
+      risk: config, portfolio, peak, mode, paused, kill_switch: killSwitch,
+      bnkr_configured: (await import("./src/bnkr.js")).isConfigured(),
+      positions_count: positions.length,
+      boot_time: bootTime, monitor_tick: monitorTick,
+      shadow_open: shadowOpen, shadow_closed: shadowClosed,
+      jobs: weJobs,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.post("/api/wealth-engine/config", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const updates = req.body;
+    if (!updates || typeof updates !== "object") { res.status(400).json({ error: "Body must be a JSON object" }); return; }
+    const allowed = ["max_leverage", "risk_per_trade_pct", "max_positions", "exposure_cap_pct", "correlation_limit", "circuit_breaker_7d_pct", "circuit_breaker_drawdown_pct", "notification_mode"];
+    const filtered: any = {};
+    for (const k of Object.keys(updates)) {
+      if (allowed.includes(k)) filtered[k] = updates[k];
+    }
+    if (Object.keys(filtered).length === 0) { res.status(400).json({ error: "No valid config keys provided" }); return; }
+    const result = await bankr.setRiskConfig(filtered);
+    if (filtered.notification_mode) {
+      const pool = db.getPool();
+      await pool.query(
+        `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+        ["we_notification_mode", JSON.stringify(filtered.notification_mode), Date.now()]
+      );
+    }
+    weDashboardCache = null;
+    res.json({ ok: true, config: result });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || String(err) });
+  }
+});
+
+app.post("/api/wealth-engine/portfolio", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const { value, reset_peak } = req.body;
+    const pool = db.getPool();
+    if (typeof value === "number" && value > 0) {
+      await pool.query(
+        `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+        ["wealth_engines_portfolio_value", JSON.stringify(value), Date.now()]
+      );
+    }
+    if (reset_peak) {
+      const currentPortfolio = await bankr.getPortfolioValue();
+      await pool.query(
+        `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+        ["wealth_engines_peak_portfolio", JSON.stringify(currentPortfolio), Date.now()]
+      );
+    }
+    weDashboardCache = null;
+    res.json({ ok: true, portfolio: await bankr.getPortfolioValue(), peak: await bankr.getPeakPortfolioValue() });
+  } catch (err: any) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.post("/api/wealth-engine/mode", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const { mode } = req.body;
+    if (!["SHADOW", "LIVE", "BETA"].includes(mode)) { res.status(400).json({ error: "Invalid mode" }); return; }
+    const pool = db.getPool();
+    await pool.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      ["wealth_engines_mode", JSON.stringify(mode), Date.now()]
+    );
+    weDashboardCache = null;
+    res.json({ ok: true, mode });
+  } catch (err: any) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.post("/api/wealth-engine/jobs/:jobId", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  const WE_JOB_IDS = new Set(["scout-micro-scan", "scout-full-cycle", "polymarket-activity-scan", "polymarket-full-cycle", "bankr-execute", "oversight-health", "oversight-weekly", "oversight-daily-summary", "oversight-shadow-refresh", "autoresearch-weekly"]);
+  try {
+    const { jobId } = req.params;
+    if (!WE_JOB_IDS.has(jobId)) { res.status(403).json({ error: "Not a Wealth Engine job" }); return; }
+    const { enabled, interval_minutes } = req.body;
+    const updates: any = {};
+    if (typeof enabled === "boolean") updates.enabled = enabled;
+    if (typeof interval_minutes === "number" && interval_minutes >= 5) {
+      updates.schedule = { intervalMinutes: interval_minutes };
+    }
+    const result = scheduledJobs.updateJob(jobId, updates);
+    if (!result) { res.status(404).json({ error: "Job not found" }); return; }
+    res.json({ ok: true, job: { id: result.id, name: result.name, enabled: result.enabled, schedule: result.schedule } });
+  } catch (err: any) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 app.get("/api/x-intelligence/data", async (_req: Request, res: Response) => {
   try {
     const forceRefresh = _req.query.force === "1";
@@ -7824,8 +7968,16 @@ async function startServer(maxRetries = 5) {
             process.exit(1);
           }
         });
-        server.listen({ port: PORT, host: "0.0.0.0", exclusive: false }, () => {
+        server.listen({ port: PORT, host: "0.0.0.0", exclusive: false }, async () => {
           console.log(`[ready] pi-replit listening on http://localhost:${PORT}`);
+          try {
+            const bootPool = db.getPool();
+            await bootPool.query(
+              `INSERT INTO app_config (key, value, updated_at) VALUES ('system_boot_time', $1, $2)
+               ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+              [JSON.stringify(Date.now()), Date.now()]
+            );
+          } catch {}
           startObSync();
           alerts.startAlertSystem(broadcastToAll, async (briefPath, content) => {
             try { await kbCreate(briefPath, content); } catch (err) {

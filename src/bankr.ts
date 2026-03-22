@@ -79,7 +79,60 @@ export interface RiskCheckResult {
 const PORTFOLIO_VALUE_KEY = "wealth_engines_portfolio_value";
 const PEAK_PORTFOLIO_KEY = "wealth_engines_peak_portfolio";
 const CONSECUTIVE_LOSSES_KEY = "wealth_engines_consecutive_losses";
+const RISK_CONFIG_KEY = "wealth_engine_config";
 const DEFAULT_PORTFOLIO = 1000;
+
+export interface RiskConfig {
+  max_leverage: number;
+  risk_per_trade_pct: number;
+  max_positions: number;
+  exposure_cap_pct: number;
+  correlation_limit: number;
+  circuit_breaker_7d_pct: number;
+  circuit_breaker_drawdown_pct: number;
+  notification_mode: "all" | "trades-only" | "silent";
+}
+
+const DEFAULT_RISK_CONFIG: RiskConfig = {
+  max_leverage: 5,
+  risk_per_trade_pct: 5,
+  max_positions: 3,
+  exposure_cap_pct: 60,
+  correlation_limit: 1,
+  circuit_breaker_7d_pct: -15,
+  circuit_breaker_drawdown_pct: -25,
+  notification_mode: "all",
+};
+
+export async function getRiskConfig(): Promise<RiskConfig> {
+  const pool = getPool();
+  try {
+    const res = await pool.query(`SELECT value FROM app_config WHERE key = $1`, [RISK_CONFIG_KEY]);
+    if (res.rows.length > 0 && typeof res.rows[0].value === "object" && res.rows[0].value !== null) {
+      return { ...DEFAULT_RISK_CONFIG, ...res.rows[0].value };
+    }
+  } catch {}
+  return { ...DEFAULT_RISK_CONFIG };
+}
+
+export async function setRiskConfig(updates: Partial<RiskConfig>): Promise<RiskConfig> {
+  const current = await getRiskConfig();
+  const merged = { ...current, ...updates };
+  if (merged.max_leverage < 1 || merged.max_leverage > 10) throw new Error("max_leverage must be 1-10");
+  if (merged.risk_per_trade_pct < 1 || merged.risk_per_trade_pct > 10) throw new Error("risk_per_trade_pct must be 1-10");
+  if (merged.max_positions < 1 || merged.max_positions > 10) throw new Error("max_positions must be 1-10");
+  if (merged.exposure_cap_pct < 20 || merged.exposure_cap_pct > 100) throw new Error("exposure_cap_pct must be 20-100");
+  if (merged.correlation_limit < 1 || merged.correlation_limit > 5) throw new Error("correlation_limit must be 1-5");
+  if (merged.circuit_breaker_7d_pct > -5 || merged.circuit_breaker_7d_pct < -30) throw new Error("circuit_breaker_7d_pct must be -5 to -30");
+  if (merged.circuit_breaker_drawdown_pct > -10 || merged.circuit_breaker_drawdown_pct < -50) throw new Error("circuit_breaker_drawdown_pct must be -10 to -50");
+  const pool = getPool();
+  await pool.query(
+    `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [RISK_CONFIG_KEY, JSON.stringify(merged), Date.now()]
+  );
+  return merged;
+}
 
 export async function getPortfolioValue(): Promise<number> {
   const pool = getPool();
@@ -155,11 +208,13 @@ export function determineApprovalTier(params: {
   drawdownPct: number;
   isFirstForAsset: boolean;
   leverageIncrease: boolean;
+  drawdownThreshold?: number;
 }): ApprovalTier {
+  const ddThresh = params.drawdownThreshold ?? -25;
   if (
     params.capitalPct > 30 ||
     params.consecutiveLosses >= 3 ||
-    params.drawdownPct < -25 ||
+    params.drawdownPct < ddThresh ||
     params.isFirstForAsset ||
     params.leverageIncrease
   ) {
@@ -275,16 +330,19 @@ export async function runPreExecutionChecks(params: {
   const mode = await getMode();
   checks.push({ name: "mode_check", passed: true, detail: `Mode: ${mode}${mode === "SHADOW" ? " (shadow trades only)" : ""}` });
 
-  const levOk = params.leverage <= 5;
-  checks.push({ name: "leverage_cap", passed: levOk, detail: `Requested: ${params.leverage}x, Max: 5x` });
+  const rc = await getRiskConfig();
+
+  const levOk = params.leverage <= rc.max_leverage;
+  checks.push({ name: "leverage_cap", passed: levOk, detail: `Requested: ${params.leverage}x, Max: ${rc.max_leverage}x` });
   if (!levOk) allPassed = false;
 
   const portfolio = await getPortfolioValue();
-  const maxRisk = portfolio * 0.05;
+  const riskPct = rc.risk_per_trade_pct / 100;
+  const maxRisk = portfolio * riskPct;
   const riskDistance = Math.abs(params.entry_price - params.stop_price);
   const riskAmount = params.risk_amount || (riskDistance > 0 ? maxRisk : 0);
   const riskOk = riskAmount <= maxRisk;
-  checks.push({ name: "risk_per_trade", passed: riskOk, detail: `Risk: $${riskAmount.toFixed(2)}, Max: $${maxRisk.toFixed(2)} (5% of $${portfolio.toFixed(2)})` });
+  checks.push({ name: "risk_per_trade", passed: riskOk, detail: `Risk: $${riskAmount.toFixed(2)}, Max: $${maxRisk.toFixed(2)} (${rc.risk_per_trade_pct}% of $${portfolio.toFixed(2)})` });
   if (!riskOk) allPassed = false;
 
   if (params.leverage > 1) {
@@ -298,23 +356,23 @@ export async function runPreExecutionChecks(params: {
   }
 
   const positions = await getPositions();
-  const posCountOk = positions.length < 3;
-  checks.push({ name: "max_positions", passed: posCountOk, detail: `Open: ${positions.length}/3` });
+  const posCountOk = positions.length < rc.max_positions;
+  checks.push({ name: "max_positions", passed: posCountOk, detail: `Open: ${positions.length}/${rc.max_positions}` });
   if (!posCountOk) allPassed = false;
 
   const totalExposure = positions.reduce((sum, p) => sum + (p.size * p.entry_price), 0);
   const newPositionSize = riskDistance > 0 ? riskAmount / riskDistance : 0;
   const newExposure = newPositionSize * params.entry_price;
   const totalAfter = totalExposure + newExposure;
-  const exposureLimit = portfolio * 0.60;
+  const exposureLimit = portfolio * (rc.exposure_cap_pct / 100);
   const exposureOk = totalAfter <= exposureLimit;
-  checks.push({ name: "total_exposure", passed: exposureOk, detail: `After: $${totalAfter.toFixed(2)} / $${exposureLimit.toFixed(2)} (60% of portfolio)` });
+  checks.push({ name: "total_exposure", passed: exposureOk, detail: `After: $${totalAfter.toFixed(2)} / $${exposureLimit.toFixed(2)} (${rc.exposure_cap_pct}% of portfolio)` });
   if (!exposureOk) allPassed = false;
 
   const bucket = getExposureBucket(params.asset, params.asset_class);
   const bucketCount = positions.filter(p => p.exposure_bucket === bucket).length;
-  const correlationOk = bucketCount < 1;
-  checks.push({ name: "correlation_limit", passed: correlationOk, detail: `Bucket "${bucket}": ${bucketCount}/1 positions` });
+  const correlationOk = bucketCount < rc.correlation_limit;
+  checks.push({ name: "correlation_limit", passed: correlationOk, detail: `Bucket "${bucket}": ${bucketCount}/${rc.correlation_limit} positions` });
   if (!correlationOk) allPassed = false;
 
   const consecutiveLosses = await getConsecutiveLosses();
@@ -322,8 +380,8 @@ export async function runPreExecutionChecks(params: {
 
   const peakPortfolio = await getPeakPortfolioValue();
   const drawdownPct = peakPortfolio > 0 ? ((portfolio - peakPortfolio) / peakPortfolio) * 100 : 0;
-  const drawdownOk = drawdownPct > -25;
-  checks.push({ name: "peak_drawdown", passed: drawdownOk, detail: `Drawdown from peak: ${drawdownPct.toFixed(1)}% (limit: -25%)` });
+  const drawdownOk = drawdownPct > rc.circuit_breaker_drawdown_pct;
+  checks.push({ name: "peak_drawdown", passed: drawdownOk, detail: `Drawdown from peak: ${drawdownPct.toFixed(1)}% (limit: ${rc.circuit_breaker_drawdown_pct}%)` });
 
   const capitalPct = portfolio > 0 ? (newExposure / portfolio) * 100 : 0;
   const firstForAsset = await isFirstTradeForAsset(params.asset, params.asset_class);
@@ -334,6 +392,7 @@ export async function runPreExecutionChecks(params: {
     drawdownPct,
     isFirstForAsset: firstForAsset,
     leverageIncrease: false,
+    drawdownThreshold: rc.circuit_breaker_drawdown_pct,
   });
   checks.push({ name: "approval_tier", passed: true, detail: `Tier: ${tier} (capital: ${capitalPct.toFixed(1)}%, losses: ${consecutiveLosses}, drawdown: ${drawdownPct.toFixed(1)}%, first: ${firstForAsset})` });
 
@@ -416,7 +475,8 @@ export async function openPosition(params: {
   }
 
   const portfolio = await getPortfolioValue();
-  const maxRisk = portfolio * 0.05;
+  const rc = await getRiskConfig();
+  const maxRisk = portfolio * (rc.risk_per_trade_pct / 100);
   const riskDistance = Math.abs(params.entry_price - params.stop_price);
   const size = riskDistance > 0 ? maxRisk / riskDistance : 0;
 
@@ -607,7 +667,8 @@ export async function checkCircuitBreaker(): Promise<{ triggered: boolean; rolli
   const peakPortfolio = await getPeakPortfolioValue();
   const peakDrawdownPct = peakPortfolio > 0 ? ((portfolio - peakPortfolio) / peakPortfolio) * 100 : 0;
 
-  const triggered = pnlPct < -15 || peakDrawdownPct < -25;
+  const rc = await getRiskConfig();
+  const triggered = pnlPct < rc.circuit_breaker_7d_pct || peakDrawdownPct < rc.circuit_breaker_drawdown_pct;
 
   if (triggered) {
     const pool = getPool();
@@ -616,9 +677,9 @@ export async function checkCircuitBreaker(): Promise<{ triggered: boolean; rolli
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
       [JSON.stringify(true), Date.now()]
     );
-    const reason = peakDrawdownPct < -25
-      ? `Peak drawdown ${peakDrawdownPct.toFixed(1)}% < -25%`
-      : `7-day P&L ${pnlPct.toFixed(1)}% < -15%`;
+    const reason = peakDrawdownPct < rc.circuit_breaker_drawdown_pct
+      ? `Peak drawdown ${peakDrawdownPct.toFixed(1)}% < ${rc.circuit_breaker_drawdown_pct}%`
+      : `7-day P&L ${pnlPct.toFixed(1)}% < ${rc.circuit_breaker_7d_pct}%`;
     console.log(`[bankr] Circuit breaker TRIGGERED: ${reason}`);
   }
 
