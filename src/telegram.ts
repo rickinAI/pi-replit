@@ -871,6 +871,10 @@ async function handleAddWalletCommand(args: string): Promise<string> {
     const { getWhaleWatchlist, isBlacklisted, buildWalletFromActivity, saveWhaleWatchlist } = await import("./polymarket.js");
     const wallets = await getWhaleWatchlist();
 
+    if (await isBlacklisted(address)) {
+      return `${mode} 🚫 Wallet \`${address.slice(0, 10)}…\` is blacklisted. Remove from blacklist first.`;
+    }
+
     const existingIdx = wallets.findIndex(w => w.address.toLowerCase() === address.toLowerCase());
     if (existingIdx !== -1) {
       const existing = wallets[existingIdx];
@@ -891,10 +895,6 @@ async function handleAddWalletCommand(args: string): Promise<string> {
         ].join("\n");
       }
       return `${mode} ⚠️ Wallet \`${address.slice(0, 10)}…\` is already tracked and active.`;
-    }
-
-    if (await isBlacklisted(address)) {
-      return `${mode} 🚫 Wallet \`${address.slice(0, 10)}…\` is blacklisted. Remove from blacklist first.`;
     }
 
     const wallet = await buildWalletFromActivity(address, "manual");
