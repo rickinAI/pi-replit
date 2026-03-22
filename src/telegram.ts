@@ -573,14 +573,13 @@ async function handleRiskCommand(): Promise<string> {
       lines.push("", "*Signal Quality:*");
       for (const s of scores) {
         const emoji = s.win_rate > 60 ? "🟢" : s.win_rate < 40 ? "🔴" : "🟡";
-        const pf = (s as any).profit_factor != null ? ` PF:${(s as any).profit_factor}` : "";
+        const pf = s.profit_factor != null ? ` PF:${s.profit_factor}` : "";
         lines.push(`${emoji} ${s.source}/${s.asset_class}: ${s.win_rate}% win (${s.recent_results.length} trades, avg $${s.avg_pnl.toFixed(2)}${pf})`);
-        const bd = (s as any).asset_breakdown;
+        const bd = s.asset_breakdown;
         if (bd && typeof bd === "object") {
           for (const [asset, stats] of Object.entries(bd)) {
-            const a = stats as { wins: number; losses: number; win_rate: number; avg_pnl: number };
-            const ae = a.win_rate > 60 ? "🟢" : a.win_rate < 40 ? "🔴" : "🟡";
-            lines.push(`  ${ae} ${asset}: ${a.win_rate}% (${a.wins}W/${a.losses}L, avg $${a.avg_pnl.toFixed(2)})`);
+            const ae = stats.win_rate > 60 ? "🟢" : stats.win_rate < 40 ? "🔴" : "🟡";
+            lines.push(`  ${ae} ${asset}: ${stats.win_rate}% (${stats.wins}W/${stats.losses}L, avg $${stats.avg_pnl.toFixed(2)})`);
           }
         }
       }
