@@ -354,6 +354,22 @@
 
     <div class="kpi-strip">
       <div class="kpi">
+        <div class="kpi-label">Markets Won</div>
+        <div class="kpi-val sm green" id="kpiWon">0</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Markets Lost</div>
+        <div class="kpi-val sm red" id="kpiLost">0</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Avg Entry</div>
+        <div class="kpi-val sm cyan" id="kpiAvgEntry">—</div>
+        <div class="kpi-sub">odds at entry</div>
+      </div>
+    </div>
+
+    <div class="kpi-strip">
+      <div class="kpi">
         <div class="kpi-label">Drawdown</div>
         <div class="kpi-val sm" id="kpiDrawdown">0%</div>
         <div class="risk-bar"><div class="risk-fill green" id="ddFill" style="width:0%"></div></div>
@@ -398,6 +414,16 @@
             <span id="pnlWashSaleRow" style="display:none">Wash: <strong id="pnlWashSales" style="color:var(--amber)">$0</strong></span>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- MARKET CONTEXT -->
+    <div class="section" id="marketSection">
+      <div class="sec-hdr" data-section="market">
+        <div class="sec-hdr-left"><div class="sec-title">Market Context</div><span class="sec-chev">&#9662;</span></div>
+      </div>
+      <div class="sec-body" id="marketBody">
+        <div class="card" id="marketCard"><div class="empty">No market data</div></div>
       </div>
     </div>
 
@@ -664,7 +690,14 @@ function render(data){
   var wi=data.whale_intelligence||{};
   document.getElementById('kpiCopyTrades').textContent=wi.copy_trades_active||0;
 
+  var mc=data.market_context||{};
+  document.getElementById('kpiWon').textContent=mc.markets_won||0;
+  document.getElementById('kpiLost').textContent=mc.markets_lost||0;
+  var avgE=mc.avg_entry_odds||0;
+  document.getElementById('kpiAvgEntry').textContent=avgE>0?fmtOdds(avgE):'—';
+
   renderPnlSummary(data.tax_summary);
+  renderMarketContext(data.market_context);
   renderRisk(data);
   renderPositions(pa);
   renderPolyTheses(data.polymarket_theses||[]);
@@ -678,7 +711,7 @@ function render(data){
   var now=new Date();
   document.getElementById('lastUpdate').textContent='Updated '+now.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})+' \u00b7 '+now.toLocaleDateString('en-US',{month:'short',day:'numeric'});
 
-  ['pnl','risk','positions','poly','whale','trades','activity','research','health','oversight'].forEach(applySec);
+  ['pnl','market','risk','positions','poly','whale','trades','activity','research','health','oversight'].forEach(applySec);
 }
 
 function renderPnlSummary(tax){
@@ -713,6 +746,48 @@ function renderRisk(d){
 }
 
 function fmtOdds(n){if(n==null)return '—';return(n*100).toFixed(0)+'¢';}
+function timeUntil(d){if(!d)return null;var ms=new Date(d).getTime()-Date.now();if(ms<=0)return 'resolving soon';var h=Math.floor(ms/36e5);if(h<1)return '<1h left';if(h<24)return h+'h left';var dy=Math.floor(h/24);return dy+(dy===1?' day left':' days left');}
+
+function renderMarketContext(mc){
+  var el=document.getElementById('marketCard');
+  if(!mc){el.innerHTML='<div class="empty">No market data</div>';return;}
+  var h='<div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">';
+  var sb=mc.source_breakdown||[];
+  sb.forEach(function(s){
+    h+='<div><div class="kpi-label">'+esc(s.source)+' WR</div>';
+    h+='<div class="kpi-val sm '+(s.win_rate>=60?'green':s.win_rate>=45?'amber':'red')+'">'+s.win_rate.toFixed(0)+'%</div>';
+    h+='<div class="kpi-sub">'+s.wins+'W / '+(s.total-s.wins)+'L &middot; '+(s.pnl>=0?'+':'')+fmt$(s.pnl)+'</div></div>';
+  });
+  if(!sb.length)h+='<div><div class="kpi-label">Source WR</div><div class="kpi-val sm">—</div></div>';
+  h+='</div>';
+  var cb=mc.category_breakdown||[];
+  if(cb.length){
+    h+='<div style="margin-top:0.5rem;border-top:1px solid var(--border);padding-top:0.4rem">';
+    h+='<div class="kpi-label" style="margin-bottom:0.25rem">Category Breakdown</div>';
+    cb.forEach(function(c){
+      h+='<div style="display:flex;justify-content:space-between;font-size:0.55rem;padding:0.1rem 0">';
+      h+='<span style="color:var(--text)">'+esc(c.category)+'</span>';
+      h+='<span style="color:var(--text-secondary)">'+c.wins+'/'+c.total+' ('+c.win_rate.toFixed(0)+'%)</span></div>';
+    });
+    h+='</div>';
+  }
+  var ur=mc.upcoming_resolutions||[];
+  if(ur.length){
+    h+='<div style="margin-top:0.5rem;border-top:1px solid var(--border);padding-top:0.4rem">';
+    h+='<div class="kpi-label" style="margin-bottom:0.25rem">Resolution Pipeline</div>';
+    ur.forEach(function(r){
+      var tl=timeUntil(r.expires_at);
+      var dc=r.direction==='YES'?'yes':'no';
+      h+='<div style="display:flex;justify-content:space-between;align-items:center;font-size:0.55rem;padding:0.12rem 0">';
+      h+='<span style="color:var(--text)">'+esc(r.question)+'</span>';
+      h+='<span style="white-space:nowrap"><span class="pill '+dc+'" style="margin-right:0.2rem">'+esc(r.direction)+'</span>';
+      h+='<span style="color:var(--amber)">'+(tl||'—')+'</span></span></div>';
+    });
+    h+='</div>';
+  }
+  el.innerHTML=h;
+}
+
 function renderPositions(pos){
   var el=document.getElementById('positionsCard');
   document.getElementById('posCount').textContent=pos.length;
@@ -733,7 +808,10 @@ function renderPositions(pos){
     h+='</span><span class="pos-pnl '+pc+'">'+(pnl>=0?'+':'')+fmt$(pnl)+' ('+fmtPct(pp)+')</span></div>';
     h+='<div class="pos-meta"><span>Entry: <strong>'+fmtOdds(p.entry_price)+'</strong></span><span>Now: <strong>'+fmtOdds(p.current_price)+'</strong></span>';
     if(p.source_wallet)h+='<span>Whale: <strong>'+esc(p.source_wallet)+'</strong></span>';
-    h+='<span>'+timeAgo(p.opened_at)+'</span></div></div>';
+    var ttr=timeUntil(p.expires_at);
+    if(ttr)h+='<span style="color:var(--amber)">'+ttr+'</span>';
+    else h+='<span>'+timeAgo(p.opened_at)+'</span>';
+    h+='</div></div>';
   });
   el.innerHTML=h;
 }
@@ -789,8 +867,25 @@ function renderWhaleIntelligence(wi){
   }
   var wallets=wi.tracked_wallets;
   var perf=wi.performance||[];
+  var signals=wi.recent_signals||[];
   document.getElementById('whaleCount').textContent=wallets.length;
   var h='';
+  if(signals.length){
+    h+='<div style="padding:0.5rem 0.75rem;border-bottom:1px solid var(--border)">';
+    h+='<div class="kpi-label" style="margin-bottom:0.3rem">Recent Whale Moves</div>';
+    signals.slice(0,5).forEach(function(s){
+      var isEntry=s.signal_type==='new_entry';
+      var dc=s.direction==='YES'?'yes':'no';
+      h+='<div style="display:flex;justify-content:space-between;align-items:center;font-size:0.55rem;padding:0.12rem 0">';
+      h+='<span style="color:var(--text)"><strong>'+esc(s.wallet_alias)+'</strong> ';
+      h+='<span style="color:var(--'+(isEntry?'green':'red')+');font-weight:600">'+(isEntry?'entered':'exited')+'</span> ';
+      h+=esc((s.market_question||'').slice(0,40))+'</span>';
+      h+='<span style="white-space:nowrap"><span class="pill '+dc+'">'+esc(s.direction)+'</span> ';
+      if(s.odds)h+='<span style="color:var(--text-secondary)">'+fmtOdds(s.odds)+'</span> ';
+      h+='<span style="color:var(--text-muted)">'+timeAgo(s.detected_at?new Date(s.detected_at).toISOString():null)+'</span></span></div>';
+    });
+    h+='</div>';
+  }
   wallets.forEach(function(w){
     var p=perf.find(function(x){return x.wallet_address===w.address;});
     var wr=w.win_rate||0;

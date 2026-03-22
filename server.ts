@@ -4441,7 +4441,18 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
     paused: summary.paused,
     kill_switch: summary.kill_switch,
     positions: (() => {
-      const bankrPositions = (summary.positions || []).filter((p: any) => (p.size || 0) > 0.0001);
+      const thesesByQuestion = new Map<string, any>();
+      pmTheses.forEach((t: any) => {
+        const q = (t.asset || t.question || t.market_question || "").toLowerCase().trim();
+        if (q) thesesByQuestion.set(q, t);
+      });
+      const enrichPosition = (p: any) => {
+        const q = (p.asset || "").toLowerCase().trim();
+        const thesis = thesesByQuestion.get(q);
+        if (thesis && thesis.expires_at) p.expires_at = thesis.expires_at;
+        return p;
+      };
+      const bankrPositions = (summary.positions || []).filter((p: any) => (p.size || 0) > 0.0001).map(enrichPosition);
       const seen = new Set(bankrPositions.map((p: any) => `${p.asset}_${p.direction}`));
       const openShadows = (shadowPerf.trades || [])
         .filter((t: any) => t.status === "open" && !seen.has(`${t.asset}_${t.direction}`));
@@ -4451,7 +4462,7 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
         const key = `${t.asset}_${t.direction}`;
         if (!shadowSeen.has(key)) { shadowSeen.add(key); dedupedShadows.push(t); }
       }
-      const shadowAsPositions = dedupedShadows.map((t: any) => ({
+      const shadowAsPositions = dedupedShadows.map((t: any) => enrichPosition({
         id: t.id || t.thesis_id,
         thesis_id: t.thesis_id,
         asset: t.asset,
@@ -4520,6 +4531,47 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
       } catch { return []; }
     })(),
     tax_summary: taxSummary,
+    market_context: (() => {
+      const marketsWon = allTradesCombined.filter((t: any) => (t.pnl || 0) > 0).length;
+      const marketsLost = allTradesCombined.filter((t: any) => (t.pnl || 0) < 0).length;
+      const entryOdds = allTradesCombined.filter((t: any) => t.entry_price > 0).map((t: any) => t.entry_price);
+      const avgEntryOdds = entryOdds.length > 0 ? entryOdds.reduce((a: number, b: number) => a + b, 0) / entryOdds.length : 0;
+      const categoryMap: Record<string, { wins: number; total: number }> = {};
+      allTradesCombined.forEach((t: any) => {
+        const cat = t.category || t.exposure_bucket || "uncategorized";
+        if (!categoryMap[cat]) categoryMap[cat] = { wins: 0, total: 0 };
+        categoryMap[cat].total++;
+        if ((t.pnl || 0) > 0) categoryMap[cat].wins++;
+      });
+      const categoryBreakdown = Object.entries(categoryMap).map(([cat, stats]) => ({
+        category: cat, wins: stats.wins, total: stats.total,
+        win_rate: stats.total > 0 ? (stats.wins / stats.total * 100) : 0,
+      })).sort((a, b) => b.total - a.total).slice(0, 5);
+      const sourceMap: Record<string, { wins: number; total: number; pnl: number }> = {};
+      allTradesCombined.forEach((t: any) => {
+        const src = t.source || "unknown";
+        if (!sourceMap[src]) sourceMap[src] = { wins: 0, total: 0, pnl: 0 };
+        sourceMap[src].total++;
+        sourceMap[src].pnl += (t.pnl || 0);
+        if ((t.pnl || 0) > 0) sourceMap[src].wins++;
+      });
+      const sourceBreakdown = Object.entries(sourceMap).map(([src, stats]) => ({
+        source: src, wins: stats.wins, total: stats.total, pnl: stats.pnl,
+        win_rate: stats.total > 0 ? (stats.wins / stats.total * 100) : 0,
+      }));
+      const upcomingResolutions = pmTheses
+        .filter((t: any) => t.expires_at)
+        .map((t: any) => ({ question: (t.asset || t.question || t.market_question || "").slice(0, 80), expires_at: t.expires_at, direction: t.direction }))
+        .sort((a: any, b: any) => new Date(a.expires_at).getTime() - new Date(b.expires_at).getTime())
+        .slice(0, 5);
+      return {
+        markets_won: marketsWon, markets_lost: marketsLost,
+        avg_entry_odds: parseFloat(avgEntryOdds.toFixed(4)),
+        category_breakdown: categoryBreakdown,
+        source_breakdown: sourceBreakdown,
+        upcoming_resolutions: upcomingResolutions,
+      };
+    })(),
     whale_intelligence: {
       tracked_wallets: (whaleWallets as any[]).map((w: any) => ({
         address: w.address,
@@ -4542,6 +4594,23 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
         avg_pnl: p.avg_pnl,
         last_trade_at: p.last_trade_at,
       })),
+      recent_signals: await (async () => {
+        try {
+          const ctPool = (await import("./src/db.js")).getPool();
+          const sigRes = await ctPool.query(`SELECT value FROM app_config WHERE key = $1`, ["copy_trading_signals"]);
+          if (sigRes.rows.length > 0 && Array.isArray(sigRes.rows[0].value)) {
+            return sigRes.rows[0].value
+              .sort((a: any, b: any) => (b.detected_at || 0) - (a.detected_at || 0))
+              .slice(0, 10)
+              .map((s: any) => ({
+                wallet_alias: s.wallet_alias, market_question: (s.market_question || "").slice(0, 80),
+                direction: s.direction, odds: s.odds, signal_type: s.signal_type,
+                detected_at: s.detected_at, amount_usd: s.amount_usd,
+              }));
+          }
+        } catch {}
+        return [];
+      })(),
       total_wallets: (whaleWallets as any[]).filter((w: any) => w.enabled).length,
       copy_trades_active: (summary.positions || []).filter((p: any) => p.is_copy_trade).length,
     },
