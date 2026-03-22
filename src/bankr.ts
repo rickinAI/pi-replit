@@ -628,6 +628,17 @@ export async function closePosition(positionId: string, exitPrice: number, close
 
   await updateConsecutiveLosses(pnl);
 
+  try {
+    await updateSignalQuality({
+      source: pos.source || "manual",
+      asset_class: pos.asset_class,
+      pnl: parseFloat(pnl.toFixed(4)),
+      asset: pos.asset,
+    });
+  } catch (e) {
+    console.error("[bankr] Signal quality update on close:", e instanceof Error ? e.message : e);
+  }
+
   recordSignal(pos.asset.toLowerCase(), "exit");
 
   try {
@@ -1058,6 +1069,116 @@ export async function generateForm8949CSV(): Promise<string> {
   }
 
   return lines.join("\n");
+}
+
+export interface SignalQualityRecord {
+  source: "crypto_scout" | "polymarket_scout";
+  asset_class: "crypto" | "polymarket";
+  wins: number;
+  losses: number;
+  total_pnl: number;
+  avg_pnl: number;
+  win_rate: number;
+  recent_results: Array<{ pnl: number; ts: number; asset: string }>;
+}
+
+const SIGNAL_QUALITY_KEY = "signal_quality_scores";
+const SIGNAL_QUALITY_MAX_RECENT = 50;
+const SIGNAL_QUALITY_DECAY_MS = 30 * 24 * 60 * 60 * 1000;
+
+export async function getSignalQuality(): Promise<SignalQualityRecord[]> {
+  const pool = getPool();
+  try {
+    const res = await pool.query(`SELECT value FROM app_config WHERE key = $1`, [SIGNAL_QUALITY_KEY]);
+    if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+      return res.rows[0].value;
+    }
+  } catch (err) {
+    console.error("[bankr] getSignalQuality failed:", err instanceof Error ? err.message : err);
+  }
+  return [];
+}
+
+export async function updateSignalQuality(params: {
+  source: "crypto_scout" | "polymarket_scout" | "manual";
+  asset_class: "crypto" | "polymarket";
+  pnl: number;
+  asset: string;
+}): Promise<void> {
+  if (params.source === "manual") return;
+
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3) ON CONFLICT (key) DO NOTHING`,
+      [SIGNAL_QUALITY_KEY, JSON.stringify([]), Date.now()]
+    );
+    const lockRes = await client.query(
+      `SELECT value FROM app_config WHERE key = $1 FOR UPDATE`,
+      [SIGNAL_QUALITY_KEY]
+    );
+    const records: SignalQualityRecord[] = (lockRes.rows.length > 0 && Array.isArray(lockRes.rows[0].value))
+      ? lockRes.rows[0].value : [];
+
+    const now = Date.now();
+    const cutoff = now - SIGNAL_QUALITY_DECAY_MS;
+
+    let record = records.find(r => r.source === params.source && r.asset_class === params.asset_class);
+    if (!record) {
+      record = {
+        source: params.source,
+        asset_class: params.asset_class,
+        wins: 0,
+        losses: 0,
+        total_pnl: 0,
+        avg_pnl: 0,
+        win_rate: 0,
+        recent_results: [],
+      };
+      records.push(record);
+    }
+
+    record.recent_results.push({ pnl: params.pnl, ts: now, asset: params.asset });
+    record.recent_results = record.recent_results
+      .filter(r => r.ts > cutoff)
+      .slice(-SIGNAL_QUALITY_MAX_RECENT);
+
+    const recentWins = record.recent_results.filter(r => r.pnl > 0).length;
+    const recentTotal = record.recent_results.length;
+    const recentPnl = record.recent_results.reduce((s, r) => s + r.pnl, 0);
+
+    if (params.pnl > 0) record.wins++;
+    else record.losses++;
+    record.total_pnl = parseFloat((record.total_pnl + params.pnl).toFixed(4));
+
+    record.win_rate = recentTotal > 0 ? parseFloat((recentWins / recentTotal * 100).toFixed(1)) : 0;
+    record.avg_pnl = recentTotal > 0 ? parseFloat((recentPnl / recentTotal).toFixed(4)) : 0;
+
+    await client.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [SIGNAL_QUALITY_KEY, JSON.stringify(records), now]
+    );
+    await client.query("COMMIT");
+    console.log(`[bankr] Signal quality updated: ${params.source}/${params.asset_class} — ${params.pnl > 0 ? "WIN" : "LOSS"} $${params.pnl.toFixed(2)}, win rate: ${record.win_rate}%`);
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export function getSignalQualityModifier(scores: SignalQualityRecord[], source: "crypto_scout" | "polymarket_scout", assetClass: "crypto" | "polymarket"): { modifier: string; winRate: number; sampleSize: number } {
+  const record = scores.find(r => r.source === source && r.asset_class === assetClass);
+  if (!record || record.recent_results.length < 3) {
+    return { modifier: "neutral", winRate: 0, sampleSize: record?.recent_results.length || 0 };
+  }
+  if (record.win_rate > 60) return { modifier: "boost", winRate: record.win_rate, sampleSize: record.recent_results.length };
+  if (record.win_rate < 40) return { modifier: "penalty", winRate: record.win_rate, sampleSize: record.recent_results.length };
+  return { modifier: "neutral", winRate: record.win_rate, sampleSize: record.recent_results.length };
 }
 
 export async function detectWashSales(): Promise<TaxLot[]> {

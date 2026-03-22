@@ -794,16 +794,18 @@ Keep this concise — it runs every 30 minutes. No thesis generation, no Nansen/
     agentId: "scout",
     prompt: `Run a FULL CYCLE analysis. This is a comprehensive market scan.
 
-1. Start with BTC technical_analysis — check BTC momentum for alt confirmation filter
-2. Check crypto_trending and crypto_movers for candidates
-3. Run technical_analysis on top 20 candidates, filter for vote_count >= 3/6
-4. Run crypto_backtest on top 5 candidates (30-day data)
-5. Check nansen_smart_money on top candidates (gracefully handle if API key not set)
-6. Search X for sentiment on top 3 candidates
-7. Generate thesis for each candidate meeting entry criteria (votes >= 4/6)
-8. Include: vote count, technical score, regime, Nansen flow, backtest score, entry/stop/target
-9. Provide a brief market overview at the top (BTC dominance, market regime, sector rotations)
-10. List any watchlist changes (assets added/removed)
+1. Check signal_quality FIRST — review your historical win rate for crypto signals. Note the modifier (boost/penalty/neutral) and factor it into confidence levels below.
+2. Start with BTC technical_analysis — check BTC momentum for alt confirmation filter
+3. Check crypto_trending and crypto_movers for candidates
+4. Run technical_analysis on top 20 candidates, filter for vote_count >= 3/6
+5. Run crypto_backtest on top 5 candidates (30-day data)
+6. Check nansen_smart_money on top candidates (gracefully handle if API key not set)
+7. Search X for sentiment on top 3 candidates
+8. Generate thesis for each candidate meeting entry criteria (votes >= 4/6)
+9. CONFIDENCE ADJUSTMENT: If signal_quality shows win rate >60%, you may upgrade MEDIUM→HIGH confidence. If win rate <40%, downgrade HIGH→MEDIUM. Include "Signal quality: X% win rate (N trades)" in thesis reasoning.
+10. Include: vote count, technical score, regime, Nansen flow, backtest score, entry/stop/target
+11. Provide a brief market overview at the top (BTC dominance, market regime, sector rotations)
+12. List any watchlist changes (assets added/removed)
 
 Output the full brief — the system will save it automatically. Do NOT use notes_create.`,
     schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 240 },
@@ -836,27 +838,30 @@ Keep this concise — it runs every 30 minutes. Only flag actionable consensus.`
     agentId: "polymarket-scout",
     prompt: `Run a FULL POLYMARKET CYCLE. Comprehensive prediction market scan.
 
-1. Get trending markets via polymarket_trending (top 20 by volume)
-2. Search specific categories: polymarket_search("crypto"), polymarket_search("politics"), polymarket_search("sports")
-3. Filter markets: volume > $50K, odds between 15-85%, resolution > 12h (if volume > $100K) or > 24h
-4. Check polymarket_whale_watchlist for tracked wallets
-5. Check polymarket_whale_activity for recent whale movements
-6. Run polymarket_consensus to detect aligned whale positions
-7. Evaluate EACH qualifying market against TIERED thesis criteria (try all tiers top-down):
+1. Check signal_quality FIRST — review your historical win rate for polymarket signals. Note the modifier (boost/penalty/neutral) and factor it into confidence levels below.
+2. Get trending markets via polymarket_trending (top 20 by volume)
+3. Search specific categories: polymarket_search("crypto"), polymarket_search("politics"), polymarket_search("sports")
+4. Filter markets: volume > $50K, odds between 15-85%, resolution > 12h (if volume > $100K) or > 24h
+5. Check polymarket_whale_watchlist for tracked wallets
+6. Check polymarket_whale_activity for recent whale movements
+7. Run polymarket_consensus to detect aligned whale positions
+8. Evaluate EACH qualifying market against TIERED thesis criteria (try all tiers top-down):
    - HIGH: 3+ whales aligned, avg score >= 0.8
    - MEDIUM: 2+ whales aligned, avg score >= 0.5
    - SPECULATIVE: 1 whale with score >= 0.7 (single-whale signal)
    - LOW: No whales needed IF volume > $500K AND odds 30-70% (volume-weighted edge)
    For ANY market matching ANY tier, generate thesis via save_pm_thesis with the tier as confidence.
    For LOW theses (volume-only): use empty whale_wallets=[], whale_avg_score=0, total_whale_amount=0.
-8. Check existing polymarket_theses — retire any that have expired or resolved
-9. Search X for sentiment on top markets
+9. CONFIDENCE ADJUSTMENT: If signal_quality shows win rate >60%, you may upgrade confidence one tier. If win rate <40%, downgrade one tier. Include "Signal quality: X% win rate (N trades)" in thesis reasoning.
+10. Check existing polymarket_theses — retire any that have expired or resolved
+11. Search X for sentiment on top markets
 
 IMPORTANT: You MUST generate at least 1 thesis per cycle if ANY market qualifies at ANY tier. Prefer more theses at lower confidence over zero theses.
 
 Output a full brief with:
 - Market overview (total volume, trending categories)
 - Whale activity summary
+- Signal quality feedback (current win rate and modifier)
 - New theses generated (with tier/confidence and reasoning)
 - Existing theses status update
 - Markets that were evaluated but rejected (with which criteria failed)

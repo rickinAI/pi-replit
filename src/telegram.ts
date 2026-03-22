@@ -500,6 +500,19 @@ async function handleRiskCommand(): Promise<string> {
     `*Exposure Limit:* ${exposurePct.toFixed(0)}%/${rc.exposure_cap_pct}%`,
     `*Buckets:* ${Object.entries(buckets).map(([b, c]) => `${b}: ${c}/${rc.correlation_limit}`).join(", ") || "none"}`,
   ];
+
+  try {
+    const { getSignalQuality } = await import("./bankr.js");
+    const scores = await getSignalQuality();
+    if (scores.length > 0) {
+      lines.push("", "*Signal Quality:*");
+      for (const s of scores) {
+        const emoji = s.win_rate > 60 ? "🟢" : s.win_rate < 40 ? "🔴" : "🟡";
+        lines.push(`${emoji} ${s.source}/${s.asset_class}: ${s.win_rate}% win (${s.recent_results.length} trades, avg $${s.avg_pnl.toFixed(2)})`);
+      }
+    }
+  } catch {}
+
   return lines.join("\n");
 }
 

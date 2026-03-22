@@ -1038,6 +1038,18 @@ export async function closeShadowTrade(
   console.log(`[oversight] Shadow trade closed: ${trade.asset} P&L: $${trade.hypothetical_pnl.toFixed(2)}`);
 
   try {
+    const { updateSignalQuality } = await import("./bankr.js");
+    await updateSignalQuality({
+      source: (trade.source as "crypto_scout" | "polymarket_scout") || "crypto_scout",
+      asset_class: trade.asset_class,
+      pnl: trade.hypothetical_pnl,
+      asset: trade.asset,
+    });
+  } catch (e) {
+    console.warn("[oversight] Signal quality update on shadow close:", e instanceof Error ? e.message : e);
+  }
+
+  try {
     const { sendShadowTradeNotification } = await import("./telegram.js");
     sendShadowTradeNotification({
       type: "close",
@@ -1087,6 +1099,28 @@ export async function refreshShadowTradesFromMarket(): Promise<{
 
   const now = Date.now();
 
+  const notifyShadowClose = async (trade: ShadowTrade, reason: string) => {
+    try {
+      const { updateSignalQuality } = await import("./bankr.js");
+      await updateSignalQuality({
+        source: (trade.source as "crypto_scout" | "polymarket_scout") || "crypto_scout",
+        asset_class: trade.asset_class,
+        pnl: trade.hypothetical_pnl,
+        asset: trade.asset,
+      });
+    } catch (e) {
+      console.warn("[oversight] Signal quality update on shadow refresh close:", e instanceof Error ? e.message : e);
+    }
+    try {
+      const { sendShadowTradeNotification } = await import("./telegram.js");
+      sendShadowTradeNotification({
+        type: "close", asset: trade.asset, direction: trade.direction,
+        entryPrice: trade.entry_price, exitPrice: trade.exit_price || trade.current_price,
+        pnl: trade.hypothetical_pnl, reason,
+      }).catch(() => {});
+    } catch {}
+  };
+
   for (const trade of openTrades) {
     const ageHours = (now - trade.opened_at) / (3600 * 1000);
     if (ageHours > SHADOW_MAX_AGE_HOURS) {
@@ -1097,14 +1131,7 @@ export async function refreshShadowTradesFromMarket(): Promise<{
       const multiplier = trade.direction === "LONG" || trade.direction === "YES" ? 1 : -1;
       trade.hypothetical_pnl = (trade.current_price - trade.entry_price) * multiplier;
       closed++;
-      try {
-        const { sendShadowTradeNotification } = await import("./telegram.js");
-        sendShadowTradeNotification({
-          type: "close", asset: trade.asset, direction: trade.direction,
-          entryPrice: trade.entry_price, exitPrice: trade.current_price,
-          pnl: trade.hypothetical_pnl, reason: "expired (168h max age)",
-        }).catch(() => {});
-      } catch {}
+      await notifyShadowClose(trade, "expired (168h max age)");
       continue;
     }
 
@@ -1141,14 +1168,7 @@ export async function refreshShadowTradesFromMarket(): Promise<{
             trade.exit_price = latestPrice;
             closed++;
             console.log(`[oversight] Shadow stop hit: ${trade.asset} ${trade.direction} @ $${latestPrice} (stop=$${trade.stop_price}) P&L: $${trade.hypothetical_pnl.toFixed(4)}`);
-            try {
-              const { sendShadowTradeNotification } = await import("./telegram.js");
-              sendShadowTradeNotification({
-                type: "close", asset: trade.asset, direction: trade.direction,
-                entryPrice: trade.entry_price, exitPrice: latestPrice,
-                pnl: trade.hypothetical_pnl, reason: `stop hit ($${trade.stop_price})`,
-              }).catch(() => {});
-            } catch {}
+            await notifyShadowClose(trade, `stop hit ($${trade.stop_price})`);
             continue;
           }
         }
@@ -1164,14 +1184,7 @@ export async function refreshShadowTradesFromMarket(): Promise<{
             trade.exit_price = latestPrice;
             closed++;
             console.log(`[oversight] Shadow target hit: ${trade.asset} ${trade.direction} @ $${latestPrice} (target=$${trade.target_price}) P&L: $${trade.hypothetical_pnl.toFixed(4)}`);
-            try {
-              const { sendShadowTradeNotification } = await import("./telegram.js");
-              sendShadowTradeNotification({
-                type: "close", asset: trade.asset, direction: trade.direction,
-                entryPrice: trade.entry_price, exitPrice: latestPrice,
-                pnl: trade.hypothetical_pnl, reason: `target hit ($${trade.target_price})`,
-              }).catch(() => {});
-            } catch {}
+            await notifyShadowClose(trade, `target hit ($${trade.target_price})`);
             continue;
           }
         }

@@ -1530,6 +1530,31 @@ function buildCoinGeckoTools(): ToolDefinition[] {
       },
     },
     {
+      name: "signal_quality",
+      label: "Signal Quality Scores",
+      description: "Get signal quality scores — historical win rates by source (crypto_scout, polymarket_scout) and asset class. Shows rolling win rate, avg P&L, total wins/losses, and recent trade results. Use this before generating theses to understand which signal sources are performing well. Sources with >60% win rate deserve a confidence boost, <40% deserve a penalty.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const scores = await bankr.getSignalQuality();
+          const summary = scores.map(s => ({
+            source: s.source,
+            asset_class: s.asset_class,
+            win_rate: s.win_rate,
+            wins: s.wins,
+            losses: s.losses,
+            total_pnl: s.total_pnl,
+            avg_pnl: s.avg_pnl,
+            sample_size: s.recent_results.length,
+            modifier: bankr.getSignalQualityModifier(scores, s.source, s.asset_class).modifier,
+          }));
+          return { content: [{ type: "text" as const, text: JSON.stringify({ scores: summary }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
       name: "scout_theses",
       label: "SCOUT Active Theses",
       description: "Get all active CRYPTO SCOUT trading theses. Returns structured thesis data including vote counts, technical scores, entry/stop/target prices, and confidence levels.",
@@ -4998,6 +5023,22 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
       crypto_history_count: researchStatus.crypto_history_count,
       polymarket_history_count: researchStatus.polymarket_history_count,
     } : null,
+    signal_quality: await (async () => {
+      try {
+        const scores = await bankr.getSignalQuality();
+        return scores.map(s => ({
+          source: s.source,
+          asset_class: s.asset_class,
+          win_rate: s.win_rate,
+          wins: s.wins,
+          losses: s.losses,
+          total_pnl: s.total_pnl,
+          avg_pnl: s.avg_pnl,
+          sample_size: s.recent_results.length,
+          modifier: bankr.getSignalQualityModifier(scores, s.source, s.asset_class).modifier,
+        }));
+      } catch { return []; }
+    })(),
     agent_activity: agentActivity,
     health: {
       kill_switch: summary.kill_switch,
