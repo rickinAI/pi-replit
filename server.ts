@@ -8277,11 +8277,15 @@ async function startServer(maxRetries = 5) {
             }
           });
           scheduledJobs.startJobSystem(
-            async (agentId: string, task: string, onProgress?: (info: { toolName: string; iteration: number }) => void) => {
-              const agentTools = [
+            async (agentId: string, task: string, onProgress?: (info: { toolName: string; iteration: number }) => void, toolSubset?: string[]) => {
+              let agentTools: any[] = [
                 ...buildKnowledgeBaseTools(),
                 ...cachedStaticTools,
               ];
+              if (toolSubset && toolSubset.length > 0) {
+                const allowed = new Set(toolSubset);
+                agentTools = agentTools.filter((t: any) => allowed.has(t.name));
+              }
               const result = await runSubAgent({
                 agentId,
                 task,

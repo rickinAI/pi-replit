@@ -163,11 +163,12 @@ export async function runSubAgent(opts: {
       });
     }
 
+    const effectiveMaxTokens = opts.isAutomatedJob ? 4096 : 16384;
     let apiResponse: Anthropic.Message;
     try {
       const requestParams: any = {
         model: modelId,
-        max_tokens: 16384,
+        max_tokens: effectiveMaxTokens,
         system: cachedSystemPrompt,
         tools: anthropicTools,
         messages,
@@ -187,7 +188,7 @@ export async function runSubAgent(opts: {
           try {
             apiResponse = await client.messages.create({
               model: modelId,
-              max_tokens: 16384,
+              max_tokens: effectiveMaxTokens,
               system: cachedSystemPrompt,
               tools: anthropicTools,
               messages,

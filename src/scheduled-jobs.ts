@@ -17,6 +17,7 @@ export interface ScheduledJob {
     intervalMinutes?: number;
   };
   enabled: boolean;
+  toolSubset?: string[];
   lastRun?: string;
   lastResult?: string;
   lastStatus?: "success" | "partial" | "error";
@@ -28,7 +29,7 @@ interface ScheduledJobsConfig {
   timezone: string;
 }
 
-type RunAgentFn = (agentId: string, task: string, onProgress?: (info: { toolName: string; iteration: number }) => void) => Promise<{ response: string; timedOut: boolean; agentId?: string; agentName?: string; modelUsed?: string; tokensUsed?: { input: number; output: number } }>;
+type RunAgentFn = (agentId: string, task: string, onProgress?: (info: { toolName: string; iteration: number }) => void, toolSubset?: string[]) => Promise<{ response: string; timedOut: boolean; agentId?: string; agentName?: string; modelUsed?: string; tokensUsed?: { input: number; output: number } }>;
 type BroadcastFn = (event: any) => void;
 type KbCreateFn = (path: string, content: string) => Promise<any>;
 type KbListFn = (path: string) => Promise<string>;
@@ -770,23 +771,15 @@ Process everything autonomously. Be thorough but efficient.`,
     id: "scout-micro-scan",
     name: "SCOUT Micro-Scan",
     agentId: "scout",
-    prompt: `Run a MICRO-SCAN cycle. This is a quick data refresh, not a full analysis.
-
-1. Get the current watchlist via scout_watchlist
-2. For each asset on the watchlist, run technical_analysis to get updated vote counts
-3. Report the results as a brief table:
-
-| Asset | Votes | Score | Regime | Entry Signal | Notes |
-|-------|-------|-------|--------|-------------|-------|
-
-4. Flag any assets where:
-   - Vote count changed significantly since last scan
-   - New entry signal appeared (votes crossed threshold)
-   - RSI exit signal appeared (overbought/oversold)
-
-Keep this concise — it runs every 60 minutes. No thesis generation, no Nansen/X checks, just signal refresh.`,
+    prompt: `MICRO-SCAN: Quick signal refresh only.
+1. scout_watchlist → get assets
+2. technical_analysis on each asset
+3. Output a table: Asset | Votes | Score | Regime | Signal
+4. Flag vote changes, new entry signals, or RSI exits.
+No thesis generation, no Nansen/X, no web searches.`,
     schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 60 },
     enabled: true,
+    toolSubset: ["scout_watchlist", "technical_analysis", "crypto_price", "notes_create"],
   },
   {
     id: "scout-full-cycle",
@@ -815,22 +808,15 @@ Output the full brief — the system will save it automatically. Do NOT use note
     id: "polymarket-activity-scan",
     name: "Polymarket Activity Scan",
     agentId: "polymarket-scout",
-    prompt: `Run a POLYMARKET ACTIVITY SCAN. Quick check of whale activity and market movements.
-
-1. Check polymarket_whale_activity for new whale entries in the last 30 minutes
-2. Check polymarket_consensus for any markets with 1+ whales aligned
-3. For any new consensus, check polymarket_details to get current odds and volume
-4. Report results as a brief summary:
-
-**New Whale Activity:** X entries detected
-**Active Consensus:** Y markets with 1+ whales
-
-For each consensus market:
-- Question, direction, whale count, avg score, current odds
-
-Keep this concise — it runs every 60 minutes. Only flag actionable consensus.`,
-    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 60 },
+    prompt: `ACTIVITY SCAN: Quick whale check.
+1. polymarket_whale_activity — new entries in last 2 hours
+2. polymarket_consensus — markets with 1+ whales aligned
+3. For consensus markets: polymarket_details for odds/volume
+Output: whale count, consensus count, actionable markets only.
+No deep analysis, no X searches.`,
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 120 },
     enabled: true,
+    toolSubset: ["polymarket_whale_activity", "polymarket_consensus", "polymarket_details", "notes_create"],
   },
   {
     id: "polymarket-full-cycle",
@@ -874,25 +860,15 @@ Do NOT use notes_create — the system saves automatically.`,
     id: "bankr-execute",
     name: "BANKR Execute",
     agentId: "bankr",
-    prompt: `Run a BANKR EXECUTION CYCLE. Check for actionable theses and execute trades.
-
-1. Check scout_theses for active crypto theses with confidence HIGH or MEDIUM
-2. Check polymarket_theses for active polymarket theses with confidence HIGH or MEDIUM
-3. For each thesis NOT already associated with an open position (check bankr_positions):
-   a. Run bankr_risk_check to validate the trade passes all risk rules
-   b. If risk check passes AND tier is "autonomous" or "dead_zone":
-      - For autonomous: execute directly via bankr_open_position
-      - For dead_zone: execute but note it for Telegram flagging
-   c. If tier is "human_required": log the thesis but do NOT execute — it needs Telegram approval
-4. Report execution summary:
-   - Theses evaluated (crypto + polymarket)
-   - Trades executed (with position IDs)
-   - Trades skipped (with reasons)
-   - Current portfolio state
-
-Keep this concise. The position monitor handles exits independently.`,
-    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 30 },
+    prompt: `EXECUTION CYCLE: Check theses and execute trades.
+1. scout_theses — active HIGH/MEDIUM crypto theses
+2. polymarket_theses — active HIGH/MEDIUM polymarket theses
+3. bankr_positions — skip theses with existing positions
+4. For new theses: bankr_risk_check → bankr_open_position if autonomous/dead_zone
+5. Output: theses evaluated, trades executed/skipped, portfolio state.`,
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 60 },
     enabled: true,
+    toolSubset: ["scout_theses", "polymarket_theses", "bankr_positions", "bankr_risk_check", "bankr_open_position", "signal_quality", "notes_create"],
   },
   {
     id: "weekly-memory-reflect",
@@ -985,16 +961,10 @@ Keep it quick — the daily summary is meant to be a 30-second glance at the day
     id: "oversight-shadow-refresh",
     name: "Oversight Shadow Price Refresh",
     agentId: "oversight",
-    prompt: `Refresh shadow trade prices from live market data.
-
-1. Call oversight_shadow_refresh to fetch current market prices for all open shadow trades.
-2. This updates hypothetical P&L using real market data and auto-closes trades older than 7 days.
-3. If any trades were updated or closed, note the counts.
-4. Save a brief summary to the vault.
-
-This ensures shadow/paper trading accurately tracks what BANKR would have earned.`,
-    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 60 },
+    prompt: `Call oversight_shadow_refresh. Report updated/closed counts. Save brief summary.`,
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 120 },
     enabled: true,
+    toolSubset: ["oversight_shadow_refresh", "notes_create"],
   },
   {
     id: "darknode-summary-9",
@@ -1010,7 +980,7 @@ This ensures shadow/paper trading accurately tracks what BANKR would have earned
     agentId: "oversight",
     prompt: "Send the DarkNode summary to Telegram.",
     schedule: { type: "daily", hour: 12, minute: 0 },
-    enabled: true,
+    enabled: false,
   },
   {
     id: "darknode-summary-15",
@@ -1026,7 +996,7 @@ This ensures shadow/paper trading accurately tracks what BANKR would have earned
     agentId: "oversight",
     prompt: "Send the DarkNode summary to Telegram.",
     schedule: { type: "daily", hour: 18, minute: 0 },
-    enabled: true,
+    enabled: false,
   },
   {
     id: "darknode-summary-21",
@@ -1120,7 +1090,7 @@ export async function getCostSummary(): Promise<any> {
     const rows = result.rows;
 
     const rates: Record<string, { input: number; output: number }> = {
-      haiku: { input: 1, output: 5 },
+      haiku: { input: 0.80, output: 4 },
       sonnet: { input: 3, output: 15 },
       opus: { input: 15, output: 75 },
     };
@@ -1262,6 +1232,40 @@ export async function init(): Promise<void> {
         const preset = DEFAULT_JOBS.find(j => j.id === "polymarket-activity-scan")!;
         pmActivityScan.prompt = preset.prompt;
         console.log("[scheduled-jobs] Migrated polymarket-activity-scan: updated to 1+ whale threshold");
+        await saveConfig();
+      }
+
+      let costOptApplied = false;
+      const costOptJobs: Record<string, { intervalMinutes?: number; prompt?: string; enabled?: boolean; toolSubset?: string[] }> = {
+        "scout-micro-scan": { intervalMinutes: 60, toolSubset: ["scout_watchlist", "technical_analysis", "crypto_price", "notes_create"] },
+        "polymarket-activity-scan": { intervalMinutes: 120, toolSubset: ["polymarket_whale_activity", "polymarket_consensus", "polymarket_details", "notes_create"] },
+        "bankr-execute": { intervalMinutes: 60, toolSubset: ["scout_theses", "polymarket_theses", "bankr_positions", "bankr_risk_check", "bankr_open_position", "signal_quality", "notes_create"] },
+        "oversight-shadow-refresh": { intervalMinutes: 120, toolSubset: ["oversight_shadow_refresh", "notes_create"] },
+        "darknode-summary-12": { enabled: false },
+        "darknode-summary-18": { enabled: false },
+      };
+      for (const [jobId, updates] of Object.entries(costOptJobs)) {
+        const j = config.jobs.find(x => x.id === jobId);
+        if (!j) continue;
+        if (updates.intervalMinutes && j.schedule.intervalMinutes !== updates.intervalMinutes) {
+          j.schedule.intervalMinutes = updates.intervalMinutes;
+          costOptApplied = true;
+        }
+        if (updates.enabled !== undefined && j.enabled !== updates.enabled) {
+          j.enabled = updates.enabled;
+          costOptApplied = true;
+        }
+        if (updates.toolSubset && !j.toolSubset) {
+          j.toolSubset = updates.toolSubset;
+          costOptApplied = true;
+        }
+        if (updates.prompt && j.prompt !== updates.prompt) {
+          j.prompt = updates.prompt;
+          costOptApplied = true;
+        }
+      }
+      if (costOptApplied) {
+        console.log("[scheduled-jobs] Migrated: cost optimization — wider intervals, tool subsets, reduced summaries");
         await saveConfig();
       }
     } else {
@@ -1863,7 +1867,7 @@ async function checkJobs(): Promise<void> {
             broadcastFn({ type: "job_progress", jobId: job.id, jobName: job.name, toolName: info.toolName, timestamp: Date.now() });
           }
         };
-        const agentResult = await runAgentFn(job.agentId, job.prompt, progressCb);
+        const agentResult = await runAgentFn(job.agentId, job.prompt, progressCb, job.toolSubset);
         const result = agentResult.response;
         const isPartial = agentResult.timedOut || result.includes("⚠️ PARTIAL");
         job.lastRun = new Date().toISOString();
@@ -2069,7 +2073,7 @@ export async function triggerJob(jobId: string): Promise<string> {
         broadcastFn({ type: "job_progress", jobId: job.id, jobName: job.name, toolName: info.toolName, timestamp: Date.now() });
       }
     };
-    const agentResult = await runAgentFn(job.agentId, job.prompt, progressCb);
+    const agentResult = await runAgentFn(job.agentId, job.prompt, progressCb, job.toolSubset);
     let result = agentResult.response;
     const isPartial = agentResult.timedOut || result.includes("⚠️ PARTIAL");
     job.lastRun = new Date().toISOString();
