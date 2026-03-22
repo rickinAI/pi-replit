@@ -9558,6 +9558,126 @@ async function getCryptoPrice(coin) {
 
 // server.ts
 init_coingecko();
+
+// src/dexscreener.ts
+var TIMEOUT_MS4 = 15e3;
+var BASE_URL2 = "https://api.dexscreener.com";
+async function dsFetch(urlPath) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS4);
+  try {
+    const res = await fetch(`${BASE_URL2}${urlPath}`, {
+      headers: { "User-Agent": "darknode/1.0" },
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    if (!res.ok) throw new Error(`DexScreener API error ${res.status}: ${res.statusText}`);
+    return await res.json();
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err.name === "AbortError") throw new Error("DexScreener request timed out");
+    throw err;
+  }
+}
+function parsePair(p) {
+  return {
+    chain: p.chainId || "",
+    dexId: p.dexId || "",
+    pairAddress: p.pairAddress || "",
+    baseToken: {
+      symbol: p.baseToken?.symbol?.toUpperCase() || "",
+      name: p.baseToken?.name || "",
+      address: p.baseToken?.address || ""
+    },
+    quoteToken: {
+      symbol: p.quoteToken?.symbol?.toUpperCase() || "",
+      name: p.quoteToken?.name || ""
+    },
+    priceUsd: parseFloat(p.priceUsd) || 0,
+    priceChange5m: p.priceChange?.m5 ?? null,
+    priceChange1h: p.priceChange?.h1 ?? null,
+    priceChange6h: p.priceChange?.h6 ?? null,
+    priceChange24h: p.priceChange?.h24 ?? null,
+    volume24h: p.volume?.h24 || 0,
+    liquidity: p.liquidity?.usd || 0,
+    fdv: p.fdv ?? null,
+    pairCreatedAt: p.pairCreatedAt ? new Date(p.pairCreatedAt).toISOString() : null
+  };
+}
+async function searchPairs(query) {
+  const data = await dsFetch(`/latest/dex/search?q=${encodeURIComponent(query)}`);
+  const pairs = (data.pairs || []).slice(0, 20).map(parsePair);
+  return { pairs };
+}
+async function getTokenPairs(chainId, tokenAddress) {
+  const data = await dsFetch(`/tokens/v1/${encodeURIComponent(chainId)}/${encodeURIComponent(tokenAddress)}`);
+  const pairs = (Array.isArray(data) ? data : data.pairs || []).slice(0, 20).map(parsePair);
+  return { pairs };
+}
+async function getTopBoostedTokens() {
+  const data = await dsFetch("/token-boosts/top/v1");
+  const tokens = (Array.isArray(data) ? data : []).slice(0, 20).map((t) => ({
+    chain: t.chainId || "",
+    tokenAddress: t.tokenAddress || "",
+    totalAmount: t.totalAmount || 0,
+    url: t.url || ""
+  }));
+  return { tokens };
+}
+async function getLatestTokenProfiles() {
+  const data = await dsFetch("/token-profiles/latest/v1");
+  const tokens = (Array.isArray(data) ? data : []).slice(0, 20).map((t) => ({
+    chain: t.chainId || "",
+    tokenAddress: t.tokenAddress || "",
+    symbol: t.header?.split(" ")[0] || "",
+    description: t.description || "",
+    url: t.url || ""
+  }));
+  return { tokens };
+}
+async function getTrendingPairs(chain) {
+  const query = chain ? `?chain=${encodeURIComponent(chain)}` : "";
+  let pairs;
+  try {
+    const data = await dsFetch(`/token-boosts/latest/v1`);
+    const boosts = (Array.isArray(data) ? data : []).slice(0, 15);
+    const pairResults = [];
+    for (const boost of boosts) {
+      if (!boost.chainId || !boost.tokenAddress) continue;
+      try {
+        const tokenData = await dsFetch(`/tokens/v1/${boost.chainId}/${boost.tokenAddress}`);
+        const tokenPairs = Array.isArray(tokenData) ? tokenData : tokenData.pairs || [];
+        if (tokenPairs.length > 0) {
+          const best = tokenPairs.sort((a, b) => (b.volume?.h24 || 0) - (a.volume?.h24 || 0))[0];
+          pairResults.push(parsePair(best));
+        }
+      } catch {
+      }
+    }
+    pairs = pairResults;
+  } catch {
+    pairs = [];
+  }
+  const trending = pairs.filter((p) => !chain || p.chain === chain).map((p) => ({
+    chain: p.chain,
+    dexId: p.dexId,
+    symbol: p.baseToken.symbol,
+    name: p.baseToken.name,
+    tokenAddress: p.baseToken.address,
+    priceUsd: p.priceUsd,
+    priceChange5m: p.priceChange5m,
+    priceChange1h: p.priceChange1h,
+    priceChange6h: p.priceChange6h,
+    priceChange24h: p.priceChange24h,
+    volume24h: p.volume24h,
+    liquidity: p.liquidity,
+    fdv: p.fdv,
+    pairCreatedAt: p.pairCreatedAt
+  }));
+  return { trending };
+}
+
+// server.ts
 init_coingecko();
 init_technical_signals();
 
@@ -9565,9 +9685,9 @@ init_technical_signals();
 import * as fs3 from "fs";
 import * as path3 from "path";
 var NANSEN_API_KEY = process.env.NANSEN_API_KEY || "";
-var BASE_URL2 = "https://api.nansen.ai/v1";
+var BASE_URL3 = "https://api.nansen.ai/v1";
 var CACHE_DIR2 = path3.join(process.env.HOME || "/tmp", ".cache", "nansen");
-var TIMEOUT_MS4 = 15e3;
+var TIMEOUT_MS5 = 15e3;
 var CACHE_TTL = {
   smart_money: 30 * 60 * 1e3,
   token_holders: 60 * 60 * 1e3,
@@ -9607,9 +9727,9 @@ async function nansenFetch(endpoint) {
     throw new Error("Nansen API key not configured. Set NANSEN_API_KEY environment variable.");
   }
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS4);
+  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS5);
   try {
-    const url = `${BASE_URL2}${endpoint}`;
+    const url = `${BASE_URL3}${endpoint}`;
     const res = await fetch(url, {
       headers: {
         "Authorization": `Bearer ${NANSEN_API_KEY}`,
@@ -10059,13 +10179,13 @@ async function meetsThesisThresholds(params) {
 init_bankr();
 
 // src/maps.ts
-var TIMEOUT_MS5 = 1e4;
+var TIMEOUT_MS6 = 1e4;
 var NOMINATIM_BASE = "https://nominatim.openstreetmap.org";
 var OSRM_BASE = "https://router.project-osrm.org";
 var UA = "pi-assistant/1.0 (personal-project)";
 async function fetchWithTimeout2(url) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS5);
+  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS6);
   try {
     const res = await fetch(url, {
       headers: { "User-Agent": UA, Accept: "application/json" },
@@ -10194,7 +10314,7 @@ ${lines.join("\n\n")}`;
 import { execFile } from "child_process";
 import path4 from "path";
 var GWS_BIN = path4.join(process.cwd(), "bin", "gws");
-var TIMEOUT_MS6 = 15e3;
+var TIMEOUT_MS7 = 15e3;
 function parseHexColor(hex) {
   return {
     red: parseInt(hex.slice(1, 3), 16) / 255,
@@ -10209,7 +10329,7 @@ async function runGws(args) {
   }
   return new Promise((resolve) => {
     const env = { ...process.env, GOOGLE_WORKSPACE_CLI_TOKEN: token };
-    execFile(GWS_BIN, args, { env, timeout: TIMEOUT_MS6, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(GWS_BIN, args, { env, timeout: TIMEOUT_MS7, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
         const errMsg = [stderr, stdout, err.message].filter(Boolean).join("\n").trim() || "Unknown error";
         console.error(`[gws] Error running: gws ${args.join(" ")}`, errMsg);
@@ -10888,20 +11008,20 @@ async function slidesBatchUpdate(presentationId, requests) {
 }
 
 // src/youtube.ts
-var BASE_URL3 = "https://www.googleapis.com/youtube/v3";
-var TIMEOUT_MS7 = 15e3;
+var BASE_URL4 = "https://www.googleapis.com/youtube/v3";
+var TIMEOUT_MS8 = 15e3;
 async function ytFetch(endpoint, params) {
   const token = await getAccessToken();
   if (!token) {
     return { ok: false, data: null, raw: "Google not connected \u2014 visit /api/gmail/auth to connect" };
   }
-  const url = new URL(`${BASE_URL3}/${endpoint}`);
+  const url = new URL(`${BASE_URL4}/${endpoint}`);
   for (const [k, v] of Object.entries(params)) {
     url.searchParams.set(k, v);
   }
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS7);
+    const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS8);
     const res = await fetch(url.toString(), {
       headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal
@@ -14202,8 +14322,8 @@ ${opts.task}`;
 import Anthropic4 from "@anthropic-ai/sdk";
 
 // src/hindsight.ts
-var BASE_URL4 = "https://api.vectorize.io/v1";
-var TIMEOUT_MS8 = 15e3;
+var BASE_URL5 = "https://api.vectorize.io/v1";
+var TIMEOUT_MS9 = 15e3;
 var MAX_RETRIES2 = 2;
 function getConfig2() {
   const apiKey = process.env.VECTORIZE_API_KEY;
@@ -14218,9 +14338,9 @@ function isConfigured8() {
 async function apiRequest(method, path8, body, retries = MAX_RETRIES2) {
   const config3 = getConfig2();
   if (!config3) throw new Error("Hindsight not configured: missing VECTORIZE_API_KEY, VECTORIZE_ORG_ID, or VECTORIZE_KB_ID");
-  const url = `${BASE_URL4}/org/${config3.organizationId}/knowledgebases/${config3.knowledgeBaseId}${path8}`;
+  const url = `${BASE_URL5}/org/${config3.organizationId}/knowledgebases/${config3.knowledgeBaseId}${path8}`;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS8);
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS9);
   try {
     const res = await fetch(url, {
       method,
@@ -16824,6 +16944,87 @@ ${sqNote}`
         try {
           const summary = await getTaxSummary();
           return { content: [{ type: "text", text: JSON.stringify(summary) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    }
+  ];
+}
+function buildDexScreenerTools() {
+  return [
+    {
+      name: "dex_search",
+      label: "DEX Pair Search",
+      description: "Search DexScreener for DEX trading pairs by token name, symbol, or address. Returns pairs with price, 5m/1h/6h/24h changes, volume, liquidity, chain, and DEX. Use for discovering on-chain trading opportunities and checking DEX liquidity before entering positions.",
+      parameters: Type.Object({
+        query: Type.String({ description: "Token name, symbol, or address to search (e.g. 'PEPE', 'solana', '0x...')" })
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const result = await searchPairs(params.query);
+          return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "dex_token_pairs",
+      label: "DEX Token Pairs",
+      description: "Get all DEX trading pairs for a specific token by chain and contract address. Returns detailed pair data with prices, changes, volume, and liquidity across all DEXes on that chain.",
+      parameters: Type.Object({
+        chain: Type.String({ description: "Chain ID (e.g. 'solana', 'ethereum', 'base', 'bsc', 'arbitrum')" }),
+        token_address: Type.String({ description: "Token contract address" })
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const result = await getTokenPairs(params.chain, params.token_address);
+          return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "dex_trending",
+      label: "DEX Trending Tokens",
+      description: "Get trending tokens on DEXes from DexScreener. Returns boosted/promoted tokens with price, volume, liquidity, and price changes across timeframes. Useful for discovering early momentum plays and new token launches before they hit centralized exchanges.",
+      parameters: Type.Object({
+        chain: Type.Optional(Type.String({ description: "Filter by chain (e.g. 'solana', 'ethereum', 'base'). Omit for all chains." }))
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const result = await getTrendingPairs(params.chain);
+          return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "dex_boosted_tokens",
+      label: "DEX Boosted Tokens",
+      description: "Get top boosted (promoted) tokens on DexScreener. These are tokens with active paid promotions \u2014 can be useful as a contrarian or momentum signal. Returns chain, address, boost amount, and link.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const result = await getTopBoostedTokens();
+          return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "dex_new_tokens",
+      label: "DEX New Token Profiles",
+      description: "Get the latest token profiles listed on DexScreener. Shows newly registered tokens with chain, address, description, and link. Use for discovering brand new launches and early-stage tokens.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const result = await getLatestTokenProfiles();
+          return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
         }
@@ -21403,6 +21604,7 @@ var cachedStaticTools = [
   ...buildTwitterTools(),
   ...buildStockTools(),
   ...buildCoinGeckoTools(),
+  ...buildDexScreenerTools(),
   ...buildSignalSourceTools(),
   ...buildMapsTools(),
   ...buildDriveTools(),

@@ -35,6 +35,7 @@ import * as news from "./src/news.js";
 import * as twitter from "./src/twitter.js";
 import * as stocks from "./src/stocks.js";
 import * as coingecko from "./src/coingecko.js";
+import * as dexscreener from "./src/dexscreener.js";
 import { getHistoricalOHLCV } from "./src/coingecko.js";
 import { analyzeAsset, recordSignal, loadCryptoSignalParams, invalidateCryptoParamsCache } from "./src/technical-signals.js";
 import * as nansen from "./src/nansen.js";
@@ -2045,6 +2046,88 @@ function buildCoinGeckoTools(): ToolDefinition[] {
         try {
           const summary = await bankr.getTaxSummary();
           return { content: [{ type: "text" as const, text: JSON.stringify(summary) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+  ];
+}
+
+function buildDexScreenerTools(): ToolDefinition[] {
+  return [
+    {
+      name: "dex_search",
+      label: "DEX Pair Search",
+      description: "Search DexScreener for DEX trading pairs by token name, symbol, or address. Returns pairs with price, 5m/1h/6h/24h changes, volume, liquidity, chain, and DEX. Use for discovering on-chain trading opportunities and checking DEX liquidity before entering positions.",
+      parameters: Type.Object({
+        query: Type.String({ description: "Token name, symbol, or address to search (e.g. 'PEPE', 'solana', '0x...')" }),
+      }),
+      async execute(_toolCallId: string, params: { query: string }) {
+        try {
+          const result = await dexscreener.searchPairs(params.query);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "dex_token_pairs",
+      label: "DEX Token Pairs",
+      description: "Get all DEX trading pairs for a specific token by chain and contract address. Returns detailed pair data with prices, changes, volume, and liquidity across all DEXes on that chain.",
+      parameters: Type.Object({
+        chain: Type.String({ description: "Chain ID (e.g. 'solana', 'ethereum', 'base', 'bsc', 'arbitrum')" }),
+        token_address: Type.String({ description: "Token contract address" }),
+      }),
+      async execute(_toolCallId: string, params: { chain: string; token_address: string }) {
+        try {
+          const result = await dexscreener.getTokenPairs(params.chain, params.token_address);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "dex_trending",
+      label: "DEX Trending Tokens",
+      description: "Get trending tokens on DEXes from DexScreener. Returns boosted/promoted tokens with price, volume, liquidity, and price changes across timeframes. Useful for discovering early momentum plays and new token launches before they hit centralized exchanges.",
+      parameters: Type.Object({
+        chain: Type.Optional(Type.String({ description: "Filter by chain (e.g. 'solana', 'ethereum', 'base'). Omit for all chains." })),
+      }),
+      async execute(_toolCallId: string, params: { chain?: string }) {
+        try {
+          const result = await dexscreener.getTrendingPairs(params.chain);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "dex_boosted_tokens",
+      label: "DEX Boosted Tokens",
+      description: "Get top boosted (promoted) tokens on DexScreener. These are tokens with active paid promotions — can be useful as a contrarian or momentum signal. Returns chain, address, boost amount, and link.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const result = await dexscreener.getTopBoostedTokens();
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "dex_new_tokens",
+      label: "DEX New Token Profiles",
+      description: "Get the latest token profiles listed on DexScreener. Shows newly registered tokens with chain, address, description, and link. Use for discovering brand new launches and early-stage tokens.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const result = await dexscreener.getLatestTokenProfiles();
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
         } catch (err) {
           return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
         }
@@ -6577,6 +6660,7 @@ const cachedStaticTools: ToolDefinition[] = [
   ...buildTwitterTools(),
   ...buildStockTools(),
   ...buildCoinGeckoTools(),
+  ...buildDexScreenerTools(),
   ...buildSignalSourceTools(),
   ...buildMapsTools(),
   ...buildDriveTools(),
