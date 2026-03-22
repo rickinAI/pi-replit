@@ -4453,7 +4453,7 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
         if (thesis && thesis.expires_at) p.expires_at = thesis.expires_at;
         return p;
       };
-      const bankrPositions = (summary.positions || []).filter((p: any) => (p.size || 0) > 0.0001).map(enrichPosition);
+      const bankrPositions = (summary.positions || []).filter((p: any) => (p.size || 0) > 0.0001 && (!p.asset_class || p.asset_class === "polymarket")).map(enrichPosition);
       const seen = new Set(bankrPositions.map((p: any) => `${p.asset}_${p.direction}`));
       const openShadows = (shadowPerf.trades || [])
         .filter((t: any) => t.status === "open" && !seen.has(`${t.asset}_${t.direction}`));
