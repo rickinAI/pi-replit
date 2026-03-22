@@ -920,8 +920,8 @@ function renderTrades(trades){
     h+='</span>';
     h+='<span class="trade-pnl '+pc+'">'+(pnl>=0?'+':'')+fmt$(pnl)+' ('+fmtPct(t.pnl_pct)+')</span></div>';
     h+='<div class="trade-meta">';
-    if(t.entry_price)h+='<span>Entry: '+fmt$(t.entry_price)+'</span>';
-    if(t.exit_price)h+='<span>Exit: '+fmt$(t.exit_price)+'</span>';
+    if(t.entry_price)h+='<span>Entry: '+(t.entry_price>0&&t.entry_price<1?fmtOdds(t.entry_price):fmt$(t.entry_price))+'</span>';
+    if(t.exit_price)h+='<span>Exit: '+(t.exit_price>0&&t.exit_price<1?fmtOdds(t.exit_price):fmt$(t.exit_price))+'</span>';
     h+='<span>'+esc(t.close_reason||'')+'</span>';
     h+='<span>'+esc(t.source||'')+'</span><span>'+timeAgo(t.closed_at)+'</span></div></div>';
   });
