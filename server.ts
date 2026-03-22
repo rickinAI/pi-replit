@@ -8142,7 +8142,9 @@ async function startServer(maxRetries = 5) {
   }
 
   function broadcastToAll(event: any) {
-    const data = `data: ${JSON.stringify(event)}\n\n`;
+    const webEvent = { ...event };
+    delete webEvent.telegramContent;
+    const data = `data: ${JSON.stringify(webEvent)}\n\n`;
     for (const entry of sessions.values()) {
       for (const sub of entry.subscribers) {
         try {

@@ -5,6 +5,15 @@ import * as tasks from "./tasks.js";
 import * as weather from "./weather.js";
 import * as news from "./news.js";
 import * as gmail from "./gmail.js";
+import {
+  buildTelegramSynthesisPrompt,
+  resolveFamilyEmoji,
+  escapeHtml,
+  truncateForTelegram,
+  formatTelegramBriefHeader,
+  formatEmailBatchGrouped,
+  EMAIL_CATEGORY_ICONS,
+} from "./telegram-format.js";
 
 interface WatchlistItem {
   symbol: string;
@@ -52,6 +61,7 @@ export interface BriefEvent {
   type: "brief";
   briefType: "morning" | "afternoon" | "evening";
   content: string;
+  telegramContent?: string;
   timestamp: string;
 }
 
@@ -254,15 +264,35 @@ async function gatherSection(name: string): Promise<string> {
         const now = new Date();
         const { end: endOfDay } = getDateInTimezone(config.timezone, 0);
         console.log(`[alerts] Calendar today query: ${now.toISOString()} to ${endOfDay.toISOString()}`);
-        const result = await calendar.listEvents({ timeMin: now.toISOString(), timeMax: endOfDay.toISOString(), maxResults: 10 });
-        return `**Today's Calendar:**\n${result}`;
+        try {
+          const events = await calendar.listEventsStructured({ timeMin: now.toISOString(), timeMax: endOfDay.toISOString(), maxResults: 10 });
+          if (events.length === 0) return "**Today's Calendar:**\nNo events today";
+          const lines = events.map(e => {
+            const familyEmoji = resolveFamilyEmoji(e.calendar, e.title);
+            return `${familyEmoji} ${e.title} — ${e.time} (${e.calendar})`;
+          });
+          return `**Today's Calendar:**\n${lines.join("\n")}`;
+        } catch {
+          const result = await calendar.listEvents({ timeMin: now.toISOString(), timeMax: endOfDay.toISOString(), maxResults: 10 });
+          return `**Today's Calendar:**\n${result}`;
+        }
       }
       case "calendar_tomorrow": {
         if (!calendar.isConfigured()) return "**Calendar:** [not connected]";
         const { start: tomorrow, end: endTomorrow } = getDateInTimezone(config.timezone, 1);
         console.log(`[alerts] Calendar tomorrow query: ${tomorrow.toISOString()} to ${endTomorrow.toISOString()}`);
-        const result = await calendar.listEvents({ timeMin: tomorrow.toISOString(), timeMax: endTomorrow.toISOString(), maxResults: 10 });
-        return `**Tomorrow's Calendar:**\n${result}`;
+        try {
+          const events = await calendar.listEventsStructured({ timeMin: tomorrow.toISOString(), timeMax: endTomorrow.toISOString(), maxResults: 10 });
+          if (events.length === 0) return "**Tomorrow's Calendar:**\nNo events tomorrow";
+          const lines = events.map(e => {
+            const familyEmoji = resolveFamilyEmoji(e.calendar, e.title);
+            return `${familyEmoji} ${e.title} — ${e.time} (${e.calendar})`;
+          });
+          return `**Tomorrow's Calendar:**\n${lines.join("\n")}`;
+        } catch {
+          const result = await calendar.listEvents({ timeMin: tomorrow.toISOString(), timeMax: endTomorrow.toISOString(), maxResults: 10 });
+          return `**Tomorrow's Calendar:**\n${result}`;
+        }
       }
       case "tasks": {
         const localTasks = await tasks.listTasks();
@@ -352,7 +382,21 @@ async function gatherSection(name: string): Promise<string> {
             .replace(/\(\* = unread\)\n?/g, "")
             .replace(/^\* /gm, "")
             .replace(/\n{3,}/g, "\n\n");
-          return `**Email:**\n${cleaned}`;
+          const blocks = cleaned.split(/\n\n+/).filter(b => b.trim());
+          const annotated: string[] = [];
+          for (const block of blocks) {
+            const subjectMatch = block.match(/Subject:\s*(.+)/i);
+            const fromMatch = block.match(/From:\s*(.+)/i);
+            const subject = subjectMatch ? subjectMatch[1].trim() : "";
+            const sender = fromMatch ? fromMatch[1].replace(/<[^>]+>/, "").trim() : "";
+            if (subject || sender) {
+              const { icon, category } = categorizeEmail(subject, sender);
+              annotated.push(`${icon} [${category}] ${block}`);
+            } else {
+              annotated.push(block);
+            }
+          }
+          return `**Email:**\n${annotated.join("\n\n")}`;
         } catch {
           return "**Email:** [unavailable]";
         }
@@ -367,18 +411,16 @@ async function gatherSection(name: string): Promise<string> {
   }
 }
 
-async function synthesizeBrief(type: string, rawSections: string): Promise<string> {
+async function synthesizeBrief(type: string, rawSections: string, channel: "web" | "telegram" = "web"): Promise<string> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return rawSections;
 
   try {
     const client = new Anthropic({ apiKey });
-    const response = await client.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 800,
-      messages: [{
-        role: "user",
-        content: `You are Rickin's personal assistant delivering his ${type} briefing. Synthesize the following raw data into a concise, natural-language briefing. Lead with the most important and actionable items. Be direct — no filler.
+
+    const prompt = channel === "telegram"
+      ? buildTelegramSynthesisPrompt(type, rawSections)
+      : `You are Rickin's personal assistant delivering his ${type} briefing. Synthesize the following raw data into a concise, natural-language briefing. Lead with the most important and actionable items. Be direct — no filler.
 
 Format rules:
 - Use markdown headers (##) for major sections
@@ -390,8 +432,12 @@ Format rules:
 - For email, mention sender and subject briefly
 
 RAW DATA:
-${rawSections}`
-      }],
+${rawSections}`;
+
+    const response = await client.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: channel === "telegram" ? 1400 : 800,
+      messages: [{ role: "user", content: prompt }],
     });
 
     const text = response.content[0]?.type === "text" ? response.content[0].text : "";
@@ -402,7 +448,7 @@ ${rawSections}`
   }
 }
 
-async function generateBrief(type: "morning" | "afternoon" | "evening"): Promise<string> {
+async function generateBrief(type: "morning" | "afternoon" | "evening"): Promise<{ web: string; telegram: string }> {
   const briefConfig = config.briefs[type];
   const sections: string[] = [];
 
@@ -417,21 +463,25 @@ async function generateBrief(type: "morning" | "afternoon" | "evening"): Promise
   }
 
   const rawContent = sections.join("\n\n---\n\n");
-  const synthesized = await synthesizeBrief(type, rawContent);
+
+  const [webSynthesized, telegramSynthesized] = await Promise.all([
+    synthesizeBrief(type, rawContent, "web"),
+    synthesizeBrief(type, rawContent, "telegram"),
+  ]);
 
   if (saveBriefFn) {
     try {
       const dateStr = new Date().toLocaleDateString("en-CA", { timeZone: config.timezone });
       const briefPath = `Daily Digests/${dateStr}-${type}.md`;
       const header = `# ${type.charAt(0).toUpperCase() + type.slice(1)} Brief — ${dateStr}\n\n`;
-      await saveBriefFn(briefPath, header + synthesized);
+      await saveBriefFn(briefPath, header + webSynthesized);
       console.log(`[alerts] Brief saved to vault: ${briefPath}`);
     } catch (err) {
       console.error(`[alerts] Failed to save brief to vault:`, err);
     }
   }
 
-  return synthesized;
+  return { web: webSynthesized, telegram: telegramSynthesized };
 }
 
 async function checkBriefs() {
@@ -472,11 +522,12 @@ async function doCheckBriefs() {
       await saveConfig();
 
       try {
-        const content = await generateBrief(type);
+        const { web, telegram } = await generateBrief(type);
         const event: BriefEvent = {
           type: "brief",
           briefType: type,
-          content,
+          content: web,
+          telegramContent: telegram,
           timestamp: new Date().toISOString(),
         };
         broadcastFn?.(event);
@@ -548,21 +599,31 @@ function flushEmailBatch() {
       type: "alert",
       alertType: "email",
       title: `${e.icon} ${e.sender}`,
-      content: e.subject,
+      content: `${e.icon} [${e.category}] ${e.subject}`,
       timestamp: e.timestamp,
     });
     return;
   }
 
-  const lines: string[] = [];
+  const groups: Record<string, Array<{ sender: string; subject: string; icon: string }>> = {};
   for (const item of actionable) {
-    lines.push(`${item.icon} ${item.subject} — ${item.sender}`);
+    if (!groups[item.category]) groups[item.category] = [];
+    groups[item.category].push(item);
+  }
+
+  const lines: string[] = [];
+  for (const [category, items] of Object.entries(groups)) {
+    const catIcon = EMAIL_CATEGORY_ICONS[category] || "📧";
+    lines.push(`${catIcon} ${category}`);
+    for (const item of items) {
+      lines.push(`  • ${item.subject} — ${item.sender}`);
+    }
   }
 
   broadcastFn?.({
     type: "alert",
     alertType: "email",
-    title: `New Emails (${actionable.length})`,
+    title: `📬 New Emails (${actionable.length})`,
     content: lines.join("\n"),
     timestamp: new Date().toISOString(),
   });
@@ -579,14 +640,15 @@ async function doCheckAlerts() {
       for (const event of events) {
         const eventKey = `${event.title.trim().toLowerCase()}|${event.startRaw}`;
         if (alertedCalendarEvents.has(eventKey)) continue;
-        const eventContent = event.title;
         if (isCalendarSystemEvent(event.title)) continue;
         alertedCalendarEvents.add(eventKey);
         persistAlertDedup();
+        const familyEmoji = resolveFamilyEmoji(event.calendar, event.title);
+        const eventContent = `${familyEmoji} ${event.title}\n${event.time}`;
         broadcastFn?.({
           type: "alert",
           alertType: "calendar",
-          title: "Upcoming Event",
+          title: `${familyEmoji} Upcoming Event`,
           content: eventContent,
           timestamp: now.toISOString(),
         });
@@ -749,11 +811,12 @@ export function stopAlertSystem() {
 
 export async function triggerBrief(type: "morning" | "afternoon" | "evening"): Promise<BriefEvent> {
   console.log(`[alerts] Manual trigger: ${type} brief`);
-  const content = await generateBrief(type);
+  const { web, telegram } = await generateBrief(type);
   const event: BriefEvent = {
     type: "brief",
     briefType: type,
-    content,
+    content: web,
+    telegramContent: telegram,
     timestamp: new Date().toISOString(),
   };
   broadcastFn?.(event);

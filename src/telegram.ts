@@ -1,4 +1,10 @@
 import { getPool } from "./db.js";
+import {
+  escapeHtml,
+  truncateForTelegram,
+  formatTelegramBriefHeader,
+  escapeAndPreserveHtmlTags,
+} from "./telegram-format.js";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID || "";
@@ -2266,7 +2272,7 @@ function getPriorityTag(alertType: string, content: string): { tag: string; prio
   return { tag: "🔔", priority: "FYI" };
 }
 
-export async function forwardAlertToTelegram(event: { type: string; briefType?: string; alertType?: string; title?: string; content: string }): Promise<void> {
+export async function forwardAlertToTelegram(event: { type: string; briefType?: string; alertType?: string; title?: string; content: string; telegramContent?: string }): Promise<void> {
   const mode = await getMode();
 
   const personalAlertTypes = new Set(["calendar", "stock", "task", "email"]);
@@ -2279,9 +2285,11 @@ export async function forwardAlertToTelegram(event: { type: string; briefType?: 
       console.log("[telegram] Suppressed duplicate brief notification");
       return;
     }
-    const briefLabel = event.briefType ? event.briefType.charAt(0).toUpperCase() + event.briefType.slice(1) : "Daily";
-    const truncated = event.content.length > 3500 ? event.content.slice(0, 3500) + "\n\n_(truncated)_" : event.content;
-    await sendAlertsBotMessage(`${mode} 📋 *${briefLabel} Brief*\n\n${truncated}`);
+    const header = formatTelegramBriefHeader(event.briefType || "Daily", mode);
+    const rawBody = event.telegramContent || event.content;
+    const safeBody = escapeAndPreserveHtmlTags(rawBody);
+    const truncated = truncateForTelegram(`${header}\n\n${safeBody}`, 4000);
+    await sendAlertsBotMessage(truncated, "HTML");
     return;
   }
 
@@ -2293,8 +2301,11 @@ export async function forwardAlertToTelegram(event: { type: string; briefType?: 
       return;
     }
     const { tag, priority } = getPriorityTag(event.alertType || "", event.content);
-    const priorityLabel = priority === "Action needed" ? "🔴 " : priority === "FYI" ? "🟡 " : "";
-    await sendAlertsBotMessage(`${mode} ${tag} *${event.title || "Alert"}*\n${priorityLabel}${priority}\n\n${event.content}`);
+    const priorityCircle = priority === "Action needed" ? "🔴" : priority === "Travel" ? "✈️" : priority === "Financial" ? "💰" : "🟡";
+    const escapedTitle = escapeHtml(event.title || "Alert");
+    const escapedContent = escapeHtml(event.content);
+    const msg = `${mode} ${tag} <b>${escapedTitle}</b>\n${priorityCircle} ${escapeHtml(priority)}\n━━━━━━━━━━━━\n${escapedContent}`;
+    await sendAlertsBotMessage(msg, "HTML");
     return;
   }
 
@@ -2312,9 +2323,8 @@ export async function forwardAlertToTelegram(event: { type: string; briefType?: 
       circuit_breaker: "🚨",
     };
     const icon = tradingIcons[event.type] || "🔔";
-    const fmt = await import("./telegram-format.js");
-    const title = fmt.escapeHtml(event.title || "Alert");
-    const body = fmt.escapeHtml(event.content);
-    await sendMessage(`${icon} <b>${title}</b>\n\n${body}`, "HTML");
+    const escapedTitle = escapeHtml(event.title || "Alert");
+    const escapedContent = escapeHtml(event.content);
+    await sendMessage(`${mode} ${icon} <b>${escapedTitle}</b>\n━━━━━━━━━━━━\n${escapedContent}`, "HTML");
   }
 }
