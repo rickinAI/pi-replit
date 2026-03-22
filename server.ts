@@ -5619,6 +5619,7 @@ app.post("/api/wealth-engine/reset", async (req: Request, res: Response) => {
       ["wealth_engines_trade_history", []],
       ["wealth_engines_positions", []],
       ["oversight_shadow_trades", []],
+      ["signal_quality_scores", []],
       ["wealth_engines_paused", false],
       ["wealth_engines_kill_switch", false],
     ];
