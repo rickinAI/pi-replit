@@ -1753,14 +1753,14 @@ export async function init(): Promise<void> {
     await deleteWebhook();
     pollingActive = true;
     pollUpdates();
-    console.log("[telegram] initialized (long-polling fallback, dead man switches hourly)");
+    console.log("[telegram] initialized (long-polling fallback, dead man switches every 4h)");
   } else {
-    console.log("[telegram] initialized (webhook mode, dead man switches hourly)");
+    console.log("[telegram] initialized (webhook mode, dead man switches every 4h)");
   }
 
   deadManInterval = setInterval(() => {
     checkDeadManSwitches().catch(err => console.error("[telegram] Dead man check error:", err));
-  }, 60 * 60 * 1000);
+  }, 4 * 60 * 60 * 1000);
 
 
   const notifyMode = await getNotificationMode();
