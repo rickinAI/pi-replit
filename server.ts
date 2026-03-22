@@ -5609,7 +5609,8 @@ app.post("/api/wealth-engine/reset", async (req: Request, res: Response) => {
   if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
   try {
     const pool = db.getPool();
-    const capital = req.body?.capital || 10000;
+    const rawCapital = req.body?.capital;
+    const capital = typeof rawCapital === "number" && isFinite(rawCapital) && rawCapital > 0 ? rawCapital : 10000;
     const now = Date.now();
     const resets: [string, unknown][] = [
       ["wealth_engines_portfolio_value", capital],
@@ -5619,6 +5620,7 @@ app.post("/api/wealth-engine/reset", async (req: Request, res: Response) => {
       ["wealth_engines_positions", []],
       ["oversight_shadow_trades", []],
       ["wealth_engines_paused", false],
+      ["wealth_engines_kill_switch", false],
     ];
     for (const [key, value] of resets) {
       await pool.query(
