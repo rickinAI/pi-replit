@@ -31,6 +31,7 @@ OBSIDIAN_API_URL = "https://obsidian.rickin.live"
 PORT = ""
 POOJA_PASSWORD = "chicken"
 DARKNODE_PASSWORD = "dn@rickin26"
+BNKR_WALLET_ADDRESS = "0xeb25c749e9ddcbf93af9c70c7c6c2388364dcd4f"
 
 [userenv.development]
 GMAIL_REDIRECT_URI = "https://51b59722-ef80-4e2b-b64d-6dc467d8bb0f-00-17dz1kfqdyzrd.janeway.replit.dev/api/gmail/callback"
