@@ -287,6 +287,15 @@ export async function runHealthCheck(): Promise<HealthReport> {
   return report;
 }
 
+interface WalletPosition {
+  redeemable?: boolean;
+  currentValue?: number;
+  closedAt?: string;
+  updatedAt?: string;
+  createdAt?: string;
+  cashPnl?: number;
+}
+
 async function checkWalletHealth(): Promise<HealthCheck> {
   try {
     const wallets = await polymarket.getWhaleWatchlist();
@@ -307,8 +316,8 @@ async function checkWalletHealth(): Promise<HealthCheck> {
       }
 
       try {
-        const positions = await polymarket.fetchWalletPositionsDirect(wallet.address);
-        const resolved = positions.filter((p: any) => {
+        const positions = await polymarket.fetchWalletPositionsDirect(wallet.address) as WalletPosition[];
+        const resolved = positions.filter((p) => {
           const isResolved = p.redeemable || p.currentValue === 0;
           const timestamp = p.closedAt || p.updatedAt || p.createdAt;
           const ts = timestamp ? new Date(timestamp).getTime() : 0;
@@ -319,7 +328,7 @@ async function checkWalletHealth(): Promise<HealthCheck> {
           if (wallet.degraded_count > 0) wallet.degraded_count = 0;
           healthy++;
         } else {
-          const wins = resolved.filter((p: any) => (p.cashPnl || 0) > 0).length;
+          const wins = resolved.filter((p) => (p.cashPnl || 0) > 0).length;
           const winRate = wins / resolved.length;
           wallet.win_rate = winRate;
 
