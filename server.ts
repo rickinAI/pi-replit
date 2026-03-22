@@ -6903,14 +6903,19 @@ app.post("/api/session/:id/cancel", async (req: Request, res: Response) => {
     console.log(`[cancel] Session abort error (may be expected):`, String(err).slice(0, 200));
   }
 
+  if (entry.currentAgentText) {
+    conversations.addMessage(entry.conversation, "assistant", entry.currentAgentText + "\n\n*[Response stopped]*");
+    conversations.save(entry.conversation).catch(() => {});
+  }
+
   entry.isAgentRunning = false;
   entry.currentToolName = null;
   entry.currentAgentText = "";
   processingQueue.delete(sessionId);
 
-  const cancelEvent = JSON.stringify({ type: "cancel_ack" });
+  const endEvent = JSON.stringify({ type: "agent_end", cancelled: true });
   for (const sub of entry.subscribers) {
-    try { sub.write(`data: ${cancelEvent}\n\n`); } catch {}
+    try { sub.write(`data: ${endEvent}\n\n`); } catch {}
   }
 
   res.json({ ok: true, wasRunning: true });

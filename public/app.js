@@ -1400,7 +1400,7 @@ window.addEventListener("online", () => {
 
 function handleAgentEvent(event) {
   if (event.type === "ping") return;
-  if (catchUpInProgress && !["brief", "alert", "agent_end", "agent_start", "message_queued", "cancel_ack"].includes(event.type)) return;
+  if (catchUpInProgress && !["brief", "alert", "agent_end", "agent_start", "message_queued"].includes(event.type)) return;
   switch (event.type) {
     case "agent_start":
       isAgentRunning = true;
@@ -1499,8 +1499,9 @@ function handleAgentEvent(event) {
       updateModelBadge(event.model);
       break;
 
-    case "agent_end":
-      if (agentBubble && agentText) {
+    case "agent_end": {
+      const wasCancelled = event.cancelled === true;
+      if (agentBubble && agentText && !wasCancelled) {
         const rawForChips = agentText;
         agentText = stripSuggestionTag(agentText);
         const bbl = agentBubble.querySelector(".bubble");
@@ -1536,19 +1537,14 @@ function handleAgentEvent(event) {
       hideStatus();
       input.focus();
       throttledScroll();
-      if (thinkingDuration >= 15 && document.hidden) {
+      if (wasCancelled) {
+        showSystemMsg("\u23f9 Response stopped");
+      } else if (thinkingDuration >= 15 && document.hidden) {
         playNotificationSound();
         showBrowserNotification("DarkNode Complete", completedText ? completedText.replace(/[#*_`]/g, "").slice(0, 120) : `Response ready (${thinkingDuration}s)`);
       }
       break;
-
-    case "cancel_ack":
-      isAgentRunning = false;
-      updateSendButton();
-      stopThinkingTimer();
-      hideStatus();
-      input.focus();
-      break;
+    }
 
     case "timeout":
       stopThinkingTimer();
