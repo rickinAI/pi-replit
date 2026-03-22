@@ -4,6 +4,7 @@ import * as gws from "./gws.js";
 import { findOrCreateCalendar, createRecurringEvent } from "./calendar.js";
 import { sendJobCompletionNotification, sendScoutBrief } from "./telegram.js";
 import * as bnkr from "./bnkr.js";
+import * as copyTrading from "./copy-trading.js";
 
 export interface ScheduledJob {
   id: string;
@@ -56,6 +57,7 @@ function getJobSavePath(jobId: string, dateStr: string, safeName: string): strin
   if (jobId === "oversight-weekly") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Weekly-Review.md`;
   if (jobId === "oversight-daily-summary") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Daily-Summary.md`;
   if (jobId === "oversight-shadow-refresh") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Shadow-Refresh.md`;
+  if (jobId === "copy-trade-scan") return `Scheduled Reports/Wealth Engines/Copy-Trading/${dateStr}-Scan.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 
@@ -864,6 +866,14 @@ Keep it concise and actionable. Save to the vault automatically.`,
     enabled: true,
   },
   {
+    id: "copy-trade-scan",
+    name: "Copy Trade Scan",
+    agentId: "system",
+    prompt: "Direct execution — scans tracked whale wallets, diffs position snapshots, and mirrors new trades via BANKR.",
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 240 },
+    enabled: true,
+  },
+  {
     id: "oversight-health",
     name: "Oversight Health Check",
     agentId: "oversight",
@@ -1235,7 +1245,7 @@ DO NOT call signal_quality — it is informational only and must not affect exec
 
     const WE_PAUSE_IDS = new Set([
       "polymarket-activity-scan", "polymarket-full-cycle",
-      "bankr-execute",
+      "bankr-execute", "copy-trade-scan",
       "oversight-health", "oversight-weekly", "oversight-daily-summary", "oversight-shadow-refresh",
     ]);
     let wePauseNeeded = false;
@@ -1789,9 +1799,90 @@ After processing, briefly confirm what you did.`;
   }
 }
 
+async function runCopyTradeScan(job: ScheduledJob): Promise<void> {
+  const jobStartMs = Date.now();
+  console.log("[copy-trade-scan] Starting copy trade scan...");
+
+  try {
+    const result = await copyTrading.runCopyTradeScan();
+    const exitResult = await copyTrading.checkCopyTradeExits();
+
+    const summaryLines = [
+      `Wallets checked: ${result.wallets_checked}`,
+      `New entries detected: ${result.new_entries.length}`,
+      `Exits detected: ${result.exits.length}`,
+      `Trades opened: ${result.trades_opened}`,
+      `Trades closed (whale exit): ${result.trades_closed}`,
+      `Trades closed (resolution): ${exitResult.closed}`,
+    ];
+    if (result.errors.length > 0) summaryLines.push(`Errors: ${result.errors.join("; ")}`);
+    if (exitResult.alerts.length > 0) summaryLines.push(`Alerts: ${exitResult.alerts.join("; ")}`);
+
+    const summary = summaryLines.join("\n");
+
+    job.lastRun = new Date().toISOString();
+    job.lastResult = summary.slice(0, 500);
+    job.lastStatus = result.errors.length > 0 ? "partial" : "success";
+    await saveConfig();
+
+    const dateStr = getTodayKey();
+    const savePath = getJobSavePath(job.id, dateStr, "Copy-Trade-Scan");
+    if (kbCreateFn) {
+      try {
+        await kbCreateFn(savePath, `# Copy Trade Scan\n*Generated: ${new Date().toLocaleString("en-US", { timeZone: config.timezone })}*\n\n${summary}`);
+      } catch {}
+    }
+
+    await writeJobHistory(job.id, job.name, job.lastStatus, summary.slice(0, 500), savePath, Date.now() - jobStartMs);
+
+    if (broadcastFn) {
+      broadcastFn({
+        type: "job_complete",
+        jobId: job.id,
+        jobName: job.name,
+        summary: summary.slice(0, 300),
+        savedTo: savePath,
+        status: job.lastStatus,
+        timestamp: Date.now(),
+      });
+    }
+
+    if (result.trades_opened > 0 || result.trades_closed > 0 || exitResult.alerts.length > 0) {
+      const { sendMessage } = await import("./telegram.js");
+      const notifyLines = ["📋 *Copy Trade Scan Complete*", ""];
+      if (result.trades_opened > 0) {
+        for (const entry of result.new_entries) {
+          notifyLines.push(`🟢 COPIED: ${entry.market_question.slice(0, 60)} ${entry.direction} from ${entry.wallet_alias}`);
+        }
+      }
+      if (result.trades_closed > 0) notifyLines.push(`🔴 Closed ${result.trades_closed} (whale exit)`);
+      if (exitResult.closed > 0) notifyLines.push(`🏁 Closed ${exitResult.closed} (market resolved)`);
+      for (const alert of exitResult.alerts) notifyLines.push(alert);
+      sendMessage(notifyLines.join("\n")).catch(() => {});
+    }
+
+    sendJobCompletionNotification({
+      jobId: job.id,
+      jobName: job.name,
+      status: job.lastStatus as "success" | "partial" | "error",
+      summary: summary.slice(0, 500),
+      durationMs: Date.now() - jobStartMs,
+    }).catch(() => {});
+
+    console.log(`[copy-trade-scan] Complete — ${result.wallets_checked} wallets, ${result.trades_opened} opened, ${result.trades_closed + exitResult.closed} closed`);
+  } catch (err) {
+    job.lastRun = new Date().toISOString();
+    job.lastResult = String(err);
+    job.lastStatus = "error";
+    await saveConfig();
+    await writeJobHistory(job.id, job.name, "error", String(err).slice(0, 500), null, Date.now() - jobStartMs);
+    console.error("[copy-trade-scan] Error:", err);
+  }
+}
+
 const WE_JOB_IDS = new Set([
   "polymarket-activity-scan", "polymarket-full-cycle",
-  "bankr-execute",
+  "bankr-execute", "copy-trade-scan",
   "oversight-health", "oversight-weekly", "oversight-daily-summary", "oversight-shadow-refresh",
 ]);
 
@@ -1855,6 +1946,8 @@ async function checkJobs(): Promise<void> {
         await runTimelineAdvance(job);
       } else if (job.id === "birthday-calendar-sync") {
         await runBirthdayCalendarSync(job);
+      } else if (job.id === "copy-trade-scan") {
+        await runCopyTradeScan(job);
       } else {
         const jobStartMs = Date.now();
         const progressCb = (info: { toolName: string; iteration: number }) => {

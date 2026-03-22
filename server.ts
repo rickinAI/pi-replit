@@ -4276,6 +4276,48 @@ app.get("/api/wealth-engines/oversight", async (_req: Request, res: Response) =>
   }
 });
 
+app.get("/api/copy-trading/wallets", async (_req: Request, res: Response) => {
+  try {
+    const { getTrackedWallets } = await import("./src/copy-trading.js");
+    const wallets = await getTrackedWallets();
+    res.json({ wallets });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/copy-trading/wallets", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const { addWallet } = await import("./src/copy-trading.js");
+    const wallet = await addWallet(req.body);
+    res.json({ wallet });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete("/api/copy-trading/wallets/:address", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const { removeWallet } = await import("./src/copy-trading.js");
+    const removed = await removeWallet(req.params.address);
+    res.json({ removed });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/copy-trading/performance", async (_req: Request, res: Response) => {
+  try {
+    const { getWalletPerformance } = await import("./src/copy-trading.js");
+    const performance = await getWalletPerformance();
+    res.json({ performance });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 function buildClosedShadowTrades(shadowPerf: any): any[] {
   const closedShadows = (shadowPerf.trades || []).filter((t: any) => t.status === "closed");
   const dedupedClosed: any[] = [];

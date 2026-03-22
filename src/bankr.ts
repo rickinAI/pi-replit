@@ -9,7 +9,7 @@ export interface Position {
   thesis_id: string;
   asset: string;
   asset_class: "polymarket";
-  source: "polymarket_scout" | "manual";
+  source: "polymarket_scout" | "manual" | "copy_trade";
   direction: string;
   leverage: string;
   entry_price: number;
@@ -24,6 +24,9 @@ export interface Position {
   exposure_bucket: string;
   bnkr_order_id?: string;
   fill_quantity?: number;
+  is_copy_trade?: boolean;
+  source_wallet?: string;
+  market_id?: string;
 }
 
 export interface TradeRecord {
@@ -31,7 +34,7 @@ export interface TradeRecord {
   thesis_id: string;
   asset: string;
   asset_class: "polymarket";
-  source: "polymarket_scout" | "manual";
+  source: "polymarket_scout" | "manual" | "copy_trade";
   direction: string;
   leverage: string;
   entry_price: number;
@@ -45,6 +48,7 @@ export interface TradeRecord {
   closed_at: string;
   close_reason: string;
   tax_lot: TaxLot;
+  source_wallet?: string;
 }
 
 export interface TaxLot {
@@ -427,7 +431,7 @@ export async function openPosition(params: {
   thesis_id: string;
   asset: string;
   asset_class: "polymarket";
-  source?: "polymarket_scout" | "manual";
+  source?: "polymarket_scout" | "manual" | "copy_trade";
   direction: string;
   leverage: number;
   entry_price: number;
@@ -436,6 +440,9 @@ export async function openPosition(params: {
   venue: "bnkr";
   tx_hash?: string;
   market_id?: string;
+  is_copy_trade?: boolean;
+  source_wallet?: string;
+  copy_trade_size_usd?: number;
 }): Promise<{ position: Position; trade_id: string; bnkr_order_id?: string }> {
   const mode = await getMode();
   if (mode === "SHADOW") {
@@ -461,19 +468,24 @@ export async function openPosition(params: {
       console.error("[bankr] Shadow tracking in SHADOW mode:", e instanceof Error ? e.message : e);
     }
 
-    const portfolio = await getPortfolioValue();
-    const rc = await getRiskConfig();
-    const maxRisk = portfolio * (rc.risk_per_trade_pct / 100);
-    const riskDistance = Math.abs(params.entry_price - params.stop_price);
-    const rawSize = riskDistance > 0 ? maxRisk / riskDistance : 0;
-    const totalExposure = existingPositions.reduce((sum, p) => sum + (p.size * p.entry_price), 0);
-    const exposureLimit = portfolio * (rc.exposure_cap_pct / 100);
-    const remainingExposure = Math.max(0, exposureLimit - totalExposure);
-    const maxSizeByExposure = params.entry_price > 0 ? remainingExposure / params.entry_price : 0;
-    const shadowSize = Math.min(rawSize, maxSizeByExposure);
+    let shadowSize: number;
+    if (params.is_copy_trade && params.copy_trade_size_usd && params.entry_price > 0) {
+      shadowSize = params.copy_trade_size_usd / params.entry_price;
+    } else {
+      const portfolio = await getPortfolioValue();
+      const rc = await getRiskConfig();
+      const maxRisk = portfolio * (rc.risk_per_trade_pct / 100);
+      const riskDistance = Math.abs(params.entry_price - params.stop_price);
+      const rawSize = riskDistance > 0 ? maxRisk / riskDistance : 0;
+      const totalExposure = existingPositions.reduce((sum, p) => sum + (p.size * p.entry_price), 0);
+      const exposureLimit = portfolio * (rc.exposure_cap_pct / 100);
+      const remainingExposure = Math.max(0, exposureLimit - totalExposure);
+      const maxSizeByExposure = params.entry_price > 0 ? remainingExposure / params.entry_price : 0;
+      shadowSize = Math.min(rawSize, maxSizeByExposure);
+    }
 
     if (shadowSize <= 0) {
-      console.log(`[bankr] SHADOW position rejected: ${params.asset} — zero size (raw=${rawSize.toFixed(4)}, maxByExposure=${maxSizeByExposure.toFixed(4)})`);
+      console.log(`[bankr] SHADOW position rejected: ${params.asset} — zero size`);
       return { position: null as any, trade_id: `rejected_${Date.now()}` };
     }
 
@@ -497,6 +509,9 @@ export async function openPosition(params: {
       venue: params.venue,
       opened_at: new Date().toISOString(),
       exposure_bucket: getExposureBucket(params.asset, params.asset_class),
+      is_copy_trade: params.is_copy_trade || false,
+      source_wallet: params.source_wallet,
+      market_id: params.market_id,
     };
 
     const positions = await getPositions();
@@ -567,6 +582,9 @@ export async function openPosition(params: {
     venue: params.venue,
     exposure_bucket: getExposureBucket(params.asset, params.asset_class),
     bnkr_order_id: bnkrOrderId,
+    is_copy_trade: params.is_copy_trade || false,
+    source_wallet: params.source_wallet,
+    market_id: params.market_id,
   };
 
   const positions = await getPositions();
@@ -644,6 +662,7 @@ export async function closePosition(positionId: string, exitPrice: number, close
     closed_at: disposedDate.toISOString(),
     close_reason: closeReason,
     tax_lot: taxLot,
+    source_wallet: pos.source_wallet,
   };
 
   positions.splice(idx, 1);
@@ -793,6 +812,9 @@ async function monitorPolymarketPosition(pos: Position, closed: TradeRecord[]): 
     }
   } catch {}
   if (!thesis) {
+    if (pos.is_copy_trade) {
+      return;
+    }
     console.warn(`[bankr] Polymarket thesis ${pos.thesis_id} not found — applying conservative stop loss`);
     const stopLoss = 0.10;
     const isYesFallback = pos.direction === "YES";
@@ -856,26 +878,28 @@ async function monitorPolymarketPosition(pos: Position, closed: TradeRecord[]): 
     return;
   }
 
-  const stopLoss = 0.10;
-  if (isYes && currentOdds <= livePos.entry_price - stopLoss) {
-    console.log(`[bankr] Polymarket stop loss (${(currentOdds * 100).toFixed(0)}%) for ${pos.asset.slice(0, 60)}`);
-    const record = await closePosition(pos.id, currentOdds, "pm_stop_loss");
-    if (record) closed.push(record);
-    return;
-  }
-  if (!isYes && currentOdds >= livePos.entry_price + stopLoss) {
-    console.log(`[bankr] Polymarket stop loss (${(currentOdds * 100).toFixed(0)}%) for ${pos.asset.slice(0, 60)}`);
-    const record = await closePosition(pos.id, currentOdds, "pm_stop_loss");
-    if (record) closed.push(record);
-    return;
-  }
+  if (!pos.is_copy_trade) {
+    const stopLoss = 0.10;
+    if (isYes && currentOdds <= livePos.entry_price - stopLoss) {
+      console.log(`[bankr] Polymarket stop loss (${(currentOdds * 100).toFixed(0)}%) for ${pos.asset.slice(0, 60)}`);
+      const record = await closePosition(pos.id, currentOdds, "pm_stop_loss");
+      if (record) closed.push(record);
+      return;
+    }
+    if (!isYes && currentOdds >= livePos.entry_price + stopLoss) {
+      console.log(`[bankr] Polymarket stop loss (${(currentOdds * 100).toFixed(0)}%) for ${pos.asset.slice(0, 60)}`);
+      const record = await closePosition(pos.id, currentOdds, "pm_stop_loss");
+      if (record) closed.push(record);
+      return;
+    }
 
-  const daysOpen = (Date.now() - new Date(pos.opened_at).getTime()) / (24 * 60 * 60 * 1000);
-  if (daysOpen > 30 && livePos.unrealized_pnl < 0) {
-    console.log(`[bankr] Polymarket time exit (${daysOpen.toFixed(0)}d underwater) for ${pos.asset.slice(0, 60)}`);
-    const record = await closePosition(pos.id, currentOdds, "pm_time_exit_underwater");
-    if (record) closed.push(record);
-    return;
+    const daysOpen = (Date.now() - new Date(pos.opened_at).getTime()) / (24 * 60 * 60 * 1000);
+    if (daysOpen > 30 && livePos.unrealized_pnl < 0) {
+      console.log(`[bankr] Polymarket time exit (${daysOpen.toFixed(0)}d underwater) for ${pos.asset.slice(0, 60)}`);
+      const record = await closePosition(pos.id, currentOdds, "pm_time_exit_underwater");
+      if (record) closed.push(record);
+      return;
+    }
   }
 
   try {
@@ -1042,7 +1066,7 @@ export async function generateForm8949CSV(): Promise<string> {
 }
 
 export interface SignalQualityRecord {
-  source: "polymarket_scout";
+  source: "polymarket_scout" | "copy_trade";
   asset_class: "polymarket";
   wins: number;
   losses: number;
@@ -1101,7 +1125,7 @@ export async function getSignalQuality(): Promise<SignalQualityRecord[]> {
 }
 
 export async function updateSignalQuality(params: {
-  source: "polymarket_scout" | "manual";
+  source: "polymarket_scout" | "manual" | "copy_trade";
   asset_class: "polymarket";
   pnl: number;
   asset: string;
@@ -1197,7 +1221,7 @@ export async function updateSignalQuality(params: {
   }
 }
 
-export function getSignalQualityModifier(scores: SignalQualityRecord[], source: "polymarket_scout", assetClass: "polymarket"): { modifier: string; winRate: number; sampleSize: number; profitFactor: number } {
+export function getSignalQualityModifier(scores: SignalQualityRecord[], source: "polymarket_scout" | "copy_trade", assetClass: "polymarket"): { modifier: string; winRate: number; sampleSize: number; profitFactor: number } {
   const MIN_SAMPLE_SIZE = 8;
   const record = scores.find(r => r.source === source && r.asset_class === assetClass);
   if (!record || record.recent_results.length < MIN_SAMPLE_SIZE) {

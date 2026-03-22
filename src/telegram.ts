@@ -750,6 +750,56 @@ async function handleAlertsCommand(): Promise<string> {
   ].join("\n");
 }
 
+async function handleWalletsCommand(): Promise<string> {
+  const mode = await getMode();
+  try {
+    const { getTrackedWallets, formatWalletList } = await import("./copy-trading.js");
+    const wallets = await getTrackedWallets();
+    return `${mode} *Tracked Wallets* (${wallets.length})\n\n${formatWalletList(wallets)}`;
+  } catch (err) {
+    return `${mode} ❌ Failed to fetch wallets: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+async function handleCopytradesCommand(): Promise<string> {
+  const mode = await getMode();
+  try {
+    const { getWalletPerformance } = await import("./copy-trading.js");
+    const { getPositions } = await import("./bankr.js");
+    const positions = await getPositions();
+    const copyPositions = positions.filter(p => p.is_copy_trade);
+    const performance = await getWalletPerformance();
+
+    const lines = [`${mode} *Copy Trading Dashboard*`, ""];
+
+    if (copyPositions.length > 0) {
+      lines.push(`*Open Copy Trades (${copyPositions.length}/3):*`);
+      for (const pos of copyPositions) {
+        const pnl = pos.unrealized_pnl || 0;
+        const pnlStr = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
+        const icon = pnl >= 0 ? "🟢" : "🔴";
+        lines.push(`${icon} ${pos.asset.slice(0, 50)} ${pos.direction} | P&L: ${pnlStr}`);
+      }
+      lines.push("");
+    } else {
+      lines.push("No open copy trades.\n");
+    }
+
+    if (performance.length > 0) {
+      lines.push("*Wallet Performance:*");
+      for (const wp of performance) {
+        if (wp.total_copy_trades === 0) continue;
+        const pnlStr = wp.total_pnl >= 0 ? `+$${wp.total_pnl.toFixed(2)}` : `-$${Math.abs(wp.total_pnl).toFixed(2)}`;
+        lines.push(`• ${wp.wallet_alias}: ${wp.win_rate}% win (${wp.total_copy_trades} trades) | ${pnlStr}`);
+      }
+    }
+
+    return lines.join("\n");
+  } catch (err) {
+    return `${mode} ❌ Failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
 async function handleHelpCommand(): Promise<string> {
   const mode = await getMode();
   return [
@@ -760,6 +810,8 @@ async function handleHelpCommand(): Promise<string> {
     "/intel — Latest SCOUT brief",
     "/scout — (redirects to /intel)",
     "/polymarket — Active PM theses",
+    "/wallets — Tracked whale wallets",
+    "/copytrades — Copy trading dashboard",
     "/trades [n] — Last N trades (default 5)",
     "/risk — Risk dashboard",
     "/oversight — Oversight agent status",
@@ -1665,6 +1717,8 @@ export async function init(): Promise<void> {
   registerCommand("research", async (args) => handleResearchCommand(args));
   registerCommand("alerts", async () => handleAlertsCommand());
   registerCommand("notify", async (args) => handleNotifyCommand(args));
+  registerCommand("wallets", async () => handleWalletsCommand());
+  registerCommand("copytrades", async () => handleCopytradesCommand());
   registerCommand("help", async () => handleHelpCommand());
 
   try {
