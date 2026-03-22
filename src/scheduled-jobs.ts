@@ -105,7 +105,7 @@ Save the compiled brief to "Scheduled Reports/Daily News.md" (overwrite previous
     name: "Market Summary",
     agentId: "analyst",
     prompt: `Analyze the current market conditions:
-1. Check the watchlist stocks and crypto prices
+1. Check the watchlist stock prices
 2. Search X for ticker sentiment and market chatter — x_search("$GOLD OR $BTC OR $MSTR OR stock market") for real-time trader sentiment
 3. Note any significant moves (>2%) with brief analysis
 4. Summarize overall market sentiment (include X/social sentiment alongside data)
@@ -886,7 +886,7 @@ Keep the output concise — just the health status and any action items.`,
 
 STEP 1: Run oversight_health_check for current system state.
 STEP 2: Run oversight_performance_review for 7-day trading performance stats.
-STEP 3: Run oversight_cross_domain_exposure to detect crypto-Polymarket correlations.
+STEP 3: Run oversight_cross_domain_exposure to detect correlated Polymarket positions.
 STEP 4: Check oversight_improvement_queue for open improvement requests.
 STEP 5: Check oversight_shadow_performance for shadow trading results.
 
