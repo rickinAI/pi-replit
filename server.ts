@@ -8067,7 +8067,7 @@ async function startServer(maxRetries = 5) {
   await alerts.init();
   await telegram.init();
   oversight.setTelegramNotifier(async (msg: string) => {
-    await telegram.sendMessage(msg);
+    await telegram.sendMessage(msg, "HTML");
   });
   await scheduledJobs.init();
   try {

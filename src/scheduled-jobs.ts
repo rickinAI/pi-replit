@@ -1890,16 +1890,20 @@ async function runCopyTradeScan(job: ScheduledJob): Promise<void> {
 
     if (result.trades_opened > 0 || result.trades_closed > 0 || exitResult.alerts.length > 0) {
       const { sendMessage } = await import("./telegram.js");
-      const notifyLines = ["📋 *Copy Trade Scan Complete*", ""];
+      const fmt = await import("./telegram-format.js");
+      const notifyLines = [
+        fmt.buildCategoryHeader(fmt.CATEGORY_BADGES.COPY_TRADE, "Scan Complete"),
+        "",
+      ];
       if (result.trades_opened > 0) {
         for (const entry of result.new_entries) {
-          notifyLines.push(`🟢 COPIED: ${entry.market_question.slice(0, 60)} ${entry.direction} from ${entry.wallet_alias}`);
+          notifyLines.push(`🟢 COPIED: ${fmt.escapeHtml(entry.market_question.slice(0, 60))} ${entry.direction} from ${fmt.escapeHtml(entry.wallet_alias)}`);
         }
       }
       if (result.trades_closed > 0) notifyLines.push(`🔴 Closed ${result.trades_closed} (whale exit)`);
       if (exitResult.closed > 0) notifyLines.push(`🏁 Closed ${exitResult.closed} (market resolved)`);
-      for (const alert of exitResult.alerts) notifyLines.push(alert);
-      sendMessage(notifyLines.join("\n")).catch(() => {});
+      for (const alert of exitResult.alerts) notifyLines.push(fmt.escapeHtml(alert));
+      sendMessage(fmt.truncateToTelegramLimit(notifyLines.join("\n")), "HTML").catch(() => {});
     }
 
     sendJobCompletionNotification({
@@ -1961,7 +1965,16 @@ async function runSeedWallets(job: ScheduledJob): Promise<void> {
 
     if (result.added > 0) {
       const { sendMessage } = await import("./telegram.js");
-      sendMessage(`🌱 *Wallet Seed Complete*\nAdded: ${result.added} | Rejected: ${result.rejected}\n${result.details.filter(d => d.startsWith("✅")).join("\n")}`).catch(() => {});
+      const fmt = await import("./telegram-format.js");
+      const seedLines = [
+        fmt.buildCategoryHeader(fmt.CATEGORY_BADGES.DISCOVERY, "Seed Complete"),
+        "",
+        `${result.added} wallets added · ${result.rejected} rejected`,
+        ...result.details.filter(d => d.startsWith("✅")).map(d => fmt.escapeHtml(d)),
+        "",
+        `Registry total: ${result.candidates_found} candidates`,
+      ];
+      sendMessage(fmt.truncateToTelegramLimit(seedLines.join("\n")), "HTML").catch(() => {});
     }
 
     console.log(`[seed-wallets] Complete — ${result.added} added, ${result.rejected} rejected`);

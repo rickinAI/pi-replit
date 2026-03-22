@@ -407,7 +407,13 @@ export async function runAnomalyScanner(): Promise<{
     if (walletsAdded > 0) {
       try {
         const { sendMessage } = await import("./telegram.js");
-        sendMessage(`🔍 *Anomaly Scanner*\n${details.join("\n")}`).catch(() => {});
+        const fmt = await import("./telegram-format.js");
+        const anomalyLines = [
+          fmt.buildCategoryHeader(fmt.CATEGORY_BADGES.DISCOVERY, "New Whale Candidate"),
+          "",
+          ...details.map(d => fmt.escapeHtml(d)),
+        ];
+        sendMessage(fmt.truncateToTelegramLimit(anomalyLines.join("\n")), "HTML").catch(() => {});
       } catch {}
     }
   } catch (err) {

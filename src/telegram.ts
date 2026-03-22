@@ -754,24 +754,57 @@ async function handleAlertsCommand(): Promise<string> {
 }
 
 async function handleWalletsCommand(): Promise<string> {
-  const mode = await getMode();
   try {
     const { getWhaleWatchlist } = await import("./polymarket.js");
-    const { formatWalletList } = await import("./copy-trading.js");
+    const { getWalletPerformance } = await import("./copy-trading.js");
+    const fmt = await import("./telegram-format.js");
     const wallets = await getWhaleWatchlist();
-    return `${mode} *Tracked Wallets* (${wallets.length})\n\n${formatWalletList(wallets)}`;
+    const performance = await getWalletPerformance();
+
+    const enabled = wallets.filter(w => w.enabled);
+    const sorted = [...enabled].sort((a, b) => b.composite_score - a.composite_score);
+    const top3 = sorted.slice(0, 3);
+
+    const nicheGroups: Record<string, number> = {};
+    for (const w of enabled) {
+      const n = w.niche || "unknown";
+      nicheGroups[n] = (nicheGroups[n] || 0) + 1;
+    }
+    const nicheStr = Object.entries(nicheGroups)
+      .map(([n, c]) => `${fmt.getNicheEmoji(n)} ${n.charAt(0).toUpperCase() + n.slice(1)} (${c})`)
+      .join(" · ");
+
+    const lines = [
+      fmt.buildCategoryHeader(fmt.CATEGORY_BADGES.WHALE_INTEL, "Registry"),
+      "",
+      `${wallets.length} tracked wallets`,
+      fmt.SEPARATOR,
+      "Top performers:",
+    ];
+
+    for (let i = 0; i < top3.length; i++) {
+      const w = top3[i];
+      const wp = performance.find(p => p.wallet_address === w.address);
+      const roi = wp && wp.total_pnl !== undefined ? ` · ROI: ${fmt.formatPnl(wp.total_pnl)}` : "";
+      lines.push(`  ${i + 1}. ${fmt.truncateAddress(w.address)} · Score: ${w.composite_score.toFixed(1)}${roi}`);
+    }
+
+    lines.push("");
+    lines.push(`Niches: ${nicheStr}`);
+
+    return fmt.truncateToTelegramLimit(lines.join("\n"));
   } catch (err) {
-    return `${mode} ❌ Failed to fetch wallets: ${err instanceof Error ? err.message : String(err)}`;
+    return `❌ Failed to fetch wallets: ${err instanceof Error ? err.message : String(err)}`;
   }
 }
 
 async function handleSeedWalletsCommand(): Promise<string> {
-  const mode = await getMode();
   try {
     const { seedWalletsFromTradeStream } = await import("./polymarket-scout.js");
+    const fmt = await import("./telegram-format.js");
     const result = await seedWalletsFromTradeStream();
     const lines = [
-      `${mode} 🌱 *Wallet Seed Results*`,
+      fmt.buildCategoryHeader(fmt.CATEGORY_BADGES.DISCOVERY, "Seed Running..."),
       "",
       `Candidates found: ${result.candidates_found}`,
       `Added: ${result.added}`,
@@ -779,81 +812,126 @@ async function handleSeedWalletsCommand(): Promise<string> {
       "",
       ...result.details.slice(0, 10),
     ];
-    return lines.join("\n");
+    return fmt.truncateToTelegramLimit(lines.join("\n"));
   } catch (err) {
-    return `${mode} ❌ Seed failed: ${err instanceof Error ? err.message : String(err)}`;
+    return `❌ Seed failed: ${err instanceof Error ? err.message : String(err)}`;
   }
 }
 
 async function handleWalletStatusCommand(): Promise<string> {
-  const mode = await getMode();
   try {
     const { getWhaleWatchlist } = await import("./polymarket.js");
     const { getWalletPerformance } = await import("./copy-trading.js");
+    const fmt = await import("./telegram-format.js");
     const wallets = await getWhaleWatchlist();
     const performance = await getWalletPerformance();
 
-    const active = wallets.filter(w => w.enabled && w.status === 'active');
+    const active = wallets.filter(w => w.enabled && w.status === 'active' && !w.observation_only);
     const observing = wallets.filter(w => w.observation_only);
     const disabled = wallets.filter(w => !w.enabled);
+    const blacklisted = wallets.filter(w => w.status === 'removed');
+
+    const lastCheckedWallet = wallets
+      .filter(w => w.last_checked > 0)
+      .sort((a, b) => b.last_checked - a.last_checked)[0];
+    const lastScanAgo = lastCheckedWallet
+      ? `${Math.floor((Date.now() - lastCheckedWallet.last_checked) / 60000)} min ago`
+      : "never";
 
     const lines = [
-      `${mode} 📊 *Wallet Status*`,
+      fmt.buildCategoryHeader(fmt.CATEGORY_BADGES.WHALE_INTEL, "Status"),
       "",
-      `Total: ${wallets.length} | Active: ${active.length} | Observing: ${observing.length} | Disabled: ${disabled.length}`,
+      `Active watchers: ${active.length}`,
+      `Observing: ${observing.length}`,
+      `Blacklisted: ${blacklisted.length}`,
+      `Disabled: ${disabled.length}`,
       "",
+      `Last scan: ${lastScanAgo}`,
     ];
 
-    for (const w of wallets) {
-      const wp = performance.find(p => p.wallet_address === w.address);
-      const status = !w.enabled ? "🔴" : w.observation_only ? "🔍" : "🟢";
-      const lastChecked = w.last_checked > 0 ? `${Math.floor((Date.now() - w.last_checked) / 60000)}m ago` : "never";
-      const pnl = wp && wp.total_copy_trades > 0 ? ` | P&L: ${wp.total_pnl >= 0 ? '+' : ''}$${wp.total_pnl.toFixed(2)}` : "";
-      lines.push(`${status} *${w.alias}* (${w.niche}) — Score: ${w.composite_score.toFixed(2)} | Checked: ${lastChecked}${pnl}`);
-    }
-
-    return lines.join("\n");
+    return fmt.truncateToTelegramLimit(lines.join("\n"));
   } catch (err) {
-    return `${mode} ❌ Failed: ${err instanceof Error ? err.message : String(err)}`;
+    return `❌ Failed: ${err instanceof Error ? err.message : String(err)}`;
   }
 }
 
 async function handleCopytradesCommand(): Promise<string> {
-  const mode = await getMode();
   try {
     const { getWalletPerformance } = await import("./copy-trading.js");
     const { getPositions } = await import("./bankr.js");
+    const fmt = await import("./telegram-format.js");
     const positions = await getPositions();
     const copyPositions = positions.filter(p => p.is_copy_trade);
     const performance = await getWalletPerformance();
 
-    const lines = [`${mode} *Copy Trading Dashboard*`, ""];
+    const lines = [
+      fmt.buildCategoryHeader(fmt.CATEGORY_BADGES.COPY_TRADE, "Active Positions"),
+      "",
+      `${copyPositions.length} open position${copyPositions.length !== 1 ? "s" : ""}`,
+    ];
 
     if (copyPositions.length > 0) {
-      lines.push(`*Open Copy Trades (${copyPositions.length}/3):*`);
-      for (const pos of copyPositions) {
+      lines.push(fmt.SEPARATOR);
+      let totalUnrealized = 0;
+      for (let i = 0; i < copyPositions.length; i++) {
+        const pos = copyPositions[i];
         const pnl = pos.unrealized_pnl || 0;
-        const pnlStr = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
-        const icon = pnl >= 0 ? "🟢" : "🔴";
-        lines.push(`${icon} ${pos.asset.slice(0, 50)} ${pos.direction} | P&L: ${pnlStr}`);
+        totalUnrealized += pnl;
+        const pnlStr = fmt.formatPnl(pnl);
+        const pctStr = pos.entry_price > 0 ? ` (${fmt.formatPct((pnl / pos.entry_price) * 100)})` : "";
+        lines.push(`${i + 1}. ${pos.asset.slice(0, 50)} ${pos.direction}`);
+        lines.push(`   Entry: $${pos.entry_price?.toFixed(2) || "?"} · ${pnlStr}${pctStr}`);
       }
       lines.push("");
-    } else {
-      lines.push("No open copy trades.\n");
+      lines.push(fmt.SEPARATOR);
+      lines.push(`Total unrealized: ${fmt.formatPnl(totalUnrealized)}`);
     }
 
-    if (performance.length > 0) {
-      lines.push("*Wallet Performance:*");
-      for (const wp of performance) {
-        if (wp.total_copy_trades === 0) continue;
-        const pnlStr = wp.total_pnl >= 0 ? `+$${wp.total_pnl.toFixed(2)}` : `-$${Math.abs(wp.total_pnl).toFixed(2)}`;
-        lines.push(`• ${wp.wallet_alias}: ${wp.win_rate}% win (${wp.total_copy_trades} trades) | ${pnlStr}`);
-      }
-    }
-
-    return lines.join("\n");
+    return fmt.truncateToTelegramLimit(lines.join("\n"));
   } catch (err) {
-    return `${mode} ❌ Failed: ${err instanceof Error ? err.message : String(err)}`;
+    return `❌ Failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+async function handleGoalCommand(args: string): Promise<string> {
+  const pool = getPool();
+  const fmt = await import("./telegram-format.js");
+  const val = args.trim();
+
+  if (!val) {
+    let goalTarget = 50000;
+    let portfolioValue = 1000;
+    try {
+      const res = await pool.query(`SELECT key, value FROM app_config WHERE key IN ('wealth_goal', 'wealth_engines_portfolio_value')`);
+      for (const row of res.rows) {
+        if (row.key === 'wealth_goal' && typeof row.value?.target === "number") goalTarget = row.value.target;
+        if (row.key === 'wealth_engines_portfolio_value' && typeof row.value === "number") portfolioValue = row.value;
+      }
+    } catch {}
+    const bar = fmt.buildProgressBar(portfolioValue, goalTarget, 10);
+    const pct = goalTarget > 0 ? ((portfolioValue / goalTarget) * 100).toFixed(1) : "0";
+    return [
+      `🎯 Current Goal: $${goalTarget.toLocaleString()}`,
+      `${bar}  $${Math.floor(portfolioValue).toLocaleString()} / $${goalTarget.toLocaleString()} (${pct}%)`,
+      "",
+      `Use /goal <amount> to change (e.g. /goal 100000)`,
+    ].join("\n");
+  }
+
+  const amount = parseInt(val.replace(/[$,]/g, ""), 10);
+  if (isNaN(amount) || amount <= 0) {
+    return `❌ Invalid amount. Use: /goal 50000`;
+  }
+
+  try {
+    await pool.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_goal', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify({ target: amount, label: `$${(amount / 1000).toFixed(0)}K Goal` }), Date.now()]
+    );
+    return `🎯 Goal updated to $${amount.toLocaleString()}`;
+  } catch (err) {
+    return `❌ Failed to update goal: ${err instanceof Error ? err.message : String(err)}`;
   }
 }
 
@@ -1029,6 +1107,7 @@ async function handleHelpCommand(): Promise<string> {
     "/add-wallet — Add whale wallet to track",
     "/remove-wallet — Remove tracked wallet",
     "/blacklist-wallet — Blacklist a wallet",
+    "/goal — View or set wealth goal target",
     "/seedwallets — Auto-discover whales",
     "/trades [n] — Last N trades (default 5)",
     "/risk — Risk dashboard",
@@ -1273,9 +1352,17 @@ async function checkDeadManSwitches(): Promise<void> {
           const lastAlert = lastDeadManAlert["pm-scout"] || 0;
           if (Date.now() - lastAlert > 4 * 3600 * 1000) {
             lastDeadManAlert["pm-scout"] = Date.now();
-            await sendMessage(
-              `${mode} ⚠️ *Dead Man's Switch: PM SCOUT*\n\nPM SCOUT has not run in ${Math.floor(hoursSince)}h (threshold: 6h).\nLast run: ${timeAgo(lastRun)}\n\nCheck scheduled jobs or run manually.`
-            );
+            const fmt = await import("./telegram-format.js");
+            const dmLines = [
+              fmt.buildCategoryHeader(fmt.CATEGORY_BADGES.DEAD_MAN, "SCOUT Silent"),
+              "",
+              `Last run: ${Math.floor(hoursSince)}h ago (threshold: 6h)`,
+              `Expected: Every 60min`,
+              `Action: Check scheduled-jobs or restart`,
+              "",
+              `[/scout to trigger manually]`,
+            ];
+            await sendMessage(fmt.truncateToTelegramLimit(dmLines.join("\n")), "HTML");
           }
         } else {
           delete lastDeadManAlert["pm-scout"];
@@ -1299,9 +1386,14 @@ async function checkDeadManSwitches(): Promise<void> {
         const lastAlert = lastDeadManAlert["bankr-monitor"] || 0;
         if (Date.now() - lastAlert > 60 * 60 * 1000) {
           lastDeadManAlert["bankr-monitor"] = Date.now();
-          await sendMessage(
-            `${mode} ⚠️ *Dead Man's Switch: BANKR Monitor*\n\nPosition monitor has not ticked in ${Math.floor(minsSince)} min (threshold: 30 min).\nLast tick: ${timeAgo(lastTick)}\n\nThe server may have restarted or crashed.`
-          );
+          const fmtBm = await import("./telegram-format.js");
+          const bmLines = [
+            fmtBm.buildCategoryHeader(fmtBm.CATEGORY_BADGES.DEAD_MAN, "BANKR Monitor Silent"),
+            "",
+            `Last tick: ${Math.floor(minsSince)}min ago (threshold: 30min)`,
+            `Action: Server may have restarted or crashed`,
+          ];
+          await sendMessage(fmtBm.truncateToTelegramLimit(bmLines.join("\n")), "HTML");
         }
       } else {
         delete lastDeadManAlert["bankr-monitor"];
@@ -1324,9 +1416,14 @@ async function checkDeadManSwitches(): Promise<void> {
           const lastAlert = lastDeadManAlert["bankr"] || 0;
           if (Date.now() - lastAlert > 4 * 3600 * 1000) {
             lastDeadManAlert["bankr"] = Date.now();
-            await sendMessage(
-              `${mode} ⚠️ *Dead Man's Switch: BANKR*\n\nBANKR agent has not run in ${Math.floor(hoursSince)}h (threshold: 8h).\nLast run: ${timeAgo(lastRun)}\n\nCheck scheduled jobs or run manually.`
-            );
+            const fmtBa = await import("./telegram-format.js");
+            const baLines = [
+              fmtBa.buildCategoryHeader(fmtBa.CATEGORY_BADGES.DEAD_MAN, "BANKR Silent"),
+              "",
+              `Last run: ${Math.floor(hoursSince)}h ago (threshold: 8h)`,
+              `Action: Check scheduled-jobs or restart`,
+            ];
+            await sendMessage(fmtBa.truncateToTelegramLimit(baLines.join("\n")), "HTML");
           }
         } else {
           delete lastDeadManAlert["bankr"];
@@ -1396,24 +1493,26 @@ export async function sendTradeAlert(params: {
   }
   if (params.reason) lines.push(`Reason: ${params.reason}`);
 
-  await sendMessage(lines.join("\n"), "");
+  await sendMessage(lines.join("\n"), "HTML");
 }
 
 export async function sendScoutBrief(brief: string, chartUrls?: string[]): Promise<void> {
-  const mode = await getMode();
+  const fmt = await import("./telegram-format.js");
 
   if (chartUrls && chartUrls.length > 0) {
     for (const url of chartUrls.slice(0, 3)) {
       try {
-        await sendPhoto(url, `${mode} 📊 SCOUT chart`);
+        await sendPhoto(url, `📊 SCOUT chart`);
       } catch (err) {
         console.warn("[telegram] Failed to send scout chart:", err instanceof Error ? err.message : err);
       }
     }
   }
 
-  const truncated = brief.length > 3500 ? brief.slice(0, 3500) + "\n\n_(truncated)_" : brief;
-  await sendMessage(`${mode} 🔍 *SCOUT Morning Brief*\n\n${truncated}`);
+  const header = fmt.buildCategoryHeader(fmt.CATEGORY_BADGES.SCOUT, "Full Cycle Complete");
+  const escaped = fmt.escapeHtml(brief);
+  const msg = `${header}\n\n${escaped}`;
+  await sendMessage(fmt.truncateToTelegramLimit(msg), "HTML");
 }
 
 let lastPmNotifyHash = "";
@@ -1432,7 +1531,7 @@ async function flushDigestQueue(): Promise<void> {
   if (digestQueue.length === 0) return;
   if (!isConfigured()) { digestQueue.length = 0; return; }
 
-  const mode = await getMode();
+  const fmt = await import("./telegram-format.js");
   const events = digestQueue.splice(0, digestQueue.length);
 
   const grouped: Record<string, DigestEvent[]> = {};
@@ -1442,26 +1541,30 @@ async function flushDigestQueue(): Promise<void> {
     grouped[key].push(e);
   }
 
-  const lines = [`${mode} 📊 *Wealth Engines Digest*`, ""];
   const groupIcons: Record<string, string> = {
     scout: "🔍", polymarket: "🎰", bankr: "💰",
     oversight: "🛡️",
   };
 
+  const lines = [
+    fmt.buildCategoryHeader(fmt.CATEGORY_BADGES.DAILY_BRIEF, "Digest"),
+    "",
+  ];
+
   for (const [group, evts] of Object.entries(grouped)) {
     const icon = groupIcons[group] || "⚙️";
     const successes = evts.filter(e => e.status !== "error").length;
     const errors = evts.filter(e => e.status === "error").length;
-    lines.push(`${icon} *${evts[0].jobName}* — ${successes} run(s)${errors > 0 ? `, ${errors} error(s)` : ""}`);
+    lines.push(`${icon} ${fmt.escapeHtml(evts[0].jobName)} — ${successes} run(s)${errors > 0 ? `, ${errors} error(s)` : ""}`);
     const lastEvent = evts[evts.length - 1];
-    if (lastEvent.detail) lines.push(`  ${lastEvent.detail}`);
+    if (lastEvent.detail) lines.push(`  ${fmt.escapeHtml(lastEvent.detail)}`);
   }
 
   lines.push("");
-  lines.push(`_${events.length} events over last 4h_`);
-  lines.push(`_${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`);
+  lines.push(`${events.length} events over last 4h`);
+  lines.push(fmt.formatETTime());
 
-  await sendMessage(lines.join("\n"));
+  await sendMessage(fmt.truncateToTelegramLimit(lines.join("\n")), "HTML");
   console.log(`[telegram] Digest flushed: ${events.length} events`);
 }
 
@@ -1473,8 +1576,8 @@ export async function sendJobCompletionNotification(params: {
   durationMs?: number;
 }): Promise<void> {
   if (!isConfigured()) return;
-  const mode = await getMode();
   const pool = getPool();
+  const fmt = await import("./telegram-format.js");
 
   const notifyMode = await getNotificationMode();
 
@@ -1487,8 +1590,15 @@ export async function sendJobCompletionNotification(params: {
   if (!weJobIds.has(params.jobId)) return;
 
   if (params.status === "error") {
-    const errSnippet = params.summary.slice(0, 300);
-    await sendMessage(`${mode} ❌ *Job Failed: ${params.jobName}*\n\n\`${errSnippet}\`\n\n_${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`);
+    const errSnippet = fmt.escapeHtml(params.summary.slice(0, 300));
+    const lines = [
+      `❌ JOB FAILED · ${fmt.escapeHtml(params.jobName)}`,
+      "",
+      errSnippet,
+      "",
+      fmt.formatETTime(),
+    ];
+    await sendMessage(fmt.truncateToTelegramLimit(lines.join("\n")), "HTML");
     return;
   }
 
@@ -1507,16 +1617,8 @@ export async function sendJobCompletionNotification(params: {
     }
   }
 
-  const durationStr = params.durationMs ? ` (${Math.round(params.durationMs / 1000)}s)` : "";
+  const durationStr = params.durationMs ? `${Math.round(params.durationMs / 1000)}s` : "";
   const statusIcon = params.status === "partial" ? "⚠️" : "✅";
-
-  const icons: Record<string, string> = {
-    "polymarket-activity-scan": "🎰", "polymarket-full-cycle": "🎰",
-    "bankr-execute": "💰", "oversight-health": "🛡️",
-    "oversight-weekly": "🛡️", "oversight-daily-summary": "📊",
-    "oversight-shadow-refresh": "👻", "prediction-markets-daily": "🔮",
-  };
-  const icon = icons[params.jobId] || "⚙️";
 
   let detailLines: string[] = [];
   try {
@@ -1526,22 +1628,22 @@ export async function sendJobCompletionNotification(params: {
         const now = Date.now();
         const active = res.rows[0].value.filter((t: any) => t.status === "active");
         const newTheses = active.filter((t: any) => t.created_at && (now - t.created_at) < 3600000);
-        detailLines.push(`*PM Theses:* ${active.length} active${newTheses.length > 0 ? ` (${newTheses.length} new)` : ""}`);
+        detailLines.push(`PM Theses: ${active.length} active${newTheses.length > 0 ? ` (${newTheses.length} new)` : ""}`);
         for (const t of active.slice(0, 3)) {
           const odds = t.current_odds != null ? `${(t.current_odds * 100).toFixed(0)}%` : "";
           const whales = t.whale_consensus ? `whales=${t.whale_consensus}` : "";
-          const parts = [(t.asset || "").slice(0, 40), t.direction, odds, whales].filter(Boolean);
+          const parts = [fmt.escapeHtml((t.asset || "").slice(0, 40)), t.direction, odds, whales].filter(Boolean);
           detailLines.push(`  • ${parts.join(" | ")}`);
         }
       }
     } else if (params.jobId === "bankr-execute") {
-      detailLines.push(params.summary.slice(0, 200));
+      detailLines.push(fmt.escapeHtml(params.summary.slice(0, 200)));
     } else if (params.jobId === "oversight-health") {
       const res = await pool.query(`SELECT value FROM app_config WHERE key = 'oversight_health_reports'`);
       if (res.rows.length > 0 && Array.isArray(res.rows[0].value) && res.rows[0].value.length > 0) {
         const latest = res.rows[0].value[res.rows[0].value.length - 1];
         const icons2: Record<string, string> = { healthy: "🟢", degraded: "🟡", critical: "🔴" };
-        detailLines.push(`${icons2[latest.overall_status] || "⚪"} ${latest.overall_status}: ${latest.summary || ""}`);
+        detailLines.push(`${icons2[latest.overall_status] || "⚪"} ${latest.overall_status}: ${fmt.escapeHtml(latest.summary || "")}`);
       }
     }
   } catch {}
@@ -1557,13 +1659,21 @@ export async function sendJobCompletionNotification(params: {
     return;
   }
 
-  const lines = [
-    `${mode} ${icon} *${params.jobName}* ${statusIcon}${durationStr}`,
-  ];
-  lines.push(...detailLines);
-  lines.push(`_${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`);
+  const jobBadge = params.jobId.startsWith("polymarket-") ? fmt.CATEGORY_BADGES.SCOUT
+    : params.jobId === "bankr-execute" ? fmt.CATEGORY_BADGES.COPY_TRADE
+    : params.jobId.startsWith("oversight-") ? fmt.CATEGORY_BADGES.OVERSIGHT
+    : "✅ JOB COMPLETE";
 
-  await sendMessage(lines.join("\n"));
+  const lines = [
+    fmt.buildCategoryHeader(jobBadge, `${statusIcon} ${fmt.escapeHtml(params.jobName)}`),
+    "",
+    `Duration: ${durationStr}`,
+  ];
+  if (detailLines.length > 0) {
+    lines.push(...detailLines);
+  }
+
+  await sendMessage(fmt.truncateToTelegramLimit(lines.join("\n")), "HTML");
 }
 
 export async function sendShadowTradeNotification(params: {
@@ -1577,30 +1687,34 @@ export async function sendShadowTradeNotification(params: {
   source?: string;
   openedAt?: number;
   closedAt?: number;
+  niche?: string;
 }): Promise<void> {
   if (!isConfigured()) return;
-  const mode = await getMode();
+  const fmt = await import("./telegram-format.js");
+  const niche = params.niche || "general";
 
   if (params.type === "open") {
+    const marketBadge = fmt.getMarketBadge(niche);
+    const assetText = fmt.escapeHtml(params.asset.slice(0, 80));
     const lines = [
-      `${mode} 👻 *Shadow Trade Opened*`,
+      fmt.buildCategoryHeader(fmt.CATEGORY_BADGES.SHADOW_BOOK, "Opening"),
       "",
-      `*Asset:* ${params.asset}`,
-      `*Direction:* ${params.direction}`,
-      `*Entry:* $${params.entryPrice.toFixed(4)}`,
+      `${marketBadge} · "${assetText}"`,
+      `Direction: ${params.direction} · Entry: $${params.entryPrice.toFixed(4)}`,
+      `Thesis: Shadow tracking — below execution threshold`,
+      "",
+      `🎲 "Watching from the sidelines... for now."`,
     ];
-    if (params.source) lines.push(`*Source:* ${params.source}`);
-    await sendMessage(lines.join("\n"));
+    await sendMessage(fmt.truncateToTelegramLimit(lines.join("\n")), "HTML");
   } else {
-    const pnlStr = params.pnl != null
-      ? (params.pnl >= 0 ? `+$${params.pnl.toFixed(2)}` : `-$${Math.abs(params.pnl).toFixed(2)}`)
-      : "N/A";
-    const pnlIcon = (params.pnl ?? 0) >= 0 ? "🟢" : "🔴";
+    const isWin = (params.pnl ?? 0) > 0;
+    const statusIcon = isWin ? "✅" : "❌";
+    const pnlStr = params.pnl != null ? fmt.formatPnl(params.pnl) : "N/A";
 
     let pctReturn = "";
     if (params.pnl != null && params.entryPrice > 0) {
       const pct = (params.pnl / params.entryPrice) * 100;
-      pctReturn = pct >= 0 ? `+${pct.toFixed(2)}%` : `${pct.toFixed(2)}%`;
+      pctReturn = fmt.formatPct(pct);
     }
 
     let holdDuration = "";
@@ -1608,22 +1722,33 @@ export async function sendShadowTradeNotification(params: {
       const diffMs = params.closedAt - params.openedAt;
       const totalMins = Math.floor(diffMs / 60000);
       const hours = Math.floor(totalMins / 60);
+      const days = Math.floor(hours / 24);
+      const remainHours = hours % 24;
       const mins = totalMins % 60;
-      if (hours > 0) holdDuration = `${hours}h ${mins}m`;
+      if (days > 0) holdDuration = `${days}d ${remainHours}h`;
+      else if (hours > 0) holdDuration = `${hours}h ${mins}m`;
       else holdDuration = `${mins}m`;
     }
 
+    const streak = await updateShadowStreak(isWin, params.pnl ?? 0);
+    const streakText = fmt.buildStreakText(streak.currentStreak, streak.streakType);
+
+    const marketBadge = fmt.getMarketBadge(niche);
+    const assetText = fmt.escapeHtml(params.asset.slice(0, 80));
+
     const lines = [
-      `${mode} 👻 *Shadow Trade Closed* ${pnlIcon}`,
+      fmt.buildCategoryHeader(fmt.CATEGORY_BADGES.SHADOW_BOOK, `Closed ${statusIcon}`),
       "",
-      `*Asset:* ${params.asset}`,
-      `*Direction:* ${params.direction}`,
-      `*Entry:* $${params.entryPrice.toFixed(4)}`,
+      `${marketBadge} · "${assetText}"`,
+      `${params.direction} · Entry: $${params.entryPrice.toFixed(4)}${params.exitPrice != null ? ` → Exit: $${params.exitPrice.toFixed(4)}` : ""}`,
+      `P&L: ${pnlStr}${pctReturn ? ` (${pctReturn})` : ""}${holdDuration ? ` | Held: ${holdDuration}` : ""}`,
     ];
-    if (params.exitPrice != null) lines.push(`*Exit:* $${params.exitPrice.toFixed(4)}`);
-    lines.push(`*P&L:* ${pnlStr}${pctReturn ? ` (${pctReturn})` : ""}`);
-    if (holdDuration) lines.push(`*Hold:* ${holdDuration}`);
-    if (params.reason) lines.push(`*Reason:* ${params.reason}`);
+    if (params.reason) lines.push(`Reason: ${fmt.escapeHtml(params.reason)}`);
+
+    if (streakText) {
+      lines.push("");
+      lines.push(streakText);
+    }
 
     let runningLine = "";
     try {
@@ -1635,18 +1760,90 @@ export async function sendShadowTradeNotification(params: {
         const wins = closed.filter((t: any) => (t.hypothetical_pnl || 0) > 0).length;
         const losses = closed.length - wins;
         const cumPnl = closed.reduce((s: number, t: any) => s + (t.hypothetical_pnl || 0), 0);
-        const winRate = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(0) : "0";
-        const cumStr = cumPnl >= 0 ? `+$${cumPnl.toFixed(2)}` : `-$${Math.abs(cumPnl).toFixed(2)}`;
-        runningLine = `📊 *Shadow Total:* ${cumStr} | W:${wins} L:${losses} | ${winRate}% win rate`;
+        runningLine = `Shadow Running Total: ${fmt.formatPnl(cumPnl)} | W:${wins} L:${losses}`;
       }
     } catch {}
     if (runningLine) {
-      lines.push("");
+      lines.push(fmt.SEPARATOR);
       lines.push(runningLine);
     }
 
-    await sendMessage(lines.join("\n"));
+    await sendMessage(fmt.truncateToTelegramLimit(lines.join("\n")), "HTML");
   }
+}
+
+interface ShadowStreak {
+  currentStreak: number;
+  streakType: "W" | "L";
+  longestStreak: number;
+  weeklyWins: number;
+  weeklyLosses: number;
+  weeklyPnl: number;
+  weekResetDate: string;
+}
+
+async function updateShadowStreak(isWin: boolean, pnl: number): Promise<ShadowStreak> {
+  const pool = getPool();
+  let streak: ShadowStreak = {
+    currentStreak: 0,
+    streakType: "W",
+    longestStreak: 0,
+    weeklyWins: 0,
+    weeklyLosses: 0,
+    weeklyPnl: 0,
+    weekResetDate: getNextMonday(),
+  };
+
+  try {
+    const res = await pool.query(`SELECT value FROM app_config WHERE key = 'shadow_streak'`);
+    if (res.rows.length > 0 && res.rows[0].value) {
+      streak = { ...streak, ...res.rows[0].value };
+    }
+  } catch {}
+
+  const nowET = new Date().toLocaleDateString("en-US", { timeZone: "America/New_York" });
+  const resetDate = new Date(streak.weekResetDate);
+  const now = new Date(nowET);
+  if (now >= resetDate) {
+    streak.weeklyWins = 0;
+    streak.weeklyLosses = 0;
+    streak.weeklyPnl = 0;
+    streak.weekResetDate = getNextMonday();
+  }
+
+  const newType: "W" | "L" = isWin ? "W" : "L";
+  if (newType === streak.streakType) {
+    streak.currentStreak++;
+  } else {
+    streak.streakType = newType;
+    streak.currentStreak = 1;
+  }
+  if (streak.currentStreak > streak.longestStreak) {
+    streak.longestStreak = streak.currentStreak;
+  }
+
+  if (isWin) streak.weeklyWins++;
+  else streak.weeklyLosses++;
+  streak.weeklyPnl += pnl;
+
+  try {
+    await pool.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('shadow_streak', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(streak), Date.now()]
+    );
+  } catch {}
+
+  return streak;
+}
+
+function getNextMonday(): string {
+  const now = new Date();
+  const day = now.getDay();
+  const daysUntilMonday = day === 0 ? 1 : 8 - day;
+  const next = new Date(now);
+  next.setDate(now.getDate() + daysUntilMonday);
+  return next.toISOString().slice(0, 10);
 }
 
 async function getNotificationMode(): Promise<"smart" | "immediate" | "digest"> {
@@ -1708,25 +1905,31 @@ async function handleNotifyCommand(args: string): Promise<string> {
 
 export async function sendDarkNodeSummary(): Promise<void> {
   if (!isConfigured()) return;
-  const mode = await getMode();
   const pool = getPool();
+  const fmt = await import("./telegram-format.js");
 
   let portfolioValue = 1000;
-  let thesisCount = 0;
   let pmThesisCount = 0;
-  let shadowPnl = 0;
+  let copyTradeCount = 0;
   let shadowOpen = 0;
   let shadowWins = 0;
   let shadowLosses = 0;
-  const todayShadowTrades: string[] = [];
+  let shadowPnl = 0;
+  let todayPnl = 0;
+  let todayWins = 0;
+  let todayLosses = 0;
   let healthStatus = "unknown";
   let healthIcon = "⚪";
   let paused = false;
   let killSwitch = false;
+  let weeklyPnlPct = 0;
+  let goalTarget = 50000;
+  let fgValue = "N/A";
+  let fgClass = "";
 
   try {
     const configRes = await pool.query(
-      `SELECT key, value FROM app_config WHERE key IN ('wealth_engines_portfolio_value', 'polymarket_scout_active_theses', 'oversight_shadow_trades', 'oversight_health_reports', 'wealth_engines_paused', 'wealth_engines_kill_switch')`
+      `SELECT key, value FROM app_config WHERE key IN ('wealth_engines_portfolio_value', 'polymarket_scout_active_theses', 'oversight_shadow_trades', 'oversight_health_reports', 'wealth_engines_paused', 'wealth_engines_kill_switch', 'shadow_streak', 'wealth_goal', 'fear_greed_index')`
     );
     const cm: Record<string, any> = {};
     for (const row of configRes.rows) cm[row.key] = row.value;
@@ -1735,8 +1938,24 @@ export async function sendDarkNodeSummary(): Promise<void> {
     paused = cm['wealth_engines_paused'] === true;
     killSwitch = cm['wealth_engines_kill_switch'] === true;
 
+    if (cm['wealth_goal'] && typeof cm['wealth_goal'].target === "number") {
+      goalTarget = cm['wealth_goal'].target;
+    }
+
+    if (cm['fear_greed_index'] && typeof cm['fear_greed_index'].value === "number") {
+      fgValue = String(cm['fear_greed_index'].value);
+      const v = cm['fear_greed_index'].value;
+      if (v <= 25) fgClass = "🔴 Extreme Fear";
+      else if (v <= 40) fgClass = "🟠 Fear";
+      else if (v <= 60) fgClass = "🟡 Neutral";
+      else if (v <= 75) fgClass = "🟢 Greed";
+      else fgClass = "🟢 Extreme Greed";
+    }
+
     if (Array.isArray(cm['polymarket_scout_active_theses'])) {
-      pmThesisCount = cm['polymarket_scout_active_theses'].filter((t: any) => t.status === "active").length;
+      const active = cm['polymarket_scout_active_theses'].filter((t: any) => t.status === "active");
+      pmThesisCount = active.length;
+      copyTradeCount = active.filter((t: any) => t.source === "copy_trade" || t.is_copy_trade).length;
     }
 
     const shadowTrades = cm['oversight_shadow_trades'];
@@ -1754,14 +1973,13 @@ export async function sendDarkNodeSummary(): Promise<void> {
       todayET.setHours(0, 0, 0, 0);
       const todayMs = todayET.getTime();
       const todayClosed = closed.filter((t: any) => (t.closed_at || 0) >= todayMs);
-      for (const t of todayClosed.slice(-5)) {
-        const pnl = t.hypothetical_pnl || 0;
-        const pnlS = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
-        const pctS = t.entry_price > 0 ? ` (${((pnl / t.entry_price) * 100).toFixed(1)}%)` : "";
-        const icon = pnl >= 0 ? "🟢" : "🔴";
-        const reason = t.close_reason ? ` — ${t.close_reason}` : "";
-        todayShadowTrades.push(`  ${icon} ${t.asset} ${t.direction} ${pnlS}${pctS}${reason}`);
-      }
+      todayWins = todayClosed.filter((t: any) => (t.hypothetical_pnl || 0) > 0).length;
+      todayLosses = todayClosed.length - todayWins;
+      todayPnl = todayClosed.reduce((s: number, t: any) => s + (t.hypothetical_pnl || 0), 0);
+    }
+
+    if (cm['shadow_streak'] && typeof cm['shadow_streak'].weeklyPnl === "number") {
+      weeklyPnlPct = portfolioValue > 0 ? (cm['shadow_streak'].weeklyPnl / portfolioValue) * 100 : 0;
     }
 
     const healthReports = cm['oversight_health_reports'];
@@ -1772,64 +1990,57 @@ export async function sendDarkNodeSummary(): Promise<void> {
     }
   } catch {}
 
-  const fgValue = "N/A";
-  const fgClass = "disabled";
-
-  let bankrLastRun = "never";
   let pmScoutLastRun = "never";
+  let activeJobCount = 0;
   try {
-    const jobRes = await pool.query(`
-      SELECT DISTINCT ON (grp) grp, created_at FROM (
-        SELECT 'bankr' AS grp, created_at FROM job_history WHERE agent_id = 'bankr'
-        UNION ALL
-        SELECT 'pm' AS grp, created_at FROM job_history WHERE job_id IN ('polymarket-activity-scan','polymarket-full-cycle')
-      ) sub ORDER BY grp, created_at DESC
-    `);
-    for (const row of jobRes.rows) {
-      const ts = timeAgo(new Date(row.created_at).getTime());
-      if (row.grp === "bankr") bankrLastRun = ts;
-      else if (row.grp === "pm") pmScoutLastRun = ts;
+    const jobRes = await pool.query(
+      `SELECT created_at FROM job_history WHERE job_id IN ('polymarket-activity-scan','polymarket-full-cycle') ORDER BY created_at DESC LIMIT 1`
+    );
+    if (jobRes.rows.length > 0) {
+      pmScoutLastRun = timeAgo(new Date(jobRes.rows[0].created_at).getTime());
     }
+    const countRes = await pool.query(`SELECT COUNT(*) as c FROM job_history WHERE created_at > NOW() - INTERVAL '24 hours'`);
+    activeJobCount = parseInt(countRes.rows[0]?.c || "0");
   } catch {}
 
-  let alerts: string[] = [];
+  const alerts: string[] = [];
   if (killSwitch) alerts.push("🚨 Kill switch ACTIVE");
   if (paused) alerts.push("⏸️ System PAUSED");
 
-  const pnlStr = shadowPnl >= 0 ? `+$${shadowPnl.toFixed(2)}` : `-$${Math.abs(shadowPnl).toFixed(2)}`;
-  const winRate = (shadowWins + shadowLosses) > 0 ? ((shadowWins / (shadowWins + shadowLosses)) * 100).toFixed(0) : "0";
+  const mood = fmt.buildMoodIndicator(weeklyPnlPct);
+  const goalBar = fmt.buildProgressBar(portfolioValue, goalTarget, 10);
+  const goalPct = goalTarget > 0 ? ((portfolioValue / goalTarget) * 100).toFixed(1) : "0";
+  const etTime = fmt.formatETTime();
+
+  const thesisLine = copyTradeCount > 0
+    ? `  ⚡ ${copyTradeCount} copy trade${copyTradeCount > 1 ? "s" : ""} | 👻 ${shadowOpen} shadow`
+    : `  👻 ${shadowOpen} shadow`;
 
   const lines = [
-    `${mode} 📊 *DarkNode Summary*`,
+    fmt.buildCategoryHeader(fmt.CATEGORY_BADGES.DAILY_BRIEF, etTime),
+    `${mood} · ${fmt.formatPct(weeklyPnlPct)} this week`,
     "",
-    `${healthIcon} *System:* ${healthStatus}${paused ? " (PAUSED)" : ""}`,
-    `💰 *Portfolio:* $${portfolioValue.toFixed(2)}`,
-    `😱 *Fear & Greed:* ${fgValue} (${fgClass})`,
+    fmt.SEPARATOR,
+    `💰 Portfolio`,
+    `  $${portfolioValue.toFixed(2)} · Shadow Mode`,
+    `  P&L today: ${fmt.formatPnl(todayPnl)} | W:${todayWins} L:${todayLosses}`,
     "",
-    `🎰 *PM Theses:* ${pmThesisCount} active`,
-    `👻 *Shadow:* ${shadowOpen} open | W:${shadowWins} L:${shadowLosses} (${winRate}%)`,
-    `💰 *Shadow P&L:* ${pnlStr}`,
+    `🎯 $${(goalTarget / 1000).toFixed(0)}K Goal`,
+    `  ${goalBar}  $${Math.floor(portfolioValue).toLocaleString()} / $${goalTarget.toLocaleString()} (${goalPct}%)`,
+    "",
+    fmt.SEPARATOR,
+    `🧠 Active Theses: ${pmThesisCount}`,
+    thesisLine,
+    "",
+    `😱 Fear & Greed: ${fgValue}${fgClass ? ` ${fgClass}` : ""}`,
+    `🤖 System: ${healthIcon} ${healthStatus}${paused ? " (PAUSED)" : ""} | ${activeJobCount} jobs (24h)`,
+    `🔍 Last Scan: ${pmScoutLastRun}`,
+    "",
+    fmt.SEPARATOR,
+    `⚠️ Alerts: ${alerts.length > 0 ? alerts.join(" · ") : "None"}`,
   ];
 
-  if (todayShadowTrades.length > 0) {
-    lines.push("");
-    lines.push("*Today's Closed:*");
-    lines.push(...todayShadowTrades);
-  }
-
-  lines.push("");
-  lines.push(`🎰 PM SCOUT: ${pmScoutLastRun}`);
-  lines.push(`💰 BANKR: ${bankrLastRun}`);
-
-  if (alerts.length > 0) {
-    lines.push("");
-    lines.push(...alerts);
-  }
-
-  lines.push("");
-  lines.push(`_${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`);
-
-  await sendMessage(lines.join("\n"));
+  await sendMessage(fmt.truncateToTelegramLimit(lines.join("\n")), "HTML");
   console.log("[telegram] DarkNode summary sent");
 }
 
@@ -1945,6 +2156,7 @@ export async function init(): Promise<void> {
   registerCommand("remove-wallet", async (args) => handleRemoveWalletCommand(args));
   registerCommand("blacklistwallet", async (args) => handleBlacklistWalletCommand(args));
   registerCommand("blacklist-wallet", async (args) => handleBlacklistWalletCommand(args));
+  registerCommand("goal", async (args) => handleGoalCommand(args));
   registerCommand("help", async () => handleHelpCommand());
 
   try {
@@ -2100,6 +2312,9 @@ export async function forwardAlertToTelegram(event: { type: string; briefType?: 
       circuit_breaker: "🚨",
     };
     const icon = tradingIcons[event.type] || "🔔";
-    await sendMessage(`${mode} ${icon} *${event.title || "Alert"}*\n\n${event.content}`);
+    const fmt = await import("./telegram-format.js");
+    const title = fmt.escapeHtml(event.title || "Alert");
+    const body = fmt.escapeHtml(event.content);
+    await sendMessage(`${icon} <b>${title}</b>\n\n${body}`, "HTML");
   }
 }

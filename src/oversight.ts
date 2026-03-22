@@ -266,11 +266,18 @@ export async function runHealthCheck(): Promise<HealthReport> {
 
   if (criticalCount > 0 || warnCount >= 2) {
     const issues = checks.filter(c => c.status !== "ok");
+    const fmt = await import("./telegram-format.js");
 
-    const alertLines = issues.map(i => `• ${i.name}: ${i.detail}`).join("\n");
-    await notifyTelegram(
-      `🔴 HEALTH ${overall.toUpperCase()}\n${alertLines}\n(${checks.length} checks, ${criticalCount} critical, ${warnCount} warn)`
-    );
+    const hcLines = [
+      fmt.buildCategoryHeader(fmt.CATEGORY_BADGES.OVERSIGHT, `Health Check ⚠️`),
+      "",
+      `${issues.length} issue${issues.length !== 1 ? "s" : ""} detected:`,
+      ...issues.map(i => `  ${i.status === "critical" ? "🔴" : "🟡"} ${i.name}: ${i.detail}`),
+      "",
+      `Action: Check scheduled-jobs status`,
+      `[/oversight for full report]`,
+    ];
+    await notifyTelegram(fmt.truncateToTelegramLimit(hcLines.join("\n")));
 
     for (const issue of issues) {
       await captureImprovement({
@@ -341,9 +348,17 @@ async function checkWalletHealth(): Promise<HealthCheck> {
               disabledThisCycle.push(wallet.alias);
               disabled++;
 
-              await notifyTelegram(
-                `⚠️ *Wallet Auto-Disabled*\n\n*${wallet.alias}* (${wallet.niche})\nWin rate: ${(winRate * 100).toFixed(0)}% (30d, ${resolved.length} resolved)\nDegraded ${wallet.degraded_count} consecutive checks\n\n_Wallet disabled. Use /add-wallet to re-enable after review._`
-              );
+              const fmtW = await import("./telegram-format.js");
+              const wdLines = [
+                fmtW.buildCategoryHeader(fmtW.CATEGORY_BADGES.WHALE_INTEL, "Wallet Auto-Disabled"),
+                "",
+                `${fmtW.getNicheEmoji(wallet.niche)} ${wallet.alias} (${wallet.niche})`,
+                `Win rate: ${(winRate * 100).toFixed(0)}% (30d, ${resolved.length} resolved)`,
+                `Degraded ${wallet.degraded_count} consecutive checks`,
+                "",
+                `Use /add-wallet to re-enable after review.`,
+              ];
+              await notifyTelegram(fmtW.truncateToTelegramLimit(wdLines.join("\n")));
             } else {
               degraded++;
             }
@@ -560,16 +575,18 @@ async function enforceCircuitBreaker(rolling7dPct: number, drawdownPct: number):
     console.log(`[oversight] CIRCUIT BREAKER ENFORCED — auto-paused all Wealth Engines`);
   }
 
+  const { CATEGORY_BADGES, buildCategoryHeader, SEPARATOR, truncateToTelegramLimit } = await import("./telegram-format.js");
   const alertMsg = [
-    `🚨 *CIRCUIT BREAKER TRIGGERED*`,
+    buildCategoryHeader(CATEGORY_BADGES.CIRCUIT_BREAK, "Triggered"),
     "",
-    `⛔ All Wealth Engine agents have been *AUTO-PAUSED*`,
+    `Reason: Risk limits exceeded`,
     `📉 7-day P&L: ${rolling7dPct.toFixed(1)}%${rolling7dPct < -15 ? " (limit: -15%)" : ""}`,
     `📉 Peak drawdown: ${drawdownPct.toFixed(1)}%${drawdownPct > 25 ? " (limit: 25%)" : ""}`,
+    `Action: New entries paused`,
     "",
-    `Use /resume to manually restart after reviewing positions.`,
+    `[/resume to override]`,
   ].join("\n");
-  await notifyTelegram(alertMsg);
+  await notifyTelegram(truncateToTelegramLimit(alertMsg));
 
   await captureImprovement({
     source: "circuit_breaker",
@@ -907,9 +924,17 @@ export async function detectCrossDomainExposure(): Promise<CrossDomainExposure[]
   const EXPOSURE_ALERT_THRESHOLD = 40;
   const highExposure = alerts.filter(a => a.combined_exposure_pct > EXPOSURE_ALERT_THRESHOLD);
   for (const alert of highExposure) {
-    await notifyTelegram(
-      `⚠️ EXPOSURE RISK: ${alert.asset_a} + ${alert.polymarket_question.slice(0, 40)} — ${alert.combined_exposure_pct.toFixed(0)}% combined exposure (${alert.correlation_type})`
-    );
+    const fmtE = await import("./telegram-format.js");
+    const erLines = [
+      fmtE.buildCategoryHeader(fmtE.CATEGORY_BADGES.OVERSIGHT, "Exposure Risk"),
+      "",
+      `⚠️ Correlated exposure detected`,
+      "",
+      `${fmtE.escapeHtml(alert.asset_a)} + ${fmtE.escapeHtml(alert.polymarket_question.slice(0, 40))}`,
+      `Combined exposure: ${alert.combined_exposure_pct.toFixed(0)}% (${alert.correlation_type})`,
+      `Recommendation: Reduce or hedge before next scan`,
+    ];
+    await notifyTelegram(fmtE.truncateToTelegramLimit(erLines.join("\n")));
     await captureImprovement({
       source: "health_check",
       category: "risk",
@@ -1520,27 +1545,28 @@ export async function generateDailyPerformanceSummary(): Promise<string> {
   const drawdownPct = peak > 0 ? ((peak - portfolio) / peak * 100) : 0;
   const queue = await getConfigValue<ImprovementRequest[]>(IMPROVEMENT_QUEUE_KEY, []);
   const openItems = queue.filter(i => i.status === "open");
+  const fmt = await import("./telegram-format.js");
 
   const lines = [
-    `📋 *Daily Performance Summary*`,
-    `_${new Date().toLocaleDateString("en-US", { timeZone: "America/New_York", weekday: "long", month: "short", day: "numeric" })}_`,
+    fmt.buildCategoryHeader(fmt.CATEGORY_BADGES.OVERSIGHT, "Daily Performance"),
+    `${new Date().toLocaleDateString("en-US", { timeZone: "America/New_York", weekday: "long", month: "short", day: "numeric" })}`,
     "",
-    `💰 *Portfolio:* $${portfolio.toFixed(2)} (peak: $${peak.toFixed(2)}, DD: ${drawdownPct.toFixed(1)}%)`,
-    `📊 *Today:* ${review.total_trades} trades, ${review.total_pnl >= 0 ? "+" : ""}$${review.total_pnl.toFixed(2)}`,
-    `🎯 *Win Rate:* ${review.win_rate.toFixed(0)}%`,
+    `💰 Portfolio: $${portfolio.toFixed(2)} (peak: $${peak.toFixed(2)}, DD: ${drawdownPct.toFixed(1)}%)`,
+    `📊 Today: ${review.total_trades} trades, ${fmt.formatPnl(review.total_pnl)}`,
+    `🎯 Win Rate: ${review.win_rate.toFixed(0)}%`,
   ];
 
   if (health) {
     const icons: Record<string, string> = { healthy: "🟢", degraded: "🟡", critical: "🔴" };
-    lines.push(`${icons[health.overall_status] || "⚪"} *System:* ${health.overall_status}`);
+    lines.push(`${icons[health.overall_status] || "⚪"} System: ${health.overall_status}`);
   }
 
   if (openItems.length > 0) {
     const critical = openItems.filter(i => i.severity === "critical");
-    lines.push(`📋 *Open Issues:* ${openItems.length}${critical.length > 0 ? ` (${critical.length} critical)` : ""}`);
+    lines.push(`📋 Open Issues: ${openItems.length}${critical.length > 0 ? ` (${critical.length} critical)` : ""}`);
   }
 
-  return lines.join("\n");
+  return fmt.truncateToTelegramLimit(lines.join("\n"));
 }
 
 export async function sendDailyPerformanceSummary(): Promise<void> {

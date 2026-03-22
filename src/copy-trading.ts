@@ -634,19 +634,31 @@ export async function runCopyTradeScan(): Promise<{
 
         try {
           const { sendMessage } = await import("./telegram.js");
+          const fmt = await import("./telegram-format.js");
+          const nicheEmoji = fmt.getNicheEmoji(wallet.niche);
+          const marketBadge = fmt.getMarketBadge(wallet.niche);
+          const confBar = fmt.buildConfidenceBar(signalResult.confidence);
+          const oneLiner = fmt.getOneLiner(signalResult.confidence);
+          const addrShort = fmt.truncateAddress(wallet.address);
+          const marketQ = fmt.escapeHtml(entry.market_question.slice(0, 80));
+          const sizeLabel = signalResult.positionSize >= 50 ? "full size" : signalResult.positionSize >= 25 ? "half size" : "skip";
+
           const lines = [
-            `⚡ *Copy Trade Signal*`,
-            `Market: ${entry.market_question.slice(0, 80)}`,
-            `Wallet: ${wallet.alias} (${wallet.niche} | Score: ${wallet.composite_score.toFixed(2)})`,
-            `Direction: ${entry.direction} @ $${currentPrice.toFixed(2)}`,
-            ``,
-            `Signal Score: ${signalResult.score}/${signalResult.maxScore} → $${signalResult.positionSize} (${signalResult.confidence}) [SHADOW]`,
-            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-            ...signalResult.signals.map(s => `✓ ${s}`),
-            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-            `→ Passed to BANKR gates`,
+            fmt.CATEGORY_BADGES.COPY_TRADE,
+            "",
+            `${marketBadge} · ${nicheEmoji} ${addrShort}`,
+            "",
+            marketQ,
+            `Confidence: ${confBar}  ${signalResult.confidence}`,
+            `Direction: ${entry.direction} · Entry: $${currentPrice.toFixed(2)}`,
+            "",
+            `💬 "${oneLiner}"`,
+            "",
+            `Whale score: ${wallet.composite_score.toFixed(1)} · Consensus: ${signalResult.signals.length} signals`,
+            fmt.SEPARATOR,
+            `Portfolio impact: $${signalResult.positionSize} (${sizeLabel})`,
           ];
-          sendMessage(lines.join("\n")).catch(() => {});
+          sendMessage(fmt.truncateToTelegramLimit(lines.join("\n")), "HTML").catch(() => {});
         } catch {}
       } else {
         errors.push(`Failed to copy ${entry.market_question.slice(0, 40)}: ${result.error}`);
@@ -660,8 +672,14 @@ export async function runCopyTradeScan(): Promise<{
   if (redeemResult.redeemed > 0) {
     try {
       const { sendMessage } = await import("./telegram.js");
+      const fmt = await import("./telegram-format.js");
       for (const alert of redeemResult.alerts) {
-        sendMessage(`✅ Auto-${alert}`).catch(() => {});
+        const lines = [
+          fmt.CATEGORY_BADGES.AUTO_REDEEM,
+          "",
+          fmt.escapeHtml(alert),
+        ];
+        sendMessage(fmt.truncateToTelegramLimit(lines.join("\n")), "HTML").catch(() => {});
       }
     } catch {}
   }
