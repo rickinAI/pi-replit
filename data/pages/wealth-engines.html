@@ -448,6 +448,17 @@
       </div>
     </div>
 
+    <!-- TRADE HISTORY -->
+    <div class="section" id="tradesSection">
+      <div class="sec-hdr" data-section="trades">
+        <div class="sec-hdr-left"><div class="sec-title">Trade History</div><span class="sec-chev">&#9662;</span></div>
+        <div class="sec-badge" id="tradeCount">0</div>
+      </div>
+      <div class="sec-body" id="tradesBody">
+        <div class="card flush" id="tradesCard"><div class="empty">No trades yet</div></div>
+      </div>
+    </div>
+
     <!-- CRYPTO THESES -->
     <div class="section" id="cryptoSection">
       <div class="sec-hdr" data-section="crypto">
@@ -477,17 +488,6 @@
       </div>
       <div class="sec-body" id="scoutBody">
         <div class="card" id="scoutCard"><div class="empty">No recent scout data</div></div>
-      </div>
-    </div>
-
-    <!-- RECENT TRADES -->
-    <div class="section" id="tradesSection">
-      <div class="sec-hdr" data-section="trades">
-        <div class="sec-hdr-left"><div class="sec-title">Trade History</div><span class="sec-chev">&#9662;</span></div>
-        <div class="sec-badge" id="tradeCount">0</div>
-      </div>
-      <div class="sec-body" id="tradesBody">
-        <div class="card flush" id="tradesCard"><div class="empty">No trades yet</div></div>
       </div>
     </div>
 
@@ -870,11 +870,18 @@ function renderTrades(trades){
   document.getElementById('tradeCount').textContent=trades.length;
   if(!trades.length){el.innerHTML='<div class="empty">No trades yet</div>';return;}
   var h='';
-  trades.slice(0,15).forEach(function(t){
-    var pc=(t.pnl||0)>=0?'green':'red';
-    h+='<div class="trade-item"><div class="trade-top"><span class="trade-asset">'+esc(t.asset)+' '+esc((t.direction||'').toUpperCase())+'</span>';
-    h+='<span class="trade-pnl '+pc+'">'+(t.pnl>=0?'+':'')+fmt$(t.pnl)+' ('+fmtPct(t.pnl_pct)+')</span></div>';
-    h+='<div class="trade-meta"><span>'+esc(t.close_reason||'')+'</span><span>'+esc(t.leverage||'1x')+'</span>';
+  trades.slice(0,20).forEach(function(t){
+    var pnl=t.pnl||0;
+    var pc=pnl>=0?'green':'red';
+    var dir=(t.direction||'').toUpperCase();
+    h+='<div class="trade-item"><div class="trade-top"><span class="trade-asset">'+esc(t.asset)+' <span class="pill '+(dir==='LONG'||dir==='YES'?'long':'short')+'">'+dir+'</span>';
+    if(t.is_shadow)h+=' <span class="pill" style="background:var(--purple-dim);color:var(--purple);font-size:0.4rem">SHADOW</span>';
+    h+='</span>';
+    h+='<span class="trade-pnl '+pc+'">'+(pnl>=0?'+':'')+fmt$(pnl)+' ('+fmtPct(t.pnl_pct)+')</span></div>';
+    h+='<div class="trade-meta">';
+    if(t.entry_price)h+='<span>Entry: '+fmt$(t.entry_price)+'</span>';
+    if(t.exit_price)h+='<span>Exit: '+fmt$(t.exit_price)+'</span>';
+    h+='<span>'+esc(t.close_reason||'')+'</span>';
     h+='<span>'+esc(t.source||'')+'</span><span>'+timeAgo(t.closed_at)+'</span></div></div>';
   });
   el.innerHTML=h;

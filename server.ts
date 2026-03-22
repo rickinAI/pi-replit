@@ -5175,9 +5175,17 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
     paused: summary.paused,
     kill_switch: summary.kill_switch,
     positions: (() => {
-      const bankrPositions = summary.positions || [];
-      const openShadows = (shadowPerf.trades || []).filter((t: any) => t.status === "open" && !bankrPositions.some((p: any) => p.thesis_id === t.thesis_id));
-      const shadowAsPositions = openShadows.map((t: any) => ({
+      const bankrPositions = (summary.positions || []).filter((p: any) => (p.size || 0) > 0.0001);
+      const seen = new Set(bankrPositions.map((p: any) => `${p.asset}_${p.direction}`));
+      const openShadows = (shadowPerf.trades || [])
+        .filter((t: any) => t.status === "open" && !seen.has(`${t.asset}_${t.direction}`));
+      const dedupedShadows: any[] = [];
+      const shadowSeen = new Set<string>();
+      for (const t of openShadows) {
+        const key = `${t.asset}_${t.direction}`;
+        if (!shadowSeen.has(key)) { shadowSeen.add(key); dedupedShadows.push(t); }
+      }
+      const shadowAsPositions = dedupedShadows.map((t: any) => ({
         id: t.id || t.thesis_id,
         thesis_id: t.thesis_id,
         asset: t.asset,
@@ -5187,15 +5195,47 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
         entry_price: t.entry_price,
         current_price: t.current_price || t.entry_price,
         atr_stop_price: t.stop_price || 0,
-        size: t.size || 0,
+        size: t.size || 1,
         source: t.source || "shadow",
         opened_at: t.opened_at || t.created_at,
         is_shadow: true,
       }));
-      const all = [...bankrPositions, ...shadowAsPositions];
-      return all.filter((p: any) => (p.size || 0) > 0.0001);
+      return [...bankrPositions, ...shadowAsPositions];
     })(),
-    recent_trades: recentTrades,
+    recent_trades: (() => {
+      const closedShadows = (shadowPerf.trades || []).filter((t: any) => t.status === "closed");
+      const dedupedClosed: any[] = [];
+      const closedSeen = new Set<string>();
+      for (const t of closedShadows) {
+        const key = `${t.asset}_${t.direction}_${t.entry_price}`;
+        if (!closedSeen.has(key)) { closedSeen.add(key); dedupedClosed.push(t); }
+      }
+      const shadowAsTrades = dedupedClosed.map((t: any) => {
+        const isLong = (t.direction || "").toUpperCase() === "LONG" || (t.direction || "").toUpperCase() === "YES";
+        const priceDiff = isLong ? (t.current_price - t.entry_price) : (t.entry_price - t.current_price);
+        return {
+          id: t.id || t.thesis_id,
+          asset: t.asset,
+          asset_class: t.asset_class || "crypto",
+          source: t.source || "shadow",
+          direction: t.direction,
+          leverage: "1x",
+          entry_price: t.entry_price,
+          exit_price: t.current_price || t.exit_price,
+          size: t.size || 1,
+          pnl: t.hypothetical_pnl || priceDiff,
+          pnl_pct: t.entry_price > 0 ? (priceDiff / t.entry_price * 100) : 0,
+          fees: 0,
+          opened_at: t.opened_at || t.created_at,
+          closed_at: t.closed_at || new Date().toISOString(),
+          close_reason: t.close_reason || "shadow_closed",
+          is_shadow: true,
+        };
+      });
+      const allTrades = [...recentTrades, ...shadowAsTrades];
+      allTrades.sort((a: any, b: any) => new Date(b.closed_at || 0).getTime() - new Date(a.closed_at || 0).getTime());
+      return allTrades.slice(0, 30);
+    })(),
     crypto_theses: cryptoTheses.slice(0, 10).map((t: any) => ({
       id: t.id, asset: t.asset, direction: t.direction, confidence: t.confidence,
       entry_price: t.entry_price, stop_loss: t.stop_price || t.stop_loss, take_profit: t.exit_price || t.take_profit,
