@@ -5605,6 +5605,36 @@ app.post("/api/wealth-engine/portfolio", async (req: Request, res: Response) => 
   }
 });
 
+app.post("/api/wealth-engine/reset", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const pool = db.getPool();
+    const capital = req.body?.capital || 10000;
+    const now = Date.now();
+    const resets: [string, unknown][] = [
+      ["wealth_engines_portfolio_value", capital],
+      ["wealth_engines_peak_portfolio", capital],
+      ["wealth_engines_consecutive_losses", 0],
+      ["wealth_engines_trade_history", []],
+      ["wealth_engines_positions", []],
+      ["oversight_shadow_trades", []],
+      ["wealth_engines_paused", false],
+    ];
+    for (const [key, value] of resets) {
+      await pool.query(
+        `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+        [key, JSON.stringify(value), now]
+      );
+    }
+    weDashboardCache = null;
+    wePnlCache = null;
+    res.json({ ok: true, portfolio: capital, peak: capital, trades: 0, positions: 0, shadow_trades: 0 });
+  } catch (err: any) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 app.post("/api/wealth-engine/mode", async (req: Request, res: Response) => {
   if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
   try {
