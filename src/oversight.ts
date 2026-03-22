@@ -136,8 +136,8 @@ export interface ShadowTrade {
   id: string;
   thesis_id: string;
   asset: string;
-  asset_class: "crypto" | "polymarket";
-  source: "crypto_scout" | "polymarket_scout";
+  asset_class: "polymarket";
+  source: "polymarket_scout";
   direction: string;
   entry_price: number;
   current_price: number;
@@ -609,12 +609,10 @@ export async function runPerformanceReview(periodDays: number = 7): Promise<Perf
   });
   const avgHoldTime = holdTimes.length > 0 ? holdTimes.reduce((a, b) => a + b, 0) / holdTimes.length : 0;
 
-  const cryptoTheses = await getConfigValue<ThesisRecord[]>("scout_active_theses", []);
   const pmTheses = await getConfigValue<ThesisRecord[]>("polymarket_scout_active_theses", []);
-  const totalTheses = cryptoTheses.length + pmTheses.length;
+  const totalTheses = pmTheses.length;
   const tradedThesisIds = new Set(periodTrades.map(t => t.thesis_id));
   const allThesisIds = new Set([
-    ...cryptoTheses.map((t: ThesisRecord) => t.id),
     ...pmTheses.map((t: ThesisRecord) => t.id),
   ]);
   const convertedCount = [...tradedThesisIds].filter(id => allThesisIds.has(id)).length;
@@ -736,7 +734,7 @@ function buildSignalAttribution(trades: TradeRecord[], totalPnl: number): Signal
   const attrs: SignalAttribution[] = [];
   const seen = new Set<string>();
 
-  for (const source of ["crypto_scout", "polymarket_scout", "manual"]) {
+  for (const source of ["polymarket_scout", "manual"]) {
     const sourceTrades = groupKeys[source];
     if (!sourceTrades || seen.has(source)) continue;
     seen.add(source);
@@ -786,44 +784,7 @@ export async function detectCrossDomainExposure(): Promise<CrossDomainExposure[]
   const portfolio = await getConfigValue<number>("wealth_engines_portfolio_value", 1000);
   const alerts: CrossDomainExposure[] = [];
 
-  const cryptoPositions = positions.filter(p => p.asset_class === "crypto");
   const pmPositions = positions.filter(p => p.asset_class === "polymarket");
-
-  const CRYPTO_PM_CORRELATIONS: Record<string, string[]> = {
-    BTC: ["bitcoin", "btc", "crypto"],
-    ETH: ["ethereum", "eth", "crypto"],
-    SOL: ["solana", "sol"],
-    DOGE: ["doge", "meme"],
-    XRP: ["xrp", "ripple"],
-  };
-
-  for (const cryptoPos of cryptoPositions) {
-    const asset = cryptoPos.asset.toUpperCase().replace(/USDT?$/, "");
-    const keywords = CRYPTO_PM_CORRELATIONS[asset] || [asset.toLowerCase()];
-
-    for (const pmPos of pmPositions) {
-      const pmAsset = pmPos.asset.toLowerCase();
-      const matched = keywords.some(kw => pmAsset.includes(kw));
-      if (!matched) continue;
-
-      const cryptoExposure = (cryptoPos.size || 0) * (cryptoPos.entry_price || 0);
-      const pmExposure = (pmPos.size || 0) * (pmPos.entry_price || 0);
-      const combinedPct = portfolio > 0 ? ((cryptoExposure + pmExposure) / portfolio * 100) : 0;
-
-      const isSameDirection =
-        (cryptoPos.direction === "LONG" && pmPos.direction === "YES") ||
-        (cryptoPos.direction === "SHORT" && pmPos.direction === "NO");
-
-      alerts.push({
-        crypto_asset: cryptoPos.asset,
-        polymarket_question: pmPos.asset.slice(0, 80),
-        correlation_type: isSameDirection ? "direct" : "inverse",
-        combined_exposure_pct: combinedPct,
-        risk_level: combinedPct > 40 ? "high" : combinedPct > 25 ? "medium" : "low",
-        detail: `${cryptoPos.asset} ${cryptoPos.direction} + PM "${pmPos.asset.slice(0, 40)}" ${pmPos.direction} — ${combinedPct.toFixed(0)}% combined exposure (${isSameDirection ? "correlated" : "hedged"})`,
-      });
-    }
-  }
 
   for (let i = 0; i < pmPositions.length; i++) {
     for (let j = i + 1; j < pmPositions.length; j++) {
@@ -972,8 +933,8 @@ export async function getImprovementQueue(): Promise<ImprovementRequest[]> {
 export async function openShadowTrade(params: {
   thesis_id: string;
   asset: string;
-  asset_class: "crypto" | "polymarket";
-  source: "crypto_scout" | "polymarket_scout";
+  asset_class: "polymarket";
+  source: "polymarket_scout";
   direction: string;
   entry_price: number;
   market_id?: string;
@@ -1041,7 +1002,7 @@ export async function closeShadowTrade(
     try {
       const { updateSignalQuality } = await import("./bankr.js");
       await updateSignalQuality({
-        source: (trade.source as "crypto_scout" | "polymarket_scout") || "crypto_scout",
+        source: (trade.source as "polymarket_scout") || "polymarket_scout",
         asset_class: trade.asset_class,
         pnl: trade.hypothetical_pnl,
         asset: trade.asset,
@@ -1190,7 +1151,7 @@ export async function refreshShadowTradesFromMarket(): Promise<{
     try {
       const { updateSignalQuality } = await import("./bankr.js");
       await updateSignalQuality({
-        source: (trade.source as "crypto_scout" | "polymarket_scout") || "crypto_scout",
+        source: (trade.source as "polymarket_scout") || "polymarket_scout",
         asset_class: trade.asset_class,
         pnl: trade.hypothetical_pnl,
         asset: trade.asset,
@@ -1367,13 +1328,11 @@ export function formatPerformanceReview(review: PerformanceReview): string {
 }
 
 export async function reviewTheses(): Promise<ThesisReview[]> {
-  const cryptoTheses = await getConfigValue<ThesisRecord[]>("scout_active_theses", []);
   const pmTheses = await getConfigValue<ThesisRecord[]>("polymarket_scout_active_theses", []);
   const history = await getConfigValue<TradeRecord[]>("wealth_engines_trade_history", []);
   const reviews: ThesisReview[] = [];
 
   const allTheses: ThesisRecord[] = [
-    ...cryptoTheses.filter((t) => t.status === "active").map((t) => ({ ...t, _source: "crypto_scout" as const })),
     ...pmTheses.filter((t) => t.status === "active").map((t) => ({ ...t, _source: "polymarket_scout" as const })),
   ];
 
@@ -1517,8 +1476,8 @@ export async function sendDailyPerformanceSummary(): Promise<void> {
 export async function autoTrackShadowTrade(params: {
   thesis_id: string;
   asset: string;
-  asset_class: "crypto" | "polymarket";
-  source: "crypto_scout" | "polymarket_scout";
+  asset_class: "polymarket";
+  source: "polymarket_scout";
   direction: string;
   entry_price: number;
   reason: string;

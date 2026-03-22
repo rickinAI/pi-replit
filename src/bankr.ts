@@ -8,8 +8,8 @@ export interface Position {
   id: string;
   thesis_id: string;
   asset: string;
-  asset_class: "crypto" | "polymarket";
-  source: "crypto_scout" | "polymarket_scout" | "manual";
+  asset_class: "polymarket";
+  source: "polymarket_scout" | "manual";
   direction: string;
   leverage: string;
   entry_price: number;
@@ -30,8 +30,8 @@ export interface TradeRecord {
   id: string;
   thesis_id: string;
   asset: string;
-  asset_class: "crypto" | "polymarket";
-  source: "crypto_scout" | "polymarket_scout" | "manual";
+  asset_class: "polymarket";
+  source: "polymarket_scout" | "manual";
   direction: string;
   leverage: string;
   entry_price: number;
@@ -50,7 +50,7 @@ export interface TradeRecord {
 export interface TaxLot {
   id: string;
   asset: string;
-  asset_class: "crypto" | "polymarket";
+  asset_class: "polymarket";
   quantity: number;
   cost_basis: number;
   cost_per_unit: number;
@@ -308,7 +308,7 @@ function getExposureBucket(asset: string, assetClass: string): string {
 
 export async function runPreExecutionChecks(params: {
   asset: string;
-  asset_class: "crypto" | "polymarket";
+  asset_class: "polymarket";
   direction: string;
   leverage: number;
   entry_price: number;
@@ -405,12 +405,11 @@ export async function runPreExecutionChecks(params: {
 
   if (!allPassed) {
     try {
-      const source: "crypto_scout" | "polymarket_scout" = params.asset_class === "polymarket" ? "polymarket_scout" : "crypto_scout";
       await autoTrackShadowTrade({
         thesis_id: `riskfail_${Date.now()}`,
         asset: params.asset,
         asset_class: params.asset_class,
-        source,
+        source: "polymarket_scout",
         direction: params.direction,
         entry_price: params.entry_price,
         stop_price: params.stop_price,
@@ -427,8 +426,8 @@ export async function runPreExecutionChecks(params: {
 export async function openPosition(params: {
   thesis_id: string;
   asset: string;
-  asset_class: "crypto" | "polymarket";
-  source?: "crypto_scout" | "polymarket_scout" | "manual";
+  asset_class: "polymarket";
+  source?: "polymarket_scout" | "manual";
   direction: string;
   leverage: number;
   entry_price: number;
@@ -447,13 +446,12 @@ export async function openPosition(params: {
       return { position: alreadyOpen, trade_id: `dup_${alreadyOpen.id}` };
     }
 
-    const source: "crypto_scout" | "polymarket_scout" = params.source === "polymarket_scout" ? "polymarket_scout" : "crypto_scout";
     try {
       await autoTrackShadowTrade({
         thesis_id: params.thesis_id,
         asset: params.asset,
         asset_class: params.asset_class,
-        source,
+        source: "polymarket_scout",
         direction: params.direction,
         entry_price: params.entry_price,
         reason: "shadow_mode_active",
@@ -486,7 +484,7 @@ export async function openPosition(params: {
       thesis_id: params.thesis_id,
       asset: params.asset,
       asset_class: params.asset_class,
-      source: source,
+      source: params.source || "polymarket_scout",
       direction: params.direction,
       leverage: String(params.leverage),
       entry_price: params.entry_price,
@@ -530,7 +528,7 @@ export async function openPosition(params: {
 
   let bnkrOrderId: string | undefined;
   let fillQuantity: number | undefined;
-  const source = params.source || (params.asset_class === "polymarket" ? "polymarket_scout" : "crypto_scout");
+  const source = params.source || "polymarket_scout";
 
   if (bnkr.isConfigured()) {
     if (params.asset_class === "polymarket") {
@@ -1044,8 +1042,8 @@ export async function generateForm8949CSV(): Promise<string> {
 }
 
 export interface SignalQualityRecord {
-  source: "crypto_scout" | "polymarket_scout";
-  asset_class: "crypto" | "polymarket";
+  source: "polymarket_scout";
+  asset_class: "polymarket";
   wins: number;
   losses: number;
   total_pnl: number;
@@ -1103,8 +1101,8 @@ export async function getSignalQuality(): Promise<SignalQualityRecord[]> {
 }
 
 export async function updateSignalQuality(params: {
-  source: "crypto_scout" | "polymarket_scout" | "manual";
-  asset_class: "crypto" | "polymarket";
+  source: "polymarket_scout" | "manual";
+  asset_class: "polymarket";
   pnl: number;
   asset: string;
   trade_id?: string;
@@ -1199,7 +1197,7 @@ export async function updateSignalQuality(params: {
   }
 }
 
-export function getSignalQualityModifier(scores: SignalQualityRecord[], source: "crypto_scout" | "polymarket_scout", assetClass: "crypto" | "polymarket"): { modifier: string; winRate: number; sampleSize: number; profitFactor: number } {
+export function getSignalQualityModifier(scores: SignalQualityRecord[], source: "polymarket_scout", assetClass: "polymarket"): { modifier: string; winRate: number; sampleSize: number; profitFactor: number } {
   const MIN_SAMPLE_SIZE = 8;
   const record = scores.find(r => r.source === source && r.asset_class === assetClass);
   if (!record || record.recent_results.length < MIN_SAMPLE_SIZE) {

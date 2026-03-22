@@ -1157,7 +1157,7 @@ function buildPredictionMarketTools(): ToolDefinition[] {
     {
       name: "signal_quality",
       label: "Signal Quality Scores",
-      description: "Get signal quality scores — historical performance by source (crypto_scout, polymarket_scout) and asset class. Shows rolling win rate, profit factor (gross profit / gross loss), avg P&L, per-asset breakdown, total wins/losses, and recent trade results. Requires minimum 8 completed trades before modifiers apply. Boost: win rate >55% AND profit factor >1.2. Penalty: win rate <40% OR profit factor <0.5. Use before generating theses to understand signal source performance.",
+      description: "Get signal quality scores — historical performance by source (polymarket_scout) and asset class. Shows rolling win rate, profit factor (gross profit / gross loss), avg P&L, per-asset breakdown, total wins/losses, and recent trade results. Requires minimum 8 completed trades before modifiers apply. Boost: win rate >55% AND profit factor >1.2. Penalty: win rate <40% OR profit factor <0.5. Use before generating theses to understand signal source performance.",
       parameters: Type.Object({}),
       async execute() {
         try {
@@ -1382,8 +1382,8 @@ function buildPredictionMarketTools(): ToolDefinition[] {
       description: "Run pre-execution risk checks before a trade. Returns pass/fail for each check: kill switch, pause, leverage, margin, position limits, exposure, correlation.",
       parameters: Type.Object({
         asset: Type.String({ description: "Asset name" }),
-        asset_class: Type.Union([Type.Literal("crypto"), Type.Literal("polymarket")]),
-        direction: Type.String({ description: "LONG, SHORT, YES, or NO" }),
+        asset_class: Type.Literal("polymarket"),
+        direction: Type.String({ description: "YES or NO" }),
         leverage: Type.Number({ description: "Leverage multiplier (max 5)" }),
         entry_price: Type.Number(),
         stop_price: Type.Number(),
@@ -1405,8 +1405,8 @@ function buildPredictionMarketTools(): ToolDefinition[] {
       parameters: Type.Object({
         thesis_id: Type.String(),
         asset: Type.String(),
-        asset_class: Type.Union([Type.Literal("crypto"), Type.Literal("polymarket")]),
-        source: Type.Optional(Type.Union([Type.Literal("crypto_scout"), Type.Literal("polymarket_scout"), Type.Literal("manual")])),
+        asset_class: Type.Literal("polymarket"),
+        source: Type.Optional(Type.Union([Type.Literal("polymarket_scout"), Type.Literal("manual")])),
         direction: Type.String(),
         leverage: Type.Number(),
         entry_price: Type.Number(),
@@ -1575,7 +1575,7 @@ function buildOversightTools(): ToolDefinition[] {
     {
       name: "oversight_cross_domain_exposure",
       label: "Oversight Cross-Domain Exposure",
-      description: "Detect correlated exposure between crypto positions and Polymarket positions. Flags when both domains have aligned bets on the same underlying asset or theme.",
+      description: "Detect correlated exposure between Polymarket positions. Flags when multiple positions have aligned bets on the same underlying theme.",
       parameters: Type.Object({}),
       async execute() {
         try {
@@ -1622,7 +1622,7 @@ function buildOversightTools(): ToolDefinition[] {
           Type.Literal("low"), Type.Literal("medium"), Type.Literal("high"), Type.Literal("critical"),
         ], { description: "Severity level" }),
         domain: Type.Optional(Type.Union([
-          Type.Literal("crypto"), Type.Literal("polymarket"), Type.Literal("cross_domain"), Type.Literal("system"),
+          Type.Literal("polymarket"), Type.Literal("system"),
         ], { description: "Domain this improvement relates to" })),
         priority: Type.Optional(Type.Number({ description: "Priority (1=critical, 4=low). Auto-derived from severity if omitted." })),
         title: Type.String({ description: "Short title for the improvement" }),
@@ -1637,7 +1637,7 @@ function buildOversightTools(): ToolDefinition[] {
         source: "health_check" | "performance_review" | "manual" | "circuit_breaker";
         category: "risk" | "execution" | "signal" | "infrastructure" | "strategy";
         severity: "low" | "medium" | "high" | "critical";
-        domain?: "crypto" | "polymarket" | "cross_domain" | "system";
+        domain?: "polymarket" | "system";
         priority?: number;
         title: string; description: string; recommendation: string;
         pattern_description?: string;
@@ -1678,15 +1678,15 @@ function buildOversightTools(): ToolDefinition[] {
       description: "Open a hypothetical shadow trade to track what would have happened without real execution.",
       parameters: Type.Object({
         thesis_id: Type.String({ description: "Thesis ID that generated this signal" }),
-        asset: Type.String({ description: "Asset name (e.g. BTC, ETH, or Polymarket question)" }),
-        asset_class: Type.Union([Type.Literal("crypto"), Type.Literal("polymarket")], { description: "Asset class" }),
-        source: Type.Union([Type.Literal("crypto_scout"), Type.Literal("polymarket_scout")], { description: "Signal source" }),
-        direction: Type.String({ description: "LONG/SHORT for crypto, YES/NO for polymarket" }),
+        asset: Type.String({ description: "Asset name (Polymarket question)" }),
+        asset_class: Type.Literal("polymarket", { description: "Asset class" }),
+        source: Type.Literal("polymarket_scout", { description: "Signal source" }),
+        direction: Type.String({ description: "YES/NO for polymarket" }),
         entry_price: Type.Number({ description: "Entry price at signal time" }),
       }),
       async execute(_toolCallId, params: {
-        thesis_id: string; asset: string; asset_class: "crypto" | "polymarket";
-        source: "crypto_scout" | "polymarket_scout"; direction: string; entry_price: number;
+        thesis_id: string; asset: string; asset_class: "polymarket";
+        source: "polymarket_scout"; direction: string; entry_price: number;
       }) {
         try {
           const trade = await oversight.openShadowTrade(params);
@@ -1800,9 +1800,9 @@ function buildOversightTools(): ToolDefinition[] {
       parameters: Type.Object({
         thesis_id: Type.String({ description: "Thesis ID to shadow" }),
         asset: Type.String({ description: "Asset symbol" }),
-        asset_class: Type.Union([Type.Literal("crypto"), Type.Literal("polymarket")], { description: "Asset class" }),
-        source: Type.Union([Type.Literal("crypto_scout"), Type.Literal("polymarket_scout")], { description: "Signal source" }),
-        direction: Type.String({ description: "Trade direction (LONG/SHORT/YES/NO)" }),
+        asset_class: Type.Literal("polymarket", { description: "Asset class" }),
+        source: Type.Literal("polymarket_scout", { description: "Signal source" }),
+        direction: Type.String({ description: "Trade direction (YES/NO)" }),
         entry_price: Type.Number({ description: "Entry price at time of shadow" }),
         reason: Type.String({ description: "Why this is being shadow-tracked instead of executed" }),
         stop_price: Type.Optional(Type.Number({ description: "Stop-loss price from thesis" })),
@@ -1810,7 +1810,7 @@ function buildOversightTools(): ToolDefinition[] {
       }),
       async execute(_toolCallId: string, params: {
         thesis_id: string; asset: string;
-        asset_class: "crypto" | "polymarket"; source: "crypto_scout" | "polymarket_scout";
+        asset_class: "polymarket"; source: "polymarket_scout";
         direction: string; entry_price: number; reason: string;
         stop_price?: number; target_price?: number;
       }) {
@@ -4290,7 +4290,7 @@ function buildClosedShadowTrades(shadowPerf: any): any[] {
     return {
       id: t.id || t.thesis_id,
       asset: t.asset,
-      asset_class: t.asset_class || "crypto",
+      asset_class: t.asset_class || "polymarket",
       source: t.source || "shadow",
       direction: t.direction,
       leverage: "1x",
@@ -4425,7 +4425,7 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
         id: t.id || t.thesis_id,
         thesis_id: t.thesis_id,
         asset: t.asset,
-        asset_class: t.asset_class || "crypto",
+        asset_class: t.asset_class || "polymarket",
         direction: t.direction,
         leverage: "1x",
         entry_price: t.entry_price,
@@ -4448,9 +4448,9 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
       created_at: t.created_at, expires_at: t.expires_at, status: t.status,
     })),
     scout: {
-      crypto_last_run: scoutLastRun,
-      crypto_regime: scoutRegime,
-      crypto_summary: scoutSummary,
+      last_run: scoutLastRun,
+      regime: scoutRegime,
+      summary: scoutSummary,
       pm_theses_count: pmTheses.length,
       pm_top_thesis: topPmThesis,
       pm_last_run: pmLastRun,

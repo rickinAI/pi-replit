@@ -897,8 +897,8 @@ STEP 8: Compile a weekly report with these sections:
 - System Health: overall status, any recurring issues this week
 - Performance: win rate, total P&L, max drawdown, Sharpe ratio, best/worst trades, slippage
 - Per-Asset Analysis: P&L by asset, flag concentrated losses
-- Source Analysis: crypto_scout vs polymarket_scout signal quality comparison
-- Cross-Domain Exposure: any correlated positions flagged
+- Source Analysis: polymarket_scout signal quality metrics
+- Exposure Analysis: any correlated positions flagged
 - Signal Attribution: which signal types contributed to wins vs losses
 - Bull/Bear Thesis Review: summary of thesis verdicts from adversarial review
 - Improvements: open items, resolved items, new items this week, routing summary
