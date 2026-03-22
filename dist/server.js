@@ -4005,12 +4005,49 @@ function stop() {
   }
   console.log("[telegram] stopped");
 }
+function getNotificationFingerprint(event) {
+  const key = `${event.type}:${event.alertType || ""}:${event.title || ""}:${event.content.slice(0, 100)}`;
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) {
+    hash = (hash << 5) - hash + key.charCodeAt(i) | 0;
+  }
+  return String(hash);
+}
+function isDuplicateNotification(fingerprint) {
+  const now = Date.now();
+  const lastSent = notificationFingerprints.get(fingerprint);
+  if (lastSent && now - lastSent < DEDUP_WINDOW_MS) return true;
+  notificationFingerprints.set(fingerprint, now);
+  for (const [fp, ts] of notificationFingerprints) {
+    if (now - ts > DEDUP_WINDOW_MS) notificationFingerprints.delete(fp);
+  }
+  return false;
+}
+function getPriorityTag(alertType, content) {
+  const c = content.toLowerCase();
+  if (alertType === "calendar") return { tag: "\u{1F4C5}", priority: "FYI" };
+  if (alertType === "stock") return { tag: "\u{1F4CA}", priority: c.includes("down") || c.includes("\u25BC") ? "Action needed" : "FYI" };
+  if (alertType === "task") return { tag: "\u{1F534}", priority: "Action needed" };
+  if (alertType === "email") {
+    if (/flight|booking|confirmation|itinerary/i.test(c)) return { tag: "\u2708\uFE0F", priority: "Travel" };
+    if (/card|amex|visa|billing|payment|statement|bank|invoice/i.test(c)) return { tag: "\u{1F4B0}", priority: "Financial" };
+    if (/shipped|delivered|tracking|order/i.test(c)) return { tag: "\u{1F4E6}", priority: "FYI" };
+    if (/urgent|asap|action required|action needed/i.test(c)) return { tag: "\u{1F534}", priority: "Action needed" };
+    return { tag: "\u{1F4E7}", priority: "FYI" };
+  }
+  return { tag: "\u{1F514}", priority: "FYI" };
+}
 async function forwardAlertToTelegram(event) {
   const mode = await getMode();
   const personalAlertTypes = /* @__PURE__ */ new Set(["calendar", "stock", "task", "email"]);
   const tradingEventTypes = /* @__PURE__ */ new Set(["scout", "bankr", "oversight", "autoresearch", "circuit_breaker"]);
   if (event.type === "brief") {
     if (!isAlertsBotConfigured()) return;
+    const fingerprint = getNotificationFingerprint(event);
+    if (isDuplicateNotification(fingerprint)) {
+      console.log("[telegram] Suppressed duplicate brief notification");
+      return;
+    }
     const briefLabel = event.briefType ? event.briefType.charAt(0).toUpperCase() + event.briefType.slice(1) : "Daily";
     const truncated = event.content.length > 3500 ? event.content.slice(0, 3500) + "\n\n_(truncated)_" : event.content;
     await sendAlertsBotMessage(`${mode} \u{1F4CB} *${briefLabel} Brief*
@@ -4020,20 +4057,26 @@ ${truncated}`);
   }
   if (event.type === "alert" && personalAlertTypes.has(event.alertType || "")) {
     if (!isAlertsBotConfigured()) return;
-    const icons = {
-      calendar: "\u{1F4C5}",
-      stock: "\u{1F4CA}",
-      task: "\u2705",
-      email: "\u{1F4E7}"
-    };
-    const icon = icons[event.alertType || ""] || "\u{1F514}";
-    await sendAlertsBotMessage(`${mode} ${icon} *${event.title || "Alert"}*
+    const fingerprint = getNotificationFingerprint(event);
+    if (isDuplicateNotification(fingerprint)) {
+      console.log(`[telegram] Suppressed duplicate ${event.alertType} notification: ${(event.title || "").slice(0, 50)}`);
+      return;
+    }
+    const { tag, priority } = getPriorityTag(event.alertType || "", event.content);
+    const priorityLabel = priority === "Action needed" ? "\u{1F534} " : priority === "FYI" ? "\u{1F7E1} " : "";
+    await sendAlertsBotMessage(`${mode} ${tag} *${event.title || "Alert"}*
+${priorityLabel}${priority}
 
 ${event.content}`);
     return;
   }
   if (tradingEventTypes.has(event.type) || event.type === "alert" && !personalAlertTypes.has(event.alertType || "")) {
     if (!isConfigured7()) return;
+    const fingerprint = getNotificationFingerprint(event);
+    if (isDuplicateNotification(fingerprint)) {
+      console.log(`[telegram] Suppressed duplicate trading notification: ${(event.title || "").slice(0, 50)}`);
+      return;
+    }
     const tradingIcons = {
       scout: "\u{1F50D}",
       bankr: "\u{1F4B0}",
@@ -4047,7 +4090,7 @@ ${event.content}`);
 ${event.content}`);
   }
 }
-var BOT_TOKEN, CHAT_ID, API_BASE2, ALERTS_BOT_TOKEN, ALERTS_CHAT_ID, ALERTS_API_BASE, WEBHOOK_SECRET, pollingActive, pollingTimeout, lastUpdateId, deadManInterval, lastDeadManAlert, commands, pendingApprovals, lastScoutNotifyHash, lastPmNotifyHash, digestQueue, digestFlushInterval, webhookMode;
+var BOT_TOKEN, CHAT_ID, API_BASE2, ALERTS_BOT_TOKEN, ALERTS_CHAT_ID, ALERTS_API_BASE, WEBHOOK_SECRET, pollingActive, pollingTimeout, lastUpdateId, deadManInterval, lastDeadManAlert, commands, pendingApprovals, lastScoutNotifyHash, lastPmNotifyHash, digestQueue, digestFlushInterval, webhookMode, DEDUP_WINDOW_MS, notificationFingerprints;
 var init_telegram = __esm({
   "src/telegram.ts"() {
     "use strict";
@@ -4072,6 +4115,8 @@ var init_telegram = __esm({
     digestQueue = [];
     digestFlushInterval = null;
     webhookMode = false;
+    DEDUP_WINDOW_MS = 2 * 60 * 60 * 1e3;
+    notificationFingerprints = /* @__PURE__ */ new Map();
   }
 });
 
@@ -11377,6 +11422,72 @@ async function checkAlerts() {
     alertRunning = false;
   }
 }
+var CALENDAR_SYSTEM_PATTERNS = [
+  /updated your access/i,
+  /shared .* calendar/i,
+  /sharing settings/i,
+  /permission/i,
+  /calendar modified/i,
+  /accepted your invitation/i,
+  /declined your invitation/i,
+  /changed the .* calendar/i,
+  /added you to/i,
+  /removed you from/i
+];
+function isCalendarSystemEvent(content) {
+  return CALENDAR_SYSTEM_PATTERNS.some((p) => p.test(content));
+}
+function categorizeEmail(subject, sender) {
+  const s = subject.toLowerCase();
+  const f = sender.toLowerCase();
+  if (/flight|booking|jetblue|delta|united|american air|southwest|airline|itinerary/i.test(s)) return { icon: "\u2708\uFE0F", category: "Travel" };
+  if (/hotel|airbnb|vrbo|reservation/i.test(s)) return { icon: "\u{1F3E8}", category: "Travel" };
+  if (/card|amex|visa|mastercard|chase|citi|capital one|billing|statement|payment|invoice/i.test(s)) return { icon: "\u{1F4B0}", category: "Financial" };
+  if (/bank|transfer|deposit|withdraw|wire|ach/i.test(s)) return { icon: "\u{1F3E6}", category: "Financial" };
+  if (/receipt|order|shipped|delivered|tracking/i.test(s)) return { icon: "\u{1F4E6}", category: "Shopping" };
+  if (/resume|cv|job|interview|application|offer letter/i.test(s)) return { icon: "\u{1F4C4}", category: "Documents" };
+  if (/meeting|call|zoom|teams|webex/i.test(s)) return { icon: "\u{1F4C5}", category: "Calendar" };
+  if (/update|weekly|digest|newsletter|report/i.test(s)) return { icon: "\u{1F4BC}", category: "Updates" };
+  if (/calendar|event|invitation|rsvp/i.test(s)) return { icon: "\u{1F4C5}", category: "Calendar" };
+  return { icon: "\u{1F4E7}", category: "Email" };
+}
+var pendingEmailAlerts = [];
+var emailBatchTimeout = null;
+function flushEmailBatch() {
+  if (pendingEmailAlerts.length === 0) return;
+  const emails = [...pendingEmailAlerts];
+  pendingEmailAlerts = [];
+  emailBatchTimeout = null;
+  if (emails.length === 1) {
+    const e = emails[0];
+    broadcastFn?.({
+      type: "alert",
+      alertType: "email",
+      title: `${e.icon} ${e.sender}`,
+      content: e.subject,
+      timestamp: e.timestamp
+    });
+    return;
+  }
+  const grouped = {};
+  for (const e of emails) {
+    if (!grouped[e.category]) grouped[e.category] = [];
+    grouped[e.category].push(e);
+  }
+  const lines = [];
+  for (const [category, items] of Object.entries(grouped)) {
+    for (const item of items) {
+      lines.push(`${item.icon} ${item.subject} \u2014 ${item.sender}`);
+    }
+  }
+  broadcastFn?.({
+    type: "alert",
+    alertType: "email",
+    title: `New Emails (${emails.length})`,
+    content: lines.join("\n"),
+    timestamp: (/* @__PURE__ */ new Date()).toISOString()
+  });
+}
 async function doCheckAlerts() {
   const now = /* @__PURE__ */ new Date();
   if (config.alerts.calendarReminder.enabled && isConfigured4()) {
@@ -11390,12 +11501,14 @@ async function doCheckAlerts() {
           const eventKey = line.trim().slice(0, 80);
           if (alertedCalendarEvents.has(eventKey)) continue;
           if (/^\d+\./.test(line.trim())) {
+            const eventContent = line.trim().replace(/^\d+\.\s*/, "");
+            if (isCalendarSystemEvent(eventContent)) continue;
             alertedCalendarEvents.add(eventKey);
             broadcastFn?.({
               type: "alert",
               alertType: "calendar",
               title: "Upcoming Event",
-              content: line.trim().replace(/^\d+\.\s*/, ""),
+              content: eventContent,
               timestamp: now.toISOString()
             });
           }
@@ -11475,6 +11588,7 @@ async function doCheckAlerts() {
       const result = await listEmails("is:unread is:important", 5);
       if (!result.includes("No emails found") && !result.includes("not authorized")) {
         const idMatches = result.matchAll(/\[([a-f0-9]+)\]/gi);
+        let newEmailCount = 0;
         for (const match of idMatches) {
           const emailId = match[1];
           if (!alertedEmailIds.has(emailId)) {
@@ -11487,15 +11601,14 @@ async function doCheckAlerts() {
               const subjectMatch = block.match(/Subject:\s*(.+)/);
               const sender = fromMatch ? fromMatch[1].replace(/<[^>]+>/, "").trim() : "Unknown";
               const subject = subjectMatch ? subjectMatch[1].trim() : "No subject";
-              broadcastFn?.({
-                type: "alert",
-                alertType: "email",
-                title: sender,
-                content: subject,
-                timestamp: now.toISOString()
-              });
+              const { icon, category } = categorizeEmail(subject, sender);
+              pendingEmailAlerts.push({ sender, subject, icon, category, timestamp: now.toISOString() });
+              newEmailCount++;
             }
           }
+        }
+        if (newEmailCount > 0 && !emailBatchTimeout) {
+          emailBatchTimeout = setTimeout(() => flushEmailBatch(), 5e3);
         }
       }
     } catch (err) {
