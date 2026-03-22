@@ -1,4 +1,5 @@
 import { getPool } from "./db.js";
+import Anthropic from "@anthropic-ai/sdk";
 
 const POLYMARKET_API = "https://clob.polymarket.com";
 const GAMMA_API = "https://gamma-api.polymarket.com";
@@ -262,4 +263,117 @@ export async function detectConsensus(activities: WhaleActivity[]): Promise<{ ma
   }
 
   return results.sort((a, b) => b.whale_count - a.whale_count || b.avg_score - a.avg_score);
+}
+
+const MACRO_CATEGORIES = ["politics", "economics", "geopolitics", "regulation", "elections", "trade", "government", "federal-reserve", "central-bank", "tariffs", "policy"];
+const EXCLUDE_KEYWORDS = ["crypto", "bitcoin", "ethereum", "solana", "nft", "defi", "token", "sports", "nba", "nfl", "mlb", "soccer", "football", "entertainment", "celebrity", "movie", "music", "tv show", "reality tv", "meme"];
+
+function isMacroRelevant(market: PolymarketMarket): boolean {
+  const text = `${market.question} ${market.description} ${market.category}`.toLowerCase();
+  for (const kw of EXCLUDE_KEYWORDS) {
+    if (text.includes(kw)) return false;
+  }
+  const cat = market.category.toLowerCase();
+  for (const mc of MACRO_CATEGORIES) {
+    if (cat.includes(mc)) return true;
+  }
+  const macroSignals = ["president", "election", "fed ", "federal reserve", "interest rate", "inflation", "gdp", "tariff", "trade war", "regulation", "congress", "senate", "supreme court", "geopolit", "nato", "war", "sanction", "central bank", "imf", "world bank", "recession", "unemployment"];
+  for (const sig of macroSignals) {
+    if (text.includes(sig)) return true;
+  }
+  return false;
+}
+
+function macroInterestScore(market: PolymarketMarket): number {
+  const yesPrice = market.tokens.find(t => t.outcome === "Yes")?.price ?? 0.5;
+  const uncertainty = 1 - Math.abs(yesPrice - 0.5) * 2;
+  const vol24hNorm = Math.min(market.volume_24h / 500000, 1);
+  const totalVolNorm = Math.min(market.volume / 5000000, 1);
+  return uncertainty * 0.4 + vol24hNorm * 0.35 + totalVolNorm * 0.25;
+}
+
+export async function getMacroMarkets(count: number = 5): Promise<PolymarketMarket[]> {
+  const searchTags = ["politics", "economics", "elections", "geopolitics", "regulation"];
+  const fetches: Promise<PolymarketMarket[]>[] = [
+    getTrendingMarkets(50),
+    ...searchTags.map(tag => searchMarkets(tag, 20)),
+  ];
+  const results = await Promise.all(fetches);
+  const all = results.flat();
+
+  const seen = new Set<string>();
+  const deduped: PolymarketMarket[] = [];
+  for (const m of all) {
+    if (!m.active || m.closed) continue;
+    const key = m.condition_id || m.market_slug;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(m);
+  }
+
+  const macro = deduped.filter(isMacroRelevant);
+  macro.sort((a, b) => macroInterestScore(b) - macroInterestScore(a));
+  return macro.slice(0, count);
+}
+
+export async function summarizeMacroMarkets(markets: PolymarketMarket[]): Promise<Map<string, string>> {
+  const result = new Map<string, string>();
+  if (markets.length === 0) return result;
+
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    for (const m of markets) result.set(m.condition_id, "");
+    return result;
+  }
+
+  const marketsText = markets.map((m, i) => {
+    const yesPrice = m.tokens.find(t => t.outcome === "Yes")?.price ?? 0;
+    const noPrice = m.tokens.find(t => t.outcome === "No")?.price ?? 0;
+    return `Market ${i + 1} (ID: ${m.condition_id}):
+Question: ${m.question}
+Description: ${(m.description || "").slice(0, 300)}
+Yes: ${(yesPrice * 100).toFixed(0)}% / No: ${(noPrice * 100).toFixed(0)}%
+24h Volume: $${m.volume_24h.toLocaleString()}
+Total Volume: $${m.volume.toLocaleString()}
+Category: ${m.category}`;
+  }).join("\n\n");
+
+  try {
+    const client = new Anthropic({ apiKey });
+    const response = await client.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 800,
+      messages: [{
+        role: "user",
+        content: `For each prediction market below, write a 1-2 sentence summary: what is this market about and why is it noteworthy right now? Include context on recent events that may be driving the odds. Be concise and insightful.
+
+Format your response as:
+Market 1: <summary>
+Market 2: <summary>
+...
+
+${marketsText}`,
+      }],
+    });
+
+    const text = response.content[0].type === "text" ? response.content[0].text : "";
+    const blocks = text.split(/(?=Market\s+\d+:)/i).filter(b => b.trim());
+    for (const block of blocks) {
+      const match = block.match(/^Market\s+(\d+):\s*([\s\S]+)/i);
+      if (match) {
+        const idx = parseInt(match[1]) - 1;
+        if (idx >= 0 && idx < markets.length) {
+          const summary = match[2].trim().replace(/\n/g, " ").replace(/\s+/g, " ");
+          result.set(markets[idx].condition_id, summary);
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[polymarket] summarizeMacroMarkets error:", err);
+  }
+
+  for (const m of markets) {
+    if (!result.has(m.condition_id)) result.set(m.condition_id, "");
+  }
+  return result;
 }

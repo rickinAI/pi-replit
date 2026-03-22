@@ -58,6 +58,7 @@ function getJobSavePath(jobId: string, dateStr: string, safeName: string): strin
   if (jobId === "oversight-daily-summary") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Daily-Summary.md`;
   if (jobId === "oversight-shadow-refresh") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Shadow-Refresh.md`;
   if (jobId === "copy-trade-scan") return `Scheduled Reports/Wealth Engines/Copy-Trading/${dateStr}-Scan.md`;
+  if (jobId === "prediction-markets-daily") return `Scheduled Reports/Prediction Markets/${dateStr}-Daily-Digest.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 
@@ -871,6 +872,14 @@ Keep it concise and actionable. Save to the vault automatically.`,
     agentId: "system",
     prompt: "Direct execution — scans tracked whale wallets, diffs position snapshots, and mirrors new trades via BANKR.",
     schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 240 },
+    enabled: true,
+  },
+  {
+    id: "prediction-markets-daily",
+    name: "Daily Prediction Markets Digest",
+    agentId: "system",
+    prompt: "Direct execution — fetches top 5 macro prediction markets, generates LLM summaries, and sends Telegram digest.",
+    schedule: { type: "daily", hour: 7, minute: 30 },
     enabled: true,
   },
   {
@@ -1880,6 +1889,133 @@ async function runCopyTradeScan(job: ScheduledJob): Promise<void> {
   }
 }
 
+async function runPredictionMarketsDigest(job: ScheduledJob): Promise<void> {
+  const jobStartMs = Date.now();
+  console.log("[prediction-markets-daily] Starting daily macro markets digest...");
+
+  try {
+    const { getMacroMarkets, summarizeMacroMarkets, getWhaleActivities } = await import("./polymarket.js");
+    const { getPositions } = await import("./bankr.js");
+
+    const markets = await getMacroMarkets(5);
+    if (markets.length === 0) {
+      console.log("[prediction-markets-daily] No macro markets found, skipping.");
+      job.lastRun = new Date().toISOString();
+      job.lastResult = "No macro markets found";
+      job.lastStatus = "success";
+      await saveConfig();
+      await writeJobHistory(job.id, job.name, "success", "No macro markets found", null, Date.now() - jobStartMs);
+      return;
+    }
+
+    const summaries = await summarizeMacroMarkets(markets);
+
+    let activeMarketIds = new Set<string>();
+    let whaleMarketIds = new Set<string>();
+
+    try {
+      const positions = await getPositions();
+      for (const pos of positions) {
+        if (pos.asset_class === "polymarket" && pos.market_id && pos.is_copy_trade) {
+          activeMarketIds.add(pos.market_id);
+        }
+      }
+    } catch (err) {
+      console.warn("[prediction-markets-daily] Failed to fetch positions for cross-reference:", err instanceof Error ? err.message : err);
+    }
+
+    try {
+      const whaleActivities = await getWhaleActivities();
+      for (const wa of whaleActivities) {
+        whaleMarketIds.add(wa.market_id);
+      }
+    } catch (err) {
+      console.warn("[prediction-markets-daily] Failed to fetch whale activities for cross-reference:", err instanceof Error ? err.message : err);
+    }
+
+    const now = new Date();
+    const dateLabel = now.toLocaleDateString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" });
+
+    const lines: string[] = [`🔮 *Daily Prediction Markets — ${dateLabel}*`, ""];
+
+    const escapeMd = (s: string) => s.replace(/([_*`\[])/g, "\\$1");
+
+    for (let i = 0; i < markets.length; i++) {
+      const m = markets[i];
+      const yesPrice = m.tokens.find(t => t.outcome === "Yes")?.price ?? 0;
+      const noPrice = m.tokens.find(t => t.outcome === "No")?.price ?? 0;
+      const vol24h = m.volume_24h >= 1000 ? `$${(m.volume_24h / 1000).toFixed(0)}K` : `$${m.volume_24h.toFixed(0)}`;
+      const summary = summaries.get(m.condition_id) || "";
+
+      let annotation = "";
+      if (activeMarketIds.has(m.condition_id)) annotation += " 📋 Active copy trade";
+      if (whaleMarketIds.has(m.condition_id)) annotation += " 🐋 Whale activity detected";
+
+      const safeQuestion = escapeMd(m.question);
+      lines.push(`*${i + 1}. ${safeQuestion}*`);
+      lines.push(`   Yes: ${(yesPrice * 100).toFixed(0)}% / No: ${(noPrice * 100).toFixed(0)}% | 24h Vol: ${vol24h}${annotation}`);
+      if (summary) lines.push(`   _${escapeMd(summary)}_`);
+      lines.push("");
+    }
+
+    lines.push(`_Generated ${now.toLocaleString("en-US", { timeZone: "America/New_York" })} ET_`);
+
+    const message = lines.join("\n");
+
+    const { sendAlertsBotMessage: sendAlerts } = await import("./telegram.js");
+    const delivered = await sendAlerts(message);
+
+    job.lastRun = new Date().toISOString();
+    if (delivered) {
+      job.lastResult = `Delivered ${markets.length} macro markets`;
+      job.lastStatus = "success";
+    } else {
+      job.lastResult = `Generated ${markets.length} macro markets but Telegram delivery failed`;
+      job.lastStatus = "partial";
+    }
+    await saveConfig();
+
+    const dateStr = getTodayKey();
+    const savePath = getJobSavePath(job.id, dateStr, "Prediction-Markets-Daily");
+    if (kbCreateFn) {
+      try {
+        await kbCreateFn(savePath, `# Daily Prediction Markets Digest\n*Generated: ${now.toLocaleString("en-US", { timeZone: config.timezone })}*\n\n${message}`);
+      } catch {}
+    }
+
+    await writeJobHistory(job.id, job.name, job.lastStatus, job.lastResult, savePath, Date.now() - jobStartMs);
+
+    if (broadcastFn) {
+      broadcastFn({
+        type: "job_complete",
+        jobId: job.id,
+        jobName: job.name,
+        summary: job.lastResult,
+        savedTo: savePath,
+        status: job.lastStatus,
+        timestamp: Date.now(),
+      });
+    }
+
+    sendJobCompletionNotification({
+      jobId: job.id,
+      jobName: job.name,
+      status: job.lastStatus as "success" | "partial" | "error",
+      summary: job.lastResult || "",
+      durationMs: Date.now() - jobStartMs,
+    }).catch(() => {});
+
+    console.log(`[prediction-markets-daily] Complete — ${markets.length} markets, delivered: ${delivered}`);
+  } catch (err) {
+    job.lastRun = new Date().toISOString();
+    job.lastResult = String(err);
+    job.lastStatus = "error";
+    await saveConfig();
+    await writeJobHistory(job.id, job.name, "error", String(err).slice(0, 500), null, Date.now() - jobStartMs);
+    console.error("[prediction-markets-daily] Error:", err);
+  }
+}
+
 const WE_JOB_IDS = new Set([
   "polymarket-activity-scan", "polymarket-full-cycle",
   "bankr-execute", "copy-trade-scan",
@@ -1948,6 +2084,8 @@ async function checkJobs(): Promise<void> {
         await runBirthdayCalendarSync(job);
       } else if (job.id === "copy-trade-scan") {
         await runCopyTradeScan(job);
+      } else if (job.id === "prediction-markets-daily") {
+        await runPredictionMarketsDigest(job);
       } else {
         const jobStartMs = Date.now();
         const progressCb = (info: { toolName: string; iteration: number }) => {

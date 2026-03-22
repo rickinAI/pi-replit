@@ -12,8 +12,8 @@ function isAlertsBotConfigured(): boolean {
   return ALERTS_BOT_TOKEN.length > 0 && ALERTS_CHAT_ID.length > 0;
 }
 
-async function sendAlertsBotMessage(text: string, parseMode: string = "Markdown"): Promise<void> {
-  if (!isAlertsBotConfigured()) return;
+export async function sendAlertsBotMessage(text: string, parseMode: string = "Markdown"): Promise<boolean> {
+  if (!isAlertsBotConfigured()) return false;
   try {
     const resp = await fetch(`${ALERTS_API_BASE}/sendMessage`, {
       method: "POST",
@@ -23,9 +23,12 @@ async function sendAlertsBotMessage(text: string, parseMode: string = "Markdown"
     if (!resp.ok) {
       const body = await resp.text();
       console.error(`[telegram-alerts] sendMessage failed (${resp.status}): ${body}`);
+      return false;
     }
+    return true;
   } catch (err) {
     console.error("[telegram-alerts] sendMessage failed:", err instanceof Error ? err.message : err);
+    return false;
   }
 }
 
@@ -1265,6 +1268,7 @@ export async function sendJobCompletionNotification(params: {
     "polymarket-activity-scan", "polymarket-full-cycle",
     "bankr-execute", "oversight-health", "oversight-weekly",
     "oversight-daily-summary", "oversight-shadow-refresh",
+    "prediction-markets-daily",
   ]);
   if (!weJobIds.has(params.jobId)) return;
 
@@ -1296,7 +1300,7 @@ export async function sendJobCompletionNotification(params: {
     "polymarket-activity-scan": "🎰", "polymarket-full-cycle": "🎰",
     "bankr-execute": "💰", "oversight-health": "🛡️",
     "oversight-weekly": "🛡️", "oversight-daily-summary": "📊",
-    "oversight-shadow-refresh": "👻",
+    "oversight-shadow-refresh": "👻", "prediction-markets-daily": "🔮",
   };
   const icon = icons[params.jobId] || "⚙️";
 
