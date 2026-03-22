@@ -721,7 +721,7 @@ async function handleAlertsCommand(): Promise<string> {
     "",
     `📋 *Mission Control* (personal + status): ${alertsStatus}`,
     "  → Daily briefs, calendar, email, stock watchlist, task alerts",
-    "  → DarkNode status digest (every 4h)",
+    "  → DarkNode summary (9am/12pm/3pm/6pm/9pm ET)",
   ].join("\n");
 }
 
@@ -1374,7 +1374,7 @@ async function handleNotifyCommand(args: string): Promise<string> {
       "",
       `*smart* — Only notify on material changes (new thesis, regime shift)`,
       `*immediate* — Notify on every job completion`,
-      `*digest* — Queue events, send batched summary every 4h`,
+      `*digest* — Queue events, send batched summary periodically`,
       "",
       `Usage: /notify smart | /notify immediate | /notify digest`,
     ].join("\n");

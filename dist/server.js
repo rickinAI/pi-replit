@@ -3035,7 +3035,7 @@ async function handleAlertsCommand() {
     "",
     `\u{1F4CB} *Mission Control* (personal + status): ${alertsStatus}`,
     "  \u2192 Daily briefs, calendar, email, stock watchlist, task alerts",
-    "  \u2192 DarkNode status digest (every 4h)"
+    "  \u2192 DarkNode summary (9am/12pm/3pm/6pm/9pm ET)"
   ].join("\n");
 }
 async function handleHelpCommand() {
@@ -3627,7 +3627,7 @@ async function handleNotifyCommand(args) {
       "",
       `*smart* \u2014 Only notify on material changes (new thesis, regime shift)`,
       `*immediate* \u2014 Notify on every job completion`,
-      `*digest* \u2014 Queue events, send batched summary every 4h`,
+      `*digest* \u2014 Queue events, send batched summary periodically`,
       "",
       `Usage: /notify smart | /notify immediate | /notify digest`
     ].join("\n");
