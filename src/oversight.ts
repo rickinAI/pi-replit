@@ -237,6 +237,9 @@ export async function runHealthCheck(): Promise<HealthReport> {
   const latencyCheck = await checkJobExecutionTrends(pool);
   checks.push(latencyCheck);
 
+  const walletHealthCheck = await checkWalletHealth();
+  checks.push(walletHealthCheck);
+
   const criticalCount = checks.filter(c => c.status === "critical").length;
   const warnCount = checks.filter(c => c.status === "warn").length;
   const overall: HealthReport["overall_status"] =
@@ -282,6 +285,89 @@ export async function runHealthCheck(): Promise<HealthReport> {
   }
 
   return report;
+}
+
+async function checkWalletHealth(): Promise<HealthCheck> {
+  try {
+    const wallets = await polymarket.getWhaleWatchlist();
+    if (wallets.length === 0) {
+      return { name: "Wallet Health", status: "ok", detail: "No wallets in registry" };
+    }
+
+    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    let healthy = 0;
+    let degraded = 0;
+    let disabled = 0;
+    const disabledThisCycle: string[] = [];
+
+    for (const wallet of wallets) {
+      if (!wallet.enabled) {
+        disabled++;
+        continue;
+      }
+
+      try {
+        const positions = await polymarket.fetchWalletPositionsDirect(wallet.address);
+        const resolved = positions.filter((p: any) => {
+          const isResolved = p.redeemable || p.currentValue === 0;
+          const timestamp = p.closedAt || p.updatedAt || p.createdAt;
+          const ts = timestamp ? new Date(timestamp).getTime() : 0;
+          return isResolved && ts > thirtyDaysAgo;
+        });
+
+        if (resolved.length < 3) {
+          if (wallet.degraded_count > 0) wallet.degraded_count = 0;
+          healthy++;
+        } else {
+          const wins = resolved.filter((p: any) => (p.cashPnl || 0) > 0).length;
+          const winRate = wins / resolved.length;
+          wallet.win_rate = winRate;
+
+          if (winRate < 0.55) {
+            wallet.degraded_count = (wallet.degraded_count || 0) + 1;
+
+            if (wallet.degraded_count >= 3) {
+              wallet.enabled = false;
+              wallet.status = "probation";
+              disabledThisCycle.push(wallet.alias);
+              disabled++;
+
+              await notifyTelegram(
+                `⚠️ *Wallet Auto-Disabled*\n\n*${wallet.alias}* (${wallet.niche})\nWin rate: ${(winRate * 100).toFixed(0)}% (30d, ${resolved.length} resolved)\nDegraded ${wallet.degraded_count} consecutive checks\n\n_Wallet disabled. Use /addwallet to re-enable after review._`
+              );
+            } else {
+              degraded++;
+            }
+          } else {
+            if (wallet.degraded_count > 0) wallet.degraded_count = 0;
+            healthy++;
+          }
+        }
+      } catch {
+        healthy++;
+      }
+
+      await new Promise(r => setTimeout(r, 300));
+    }
+
+    await polymarket.saveWhaleWatchlist(wallets);
+
+    const total = healthy + degraded + disabled;
+    const detail = `${healthy} healthy, ${degraded} degraded, ${disabled} disabled` +
+      (disabledThisCycle.length > 0 ? ` (auto-disabled: ${disabledThisCycle.join(", ")})` : "");
+
+    const status: HealthCheck["status"] =
+      disabledThisCycle.length > 0 ? "warn" :
+      degraded > 0 ? "warn" : "ok";
+
+    return { name: "Wallet Health", status, detail, value: healthy, threshold: total };
+  } catch (err) {
+    return {
+      name: "Wallet Health",
+      status: "warn",
+      detail: `Check failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
 }
 
 async function checkAgentFreshness(

@@ -857,6 +857,161 @@ async function handleCopytradesCommand(): Promise<string> {
   }
 }
 
+async function handleAddWalletCommand(args: string): Promise<string> {
+  const mode = await getMode();
+  const parts = args.trim().split(/\s+/);
+  const address = parts[0];
+  const alias = parts.slice(1).join(" ") || undefined;
+
+  if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
+    return `${mode} ❌ Usage: /addwallet <0x address> [alias]\nAddress must be a valid 42-char hex address.`;
+  }
+
+  try {
+    const { getWhaleWatchlist, isBlacklisted, buildWalletFromActivity, scoreWallet, saveWhaleWatchlist } = await import("./polymarket.js");
+    const wallets = await getWhaleWatchlist();
+
+    const existingIdx = wallets.findIndex(w => w.address.toLowerCase() === address.toLowerCase());
+    if (existingIdx !== -1) {
+      const existing = wallets[existingIdx];
+      if (!existing.enabled || existing.status === "probation") {
+        existing.enabled = true;
+        existing.status = "active";
+        existing.degraded_count = 0;
+        existing.observation_only = true;
+        if (alias) existing.alias = alias;
+        await saveWhaleWatchlist(wallets);
+        return [
+          `${mode} ♻️ *Wallet Re-Enabled*`,
+          "",
+          `*Alias:* ${existing.alias}`,
+          `*Address:* \`${existing.address.slice(0, 10)}…\``,
+          `*Score:* ${existing.composite_score.toFixed(2)}`,
+          `_Was disabled/probation — now active (observation\\_only). Degraded count reset._`,
+        ].join("\n");
+      }
+      return `${mode} ⚠️ Wallet \`${address.slice(0, 10)}…\` is already tracked and active.`;
+    }
+
+    if (await isBlacklisted(address)) {
+      return `${mode} 🚫 Wallet \`${address.slice(0, 10)}…\` is blacklisted. Remove from blacklist first.`;
+    }
+
+    const wallet = await buildWalletFromActivity(address, "manual");
+    if (alias) wallet.alias = alias;
+    wallet.observation_only = true;
+
+    wallets.push(wallet);
+    await saveWhaleWatchlist(wallets);
+
+    return [
+      `${mode} ✅ *Wallet Added*`,
+      "",
+      `*Alias:* ${wallet.alias}`,
+      `*Address:* \`${wallet.address.slice(0, 10)}…\``,
+      `*Niche:* ${wallet.niche}`,
+      `*Score:* ${wallet.composite_score.toFixed(2)}`,
+      `*Win Rate:* ${(wallet.win_rate * 100).toFixed(0)}%`,
+      `*Trades:* ${wallet.total_trades} | Markets: ${wallet.total_markets}`,
+      "",
+      `_Status: observation\\_only — will be promoted after first copy-trade scan cycle._`,
+    ].join("\n");
+  } catch (err) {
+    return `${mode} ❌ Failed to add wallet: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+async function handleRemoveWalletCommand(args: string): Promise<string> {
+  const mode = await getMode();
+  const query = args.trim();
+
+  if (!query) {
+    return `${mode} ❌ Usage: /removewallet <address or alias>`;
+  }
+
+  try {
+    const { getWhaleWatchlist, saveWhaleWatchlist } = await import("./polymarket.js");
+    const wallets = await getWhaleWatchlist();
+    const idx = wallets.findIndex(w =>
+      w.address.toLowerCase() === query.toLowerCase() ||
+      w.alias.toLowerCase() === query.toLowerCase()
+    );
+
+    if (idx === -1) {
+      return `${mode} ⚠️ No wallet found matching \`${query}\`.`;
+    }
+
+    const removed = wallets.splice(idx, 1)[0];
+    await saveWhaleWatchlist(wallets);
+
+    return [
+      `${mode} 🗑️ *Wallet Removed*`,
+      "",
+      `*Alias:* ${removed.alias}`,
+      `*Address:* \`${removed.address.slice(0, 10)}…\``,
+      `*Was:* ${removed.enabled ? "enabled" : "disabled"} | Score: ${removed.composite_score.toFixed(2)}`,
+      `_${wallets.length} wallets remaining in registry._`,
+    ].join("\n");
+  } catch (err) {
+    return `${mode} ❌ Failed to remove wallet: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+async function handleBlacklistWalletCommand(args: string): Promise<string> {
+  const mode = await getMode();
+  const query = args.trim();
+
+  if (!query) {
+    return `${mode} ❌ Usage: /blacklistwallet <address or alias>`;
+  }
+
+  try {
+    const { getWhaleWatchlist, saveWhaleWatchlist, getBlacklist, saveBlacklist } = await import("./polymarket.js");
+    const wallets = await getWhaleWatchlist();
+    const idx = wallets.findIndex(w =>
+      w.address.toLowerCase() === query.toLowerCase() ||
+      w.alias.toLowerCase() === query.toLowerCase()
+    );
+
+    let address: string;
+    let aliasLabel: string;
+
+    if (idx !== -1) {
+      address = wallets[idx].address.toLowerCase();
+      aliasLabel = wallets[idx].alias;
+    } else if (/^0x[a-fA-F0-9]{40}$/i.test(query)) {
+      address = query.toLowerCase();
+      aliasLabel = `${address.slice(0, 10)}…`;
+    } else {
+      return `${mode} ⚠️ No wallet found matching \`${query}\`. Provide a valid address or alias.`;
+    }
+
+    const blacklist = await getBlacklist();
+    if (blacklist.includes(address)) {
+      return `${mode} ⚠️ \`${address.slice(0, 10)}…\` is already blacklisted.`;
+    }
+
+    if (idx !== -1) {
+      wallets.splice(idx, 1);
+      await saveWhaleWatchlist(wallets);
+    }
+
+    blacklist.push(address);
+    await saveBlacklist(blacklist);
+
+    return [
+      `${mode} 🚫 *Wallet Blacklisted*`,
+      "",
+      `*Alias:* ${aliasLabel}`,
+      `*Address:* \`${address.slice(0, 10)}…\``,
+      idx !== -1 ? `_Removed from registry and added to blacklist._` : `_Added to blacklist (was not in registry)._`,
+      `_Blacklist size: ${blacklist.length}_`,
+    ].join("\n");
+  } catch (err) {
+    return `${mode} ❌ Failed to blacklist wallet: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
 async function handleHelpCommand(): Promise<string> {
   const mode = await getMode();
   return [
@@ -868,7 +1023,12 @@ async function handleHelpCommand(): Promise<string> {
     "/scout — (redirects to /intel)",
     "/polymarket — Active PM theses",
     "/wallets — Tracked whale wallets",
+    "/walletstatus — Wallet health & scores",
     "/copytrades — Copy trading dashboard",
+    "/addwallet — Add whale wallet to track",
+    "/removewallet — Remove tracked wallet",
+    "/blacklistwallet — Blacklist a wallet",
+    "/seedwallets — Auto-discover whales",
     "/trades [n] — Last N trades (default 5)",
     "/risk — Risk dashboard",
     "/oversight — Oversight agent status",
@@ -881,7 +1041,6 @@ async function handleHelpCommand(): Promise<string> {
     "/public on|off — Toggle dashboard access",
     "/alerts — Bot connection status",
     "/notify [smart|immediate|digest] — Notification mode",
-    "/research — (disabled, prediction-markets only)",
     "/help — This message",
   ].join("\n");
 }
@@ -1779,6 +1938,9 @@ export async function init(): Promise<void> {
   registerCommand("copytrades", async () => handleCopytradesCommand());
   registerCommand("walletstatus", async () => handleWalletStatusCommand());
   registerCommand("seedwallets", async () => handleSeedWalletsCommand());
+  registerCommand("addwallet", async (args) => handleAddWalletCommand(args));
+  registerCommand("removewallet", async (args) => handleRemoveWalletCommand(args));
+  registerCommand("blacklistwallet", async (args) => handleBlacklistWalletCommand(args));
   registerCommand("help", async () => handleHelpCommand());
 
   try {
