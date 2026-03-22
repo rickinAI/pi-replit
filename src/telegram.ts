@@ -1450,6 +1450,7 @@ export async function sendTradeAlert(params: {
   openedAt?: string;
   closedAt?: string;
 }): Promise<void> {
+  const fmt = await import("./telegram-format.js");
   const mode = await getMode();
   const icons: Record<string, string> = {
     executed: "📈",
@@ -1461,11 +1462,11 @@ export async function sendTradeAlert(params: {
   const icon = icons[params.type] || "📊";
 
   const lines = [`${mode} ${icon} Trade ${params.type.toUpperCase()}`, ""];
-  lines.push(`Asset: ${params.asset}`);
-  if (params.direction) lines.push(`Direction: ${params.direction}`);
-  if (params.leverage) lines.push(`Leverage: ${params.leverage}`);
-  if (params.entryPrice) lines.push(`Entry: $${params.entryPrice}`);
-  if (params.exitPrice) lines.push(`Exit: $${params.exitPrice}`);
+  lines.push(`Asset: ${fmt.escapeHtml(params.asset)}`);
+  if (params.direction) lines.push(`Direction: ${fmt.escapeHtml(params.direction)}`);
+  if (params.leverage) lines.push(`Leverage: ${fmt.escapeHtml(params.leverage)}`);
+  if (params.entryPrice) lines.push(`Entry: $${fmt.escapeHtml(params.entryPrice)}`);
+  if (params.exitPrice) lines.push(`Exit: $${fmt.escapeHtml(params.exitPrice)}`);
   if (params.pnl != null) {
     const pnlStr = params.pnl >= 0 ? `+$${params.pnl.toFixed(2)}` : `-$${Math.abs(params.pnl).toFixed(2)}`;
     lines.push(`PnL: ${pnlStr}`);
@@ -1491,7 +1492,7 @@ export async function sendTradeAlert(params: {
       lines.push(`Hold: ${holdH}h ${holdM}m`);
     }
   }
-  if (params.reason) lines.push(`Reason: ${params.reason}`);
+  if (params.reason) lines.push(`Reason: ${fmt.escapeHtml(params.reason)}`);
 
   await sendMessage(lines.join("\n"), "HTML");
 }
