@@ -1405,7 +1405,6 @@ async function handleNotifyCommand(args: string): Promise<string> {
   }
 }
 
-let darkNodeSummaryInterval: ReturnType<typeof setInterval> | null = null;
 
 export async function sendDarkNodeSummary(): Promise<void> {
   if (!isConfigured()) return;
@@ -1742,18 +1741,6 @@ export async function init(): Promise<void> {
     checkDeadManSwitches().catch(err => console.error("[telegram] Dead man check error:", err));
   }, 60 * 60 * 1000);
 
-  let lastSummarySlot = "";
-  darkNodeSummaryInterval = setInterval(() => {
-    const nowET = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
-    const h = nowET.getHours();
-    const m = nowET.getMinutes();
-    const slotKey = `${nowET.toDateString()}-${h}`;
-    if ([9, 12, 15, 18, 21].includes(h) && m < 10 && slotKey !== lastSummarySlot) {
-      lastSummarySlot = slotKey;
-      sendDarkNodeSummary().catch(err => console.error("[telegram] DarkNode summary error:", err));
-    }
-  }, 10 * 60 * 1000);
-  console.log("[telegram] DarkNode summary enabled (9am, 12pm, 3pm, 6pm, 9pm ET)");
 
   const notifyMode = await getNotificationMode();
   if (notifyMode === "digest") {
@@ -1773,10 +1760,6 @@ export function stop(): void {
   if (deadManInterval) {
     clearInterval(deadManInterval);
     deadManInterval = null;
-  }
-  if (darkNodeSummaryInterval) {
-    clearInterval(darkNodeSummaryInterval);
-    darkNodeSummaryInterval = null;
   }
   if (digestFlushInterval) {
     clearInterval(digestFlushInterval);

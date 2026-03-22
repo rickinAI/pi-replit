@@ -3960,18 +3960,6 @@ async function init6() {
   deadManInterval = setInterval(() => {
     checkDeadManSwitches().catch((err) => console.error("[telegram] Dead man check error:", err));
   }, 60 * 60 * 1e3);
-  let lastSummarySlot = "";
-  darkNodeSummaryInterval = setInterval(() => {
-    const nowET = new Date((/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York" }));
-    const h = nowET.getHours();
-    const m = nowET.getMinutes();
-    const slotKey = `${nowET.toDateString()}-${h}`;
-    if ([9, 12, 15, 18, 21].includes(h) && m < 10 && slotKey !== lastSummarySlot) {
-      lastSummarySlot = slotKey;
-      sendDarkNodeSummary().catch((err) => console.error("[telegram] DarkNode summary error:", err));
-    }
-  }, 10 * 60 * 1e3);
-  console.log("[telegram] DarkNode summary enabled (9am, 12pm, 3pm, 6pm, 9pm ET)");
   const notifyMode = await getNotificationMode();
   if (notifyMode === "digest") {
     digestFlushInterval = setInterval(() => {
@@ -3989,10 +3977,6 @@ function stop() {
   if (deadManInterval) {
     clearInterval(deadManInterval);
     deadManInterval = null;
-  }
-  if (darkNodeSummaryInterval) {
-    clearInterval(darkNodeSummaryInterval);
-    darkNodeSummaryInterval = null;
   }
   if (digestFlushInterval) {
     clearInterval(digestFlushInterval);
@@ -4042,7 +4026,7 @@ ${event.content}`);
 ${event.content}`);
   }
 }
-var BOT_TOKEN, CHAT_ID, API_BASE2, ALERTS_BOT_TOKEN, ALERTS_CHAT_ID, ALERTS_API_BASE, WEBHOOK_SECRET, pollingActive, pollingTimeout, lastUpdateId, deadManInterval, lastDeadManAlert, commands, pendingApprovals, lastScoutNotifyHash, lastPmNotifyHash, digestQueue, digestFlushInterval, darkNodeSummaryInterval, webhookMode;
+var BOT_TOKEN, CHAT_ID, API_BASE2, ALERTS_BOT_TOKEN, ALERTS_CHAT_ID, ALERTS_API_BASE, WEBHOOK_SECRET, pollingActive, pollingTimeout, lastUpdateId, deadManInterval, lastDeadManAlert, commands, pendingApprovals, lastScoutNotifyHash, lastPmNotifyHash, digestQueue, digestFlushInterval, webhookMode;
 var init_telegram = __esm({
   "src/telegram.ts"() {
     "use strict";
@@ -4066,7 +4050,6 @@ var init_telegram = __esm({
     lastPmNotifyHash = "";
     digestQueue = [];
     digestFlushInterval = null;
-    darkNodeSummaryInterval = null;
     webhookMode = false;
   }
 });
@@ -12501,6 +12484,46 @@ This ensures shadow/paper trading accurately tracks what BANKR would have earned
     enabled: true
   },
   {
+    id: "darknode-summary-9",
+    name: "DarkNode Summary (9am)",
+    agentId: "oversight",
+    prompt: "Send the DarkNode summary to Telegram.",
+    schedule: { type: "daily", hour: 9, minute: 0 },
+    enabled: true
+  },
+  {
+    id: "darknode-summary-12",
+    name: "DarkNode Summary (12pm)",
+    agentId: "oversight",
+    prompt: "Send the DarkNode summary to Telegram.",
+    schedule: { type: "daily", hour: 12, minute: 0 },
+    enabled: true
+  },
+  {
+    id: "darknode-summary-15",
+    name: "DarkNode Summary (3pm)",
+    agentId: "oversight",
+    prompt: "Send the DarkNode summary to Telegram.",
+    schedule: { type: "daily", hour: 15, minute: 0 },
+    enabled: true
+  },
+  {
+    id: "darknode-summary-18",
+    name: "DarkNode Summary (6pm)",
+    agentId: "oversight",
+    prompt: "Send the DarkNode summary to Telegram.",
+    schedule: { type: "daily", hour: 18, minute: 0 },
+    enabled: true
+  },
+  {
+    id: "darknode-summary-21",
+    name: "DarkNode Summary (9pm)",
+    agentId: "oversight",
+    prompt: "Send the DarkNode summary to Telegram.",
+    schedule: { type: "daily", hour: 21, minute: 0 },
+    enabled: true
+  },
+  {
     id: "autoresearch-weekly",
     name: "Autoresearch Strategy Optimization",
     agentId: "scout",
@@ -13094,6 +13117,25 @@ ${results.join("\n")}`;
     await writeJobHistory(job.id, job.name, "error", String(err).slice(0, 300), null, null);
   }
 }
+async function runDarkNodeSummary(job) {
+  console.log(`[scheduled-jobs] Running DarkNode summary (${job.name})...`);
+  try {
+    const { sendDarkNodeSummary: sendDarkNodeSummary2 } = await Promise.resolve().then(() => (init_telegram(), telegram_exports));
+    await sendDarkNodeSummary2();
+    job.lastRun = (/* @__PURE__ */ new Date()).toISOString();
+    job.lastResult = "DarkNode summary sent to Telegram";
+    job.lastStatus = "success";
+    await saveConfig2();
+  } catch (err) {
+    console.error("[scheduled-jobs] DarkNode summary error:", err);
+    job.lastRun = (/* @__PURE__ */ new Date()).toISOString();
+    job.lastResult = `Error: ${err instanceof Error ? err.message : err}`;
+    job.lastStatus = "error";
+    await saveConfig2();
+  }
+  jobRunning = false;
+  currentRunningJobId = null;
+}
 async function runInboxMonitor(job) {
   console.log(`[scheduled-jobs] Inbox monitor: checking for @darknode emails...`);
   let emails;
@@ -13230,7 +13272,9 @@ async function checkJobs() {
       });
     }
     try {
-      if (job.id === "darknode-inbox-monitor") {
+      if (job.id.startsWith("darknode-summary-")) {
+        await runDarkNodeSummary(job);
+      } else if (job.id === "darknode-inbox-monitor") {
         await runInboxMonitor(job);
       } else if (job.id === "baby-timeline-advance") {
         await runTimelineAdvance(job);
@@ -13404,6 +13448,10 @@ async function triggerJob(jobId) {
     broadcastFn2({ type: "job_start", jobId: job.id, jobName: job.name, timestamp: Date.now() });
   }
   try {
+    if (job.id.startsWith("darknode-summary-")) {
+      await runDarkNodeSummary(job);
+      return job.lastResult || "DarkNode summary sent";
+    }
     if (job.id === "darknode-inbox-monitor") {
       await runInboxMonitor(job);
       return job.lastResult || "Inbox monitor completed";

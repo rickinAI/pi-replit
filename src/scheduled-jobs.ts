@@ -997,6 +997,46 @@ This ensures shadow/paper trading accurately tracks what BANKR would have earned
     enabled: true,
   },
   {
+    id: "darknode-summary-9",
+    name: "DarkNode Summary (9am)",
+    agentId: "oversight",
+    prompt: "Send the DarkNode summary to Telegram.",
+    schedule: { type: "daily", hour: 9, minute: 0 },
+    enabled: true,
+  },
+  {
+    id: "darknode-summary-12",
+    name: "DarkNode Summary (12pm)",
+    agentId: "oversight",
+    prompt: "Send the DarkNode summary to Telegram.",
+    schedule: { type: "daily", hour: 12, minute: 0 },
+    enabled: true,
+  },
+  {
+    id: "darknode-summary-15",
+    name: "DarkNode Summary (3pm)",
+    agentId: "oversight",
+    prompt: "Send the DarkNode summary to Telegram.",
+    schedule: { type: "daily", hour: 15, minute: 0 },
+    enabled: true,
+  },
+  {
+    id: "darknode-summary-18",
+    name: "DarkNode Summary (6pm)",
+    agentId: "oversight",
+    prompt: "Send the DarkNode summary to Telegram.",
+    schedule: { type: "daily", hour: 18, minute: 0 },
+    enabled: true,
+  },
+  {
+    id: "darknode-summary-21",
+    name: "DarkNode Summary (9pm)",
+    agentId: "oversight",
+    prompt: "Send the DarkNode summary to Telegram.",
+    schedule: { type: "daily", hour: 21, minute: 0 },
+    enabled: true,
+  },
+  {
     id: "autoresearch-weekly",
     name: "Autoresearch Strategy Optimization",
     agentId: "scout",
@@ -1645,6 +1685,26 @@ async function runBirthdayCalendarSync(job: ScheduledJob): Promise<void> {
   }
 }
 
+async function runDarkNodeSummary(job: ScheduledJob): Promise<void> {
+  console.log(`[scheduled-jobs] Running DarkNode summary (${job.name})...`);
+  try {
+    const { sendDarkNodeSummary } = await import("./telegram.js");
+    await sendDarkNodeSummary();
+    job.lastRun = new Date().toISOString();
+    job.lastResult = "DarkNode summary sent to Telegram";
+    job.lastStatus = "success";
+    await saveConfig();
+  } catch (err) {
+    console.error("[scheduled-jobs] DarkNode summary error:", err);
+    job.lastRun = new Date().toISOString();
+    job.lastResult = `Error: ${err instanceof Error ? err.message : err}`;
+    job.lastStatus = "error";
+    await saveConfig();
+  }
+  jobRunning = false;
+  currentRunningJobId = null;
+}
+
 async function runInboxMonitor(job: ScheduledJob): Promise<void> {
   console.log(`[scheduled-jobs] Inbox monitor: checking for @darknode emails...`);
   let emails;
@@ -1790,7 +1850,9 @@ async function checkJobs(): Promise<void> {
     }
 
     try {
-      if (job.id === "darknode-inbox-monitor") {
+      if (job.id.startsWith("darknode-summary-")) {
+        await runDarkNodeSummary(job);
+      } else if (job.id === "darknode-inbox-monitor") {
         await runInboxMonitor(job);
       } else if (job.id === "baby-timeline-advance") {
         await runTimelineAdvance(job);
@@ -1983,6 +2045,11 @@ export async function triggerJob(jobId: string): Promise<string> {
   }
 
   try {
+    if (job.id.startsWith("darknode-summary-")) {
+      await runDarkNodeSummary(job);
+      return job.lastResult || "DarkNode summary sent";
+    }
+
     if (job.id === "darknode-inbox-monitor") {
       await runInboxMonitor(job);
       return job.lastResult || "Inbox monitor completed";
