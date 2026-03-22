@@ -210,6 +210,7 @@ export function determineApprovalTier(params: {
   leverageIncrease: boolean;
   drawdownThreshold?: number;
 }): ApprovalTier {
+  if (mode === "SHADOW") return "autonomous";
   const ddThresh = params.drawdownThreshold ?? -25;
   if (
     params.capitalPct > 30 ||

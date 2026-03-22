@@ -869,7 +869,7 @@ Do NOT use notes_create — the system saves automatically.`,
 1. scout_theses — active HIGH/MEDIUM crypto theses
 2. polymarket_theses — active HIGH/MEDIUM polymarket theses
 3. bankr_positions — skip theses with existing positions
-4. For new theses: bankr_risk_check → bankr_open_position if autonomous/dead_zone
+4. For new theses: bankr_risk_check → if passed, bankr_open_position (all tiers execute automatically)
 5. Output: theses evaluated, trades executed/skipped, portfolio state.`,
     schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 60 },
     enabled: true,
