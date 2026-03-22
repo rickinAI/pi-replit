@@ -453,6 +453,81 @@ async function checkAlerts() {
   }
 }
 
+const CALENDAR_SYSTEM_PATTERNS = [
+  /updated your access/i,
+  /shared .* calendar/i,
+  /sharing settings/i,
+  /permission/i,
+  /calendar modified/i,
+  /accepted your invitation/i,
+  /declined your invitation/i,
+  /changed the .* calendar/i,
+  /added you to/i,
+  /removed you from/i,
+];
+
+function isCalendarSystemEvent(content: string): boolean {
+  return CALENDAR_SYSTEM_PATTERNS.some(p => p.test(content));
+}
+
+function categorizeEmail(subject: string, sender: string): { icon: string; category: string } {
+  const s = subject.toLowerCase();
+  const f = sender.toLowerCase();
+  if (/flight|booking|jetblue|delta|united|american air|southwest|airline|itinerary/i.test(s)) return { icon: "✈️", category: "Travel" };
+  if (/hotel|airbnb|vrbo|reservation/i.test(s)) return { icon: "🏨", category: "Travel" };
+  if (/card|amex|visa|mastercard|chase|citi|capital one|billing|statement|payment|invoice/i.test(s)) return { icon: "💰", category: "Financial" };
+  if (/bank|transfer|deposit|withdraw|wire|ach/i.test(s)) return { icon: "🏦", category: "Financial" };
+  if (/receipt|order|shipped|delivered|tracking/i.test(s)) return { icon: "📦", category: "Shopping" };
+  if (/resume|cv|job|interview|application|offer letter/i.test(s)) return { icon: "📄", category: "Documents" };
+  if (/meeting|call|zoom|teams|webex/i.test(s)) return { icon: "📅", category: "Calendar" };
+  if (/update|weekly|digest|newsletter|report/i.test(s)) return { icon: "💼", category: "Updates" };
+  if (/calendar|event|invitation|rsvp/i.test(s)) return { icon: "📅", category: "Calendar" };
+  return { icon: "📧", category: "Email" };
+}
+
+let pendingEmailAlerts: Array<{ sender: string; subject: string; icon: string; category: string; timestamp: string }> = [];
+let emailBatchTimeout: ReturnType<typeof setTimeout> | null = null;
+
+function flushEmailBatch() {
+  if (pendingEmailAlerts.length === 0) return;
+  const emails = [...pendingEmailAlerts];
+  pendingEmailAlerts = [];
+  emailBatchTimeout = null;
+
+  if (emails.length === 1) {
+    const e = emails[0];
+    broadcastFn?.({
+      type: "alert",
+      alertType: "email",
+      title: `${e.icon} ${e.sender}`,
+      content: e.subject,
+      timestamp: e.timestamp,
+    });
+    return;
+  }
+
+  const grouped: Record<string, typeof emails> = {};
+  for (const e of emails) {
+    if (!grouped[e.category]) grouped[e.category] = [];
+    grouped[e.category].push(e);
+  }
+
+  const lines: string[] = [];
+  for (const [category, items] of Object.entries(grouped)) {
+    for (const item of items) {
+      lines.push(`${item.icon} ${item.subject} — ${item.sender}`);
+    }
+  }
+
+  broadcastFn?.({
+    type: "alert",
+    alertType: "email",
+    title: `New Emails (${emails.length})`,
+    content: lines.join("\n"),
+    timestamp: new Date().toISOString(),
+  });
+}
+
 async function doCheckAlerts() {
   const now = new Date();
 
@@ -467,12 +542,14 @@ async function doCheckAlerts() {
           const eventKey = line.trim().slice(0, 80);
           if (alertedCalendarEvents.has(eventKey)) continue;
           if (/^\d+\./.test(line.trim())) {
+            const eventContent = line.trim().replace(/^\d+\.\s*/, "");
+            if (isCalendarSystemEvent(eventContent)) continue;
             alertedCalendarEvents.add(eventKey);
             broadcastFn?.({
               type: "alert",
               alertType: "calendar",
               title: "Upcoming Event",
-              content: line.trim().replace(/^\d+\.\s*/, ""),
+              content: eventContent,
               timestamp: now.toISOString(),
             });
           }
@@ -557,6 +634,7 @@ async function doCheckAlerts() {
       const result = await gmail.listEmails("is:unread is:important", 5);
       if (!result.includes("No emails found") && !result.includes("not authorized")) {
         const idMatches = result.matchAll(/\[([a-f0-9]+)\]/gi);
+        let newEmailCount = 0;
         for (const match of idMatches) {
           const emailId = match[1];
           if (!alertedEmailIds.has(emailId)) {
@@ -569,15 +647,14 @@ async function doCheckAlerts() {
               const subjectMatch = block.match(/Subject:\s*(.+)/);
               const sender = fromMatch ? fromMatch[1].replace(/<[^>]+>/, "").trim() : "Unknown";
               const subject = subjectMatch ? subjectMatch[1].trim() : "No subject";
-              broadcastFn?.({
-                type: "alert",
-                alertType: "email",
-                title: sender,
-                content: subject,
-                timestamp: now.toISOString(),
-              });
+              const { icon, category } = categorizeEmail(subject, sender);
+              pendingEmailAlerts.push({ sender, subject, icon, category, timestamp: now.toISOString() });
+              newEmailCount++;
             }
           }
+        }
+        if (newEmailCount > 0 && !emailBatchTimeout) {
+          emailBatchTimeout = setTimeout(() => flushEmailBatch(), 5000);
         }
       }
     } catch (err) {
@@ -618,6 +695,11 @@ export function startAlertSystem(broadcast: BroadcastFn, saveBrief?: SaveBriefFn
 export function stopAlertSystem() {
   if (briefInterval) clearInterval(briefInterval);
   if (alertInterval) clearInterval(alertInterval);
+  if (emailBatchTimeout) {
+    clearTimeout(emailBatchTimeout);
+    emailBatchTimeout = null;
+    flushEmailBatch();
+  }
   broadcastFn = null;
 }
 

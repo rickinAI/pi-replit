@@ -72,6 +72,8 @@ export async function runSubAgent(opts: {
   allTools: ToolImpl[];
   apiKey: string;
   model?: string;
+  modelOverride?: string;
+  isAutomatedJob?: boolean;
   onProgress?: (info: { toolName: string; iteration: number }) => void;
 }): Promise<SubAgentResult> {
   if (!opts.apiKey) throw new Error("Anthropic API key is not configured — cannot run sub-agents");
@@ -80,7 +82,7 @@ export async function runSubAgent(opts: {
   if (!agent.enabled) throw new Error(`Agent "${opts.agentId}" is currently disabled`);
 
   const startTime = Date.now();
-  console.log(`[agent:${agent.id}] started — "${opts.task.slice(0, 80)}"`);
+  console.log(`[agent:${agent.id}] started — "${opts.task.slice(0, 80)}"${opts.isAutomatedJob ? " [automated]" : ""}`);
 
   const filteredTools = opts.allTools.filter(t => agent.tools.includes(t.name));
   console.log(`[agent:${agent.id}] tools: ${filteredTools.length} of ${opts.allTools.length} (${filteredTools.map(t => t.name).join(", ")})`);
@@ -88,10 +90,12 @@ export async function runSubAgent(opts: {
   const toolsUsed: string[] = [];
 
   const client = new Anthropic({ apiKey: opts.apiKey });
-  const modelId = agent.model === "default" ? (opts.model || "claude-sonnet-4-6") : agent.model;
+  const modelId = opts.modelOverride
+    ? opts.modelOverride
+    : agent.model === "default" ? (opts.model || "claude-sonnet-4-6") : agent.model;
 
   let systemPrompt = agent.systemPrompt;
-  if (hasVaultTools(agent.tools)) {
+  if (hasVaultTools(agent.tools) && !opts.isAutomatedJob) {
     try {
       const vaultSkills = await getVaultSkillsContext();
       if (vaultSkills) {
@@ -102,6 +106,14 @@ export async function runSubAgent(opts: {
       console.warn(`[agent:${agent.id}] failed to load vault skills: ${err.message}`);
     }
   }
+
+  if (opts.isAutomatedJob) {
+    systemPrompt += "\n\nReturn structured, concise output. No prose explanations.";
+  }
+
+  const cachedSystemPrompt = [
+    { type: "text" as const, text: systemPrompt, cache_control: { type: "ephemeral" as const } },
+  ];
 
   let userContent = opts.task;
   if (opts.context) userContent = `Context:\n${opts.context}\n\nTask:\n${opts.task}`;
@@ -156,7 +168,7 @@ export async function runSubAgent(opts: {
       const requestParams: any = {
         model: modelId,
         max_tokens: 16384,
-        system: systemPrompt,
+        system: cachedSystemPrompt,
         tools: anthropicTools,
         messages,
       };
@@ -176,7 +188,7 @@ export async function runSubAgent(opts: {
             apiResponse = await client.messages.create({
               model: modelId,
               max_tokens: 16384,
-              system: systemPrompt,
+              system: cachedSystemPrompt,
               tools: anthropicTools,
               messages,
             });
@@ -203,7 +215,7 @@ export async function runSubAgent(opts: {
           const retryParams: any = {
             model: modelId,
             max_tokens: 16384,
-            system: systemPrompt,
+            system: cachedSystemPrompt,
             tools: anthropicTools,
             messages,
           };
@@ -298,7 +310,7 @@ export async function runSubAgent(opts: {
       const summaryParams: any = {
         model: modelId,
         max_tokens: 4096,
-        system: systemPrompt,
+        system: cachedSystemPrompt,
         messages,
       };
       if (containerId) summaryParams.container_id = containerId;

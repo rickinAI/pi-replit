@@ -12292,8 +12292,8 @@ Process everything autonomously. Be thorough but efficient.`,
    - New entry signal appeared (votes crossed threshold)
    - RSI exit signal appeared (overbought/oversold)
 
-Keep this concise \u2014 it runs every 30 minutes. No thesis generation, no Nansen/X checks, just signal refresh.`,
-    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 30 },
+Keep this concise \u2014 it runs every 60 minutes. No thesis generation, no Nansen/X checks, just signal refresh.`,
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 60 },
     enabled: true
   },
   {
@@ -12336,8 +12336,8 @@ Output the full brief \u2014 the system will save it automatically. Do NOT use n
 For each consensus market:
 - Question, direction, whale count, avg score, current odds
 
-Keep this concise \u2014 it runs every 30 minutes. Only flag actionable consensus.`,
-    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 30 },
+Keep this concise \u2014 it runs every 60 minutes. Only flag actionable consensus.`,
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 60 },
     enabled: true
   },
   {
@@ -13836,15 +13836,15 @@ async function runSubAgent(opts) {
   if (!agent) throw new Error(`Agent "${opts.agentId}" not found. Use list_agents to see available agents.`);
   if (!agent.enabled) throw new Error(`Agent "${opts.agentId}" is currently disabled`);
   const startTime = Date.now();
-  console.log(`[agent:${agent.id}] started \u2014 "${opts.task.slice(0, 80)}"`);
+  console.log(`[agent:${agent.id}] started \u2014 "${opts.task.slice(0, 80)}"${opts.isAutomatedJob ? " [automated]" : ""}`);
   const filteredTools = opts.allTools.filter((t) => agent.tools.includes(t.name));
   console.log(`[agent:${agent.id}] tools: ${filteredTools.length} of ${opts.allTools.length} (${filteredTools.map((t) => t.name).join(", ")})`);
   const anthropicTools = convertToolsToAnthropicFormat(filteredTools);
   const toolsUsed = [];
   const client = new Anthropic3({ apiKey: opts.apiKey });
-  const modelId = agent.model === "default" ? opts.model || "claude-sonnet-4-6" : agent.model;
+  const modelId = opts.modelOverride ? opts.modelOverride : agent.model === "default" ? opts.model || "claude-sonnet-4-6" : agent.model;
   let systemPrompt = agent.systemPrompt;
-  if (hasVaultTools(agent.tools)) {
+  if (hasVaultTools(agent.tools) && !opts.isAutomatedJob) {
     try {
       const vaultSkills = await getVaultSkillsContext();
       if (vaultSkills) {
@@ -13855,6 +13855,12 @@ async function runSubAgent(opts) {
       console.warn(`[agent:${agent.id}] failed to load vault skills: ${err.message}`);
     }
   }
+  if (opts.isAutomatedJob) {
+    systemPrompt += "\n\nReturn structured, concise output. No prose explanations.";
+  }
+  const cachedSystemPrompt = [
+    { type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }
+  ];
   let userContent = opts.task;
   if (opts.context) userContent = `Context:
 ${opts.context}
@@ -13904,7 +13910,7 @@ ${opts.task}`;
       const requestParams = {
         model: modelId,
         max_tokens: 16384,
-        system: systemPrompt,
+        system: cachedSystemPrompt,
         tools: anthropicTools,
         messages
       };
@@ -13923,7 +13929,7 @@ ${opts.task}`;
             apiResponse = await client.messages.create({
               model: modelId,
               max_tokens: 16384,
-              system: systemPrompt,
+              system: cachedSystemPrompt,
               tools: anthropicTools,
               messages
             });
@@ -13949,7 +13955,7 @@ ${opts.task}`;
           const retryParams = {
             model: modelId,
             max_tokens: 16384,
-            system: systemPrompt,
+            system: cachedSystemPrompt,
             tools: anthropicTools,
             messages
           };
@@ -14032,7 +14038,7 @@ ${opts.task}`;
       const summaryParams = {
         model: modelId,
         max_tokens: 4096,
-        system: systemPrompt,
+        system: cachedSystemPrompt,
         messages
       };
       if (containerId) summaryParams.container_id = containerId;
@@ -22844,6 +22850,8 @@ Reconnect: /api/gmail/auth`).catch(() => {
                 task,
                 allTools: agentTools,
                 apiKey: ANTHROPIC_KEY,
+                modelOverride: "claude-haiku-4-5-20251001",
+                isAutomatedJob: true,
                 onProgress
               });
               return result;

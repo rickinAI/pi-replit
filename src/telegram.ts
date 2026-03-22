@@ -1793,6 +1793,44 @@ export function stop(): void {
   console.log("[telegram] stopped");
 }
 
+const DEDUP_WINDOW_MS = 2 * 60 * 60 * 1000;
+const notificationFingerprints = new Map<string, number>();
+
+function getNotificationFingerprint(event: { type: string; alertType?: string; title?: string; content: string }): string {
+  const key = `${event.type}:${event.alertType || ""}:${event.title || ""}:${event.content.slice(0, 100)}`;
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) {
+    hash = ((hash << 5) - hash + key.charCodeAt(i)) | 0;
+  }
+  return String(hash);
+}
+
+function isDuplicateNotification(fingerprint: string): boolean {
+  const now = Date.now();
+  const lastSent = notificationFingerprints.get(fingerprint);
+  if (lastSent && (now - lastSent) < DEDUP_WINDOW_MS) return true;
+  notificationFingerprints.set(fingerprint, now);
+  for (const [fp, ts] of notificationFingerprints) {
+    if (now - ts > DEDUP_WINDOW_MS) notificationFingerprints.delete(fp);
+  }
+  return false;
+}
+
+function getPriorityTag(alertType: string, content: string): { tag: string; priority: string } {
+  const c = content.toLowerCase();
+  if (alertType === "calendar") return { tag: "📅", priority: "FYI" };
+  if (alertType === "stock") return { tag: "📊", priority: c.includes("down") || c.includes("▼") ? "Action needed" : "FYI" };
+  if (alertType === "task") return { tag: "🔴", priority: "Action needed" };
+  if (alertType === "email") {
+    if (/flight|booking|confirmation|itinerary/i.test(c)) return { tag: "✈️", priority: "Travel" };
+    if (/card|amex|visa|billing|payment|statement|bank|invoice/i.test(c)) return { tag: "💰", priority: "Financial" };
+    if (/shipped|delivered|tracking|order/i.test(c)) return { tag: "📦", priority: "FYI" };
+    if (/urgent|asap|action required|action needed/i.test(c)) return { tag: "🔴", priority: "Action needed" };
+    return { tag: "📧", priority: "FYI" };
+  }
+  return { tag: "🔔", priority: "FYI" };
+}
+
 export async function forwardAlertToTelegram(event: { type: string; briefType?: string; alertType?: string; title?: string; content: string }): Promise<void> {
   const mode = await getMode();
 
@@ -1801,6 +1839,11 @@ export async function forwardAlertToTelegram(event: { type: string; briefType?: 
 
   if (event.type === "brief") {
     if (!isAlertsBotConfigured()) return;
+    const fingerprint = getNotificationFingerprint(event);
+    if (isDuplicateNotification(fingerprint)) {
+      console.log("[telegram] Suppressed duplicate brief notification");
+      return;
+    }
     const briefLabel = event.briefType ? event.briefType.charAt(0).toUpperCase() + event.briefType.slice(1) : "Daily";
     const truncated = event.content.length > 3500 ? event.content.slice(0, 3500) + "\n\n_(truncated)_" : event.content;
     await sendAlertsBotMessage(`${mode} 📋 *${briefLabel} Brief*\n\n${truncated}`);
@@ -1809,19 +1852,24 @@ export async function forwardAlertToTelegram(event: { type: string; briefType?: 
 
   if (event.type === "alert" && personalAlertTypes.has(event.alertType || "")) {
     if (!isAlertsBotConfigured()) return;
-    const icons: Record<string, string> = {
-      calendar: "📅",
-      stock: "📊",
-      task: "✅",
-      email: "📧",
-    };
-    const icon = icons[event.alertType || ""] || "🔔";
-    await sendAlertsBotMessage(`${mode} ${icon} *${event.title || "Alert"}*\n\n${event.content}`);
+    const fingerprint = getNotificationFingerprint(event);
+    if (isDuplicateNotification(fingerprint)) {
+      console.log(`[telegram] Suppressed duplicate ${event.alertType} notification: ${(event.title || "").slice(0, 50)}`);
+      return;
+    }
+    const { tag, priority } = getPriorityTag(event.alertType || "", event.content);
+    const priorityLabel = priority === "Action needed" ? "🔴 " : priority === "FYI" ? "🟡 " : "";
+    await sendAlertsBotMessage(`${mode} ${tag} *${event.title || "Alert"}*\n${priorityLabel}${priority}\n\n${event.content}`);
     return;
   }
 
   if (tradingEventTypes.has(event.type) || (event.type === "alert" && !personalAlertTypes.has(event.alertType || ""))) {
     if (!isConfigured()) return;
+    const fingerprint = getNotificationFingerprint(event);
+    if (isDuplicateNotification(fingerprint)) {
+      console.log(`[telegram] Suppressed duplicate trading notification: ${(event.title || "").slice(0, 50)}`);
+      return;
+    }
     const tradingIcons: Record<string, string> = {
       scout: "🔍",
       bankr: "💰",

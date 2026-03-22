@@ -784,8 +784,8 @@ Process everything autonomously. Be thorough but efficient.`,
    - New entry signal appeared (votes crossed threshold)
    - RSI exit signal appeared (overbought/oversold)
 
-Keep this concise — it runs every 30 minutes. No thesis generation, no Nansen/X checks, just signal refresh.`,
-    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 30 },
+Keep this concise — it runs every 60 minutes. No thesis generation, no Nansen/X checks, just signal refresh.`,
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 60 },
     enabled: true,
   },
   {
@@ -828,8 +828,8 @@ Output the full brief — the system will save it automatically. Do NOT use note
 For each consensus market:
 - Question, direction, whale count, avg score, current odds
 
-Keep this concise — it runs every 30 minutes. Only flag actionable consensus.`,
-    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 30 },
+Keep this concise — it runs every 60 minutes. Only flag actionable consensus.`,
+    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 60 },
     enabled: true,
   },
   {

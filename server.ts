@@ -8152,6 +8152,8 @@ async function startServer(maxRetries = 5) {
                 task,
                 allTools: agentTools as any,
                 apiKey: ANTHROPIC_KEY,
+                modelOverride: "claude-haiku-4-5-20251001",
+                isAutomatedJob: true,
                 onProgress,
               });
               return result;
