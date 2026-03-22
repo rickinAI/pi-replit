@@ -6904,7 +6904,7 @@ app.post("/api/session/:id/cancel", async (req: Request, res: Response) => {
   }
 
   if (entry.currentAgentText) {
-    conversations.addMessage(entry.conversation, "assistant", entry.currentAgentText + "\n\n*[Response stopped]*");
+    conversations.addMessage(entry.conversation, "agent", entry.currentAgentText + "\n\n*[Response stopped]*");
     conversations.save(entry.conversation).catch(() => {});
   }
 

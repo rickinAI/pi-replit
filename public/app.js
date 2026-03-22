@@ -2120,13 +2120,7 @@ async function stopAgent() {
   if (!sessionId || cancelInFlight) return;
   cancelInFlight = true;
   try {
-    const res = await fetch(`/api/session/${sessionId}/cancel`, { method: "POST" });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.wasRunning) {
-        showSystemMsg("\u23f9 Response stopped");
-      }
-    }
+    await fetch(`/api/session/${sessionId}/cancel`, { method: "POST" });
   } catch (err) {
     console.error("[cancel] error:", err);
   } finally {
