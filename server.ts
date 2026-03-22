@@ -8228,6 +8228,23 @@ async function runStartupRecovery() {
 }
 
 async function sendStartupNotification(googleStatus: { connected: boolean; email?: string; error?: string }) {
+  const DEBOUNCE_MINUTES = 30;
+  try {
+    const pool = (await import("./src/db.js")).getPool();
+    const result = await pool.query(
+      `SELECT value FROM app_config WHERE key = 'last_startup_notification'`
+    );
+    if (result.rows.length > 0) {
+      const lastSent = Number(result.rows[0].value);
+      if (Number.isFinite(lastSent) && lastSent > 0 && Date.now() - lastSent < DEBOUNCE_MINUTES * 60 * 1000) {
+        console.log(`[boot] Startup notification skipped (last sent ${Math.round((Date.now() - lastSent) / 60000)}m ago, debounce ${DEBOUNCE_MINUTES}m)`);
+        return;
+      }
+    }
+  } catch (err) {
+    console.error("[boot] Startup notification debounce check failed:", err instanceof Error ? err.message : err);
+  }
+
   const jobs = scheduledJobs.getJobs();
   const enabledJobs = jobs.filter(j => j.enabled).length;
   const bnkrStatus = bnkr.isConfigured() ? "Live" : "Shadow";
@@ -8244,6 +8261,17 @@ async function sendStartupNotification(googleStatus: { connected: boolean; email
   ].join("\n");
 
   await telegram.sendMessage(msg);
+
+  try {
+    const pool = (await import("./src/db.js")).getPool();
+    await pool.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('last_startup_notification', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = $2`,
+      [JSON.stringify(Date.now()), Date.now()]
+    );
+  } catch (err) {
+    console.error("[boot] Failed to persist startup notification timestamp:", err instanceof Error ? err.message : err);
+  }
 }
 
 async function startServer(maxRetries = 5) {
