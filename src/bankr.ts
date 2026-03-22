@@ -209,8 +209,9 @@ export function determineApprovalTier(params: {
   isFirstForAsset: boolean;
   leverageIncrease: boolean;
   drawdownThreshold?: number;
+  mode?: string;
 }): ApprovalTier {
-  if (mode === "SHADOW") return "autonomous";
+  if (params.mode === "SHADOW") return "autonomous";
   const ddThresh = params.drawdownThreshold ?? -25;
   if (
     params.capitalPct > 30 ||
@@ -398,6 +399,7 @@ export async function runPreExecutionChecks(params: {
     isFirstForAsset: mode === "SHADOW" ? false : firstForAsset,
     leverageIncrease: false,
     drawdownThreshold: rc.circuit_breaker_drawdown_pct,
+    mode,
   });
   checks.push({ name: "approval_tier", passed: true, detail: `Tier: ${tier} (capital: ${capitalPct.toFixed(1)}%, losses: ${consecutiveLosses}, drawdown: ${drawdownPct.toFixed(1)}%, first: ${firstForAsset})` });
 

@@ -5174,7 +5174,27 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
     mode: summary.mode,
     paused: summary.paused,
     kill_switch: summary.kill_switch,
-    positions: summary.positions,
+    positions: (() => {
+      const bankrPositions = summary.positions || [];
+      const openShadows = (shadowPerf.trades || []).filter((t: any) => t.status === "open" && !bankrPositions.some((p: any) => p.thesis_id === t.thesis_id));
+      const shadowAsPositions = openShadows.map((t: any) => ({
+        id: t.id || t.thesis_id,
+        thesis_id: t.thesis_id,
+        asset: t.asset,
+        asset_class: t.asset_class || "crypto",
+        direction: t.direction,
+        leverage: "1x",
+        entry_price: t.entry_price,
+        current_price: t.current_price || t.entry_price,
+        atr_stop_price: t.stop_price || 0,
+        size: t.size || 0,
+        source: t.source || "shadow",
+        opened_at: t.opened_at || t.created_at,
+        is_shadow: true,
+      }));
+      const all = [...bankrPositions, ...shadowAsPositions];
+      return all.filter((p: any) => (p.size || 0) > 0.0001);
+    })(),
     recent_trades: recentTrades,
     crypto_theses: cryptoTheses.slice(0, 10).map((t: any) => ({
       id: t.id, asset: t.asset, direction: t.direction, confidence: t.confidence,

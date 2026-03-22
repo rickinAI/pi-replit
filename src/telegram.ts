@@ -1089,25 +1089,25 @@ export async function sendTradeAlert(params: {
   };
   const icon = icons[params.type] || "📊";
 
-  const lines = [`${mode} ${icon} *Trade ${params.type.toUpperCase()}*`, ""];
-  lines.push(`*Asset:* ${params.asset}`);
-  if (params.direction) lines.push(`*Direction:* ${params.direction}`);
-  if (params.leverage) lines.push(`*Leverage:* ${params.leverage}`);
-  if (params.entryPrice) lines.push(`*Entry:* $${params.entryPrice}`);
-  if (params.exitPrice) lines.push(`*Exit:* $${params.exitPrice}`);
+  const lines = [`${mode} ${icon} Trade ${params.type.toUpperCase()}`, ""];
+  lines.push(`Asset: ${params.asset}`);
+  if (params.direction) lines.push(`Direction: ${params.direction}`);
+  if (params.leverage) lines.push(`Leverage: ${params.leverage}`);
+  if (params.entryPrice) lines.push(`Entry: $${params.entryPrice}`);
+  if (params.exitPrice) lines.push(`Exit: $${params.exitPrice}`);
   if (params.pnl != null) {
     const pnlStr = params.pnl >= 0 ? `+$${params.pnl.toFixed(2)}` : `-$${Math.abs(params.pnl).toFixed(2)}`;
-    lines.push(`*P&L:* ${pnlStr}`);
+    lines.push(`PnL: ${pnlStr}`);
   }
   if (params.pnlPct != null) {
     const sign = params.pnlPct >= 0 ? "+" : "";
-    lines.push(`*Return:* ${sign}${params.pnlPct.toFixed(2)}%`);
+    lines.push(`Return: ${sign}${params.pnlPct.toFixed(2)}%`);
   } else if (params.pnl != null && params.entryPrice) {
     const entry = parseFloat(params.entryPrice);
     if (entry > 0) {
       const pct = (params.pnl / entry) * 100;
       const sign = pct >= 0 ? "+" : "";
-      lines.push(`*Return:* ${sign}${pct.toFixed(2)}%`);
+      lines.push(`Return: ${sign}${pct.toFixed(2)}%`);
     }
   }
   if (params.openedAt && params.closedAt) {
@@ -1117,12 +1117,12 @@ export async function sendTradeAlert(params: {
       const holdMs = closeMs - openMs;
       const holdH = Math.floor(holdMs / 3600000);
       const holdM = Math.floor((holdMs % 3600000) / 60000);
-      lines.push(`*Hold:* ${holdH}h ${holdM}m`);
+      lines.push(`Hold: ${holdH}h ${holdM}m`);
     }
   }
-  if (params.reason) lines.push(`*Reason:* ${params.reason}`);
+  if (params.reason) lines.push(`Reason: ${params.reason}`);
 
-  await sendMessage(lines.join("\n"));
+  await sendMessage(lines.join("\n"), "");
 }
 
 export async function sendScoutBrief(brief: string, chartUrls?: string[]): Promise<void> {

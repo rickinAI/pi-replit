@@ -204,20 +204,6 @@
   .health-name { font-size:0.46rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.3px; font-weight:700; }
   .health-val { font-size:0.52rem; color:var(--text-secondary); margin-top:0.05rem; }
 
-  .shadow-item { padding:0.4rem 0.75rem; border-bottom:1px solid var(--border); }
-  .shadow-item:last-child { border-bottom:none; }
-  .shadow-top { display:flex; align-items:center; justify-content:space-between; }
-  .shadow-asset { font-size:0.68rem; font-weight:600; color:var(--text); display:flex; align-items:center; gap:0.25rem; }
-  .shadow-status { font-size:0.46rem; font-weight:700; padding:1px 5px; border-radius:4px; }
-  .shadow-status.open { background:var(--cyan-dim); color:var(--cyan); }
-  .shadow-status.closed { background:var(--purple-dim); color:var(--purple); }
-  .shadow-status.win { background:var(--green-dim); color:var(--green); }
-  .shadow-status.loss { background:var(--red-dim); color:var(--red); }
-  .shadow-meta { font-size:0.5rem; color:var(--text-muted); margin-top:0.1rem; }
-  .shadow-pnl-row { display:flex; align-items:center; gap:0.4rem; margin-top:0.1rem; }
-  .shadow-pnl-val { font-size:0.62rem; font-weight:700; }
-  .shadow-pnl-pct { font-size:0.5rem; font-weight:600; }
-  .shadow-prices { font-size:0.48rem; color:var(--text-muted); display:flex; gap:0.4rem; flex-wrap:wrap; margin-top:0.1rem; }
 
   .fng-gauge { display:flex; align-items:center; gap:0.5rem; margin-top:0.3rem; padding:0.4rem 0; }
   .fng-bar { flex:1; height:6px; border-radius:3px; background:linear-gradient(90deg,#ef4444,#f59e0b,#10b981); position:relative; }
@@ -494,17 +480,6 @@
       </div>
     </div>
 
-    <!-- SHADOW TRADES -->
-    <div class="section" id="shadowSection">
-      <div class="sec-hdr" data-section="shadow">
-        <div class="sec-hdr-left"><div class="sec-title">Shadow Trades</div><span class="sec-chev">&#9662;</span></div>
-        <div class="sec-badge" id="shadowCount">0</div>
-      </div>
-      <div class="sec-body" id="shadowBody">
-        <div class="card flush" id="shadowCard"><div class="empty">No shadow trades</div></div>
-      </div>
-    </div>
-
     <!-- RECENT TRADES -->
     <div class="section" id="tradesSection">
       <div class="sec-hdr" data-section="trades">
@@ -703,7 +678,6 @@ function render(data){
   renderCryptoTheses(data.crypto_theses||[]);
   renderPolyTheses(data.polymarket_theses||[]);
   renderScout(data.scout);
-  renderShadow(data.shadow);
   renderTrades(data.recent_trades||[]);
   renderActivity(data.agent_activity||[]);
   renderResearch(data.autoresearch);
@@ -760,6 +734,7 @@ function renderPositions(pos){
     var pnl=pd*(p.size||0);var pp=p.entry_price>0?(pd/p.entry_price*100):0;
     var pc=pnl>=0?'green':'red';
     h+='<div class="pos-item"><div class="pos-top"><span class="pos-asset">'+esc(p.asset)+' <span class="pill '+dc+'">'+dir+'</span>';
+    if(p.is_shadow)h+='<span class="pill" style="background:var(--purple-dim);color:var(--purple);font-size:0.4rem">SHADOW</span>';
     if(p.source)h+='<span class="pill source">'+esc(p.source)+'</span>';
     h+='</span><span class="pos-pnl '+pc+'">'+(pnl>=0?'+':'')+fmt$(pnl)+' ('+fmtPct(pp)+')</span></div>';
     h+='<div class="pos-meta"><span>Entry: <strong>'+fmt$(p.entry_price)+'</strong></span><span>Now: <strong>'+fmt$(p.current_price)+'</strong></span>';
@@ -887,47 +862,6 @@ function renderScout(s){
     if(s.pm_last_run)h+='<div class="scout-time">Last scan: '+timeAgo(s.pm_last_run)+'</div>';
   }
   h+='</div>';
-  el.innerHTML=h;
-}
-
-function renderShadow(sh){
-  var el=document.getElementById('shadowCard');
-  document.getElementById('shadowCount').textContent=sh?sh.total_trades:0;
-  if(!sh||!sh.total_trades){el.innerHTML='<div class="empty">No shadow trades</div>';return;}
-  var h='<div style="padding:0.5rem 0.75rem;display:grid;grid-template-columns:repeat(3,1fr) repeat(2,1fr);gap:0.3rem;border-bottom:1px solid var(--border)">';
-  h+='<div><div class="kpi-label">Total</div><div style="font-size:0.75rem;font-weight:700;color:#fff">'+sh.total_trades+'</div></div>';
-  h+='<div><div class="kpi-label">Open</div><div style="font-size:0.75rem;font-weight:700;color:var(--cyan)">'+sh.open_trades+'</div></div>';
-  var spc=sh.total_pnl>=0?'green':'red';
-  h+='<div><div class="kpi-label">P&amp;L</div><div style="font-size:0.75rem;font-weight:700" class="'+spc+'">'+(sh.total_pnl>=0?'+':'')+fmt$(sh.total_pnl)+'</div></div>';
-  h+='<div><div class="kpi-label">Win Rate</div><div style="font-size:0.75rem;font-weight:700;color:#fff">'+(sh.win_rate||0).toFixed(0)+'%</div></div>';
-  var bestC=sh.best_trade>=0?'green':'red';var worstC=sh.worst_trade>=0?'green':'red';
-  h+='<div><div class="kpi-label">Best/Worst</div><div style="font-size:0.6rem;font-weight:700"><span class="'+bestC+'">'+(sh.best_trade>=0?'+':'')+fmt$(sh.best_trade||0)+'</span>';
-  h+=' <span style="color:var(--text-muted)">/</span> <span class="'+worstC+'">'+fmt$(sh.worst_trade||0)+'</span></div></div>';
-  h+='</div>';
-  if(sh.trades&&sh.trades.length){
-    sh.trades.forEach(function(t){
-      var dir=(t.direction||'').toUpperCase();
-      var isOpen=t.status==='open';
-      var pnl=t.hypothetical_pnl||t.pnl||0;
-      var pnlPct=t.entry_price>0?(Math.abs(pnl)/t.entry_price*100):0;
-      var pc=pnl>=0?'green':'red';
-      h+='<div class="shadow-item"><div class="shadow-top"><span class="shadow-asset">'+esc(t.asset)+' <span class="pill '+(dir==='LONG'||dir==='YES'?'long':'short')+'">'+dir+'</span>';
-      if(isOpen){h+=' <span class="shadow-status open">OPEN</span>';}
-      else{h+=' <span class="shadow-status '+(pnl>=0?'win':'loss')+'">'+(pnl>=0?'WIN':'LOSS')+'</span>';}
-      h+='</span>';
-      h+='<span class="shadow-pnl-val '+pc+'">'+(pnl>=0?'+':'')+fmt$(pnl)+' <span class="shadow-pnl-pct">('+pnlPct.toFixed(1)+'%)</span></span>';
-      h+='</div>';
-      h+='<div class="shadow-prices">';
-      h+='<span>Entry: '+fmt$(t.entry_price)+'</span>';
-      if(isOpen&&t.current_price)h+='<span>Now: '+fmt$(t.current_price)+'</span>';
-      if(!isOpen&&t.exit_price)h+='<span>Exit: '+fmt$(t.exit_price)+'</span>';
-      if(t.stop_price)h+='<span>Stop: '+fmt$(t.stop_price)+'</span>';
-      if(t.target_price)h+='<span>TP: '+fmt$(t.target_price)+'</span>';
-      h+='<span>'+esc(t.source||'')+'</span>';
-      h+='<span>'+timeAgo(t.opened_at)+'</span>';
-      h+='</div></div>';
-    });
-  }
   el.innerHTML=h;
 }
 
