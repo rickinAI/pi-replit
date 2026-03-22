@@ -4265,7 +4265,7 @@ async function authMiddleware(req: Request, res: Response, next: NextFunction) {
   if (req.path === "/api/gmail/auth") { next(); return; }
   if (req.path === "/api/telegram/webhook") { next(); return; }
 
-  if (req.path === "/pages/wealth-engines" || req.path === "/api/wealth-engines/data") {
+  if (req.path === "/pages/wealth-engines" || req.path === "/pages/wealth-engines-pnl" || req.path === "/api/wealth-engines/data" || req.path === "/api/wealth-engines/pnl-data") {
     try {
       const dbMod = await import("./src/db.js");
       const pool = dbMod.getPool();
@@ -4908,7 +4908,7 @@ let weDashboardCache: { data: any; ts: number } | null = null;
 const WE_DASHBOARD_TTL = 30_000;
 
 async function buildWealthEnginesDashboardData(): Promise<any> {
-  const [summary, tradeHistory, pmTheses, cryptoTheses, oversightData, shadowPerf, researchStatus, fearGreed] = await Promise.all([
+  const [summary, tradeHistory, pmTheses, cryptoTheses, oversightData, shadowPerf, researchStatus, fearGreed, taxSummary] = await Promise.all([
     bankr.getPortfolioSummary(),
     bankr.getTradeHistory(),
     polymarketScout.getActiveTheses().catch(() => []),
@@ -4917,6 +4917,7 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
     oversight.getShadowPerformance().catch(() => ({ total_trades: 0, open_trades: 0, closed_trades: 0, total_pnl: 0, win_rate: 0, avg_pnl: 0, trades: [] })),
     autoresearch.getResearchStatus().catch(() => null),
     signalSources.getFearGreedIndex().catch(() => null),
+    bankr.getTaxSummary().catch(() => null),
   ]);
 
   const recentTrades = tradeHistory.slice(-20).reverse();
@@ -5067,6 +5068,7 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
         }));
       } catch { return []; }
     })(),
+    tax_summary: taxSummary,
     agent_activity: agentActivity,
     health: {
       kill_switch: summary.kill_switch,
@@ -5101,6 +5103,68 @@ app.get("/api/wealth-engines/data", async (req: Request, res: Response) => {
 });
 
 const WE_CONTROL_USERS = new Set(["rickin", "darknode"]);
+
+let wePnlCache: { data: any; ts: number } | null = null;
+const WE_PNL_TTL = 30_000;
+
+async function buildPnlDashboardData(): Promise<any> {
+  const [summary, tradeHistory, taxSummary] = await Promise.all([
+    bankr.getPortfolioSummary(),
+    bankr.getTradeHistory(),
+    bankr.getTaxSummary(),
+  ]);
+
+  const totalRealizedPnl = tradeHistory.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
+  const now = Date.now();
+  const now24h = now - 24 * 60 * 60_000;
+  const now7d = now - 7 * 24 * 60 * 60_000;
+  const dailyTrades = tradeHistory.filter((t: any) => new Date(t.closed_at).getTime() > now24h);
+  const weeklyTrades = tradeHistory.filter((t: any) => new Date(t.closed_at).getTime() > now7d);
+  const dailyPnl = dailyTrades.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
+  const weeklyPnl = weeklyTrades.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
+  const totalWins = tradeHistory.filter((t: any) => (t.pnl || 0) > 0).length;
+  const winRate = tradeHistory.length > 0 ? (totalWins / tradeHistory.length * 100) : 0;
+
+  return {
+    timestamp: new Date().toISOString(),
+    portfolio_value: summary.portfolio_value,
+    peak_portfolio_value: summary.peak_portfolio_value,
+    peak_drawdown_pct: summary.peak_drawdown_pct,
+    total_realized_pnl: totalRealizedPnl,
+    daily_pnl: parseFloat(dailyPnl.toFixed(4)),
+    weekly_pnl: parseFloat(weeklyPnl.toFixed(4)),
+    initial_capital: summary.initial_capital || 1000,
+    total_trades: tradeHistory.length,
+    win_rate: parseFloat(winRate.toFixed(1)),
+    all_trades: tradeHistory.map((t: any) => ({
+      id: t.id, asset: t.asset, asset_class: t.asset_class, source: t.source,
+      direction: t.direction, leverage: t.leverage,
+      entry_price: t.entry_price, exit_price: t.exit_price,
+      size: t.size, pnl: t.pnl, pnl_pct: t.pnl_pct, fees: t.fees,
+      opened_at: t.opened_at, closed_at: t.closed_at,
+      close_reason: t.close_reason,
+      tax_lot: t.tax_lot,
+    })),
+    recent_trades: tradeHistory.slice(-20).reverse(),
+    tax_summary: taxSummary,
+  };
+}
+
+app.get("/api/wealth-engines/pnl-data", async (req: Request, res: Response) => {
+  try {
+    const forceRefresh = req.query.force === "1";
+    if (!forceRefresh && wePnlCache && Date.now() - wePnlCache.ts < WE_PNL_TTL) {
+      res.json(wePnlCache.data);
+      return;
+    }
+    const data = await buildPnlDashboardData();
+    wePnlCache = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err: any) {
+    console.error("[wealth-engines] pnl data error:", err);
+    res.status(500).json({ error: "Failed to fetch P&L data" });
+  }
+});
 
 app.post("/api/wealth-engines/pause", async (req: Request, res: Response) => {
   if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -6106,6 +6170,22 @@ app.get("/pages/:slug", async (req: Request, res: Response) => {
       return;
     } catch (err) {
       console.error("[wealth-engines] SSR error:", err);
+    }
+  }
+
+  if (slug === "wealth-engines-pnl") {
+    try {
+      let html = fs.readFileSync(filePath, "utf-8");
+      const data = await buildPnlDashboardData();
+      const safeJson = JSON.stringify(data).replace(/<\//g, "<\\/");
+      html = html.replace(
+        "var SSR_DATA = null;",
+        `var SSR_DATA = ${safeJson};`
+      );
+      res.type("html").send(html);
+      return;
+    } catch (err) {
+      console.error("[wealth-engines-pnl] SSR error:", err);
     }
   }
 

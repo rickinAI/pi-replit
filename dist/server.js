@@ -6007,8 +6007,10 @@ async function getTaxSummary() {
   const year = (/* @__PURE__ */ new Date()).getFullYear();
   const yearStart = new Date(year, 0, 1).getTime();
   const yearTrades = history.filter((t) => new Date(t.closed_at).getTime() >= yearStart);
-  let gains = 0;
-  let losses = 0;
+  let stGains = 0;
+  let stLosses = 0;
+  let ltGains = 0;
+  let ltLosses = 0;
   let washSaleAdj = 0;
   const quarterly = {};
   for (const t of yearTrades) {
@@ -6016,26 +6018,39 @@ async function getTaxSummary() {
     if (!quarterly[q]) quarterly[q] = { trades: 0, pnl: 0 };
     quarterly[q].trades++;
     quarterly[q].pnl += t.pnl;
-    if (t.pnl >= 0) gains += t.pnl;
-    else losses += t.pnl;
-    if (t.tax_lot.wash_sale_flagged) {
+    const isLongTerm = t.tax_lot?.holding_period === "long";
+    if (t.pnl >= 0) {
+      if (isLongTerm) ltGains += t.pnl;
+      else stGains += t.pnl;
+    } else {
+      if (isLongTerm) ltLosses += t.pnl;
+      else stLosses += t.pnl;
+    }
+    if (t.tax_lot?.wash_sale_flagged) {
       washSaleAdj += t.tax_lot.wash_sale_disallowed;
     }
   }
-  const netTaxable = gains + losses + washSaleAdj;
-  const federalRate = 0.24;
+  const totalGains = stGains + ltGains;
+  const totalLosses = stLosses + ltLosses;
+  const netTaxable = totalGains + totalLosses + washSaleAdj;
+  const stFederalRate = 0.24;
+  const ltFederalRate = 0.15;
   const nyRate = 0.0685;
+  const estFederal = Math.max(0, stGains + stLosses) * stFederalRate + Math.max(0, ltGains + ltLosses) * ltFederalRate;
+  const estNY = Math.max(0, netTaxable) * nyRate;
   return {
     year,
     total_trades: yearTrades.length,
-    realized_pnl: parseFloat((gains + losses).toFixed(2)),
-    short_term_gains: parseFloat(gains.toFixed(2)),
-    short_term_losses: parseFloat(losses.toFixed(2)),
+    realized_pnl: parseFloat((totalGains + totalLosses).toFixed(2)),
+    short_term_gains: parseFloat(stGains.toFixed(2)),
+    short_term_losses: parseFloat(stLosses.toFixed(2)),
+    long_term_gains: parseFloat(ltGains.toFixed(2)),
+    long_term_losses: parseFloat(ltLosses.toFixed(2)),
     wash_sale_adjustments: parseFloat(washSaleAdj.toFixed(2)),
     net_taxable: parseFloat(netTaxable.toFixed(2)),
-    estimated_federal_tax: parseFloat((Math.max(0, netTaxable) * federalRate).toFixed(2)),
-    estimated_ny_tax: parseFloat((Math.max(0, netTaxable) * nyRate).toFixed(2)),
-    total_estimated_tax: parseFloat((Math.max(0, netTaxable) * (federalRate + nyRate)).toFixed(2)),
+    estimated_federal_tax: parseFloat(estFederal.toFixed(2)),
+    estimated_ny_tax: parseFloat(estNY.toFixed(2)),
+    total_estimated_tax: parseFloat((estFederal + estNY).toFixed(2)),
     quarterly
   };
 }
@@ -18687,7 +18702,7 @@ async function authMiddleware(req, res, next) {
     next();
     return;
   }
-  if (req.path === "/pages/wealth-engines" || req.path === "/api/wealth-engines/data") {
+  if (req.path === "/pages/wealth-engines" || req.path === "/pages/wealth-engines-pnl" || req.path === "/api/wealth-engines/data" || req.path === "/api/wealth-engines/pnl-data") {
     try {
       const dbMod = await Promise.resolve().then(() => (init_db(), db_exports));
       const pool2 = dbMod.getPool();
@@ -19332,7 +19347,7 @@ app.get("/api/wealth-engines/oversight", async (_req, res) => {
 var weDashboardCache = null;
 var WE_DASHBOARD_TTL = 3e4;
 async function buildWealthEnginesDashboardData() {
-  const [summary, tradeHistory, pmTheses, cryptoTheses, oversightData, shadowPerf, researchStatus, fearGreed] = await Promise.all([
+  const [summary, tradeHistory, pmTheses, cryptoTheses, oversightData, shadowPerf, researchStatus, fearGreed, taxSummary] = await Promise.all([
     getPortfolioSummary(),
     getTradeHistory(),
     getActiveTheses2().catch(() => []),
@@ -19340,7 +19355,8 @@ async function buildWealthEnginesDashboardData() {
     getOversightSummary().catch(() => null),
     getShadowPerformance().catch(() => ({ total_trades: 0, open_trades: 0, closed_trades: 0, total_pnl: 0, win_rate: 0, avg_pnl: 0, trades: [] })),
     getResearchStatus().catch(() => null),
-    getFearGreedIndex().catch(() => null)
+    getFearGreedIndex().catch(() => null),
+    getTaxSummary().catch(() => null)
   ]);
   const recentTrades = tradeHistory.slice(-20).reverse();
   const totalRealizedPnl = tradeHistory.reduce((sum, t) => sum + (t.pnl || 0), 0);
@@ -19508,6 +19524,7 @@ async function buildWealthEnginesDashboardData() {
         return [];
       }
     })(),
+    tax_summary: taxSummary,
     agent_activity: agentActivity,
     health: {
       kill_switch: summary.kill_switch,
@@ -19540,6 +19557,72 @@ app.get("/api/wealth-engines/data", async (req, res) => {
   }
 });
 var WE_CONTROL_USERS = /* @__PURE__ */ new Set(["rickin", "darknode"]);
+var wePnlCache = null;
+var WE_PNL_TTL = 3e4;
+async function buildPnlDashboardData() {
+  const [summary, tradeHistory, taxSummary] = await Promise.all([
+    getPortfolioSummary(),
+    getTradeHistory(),
+    getTaxSummary()
+  ]);
+  const totalRealizedPnl = tradeHistory.reduce((sum, t) => sum + (t.pnl || 0), 0);
+  const now = Date.now();
+  const now24h = now - 24 * 60 * 6e4;
+  const now7d = now - 7 * 24 * 60 * 6e4;
+  const dailyTrades = tradeHistory.filter((t) => new Date(t.closed_at).getTime() > now24h);
+  const weeklyTrades = tradeHistory.filter((t) => new Date(t.closed_at).getTime() > now7d);
+  const dailyPnl = dailyTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
+  const weeklyPnl = weeklyTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
+  const totalWins = tradeHistory.filter((t) => (t.pnl || 0) > 0).length;
+  const winRate = tradeHistory.length > 0 ? totalWins / tradeHistory.length * 100 : 0;
+  return {
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    portfolio_value: summary.portfolio_value,
+    peak_portfolio_value: summary.peak_portfolio_value,
+    peak_drawdown_pct: summary.peak_drawdown_pct,
+    total_realized_pnl: totalRealizedPnl,
+    daily_pnl: parseFloat(dailyPnl.toFixed(4)),
+    weekly_pnl: parseFloat(weeklyPnl.toFixed(4)),
+    initial_capital: summary.initial_capital || 1e3,
+    total_trades: tradeHistory.length,
+    win_rate: parseFloat(winRate.toFixed(1)),
+    all_trades: tradeHistory.map((t) => ({
+      id: t.id,
+      asset: t.asset,
+      asset_class: t.asset_class,
+      source: t.source,
+      direction: t.direction,
+      leverage: t.leverage,
+      entry_price: t.entry_price,
+      exit_price: t.exit_price,
+      size: t.size,
+      pnl: t.pnl,
+      pnl_pct: t.pnl_pct,
+      fees: t.fees,
+      opened_at: t.opened_at,
+      closed_at: t.closed_at,
+      close_reason: t.close_reason,
+      tax_lot: t.tax_lot
+    })),
+    recent_trades: tradeHistory.slice(-20).reverse(),
+    tax_summary: taxSummary
+  };
+}
+app.get("/api/wealth-engines/pnl-data", async (req, res) => {
+  try {
+    const forceRefresh = req.query.force === "1";
+    if (!forceRefresh && wePnlCache && Date.now() - wePnlCache.ts < WE_PNL_TTL) {
+      res.json(wePnlCache.data);
+      return;
+    }
+    const data = await buildPnlDashboardData();
+    wePnlCache = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    console.error("[wealth-engines] pnl data error:", err);
+    res.status(500).json({ error: "Failed to fetch P&L data" });
+  }
+});
 app.post("/api/wealth-engines/pause", async (req, res) => {
   if (!WE_CONTROL_USERS.has(req.user)) {
     res.status(403).json({ error: "Forbidden" });
@@ -20589,6 +20672,21 @@ app.get("/pages/:slug", async (req, res) => {
       return;
     } catch (err) {
       console.error("[wealth-engines] SSR error:", err);
+    }
+  }
+  if (slug === "wealth-engines-pnl") {
+    try {
+      let html = fs6.readFileSync(filePath, "utf-8");
+      const data = await buildPnlDashboardData();
+      const safeJson = JSON.stringify(data).replace(/<\//g, "<\\/");
+      html = html.replace(
+        "var SSR_DATA = null;",
+        `var SSR_DATA = ${safeJson};`
+      );
+      res.type("html").send(html);
+      return;
+    } catch (err) {
+      console.error("[wealth-engines-pnl] SSR error:", err);
     }
   }
   if (slug === "baby-dashboard" && isTokenAuth && isConnected()) {

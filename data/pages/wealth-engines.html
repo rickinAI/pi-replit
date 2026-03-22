@@ -346,6 +346,37 @@
       </div>
     </div>
 
+    <!-- P&L & TAX SUMMARY -->
+    <div class="section" id="pnlSection">
+      <div class="sec-hdr" data-section="pnl">
+        <div class="sec-hdr-left"><div class="sec-title">P&L & Tax</div><span class="sec-chev">&#9662;</span></div>
+        <a href="/pages/wealth-engines-pnl" style="font-size:0.48rem;color:var(--accent);font-weight:600;text-decoration:none;letter-spacing:0.3px">FULL VIEW →</a>
+      </div>
+      <div class="sec-body" id="pnlBody">
+        <div class="card" id="pnlSummaryCard">
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.5rem">
+            <div>
+              <div class="kpi-label">Realized P&L</div>
+              <div class="kpi-val sm" id="pnlRealized">$0.00</div>
+            </div>
+            <div>
+              <div class="kpi-label">YTD Tax</div>
+              <div class="kpi-val sm amber" id="pnlEstTax">$0.00</div>
+            </div>
+            <div>
+              <div class="kpi-label">Net After Tax</div>
+              <div class="kpi-val sm" id="pnlNetAfterTax">$0.00</div>
+            </div>
+          </div>
+          <div style="margin-top:0.4rem;display:flex;gap:0.75rem;font-size:0.5rem;color:var(--text-muted)">
+            <span>ST Gains: <strong id="pnlSTGains" style="color:var(--text)">$0</strong></span>
+            <span>ST Losses: <strong id="pnlSTLosses" style="color:var(--text)">$0</strong></span>
+            <span id="pnlWashSaleRow" style="display:none">Wash: <strong id="pnlWashSales" style="color:var(--amber)">$0</strong></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- RISK DASHBOARD -->
     <div class="section" id="riskSection">
       <div class="sec-hdr" data-section="risk">
@@ -372,7 +403,7 @@
             </div>
             <div>
               <div class="kpi-label">Leverage Cap</div>
-              <div class="kpi-val sm">2x</div>
+              <div class="kpi-val sm">5x</div>
               <div class="kpi-sub">Max allowed</div>
             </div>
           </div>
@@ -607,6 +638,7 @@ function render(data){
   document.getElementById('kpiPosCount').textContent=pa.length+' position'+(pa.length!==1?'s':'');
   document.getElementById('kpiAvail').textContent=fmt$(data.available_usdc||0);
 
+  renderPnlSummary(data.tax_summary);
   renderRisk(data);
   renderPositions(pa);
   renderCryptoTheses(data.crypto_theses||[]);
@@ -622,7 +654,20 @@ function render(data){
   var now=new Date();
   document.getElementById('lastUpdate').textContent='Updated '+now.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})+' \u00b7 '+now.toLocaleDateString('en-US',{month:'short',day:'numeric'});
 
-  ['risk','positions','crypto','poly','scout','shadow','trades','activity','research','health','oversight'].forEach(applySec);
+  ['pnl','risk','positions','crypto','poly','scout','shadow','trades','activity','research','health','oversight'].forEach(applySec);
+}
+
+function renderPnlSummary(tax){
+  if(!tax){return;}
+  var rp=tax.realized_pnl||0;var rpEl=document.getElementById('pnlRealized');
+  rpEl.textContent=(rp>=0?'+':'')+fmt$(rp);rpEl.className='kpi-val sm '+(rp>=0?'green':'red');
+  document.getElementById('pnlEstTax').textContent=fmt$(tax.total_estimated_tax||0);
+  var net=rp-(tax.total_estimated_tax||0);var netEl=document.getElementById('pnlNetAfterTax');
+  netEl.textContent=(net>=0?'+':'')+fmt$(net);netEl.className='kpi-val sm '+(net>=0?'green':'red');
+  document.getElementById('pnlSTGains').textContent=fmt$(tax.short_term_gains||0);
+  document.getElementById('pnlSTLosses').textContent=fmt$(tax.short_term_losses||0);
+  if(tax.wash_sale_adjustments){document.getElementById('pnlWashSaleRow').style.display='';document.getElementById('pnlWashSales').textContent=fmt$(tax.wash_sale_adjustments);}
+  else{document.getElementById('pnlWashSaleRow').style.display='none';}
 }
 
 function renderRisk(d){

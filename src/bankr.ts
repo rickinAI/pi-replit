@@ -993,6 +993,8 @@ export async function getTaxSummary(): Promise<{
   realized_pnl: number;
   short_term_gains: number;
   short_term_losses: number;
+  long_term_gains: number;
+  long_term_losses: number;
   wash_sale_adjustments: number;
   net_taxable: number;
   estimated_federal_tax: number;
@@ -1006,8 +1008,10 @@ export async function getTaxSummary(): Promise<{
 
   const yearTrades = history.filter(t => new Date(t.closed_at).getTime() >= yearStart);
 
-  let gains = 0;
-  let losses = 0;
+  let stGains = 0;
+  let stLosses = 0;
+  let ltGains = 0;
+  let ltLosses = 0;
   let washSaleAdj = 0;
   const quarterly: Record<string, { trades: number; pnl: number }> = {};
 
@@ -1017,29 +1021,43 @@ export async function getTaxSummary(): Promise<{
     quarterly[q].trades++;
     quarterly[q].pnl += t.pnl;
 
-    if (t.pnl >= 0) gains += t.pnl;
-    else losses += t.pnl;
+    const isLongTerm = t.tax_lot?.holding_period === "long";
+    if (t.pnl >= 0) {
+      if (isLongTerm) ltGains += t.pnl;
+      else stGains += t.pnl;
+    } else {
+      if (isLongTerm) ltLosses += t.pnl;
+      else stLosses += t.pnl;
+    }
 
-    if (t.tax_lot.wash_sale_flagged) {
+    if (t.tax_lot?.wash_sale_flagged) {
       washSaleAdj += t.tax_lot.wash_sale_disallowed;
     }
   }
 
-  const netTaxable = gains + losses + washSaleAdj;
-  const federalRate = 0.24;
+  const totalGains = stGains + ltGains;
+  const totalLosses = stLosses + ltLosses;
+  const netTaxable = totalGains + totalLosses + washSaleAdj;
+  const stFederalRate = 0.24;
+  const ltFederalRate = 0.15;
   const nyRate = 0.0685;
+
+  const estFederal = Math.max(0, stGains + stLosses) * stFederalRate + Math.max(0, ltGains + ltLosses) * ltFederalRate;
+  const estNY = Math.max(0, netTaxable) * nyRate;
 
   return {
     year,
     total_trades: yearTrades.length,
-    realized_pnl: parseFloat((gains + losses).toFixed(2)),
-    short_term_gains: parseFloat(gains.toFixed(2)),
-    short_term_losses: parseFloat(losses.toFixed(2)),
+    realized_pnl: parseFloat((totalGains + totalLosses).toFixed(2)),
+    short_term_gains: parseFloat(stGains.toFixed(2)),
+    short_term_losses: parseFloat(stLosses.toFixed(2)),
+    long_term_gains: parseFloat(ltGains.toFixed(2)),
+    long_term_losses: parseFloat(ltLosses.toFixed(2)),
     wash_sale_adjustments: parseFloat(washSaleAdj.toFixed(2)),
     net_taxable: parseFloat(netTaxable.toFixed(2)),
-    estimated_federal_tax: parseFloat((Math.max(0, netTaxable) * federalRate).toFixed(2)),
-    estimated_ny_tax: parseFloat((Math.max(0, netTaxable) * nyRate).toFixed(2)),
-    total_estimated_tax: parseFloat((Math.max(0, netTaxable) * (federalRate + nyRate)).toFixed(2)),
+    estimated_federal_tax: parseFloat(estFederal.toFixed(2)),
+    estimated_ny_tax: parseFloat(estNY.toFixed(2)),
+    total_estimated_tax: parseFloat((estFederal + estNY).toFixed(2)),
     quarterly,
   };
 }
