@@ -5611,11 +5611,14 @@ async function runPreExecutionChecks(params) {
   checks.push({ name: "max_positions", passed: posCountOk, detail: `Open: ${positions.length}/${rc.max_positions}` });
   if (!posCountOk) allPassed = false;
   const totalExposure = positions.reduce((sum, p) => sum + p.size * p.entry_price, 0);
-  const newPositionSize = riskDistance > 0 ? riskAmount / riskDistance : 0;
+  const rawPositionSize = riskDistance > 0 ? riskAmount / riskDistance : 0;
+  const exposureLimit = portfolio * (rc.exposure_cap_pct / 100);
+  const remainingExposure = Math.max(0, exposureLimit - totalExposure);
+  const maxSizeByExposure = params.entry_price > 0 ? remainingExposure / params.entry_price : 0;
+  const newPositionSize = Math.min(rawPositionSize, maxSizeByExposure);
   const newExposure = newPositionSize * params.entry_price;
   const totalAfter = totalExposure + newExposure;
-  const exposureLimit = portfolio * (rc.exposure_cap_pct / 100);
-  const exposureOk = totalAfter <= exposureLimit;
+  const exposureOk = newPositionSize > 0 && totalAfter <= exposureLimit;
   checks.push({ name: "total_exposure", passed: exposureOk, detail: `After: $${totalAfter.toFixed(2)} / $${exposureLimit.toFixed(2)} (${rc.exposure_cap_pct}% of portfolio)` });
   if (!exposureOk) allPassed = false;
   const bucket = getExposureBucket(params.asset, params.asset_class);
@@ -5634,7 +5637,7 @@ async function runPreExecutionChecks(params) {
     confidence: params.confidence || 3.5,
     consecutiveLosses,
     drawdownPct,
-    isFirstForAsset: firstForAsset,
+    isFirstForAsset: mode === "SHADOW" ? false : firstForAsset,
     leverageIncrease: false,
     drawdownThreshold: rc.circuit_breaker_drawdown_pct
   });
@@ -5681,7 +5684,17 @@ async function openPosition(params) {
     const rc2 = await getRiskConfig();
     const maxRisk2 = portfolio2 * (rc2.risk_per_trade_pct / 100);
     const riskDistance2 = Math.abs(params.entry_price - params.stop_price);
-    const shadowSize = riskDistance2 > 0 ? maxRisk2 / riskDistance2 : 0;
+    const rawSize2 = riskDistance2 > 0 ? maxRisk2 / riskDistance2 : 0;
+    const existingPositions = await getPositions();
+    const totalExposure = existingPositions.reduce((sum, p) => sum + p.size * p.entry_price, 0);
+    const exposureLimit = portfolio2 * (rc2.exposure_cap_pct / 100);
+    const remainingExposure = Math.max(0, exposureLimit - totalExposure);
+    const maxSizeByExposure = params.entry_price > 0 ? remainingExposure / params.entry_price : 0;
+    const shadowSize = Math.min(rawSize2, maxSizeByExposure);
+    if (shadowSize <= 0) {
+      console.log(`[bankr] SHADOW position rejected: ${params.asset} \u2014 zero size (raw=${rawSize2.toFixed(4)}, maxByExposure=${maxSizeByExposure.toFixed(4)})`);
+      return { position: null, trade_id: `rejected_${Date.now()}` };
+    }
     const shadowPosId = `shadow_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const shadowTradeId = `shadow_trade_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const shadowPosition = {
@@ -5714,7 +5727,16 @@ async function openPosition(params) {
   const rc = await getRiskConfig();
   const maxRisk = portfolio * (rc.risk_per_trade_pct / 100);
   const riskDistance = Math.abs(params.entry_price - params.stop_price);
-  const size = riskDistance > 0 ? maxRisk / riskDistance : 0;
+  const rawSize = riskDistance > 0 ? maxRisk / riskDistance : 0;
+  const livePositions = await getPositions();
+  const liveExposure = livePositions.reduce((sum, p) => sum + p.size * p.entry_price, 0);
+  const liveExpLimit = portfolio * (rc.exposure_cap_pct / 100);
+  const liveRemaining = Math.max(0, liveExpLimit - liveExposure);
+  const liveMaxSize = params.entry_price > 0 ? liveRemaining / params.entry_price : 0;
+  const size = Math.min(rawSize, liveMaxSize);
+  if (size <= 0) {
+    throw new Error(`Position rejected: zero size after exposure cap (raw=${rawSize.toFixed(4)}, maxByExposure=${liveMaxSize.toFixed(4)})`);
+  }
   const posId = `pos_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const tradeId = `trade_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   let bnkrOrderId;
