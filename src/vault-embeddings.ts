@@ -4,7 +4,7 @@ import pg from "pg";
 const EMBEDDING_DIM = 768;
 const CHUNK_MAX_CHARS = 1500;
 const BATCH_SIZE = 20;
-const DEFAULT_EXCLUDED_FOLDERS = ["Daily Digests", "Scheduled Reports", "Archive"];
+const DEFAULT_EXCLUDED_FOLDERS = ["Ops/Daily Digests", "Ops", "Archive"];
 
 function getExcludedFolders(): string[] {
   const envExclusions = process.env.VAULT_EXCLUDE_FOLDERS;

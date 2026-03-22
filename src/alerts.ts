@@ -472,7 +472,7 @@ async function generateBrief(type: "morning" | "afternoon" | "evening"): Promise
   if (saveBriefFn) {
     try {
       const dateStr = new Date().toLocaleDateString("en-CA", { timeZone: config.timezone });
-      const briefPath = `Daily Digests/${dateStr}-${type}.md`;
+      const briefPath = `Ops/Daily Digests/${dateStr}-${type}.md`;
       const header = `# ${type.charAt(0).toUpperCase() + type.slice(1)} Brief — ${dateStr}\n\n`;
       await saveBriefFn(briefPath, header + webSynthesized);
       console.log(`[alerts] Brief saved to vault: ${briefPath}`);

@@ -3568,7 +3568,7 @@ function buildAgentTools(allToolsFn: () => ToolDefinition[], sessionId: string):
           if (result.response && result.response.length > 200) {
             try {
               const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-              savedTo = `Scheduled Reports/Agent Results/${params.agent}-${ts}.md`;
+              savedTo = `Ops/Agent Results/${params.agent}-${ts}.md`;
               await kbCreate(savedTo, `# ${params.agent} result\n*Task: ${params.task.slice(0, 200)}*\n*Duration: ${((result.durationMs || 0) / 1000).toFixed(0)}s*\n\n${result.response}`);
             } catch { savedTo = undefined; }
           }
@@ -4201,7 +4201,7 @@ app.get("/api/vault/moodys-brief", async (_req: Request, res: Response) => {
     const day = now.toLocaleString("en-US", { timeZone: tz, day: "2-digit" });
     const dateStr = `${year}-${month}-${day}`;
     const paths = [
-      `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief.md`,
+      `Ops/Intelligence/Daily/${dateStr}-Brief.md`,
     ];
     const etHour = parseInt(now.toLocaleString("en-US", { timeZone: tz, hour: "numeric", hour12: false }));
     let briefContent: string | null = null;
@@ -4221,7 +4221,7 @@ app.get("/api/vault/moodys-brief", async (_req: Request, res: Response) => {
       const yDay = yesterday.toLocaleString("en-US", { timeZone: tz, day: "2-digit" });
       const yDateStr = `${yYear}-${yMonth}-${yDay}`;
       try {
-        const content = await kbRead(`Scheduled Reports/Moody's Intelligence/Daily/${yDateStr}-Brief.md`);
+        const content = await kbRead(`Ops/Intelligence/Daily/${yDateStr}-Brief.md`);
         if (content && content.length > 100) { briefContent = content; briefDate = yDateStr; }
       } catch {}
     }
@@ -4315,14 +4315,14 @@ app.get("/api/vault/real-estate-scan", async (_req: Request, res: Response) => {
     let scanContent: string | null = null;
     let scanDate = dateStr;
     try {
-      const content = await kbRead(`Scheduled Reports/Real Estate/${dateStr}-Property-Scan.md`);
+      const content = await kbRead(`Ops/Real Estate/${dateStr}-Property-Scan.md`);
       if (content) scanContent = content;
     } catch {}
     if (!scanContent) {
       const yesterday = new Date(now.getTime() - 86400000);
       const yDateStr = `${yesterday.toLocaleString("en-US", { timeZone: tz, year: "numeric" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, month: "2-digit" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, day: "2-digit" })}`;
       try {
-        const content = await kbRead(`Scheduled Reports/Real Estate/${yDateStr}-Property-Scan.md`);
+        const content = await kbRead(`Ops/Real Estate/${yDateStr}-Property-Scan.md`);
         if (content) { scanContent = content; scanDate = yDateStr; }
       } catch {}
     }
@@ -5582,7 +5582,7 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
         let briefDate = dateStr;
         if (etHour >= 6) {
           try {
-            const content = await kbRead(`Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief.md`);
+            const content = await kbRead(`Ops/Intelligence/Daily/${dateStr}-Brief.md`);
             if (content && content.length > 100) briefContent = content;
           } catch {}
         }
@@ -5590,7 +5590,7 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
           const yesterday = new Date(now.getTime() - 86400000);
           const yDateStr = `${yesterday.toLocaleString("en-US", { timeZone: tz, year: "numeric" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, month: "2-digit" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, day: "2-digit" })}`;
           try {
-            const content = await kbRead(`Scheduled Reports/Moody's Intelligence/Daily/${yDateStr}-Brief.md`);
+            const content = await kbRead(`Ops/Intelligence/Daily/${yDateStr}-Brief.md`);
             if (content && content.length > 100) { briefContent = content; briefDate = yDateStr; }
           } catch {}
         }
@@ -5683,14 +5683,14 @@ app.get("/api/daily-brief/data", async (_req: Request, res: Response) => {
         let scanContent: string | null = null;
         let scanDate = dateStr;
         try {
-          const content = await kbRead(`Scheduled Reports/Real Estate/${dateStr}-Property-Scan.md`);
+          const content = await kbRead(`Ops/Real Estate/${dateStr}-Property-Scan.md`);
           if (content) scanContent = content;
         } catch {}
         if (!scanContent) {
           const yesterday = new Date(now.getTime() - 86400000);
           const yDateStr = `${yesterday.toLocaleString("en-US", { timeZone: tz, year: "numeric" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, month: "2-digit" })}-${yesterday.toLocaleString("en-US", { timeZone: tz, day: "2-digit" })}`;
           try {
-            const content = await kbRead(`Scheduled Reports/Real Estate/${yDateStr}-Property-Scan.md`);
+            const content = await kbRead(`Ops/Real Estate/${yDateStr}-Property-Scan.md`);
             if (content) { scanContent = content; scanDate = yDateStr; }
           } catch {}
         }

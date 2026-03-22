@@ -58,13 +58,13 @@ const INTEL_SENDER_RULES: SenderRule[] = [
 ];
 
 const ENGINE_SENDER_RULES: SenderRule[] = [
-  { domain: "bankr.bot", category: "engine/confirmation", folder: "Scheduled Reports/Wealth Engines/BANKR" },
-  { domain: "bnkr.bot", category: "engine/confirmation", folder: "Scheduled Reports/Wealth Engines/BANKR" },
+  { domain: "bankr.bot", category: "engine/confirmation", folder: "Ops/Wealth Engines/Scheduled/BANKR" },
+  { domain: "bnkr.bot", category: "engine/confirmation", folder: "Ops/Wealth Engines/Scheduled/BANKR" },
 ];
 
 const SUBJECT_KEYWORDS: { pattern: RegExp; category: EmailCategory; folder: string }[] = [
-  { pattern: /trade|execution|order|filled|position/i, category: "engine/trade", folder: "Scheduled Reports/Wealth Engines/BANKR" },
-  { pattern: /risk|drawdown|circuit.?break|margin/i, category: "engine/risk", folder: "Scheduled Reports/Wealth Engines/BANKR" },
+  { pattern: /trade|execution|order|filled|position/i, category: "engine/trade", folder: "Ops/Wealth Engines/Scheduled/BANKR" },
+  { pattern: /risk|drawdown|circuit.?break|margin/i, category: "engine/risk", folder: "Ops/Wealth Engines/Scheduled/BANKR" },
   { pattern: /forecast|prediction|odds|probability|market/i, category: "intel/macro", folder: "SCOUT/Email-Intel/Macro" },
   { pattern: /whale|large.?trade|anomal/i, category: "intel/whale", folder: "SCOUT/Email-Intel/Whales" },
   { pattern: /weather|hurricane|storm|temperature|noaa/i, category: "intel/weather", folder: "SCOUT/Email-Intel/Weather" },
@@ -188,7 +188,7 @@ export function classifyEmail(params: {
       }
     }
 
-    return { inbox: "engine", category: "engine/general", vaultFolder: "Scheduled Reports/Wealth Engines/BANKR", tags: ["source/email", "engine/general"], allowed: true };
+    return { inbox: "engine", category: "engine/general", vaultFolder: "Ops/Wealth Engines/Scheduled/BANKR", tags: ["source/email", "engine/general"], allowed: true };
   }
 
   if (inbox === "vault") {

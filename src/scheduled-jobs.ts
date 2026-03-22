@@ -39,28 +39,28 @@ type KbListFn = (path: string) => Promise<string>;
 type KbMoveFn = (from: string, to: string) => Promise<string>;
 
 function getJobSavePath(jobId: string, dateStr: string, safeName: string): string {
-  if (jobId === "moodys-daily-intel") return `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief.md`;
-  if (jobId === "moodys-profile-updates") return `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Profile-Updates.md`;
-  if (jobId === "moodys-weekly-digest") return `Scheduled Reports/Moody's Intelligence/Weekly/${dateStr}-Digest.md`;
-  if (jobId === "real-estate-daily-scan") return `Scheduled Reports/Real Estate/${dateStr}-Property-Scan.md`;
-  if (jobId === "darknode-inbox-monitor") return `Scheduled Reports/Inbox Monitor/${dateStr}-${safeName}.md`;
-  if (jobId === "life-audit") return `Scheduled Reports/Life-Audit/${dateStr}.md`;
-  if (jobId === "daily-inbox-triage-am") return `Scheduled Reports/Inbox Cleanup/${dateStr}-AM-triage.md`;
-  if (jobId === "daily-inbox-triage-pm") return `Scheduled Reports/Inbox Cleanup/${dateStr}-PM-triage.md`;
-  if (jobId === "weekly-inbox-deep-clean") return `Scheduled Reports/Inbox Cleanup/${dateStr}-weekly-summary.md`;
-  if (jobId === "baby-dashboard-weekly-update") return `Scheduled Reports/Baby Dashboard/${dateStr}-Weekly-Log.md`;
-  if (jobId === "birthday-calendar-sync") return `Scheduled Reports/Birthday Sync/${dateStr}-Sync.md`;
-  if (jobId === "polymarket-activity-scan") return `Scheduled Reports/Wealth Engines/Polymarket/${dateStr}-Activity-Scan.md`;
-  if (jobId === "polymarket-full-cycle") return `Scheduled Reports/Wealth Engines/Polymarket/${dateStr}-Full-Cycle.md`;
-  if (jobId === "weekly-memory-reflect") return `Scheduled Reports/Memory/${dateStr}-Weekly-Digest.md`;
-  if (jobId === "bankr-execute") return `Scheduled Reports/Wealth Engines/BANKR/${dateStr}-Execution.md`;
-  if (jobId === "oversight-health") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Health.md`;
-  if (jobId === "oversight-weekly") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Weekly-Review.md`;
-  if (jobId === "oversight-daily-summary") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Daily-Summary.md`;
-  if (jobId === "oversight-shadow-refresh") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Shadow-Refresh.md`;
-  if (jobId === "copy-trade-scan") return `Scheduled Reports/Wealth Engines/Copy-Trading/${dateStr}-Scan.md`;
-  if (jobId === "prediction-markets-daily") return `Scheduled Reports/Prediction Markets/${dateStr}-Daily-Digest.md`;
-  return `Scheduled Reports/${dateStr}-${safeName}.md`;
+  if (jobId === "moodys-daily-intel") return `Ops/Intelligence/Daily/${dateStr}-Brief.md`;
+  if (jobId === "moodys-profile-updates") return `Ops/Intelligence/Daily/${dateStr}-Profile-Updates.md`;
+  if (jobId === "moodys-weekly-digest") return `Ops/Intelligence/Weekly/${dateStr}-Digest.md`;
+  if (jobId === "real-estate-daily-scan") return `Ops/Real Estate/${dateStr}-Property-Scan.md`;
+  if (jobId === "darknode-inbox-monitor") return `Ops/Inbox Monitor/${dateStr}-${safeName}.md`;
+  if (jobId === "life-audit") return `Ops/Life Audit/${dateStr}.md`;
+  if (jobId === "daily-inbox-triage-am") return `Ops/Inbox/${dateStr}-AM-triage.md`;
+  if (jobId === "daily-inbox-triage-pm") return `Ops/Inbox/${dateStr}-PM-triage.md`;
+  if (jobId === "weekly-inbox-deep-clean") return `Ops/Inbox/${dateStr}-weekly-summary.md`;
+  if (jobId === "baby-dashboard-weekly-update") return `Ops/Baby Dashboard/${dateStr}-Weekly-Log.md`;
+  if (jobId === "birthday-calendar-sync") return `Ops/Birthday Sync/${dateStr}-Sync.md`;
+  if (jobId === "polymarket-activity-scan") return `Ops/Wealth Engines/Scheduled/Polymarket/${dateStr}-Activity-Scan.md`;
+  if (jobId === "polymarket-full-cycle") return `Ops/Wealth Engines/Scheduled/Polymarket/${dateStr}-Full-Cycle.md`;
+  if (jobId === "weekly-memory-reflect") return `Ops/Memory/${dateStr}-Weekly-Digest.md`;
+  if (jobId === "bankr-execute") return `Ops/Wealth Engines/Scheduled/BANKR/${dateStr}-Execution.md`;
+  if (jobId === "oversight-health") return `Ops/Wealth Engines/Scheduled/Oversight/${dateStr}-Health.md`;
+  if (jobId === "oversight-weekly") return `Ops/Wealth Engines/Scheduled/Oversight/${dateStr}-Weekly-Review.md`;
+  if (jobId === "oversight-daily-summary") return `Ops/Wealth Engines/Scheduled/Oversight/${dateStr}-Daily-Summary.md`;
+  if (jobId === "oversight-shadow-refresh") return `Ops/Wealth Engines/Scheduled/Oversight/${dateStr}-Shadow-Refresh.md`;
+  if (jobId === "copy-trade-scan") return `Ops/Wealth Engines/Scheduled/Copy-Trading/${dateStr}-Scan.md`;
+  if (jobId === "prediction-markets-daily") return `Ops/Wealth Engines/Scheduled/Prediction Markets/${dateStr}-Daily-Digest.md`;
+  return `Ops/Scheduled/${dateStr}-${safeName}.md`;
 }
 
 let jobStatusCache: Record<string, any> = {};
@@ -68,7 +68,7 @@ let jobStatusCache: Record<string, any> = {};
 async function writeJobStatus(jobId: string, entry: { lastRun: string; status: string; savedTo: string | null; error: string | null }): Promise<void> {
   jobStatusCache[jobId] = entry;
   if (kbCreateFn) {
-    await kbCreateFn("Scheduled Reports/job-status.json", JSON.stringify(jobStatusCache, null, 2));
+    await kbCreateFn("Ops/Scheduled/job-status.json", JSON.stringify(jobStatusCache, null, 2));
   }
 }
 
@@ -86,7 +86,7 @@ Check for these issues and list each finding with a suggested action:
 4. Inconsistent naming — list files that don't follow conventions (kebab-case or Title Case) with suggested renames
 5. Large files or folders that could be reorganised
 
-Save the report to "Scheduled Reports/KB Audit Report.md" (overwrite previous). Format as a clear checklist so I can review and action items manually.`,
+Save the report to "Ops/Scheduled/KB Audit Report.md" (overwrite previous). Format as a clear checklist so I can review and action items manually.`,
     schedule: { type: "daily", hour: 2, minute: 0 },
     enabled: false,
   },
@@ -100,7 +100,7 @@ Save the report to "Scheduled Reports/KB Audit Report.md" (overwrite previous). 
 3. World events
 
 For each story, provide a 2-3 sentence summary with context on why it matters.
-Save the compiled brief to "Scheduled Reports/Daily News.md" (overwrite previous).`,
+Save the compiled brief to "Ops/Scheduled/Daily News.md" (overwrite previous).`,
     schedule: { type: "daily", hour: 6, minute: 30 },
     enabled: false,
   },
@@ -115,7 +115,7 @@ Save the compiled brief to "Scheduled Reports/Daily News.md" (overwrite previous
 4. Summarize overall market sentiment (include X/social sentiment alongside data)
 5. Flag any notable earnings or economic events today
 
-Save the report to "Scheduled Reports/Market Summary.md" (overwrite previous).`,
+Save the report to "Ops/Scheduled/Market Summary.md" (overwrite previous).`,
     schedule: { type: "daily", hour: 7, minute: 30 },
     enabled: false,
   },
@@ -212,7 +212,7 @@ IMPORTANT:
     agentId: "moodys",
     prompt: `Read today's intelligence brief and update competitor/analyst profiles with the findings.
 
-STEP 1: Use notes_list on "Scheduled Reports/Moody's Intelligence/Daily/" to find today's brief (filename format: YYYY-MM-DD-Brief.md). Read it with notes_read.
+STEP 1: Use notes_list on "Ops/Intelligence/Daily/" to find today's brief (filename format: YYYY-MM-DD-Brief.md). Read it with notes_read.
 
 STEP 2: For each competitor that has actual findings in the brief (not "No new developments"), use notes_append on the corresponding profile file to add a date-stamped entry:
 
@@ -238,11 +238,11 @@ After completing all updates, provide a summary of how many profiles were update
     agentId: "moodys",
     prompt: `Generate the weekly Moody's strategic digest by reading and synthesising all daily intelligence briefs from this past week.
 
-STEP 1: List files in "Scheduled Reports/Moody's Intelligence/Daily/" folder using notes_list.
+STEP 1: List files in "Ops/Intelligence/Daily/" folder using notes_list.
 STEP 2: Read every file matching "*-Brief.md" from the last 7 days.
 STEP 3: Synthesise all daily briefs into the weekly digest format below.
 
-Save using notes_create to "Scheduled Reports/Moody's Intelligence/Weekly/{today's date YYYY-MM-DD}-Digest.md":
+Save using notes_create to "Ops/Intelligence/Weekly/{today's date YYYY-MM-DD}-Digest.md":
 
 # Moody's Weekly Strategic Digest — Week of {date}
 
@@ -333,7 +333,7 @@ Focus on:
 
 Flag ⭐ standout properties (great schools + walkable + good commute + character) and save each to "Real Estate/Favorites/{Address slug}.md" with full details using notes_create.
 
-OUTPUT — Save using notes_create to "Scheduled Reports/Real Estate/{today's date YYYY-MM-DD}-Property-Scan.md":
+OUTPUT — Save using notes_create to "Ops/Real Estate/{today's date YYYY-MM-DD}-Property-Scan.md":
 
 # Daily Property Scan — {today's date}
 
@@ -395,7 +395,7 @@ If no properties are found in an area, note "No new listings matching criteria" 
 6. Check Document Checklist for any missing/unverified items needed before the next trip
 
 ## Output Format
-Save a report to "Scheduled Reports/Life-Audit/" with:
+Save a report to "Ops/Life Audit/" with:
 - 🔴 CRITICAL: Conflicts that could prevent travel (denied boarding, expired documents, policy violations)
 - 🟡 WARNING: Items that need attention within 14 days (deadlines, missing documents, insurance windows)
 - 🟢 OK: Confirmed-clear items (gives confidence)
@@ -462,7 +462,7 @@ Do NOT archive:
 - Anything you're unsure about — when in doubt, leave it in inbox
 
 ## Step 5: Save Triage Log
-Save a lightweight log using notes_create to "Scheduled Reports/Inbox Cleanup/{today YYYY-MM-DD}-AM-triage.md":
+Save a lightweight log using notes_create to "Ops/Inbox/{today YYYY-MM-DD}-AM-triage.md":
 
 # Inbox Triage — {date} AM
 
@@ -535,7 +535,7 @@ Do NOT archive:
 - Anything you're unsure about — when in doubt, leave it in inbox
 
 ## Step 5: Save Triage Log
-Save a lightweight log using notes_create to "Scheduled Reports/Inbox Cleanup/{today YYYY-MM-DD}-PM-triage.md":
+Save a lightweight log using notes_create to "Ops/Inbox/{today YYYY-MM-DD}-PM-triage.md":
 
 # Inbox Triage — {date} PM
 
@@ -615,7 +615,7 @@ Combine counts: {"shoppingDone":"5/39","tasksDone":"3/22"}
 If any tab was missing, omit that field.
 
 ## Step 3: Inject Data into Dashboard HTML
-Read the current file at "Scheduled Reports/baby-dashboard-source.html" using notes_read. If not found, read "data/pages/baby-dashboard.html".
+Read the current file at "Ops/Baby Dashboard/baby-dashboard-source.html" using notes_read. If not found, read "data/pages/baby-dashboard.html".
 
 DO NOT regenerate the HTML. Only inject data blocks before </body>. For each data type, if a \`<script id="..."\` block already exists, REPLACE it. Otherwise INSERT before </body>.
 
@@ -722,7 +722,7 @@ Do NOT archive:
 While scanning, note any senders that appear to be subscriptions or recurring newsletters. After processing, append detected subscriptions to Google Sheet "Bhatt Family — Subscriptions & Bills Tracker" (spreadsheet ID: 1j5-EOdfIyqMFewDkXQ09a1o9HZAeSDGv4w52zWa0ELs) in the "Email Subscriptions" tab using sheets_append. Columns: Sender, Email Address, Type (newsletter/subscription/marketing), Frequency (daily/weekly/monthly), First Seen Date. Check existing rows first with sheets_read to avoid duplicates.
 
 ## Step 6: Save Weekly Summary
-Save a summary report using notes_create to "Scheduled Reports/Inbox Cleanup/{today YYYY-MM-DD}-weekly-summary.md":
+Save a summary report using notes_create to "Ops/Inbox/{today YYYY-MM-DD}-weekly-summary.md":
 
 # Weekly Inbox Summary — {date}
 
@@ -1128,12 +1128,12 @@ async function archiveOldReports(): Promise<void> {
   const cutoffStr = cutoff.toISOString().slice(0, 10);
 
   const folders = [
-    { src: "Scheduled Reports/Moody's Intelligence/Daily", dest: "Archive/Moody's Intelligence/Daily" },
-    { src: "Scheduled Reports/Moody's Intelligence/Weekly", dest: "Archive/Moody's Intelligence/Weekly" },
-    { src: "Scheduled Reports/Real Estate", dest: "Archive/Real Estate" },
-    { src: "Scheduled Reports/Life-Audit", dest: "Archive/Life-Audit" },
-    { src: "Scheduled Reports/Inbox Cleanup", dest: "Archive/Inbox Cleanup" },
-    { src: "Scheduled Reports/Baby Dashboard", dest: "Archive/Baby Dashboard" },
+    { src: "Ops/Intelligence/Daily", dest: "Archive/Intelligence/Daily" },
+    { src: "Ops/Intelligence/Weekly", dest: "Archive/Intelligence/Weekly" },
+    { src: "Ops/Real Estate", dest: "Archive/Real Estate" },
+    { src: "Ops/Life Audit", dest: "Archive/Life Audit" },
+    { src: "Ops/Inbox", dest: "Archive/Inbox" },
+    { src: "Ops/Baby Dashboard", dest: "Archive/Baby Dashboard" },
   ];
 
   let archived = 0;
@@ -1829,7 +1829,7 @@ After processing, briefly confirm what you did.`;
   if (kbCreateFn) {
     const todayKey = getTodayKey();
     const timestamp = new Date().toLocaleString("en-US", { timeZone: config.timezone }).replace(/[/:]/g, "-").replace(/,\s*/g, "_");
-    inboxSavePath = `Scheduled Reports/Inbox Monitor/${todayKey}-${timestamp}.md`;
+    inboxSavePath = `Ops/Inbox Monitor/${todayKey}-${timestamp}.md`;
     try {
       await kbCreateFn(inboxSavePath, `# Inbox Monitor Results\n*Processed: ${new Date().toLocaleString("en-US", { timeZone: config.timezone })}*\n*Emails processed: ${emails.length}*\n\n${fullResult}`);
     } catch {}
@@ -2427,7 +2427,7 @@ export async function triggerJob(jobId: string): Promise<string> {
       try {
         const fs = await import("fs");
         const path = await import("path");
-        const briefDir = path.join(process.cwd(), "data/vault/Scheduled Reports/Moody's Intelligence/Daily");
+        const briefDir = path.join(process.cwd(), "data/vault/Ops/Intelligence/Daily");
         if (fs.existsSync(briefDir)) {
           const files = fs.readdirSync(briefDir).filter((f: string) => f.endsWith("-Brief.md") && f > `${todayKey}-Brief.md`).sort().reverse();
           for (const fname of files) {
