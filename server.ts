@@ -4354,12 +4354,14 @@ let weDashboardCache: { data: any; ts: number } | null = null;
 const WE_DASHBOARD_TTL = 30_000;
 
 async function buildWealthEnginesDashboardData(): Promise<any> {
-  const [summary, tradeHistory, pmTheses, oversightData, shadowPerf] = await Promise.all([
+  const [summary, tradeHistory, pmTheses, oversightData, shadowPerf, whaleWallets, whalePerformance] = await Promise.all([
     bankr.getPortfolioSummary(),
     bankr.getTradeHistory(),
     polymarketScout.getActiveTheses().catch(() => []),
     oversight.getOversightSummary().catch(() => null),
     oversight.getShadowPerformance().catch(() => ({ total_trades: 0, open_trades: 0, closed_trades: 0, total_pnl: 0, win_rate: 0, avg_pnl: 0, trades: [] })),
+    (async () => { try { const { getTrackedWallets } = await import("./src/copy-trading.js"); return getTrackedWallets(); } catch { return []; } })(),
+    (async () => { try { const { getWalletPerformance } = await import("./src/copy-trading.js"); return getWalletPerformance(); } catch { return []; } })(),
   ]);
 
   const closedShadowTrades = buildClosedShadowTrades(shadowPerf);
@@ -4518,6 +4520,31 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
       } catch { return []; }
     })(),
     tax_summary: taxSummary,
+    whale_intelligence: {
+      tracked_wallets: (whaleWallets as any[]).map((w: any) => ({
+        address: w.address,
+        alias: w.alias,
+        niche: w.niche,
+        win_rate: w.win_rate,
+        pnl: w.pnl,
+        total_trades: w.total_trades,
+        enabled: w.enabled,
+        last_checked: w.last_checked,
+      })),
+      performance: (whalePerformance as any[]).map((p: any) => ({
+        wallet_address: p.wallet_address,
+        wallet_alias: p.wallet_alias,
+        total_copy_trades: p.total_copy_trades,
+        wins: p.wins,
+        losses: p.losses,
+        win_rate: p.win_rate,
+        total_pnl: p.total_pnl,
+        avg_pnl: p.avg_pnl,
+        last_trade_at: p.last_trade_at,
+      })),
+      total_wallets: (whaleWallets as any[]).filter((w: any) => w.enabled).length,
+      copy_trades_active: (summary.positions || []).filter((p: any) => p.is_copy_trade).length,
+    },
     agent_activity: agentActivity,
     wealth_engines_paused: await (async () => {
       try {
@@ -4718,6 +4745,23 @@ app.get("/api/wealth-engine/config", async (req: Request, res: Response) => {
       hour: j.schedule.hour ?? null, minute: j.schedule.minute ?? null,
       last_run: j.lastRun || null, last_status: j.lastStatus || null,
     }));
+    let copyTradingConfig: any = {};
+    try {
+      const { getTrackedWallets } = await import("./src/copy-trading.js");
+      const wallets = await getTrackedWallets();
+      copyTradingConfig = {
+        trade_size: 50,
+        max_concurrent: 3,
+        min_odds: 0.15,
+        max_odds: 0.85,
+        min_volume: 10000,
+        min_liquidity: 10000,
+        min_wallet_win_rate: 65,
+        hard_stop: 100,
+        wallet_count: wallets.filter((w: any) => w.enabled).length,
+      };
+    } catch {}
+
     res.json({
       risk: config, portfolio, peak, mode, paused, kill_switch: killSwitch,
       bnkr_configured: bnkr.isConfigured(),
@@ -4725,6 +4769,7 @@ app.get("/api/wealth-engine/config", async (req: Request, res: Response) => {
       boot_time: bootTime, monitor_tick: monitorTick,
       shadow_open: shadowOpen, shadow_closed: shadowClosed,
       jobs: weJobs,
+      copy_trading: copyTradingConfig,
     });
   } catch (err: any) {
     res.status(500).json({ error: String(err) });

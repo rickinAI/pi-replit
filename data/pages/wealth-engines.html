@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#050a12">
-<title>DarkNode — Wealth Engines</title>
+<title>DarkNode — Command Center</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
   :root {
@@ -205,11 +205,8 @@
   .health-val { font-size:0.52rem; color:var(--text-secondary); margin-top:0.05rem; }
 
 
-  .fng-gauge { display:flex; align-items:center; gap:0.5rem; margin-top:0.3rem; padding:0.4rem 0; }
-  .fng-bar { flex:1; height:6px; border-radius:3px; background:linear-gradient(90deg,#ef4444,#f59e0b,#10b981); position:relative; }
-  .fng-marker { position:absolute; top:-3px; width:12px; height:12px; border-radius:50%; border:2px solid #fff; transform:translateX(-50%); }
-  .fng-val { font-size:0.82rem; font-weight:800; min-width:2rem; text-align:center; }
-  .fng-label { font-size:0.5rem; font-weight:600; text-transform:uppercase; letter-spacing:0.3px; }
+  .whale-item { padding:0.5rem 0.75rem; border-bottom:1px solid var(--border); }
+  .whale-item:last-child { border-bottom:none; }
 
   .activity-item { padding:0.35rem 0.75rem; border-bottom:1px solid var(--border); display:flex; align-items:flex-start; gap:0.4rem; }
   .activity-item:last-child { border-bottom:none; }
@@ -310,7 +307,7 @@
   <div class="container">
     <div id="killBanner" class="alert-banner kill">KILL SWITCH ACTIVE — ALL TRADING HALTED</div>
     <div id="pauseBanner" class="alert-banner pause">SYSTEM PAUSED — CIRCUIT BREAKER TRIGGERED</div>
-    <div id="wePausedBanner" class="alert-banner pause" style="display:none;background:rgba(167,139,250,0.08);border:1px solid rgba(167,139,250,0.2);color:#a78bfa">⏸ WEALTH ENGINES PAUSED — Resuming with new architecture (Mac Mini migration)</div>
+    <div id="wePausedBanner" class="alert-banner pause" style="display:none;background:rgba(167,139,250,0.08);border:1px solid rgba(167,139,250,0.2);color:#a78bfa">⏸ COPY TRADING PAUSED</div>
 
     <div class="kpi-strip">
       <div class="kpi wide">
@@ -429,9 +426,9 @@
               <div class="kpi-val sm" id="riskConsec">0</div>
             </div>
             <div>
-              <div class="kpi-label">Leverage Cap</div>
-              <div class="kpi-val sm">5x</div>
-              <div class="kpi-sub">Max allowed</div>
+              <div class="kpi-label">Copy Trades</div>
+              <div class="kpi-val sm cyan" id="kpiCopyTrades">0</div>
+              <div class="kpi-sub">active</div>
             </div>
           </div>
         </div>
@@ -460,35 +457,25 @@
       </div>
     </div>
 
-    <!-- CRYPTO THESES -->
-    <div class="section" id="cryptoSection">
-      <div class="sec-hdr" data-section="crypto">
-        <div class="sec-hdr-left"><div class="sec-title">Crypto Scout Signals</div><span class="sec-chev">&#9662;</span></div>
-        <div class="sec-badge" id="cryptoCount">0</div>
-      </div>
-      <div class="sec-body" id="cryptoBody">
-        <div class="card flush" id="cryptoCard"><div class="empty">No active crypto theses</div></div>
-      </div>
-    </div>
-
     <!-- POLYMARKET THESES -->
     <div class="section" id="polySection">
       <div class="sec-hdr" data-section="poly">
-        <div class="sec-hdr-left"><div class="sec-title">Polymarket Positions</div><span class="sec-chev">&#9662;</span></div>
+        <div class="sec-hdr-left"><div class="sec-title">Active Theses</div><span class="sec-chev">&#9662;</span></div>
         <div class="sec-badge" id="polyCount">0</div>
       </div>
       <div class="sec-body" id="polyBody">
-        <div class="card flush" id="polyCard"><div class="empty">No active polymarket theses</div></div>
+        <div class="card flush" id="polyCard"><div class="empty">No active theses</div></div>
       </div>
     </div>
 
-    <!-- SCOUT INTELLIGENCE -->
-    <div class="section" id="scoutSection">
-      <div class="sec-hdr" data-section="scout">
-        <div class="sec-hdr-left"><div class="sec-title">Scout Intelligence</div><span class="sec-chev">&#9662;</span></div>
+    <!-- WHALE INTELLIGENCE -->
+    <div class="section" id="whaleSection">
+      <div class="sec-hdr" data-section="whale">
+        <div class="sec-hdr-left"><div class="sec-title">Whale Intelligence</div><span class="sec-chev">&#9662;</span></div>
+        <div class="sec-badge" id="whaleCount">0</div>
       </div>
-      <div class="sec-body" id="scoutBody">
-        <div class="card" id="scoutCard"><div class="empty">No recent scout data</div></div>
+      <div class="sec-body" id="whaleBody">
+        <div class="card flush" id="whaleCard"><div class="empty">No tracked wallets</div></div>
       </div>
     </div>
 
@@ -589,8 +576,8 @@ function confirmAction(action){
   var msg=document.getElementById('confirmMsg');
   var btn=document.getElementById('confirmBtn');
   if(action==='kill'){t.textContent='Activate Kill Switch';msg.textContent='This will halt all trading and close positions on next monitor tick.';btn.textContent='KILL';btn.className='btn-confirm';}
-  else if(action==='pause'){t.textContent='Pause System';msg.textContent='All Wealth Engine jobs will halt.';btn.textContent='PAUSE';btn.className='btn-confirm';}
-  else if(action==='resume'){t.textContent='Resume System';msg.textContent='Resume all Wealth Engine operations.';btn.textContent='RESUME';btn.className='btn-confirm safe';}
+  else if(action==='pause'){t.textContent='Pause System';msg.textContent='All trading and copy trading jobs will halt.';btn.textContent='PAUSE';btn.className='btn-confirm';}
+  else if(action==='resume'){t.textContent='Resume System';msg.textContent='Resume all trading operations.';btn.textContent='RESUME';btn.className='btn-confirm safe';}
   m.classList.add('active');
 }
 function closeConfirm(){document.getElementById('confirmModal').classList.remove('active');pendingAction=null;}
@@ -674,12 +661,14 @@ function render(data){
   document.getElementById('kpiPosCount').textContent=pa.length+' position'+(pa.length!==1?'s':'');
   document.getElementById('kpiAvail').textContent=fmt$(data.available_usdc||0);
 
+  var wi=data.whale_intelligence||{};
+  document.getElementById('kpiCopyTrades').textContent=wi.copy_trades_active||0;
+
   renderPnlSummary(data.tax_summary);
   renderRisk(data);
   renderPositions(pa);
-  renderCryptoTheses(data.crypto_theses||[]);
   renderPolyTheses(data.polymarket_theses||[]);
-  renderScout(data.scout);
+  renderWhaleIntelligence(data.whale_intelligence);
   renderTrades(data.recent_trades||[]);
   renderActivity(data.agent_activity||[]);
   renderResearch(data.autoresearch);
@@ -689,7 +678,7 @@ function render(data){
   var now=new Date();
   document.getElementById('lastUpdate').textContent='Updated '+now.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})+' \u00b7 '+now.toLocaleDateString('en-US',{month:'short',day:'numeric'});
 
-  ['pnl','risk','positions','crypto','poly','scout','shadow','trades','activity','research','health','oversight'].forEach(applySec);
+  ['pnl','risk','positions','poly','whale','trades','activity','research','health','oversight'].forEach(applySec);
 }
 
 function renderPnlSummary(tax){
@@ -723,6 +712,7 @@ function renderRisk(d){
   document.getElementById('riskConsec').textContent=d.consecutive_losses||0;
 }
 
+function fmtOdds(n){if(n==null)return '—';return(n*100).toFixed(0)+'¢';}
 function renderPositions(pos){
   var el=document.getElementById('positionsCard');
   document.getElementById('posCount').textContent=pos.length;
@@ -730,59 +720,20 @@ function renderPositions(pos){
   var h='';
   pos.forEach(function(p){
     var dir=(p.direction||'').toUpperCase();
-    var dc=dir==='LONG'||dir==='YES'?(dir==='YES'?'yes':'long'):(dir==='NO'?'no':'short');
+    var dc=dir==='YES'?'yes':dir==='NO'?'no':dir==='LONG'?'long':'short';
     var il=dir==='LONG'||dir==='YES';
     var pd=il?(p.current_price-p.entry_price):(p.entry_price-p.current_price);
     var pnl=pd*(p.size||0);var pp=p.entry_price>0?(pd/p.entry_price*100):0;
     var pc=pnl>=0?'green':'red';
-    h+='<div class="pos-item"><div class="pos-top"><span class="pos-asset">'+esc(p.asset)+' <span class="pill '+dc+'">'+dir+'</span>';
+    var label=esc((p.asset||'').length>55?p.asset.slice(0,55)+'…':p.asset);
+    h+='<div class="pos-item"><div class="pos-top"><span class="pos-asset">'+label+' <span class="pill '+dc+'">'+dir+'</span>';
     if(p.is_shadow)h+='<span class="pill" style="background:var(--purple-dim);color:var(--purple);font-size:0.4rem">SHADOW</span>';
+    if(p.is_copy_trade)h+='<span class="pill" style="background:var(--cyan-dim);color:var(--cyan);font-size:0.4rem">COPY</span>';
     if(p.source)h+='<span class="pill source">'+esc(p.source)+'</span>';
     h+='</span><span class="pos-pnl '+pc+'">'+(pnl>=0?'+':'')+fmt$(pnl)+' ('+fmtPct(pp)+')</span></div>';
-    h+='<div class="pos-meta"><span>Entry: <strong>'+fmt$(p.entry_price)+'</strong></span><span>Now: <strong>'+fmt$(p.current_price)+'</strong></span>';
-    h+='<span>Lev: <strong>'+esc(p.leverage||'1x')+'</strong></span><span>Stop: <strong>'+fmt$(p.atr_stop_price)+'</strong></span>';
+    h+='<div class="pos-meta"><span>Entry: <strong>'+fmtOdds(p.entry_price)+'</strong></span><span>Now: <strong>'+fmtOdds(p.current_price)+'</strong></span>';
+    if(p.source_wallet)h+='<span>Whale: <strong>'+esc(p.source_wallet)+'</strong></span>';
     h+='<span>'+timeAgo(p.opened_at)+'</span></div></div>';
-  });
-  el.innerHTML=h;
-}
-
-var expandedTheses={};
-function toggleThesis(id){expandedTheses[id]=!expandedTheses[id];renderCryptoTheses(DATA.crypto_theses||[]);}
-function renderCryptoTheses(theses){
-  var el=document.getElementById('cryptoCard');
-  document.getElementById('cryptoCount').textContent=theses.length;
-  if(!theses.length){el.innerHTML='<div class="empty">No active crypto theses</div>';return;}
-  var h='';
-  theses.forEach(function(t){
-    var dir=(t.direction||'').toUpperCase();
-    var dc=dir==='LONG'?'long':'short';
-    var exp=expandedTheses[t.id];
-    h+='<div class="thesis-item" onclick="toggleThesis(\''+esc(t.id)+'\')">';
-    h+='<div class="thesis-top"><span class="thesis-asset">'+esc(t.asset)+' <span class="pill '+dc+'">'+dir+'</span>';
-    h+=' <span class="thesis-conf '+esc(t.confidence)+'">'+esc(t.confidence)+'</span>';
-    if(t.vote_count)h+=' <span style="font-size:0.46rem;color:var(--text-muted);font-weight:500">'+esc(t.vote_count)+'</span>';
-    h+='</span><span style="font-size:0.7rem;color:var(--text-muted)">'+(exp?'\u25B4':'\u25BE')+'</span></div>';
-    if(t.reasoning){
-      var reason=t.reasoning;
-      h+='<div class="thesis-reason'+(exp?'':' collapsed')+'">'+esc(reason)+'</div>';
-      if(!exp&&reason.length>100)h+='<div class="thesis-expand">TAP TO EXPAND</div>';
-    }
-    h+='<div class="thesis-meta"><span>Entry: '+fmt$(t.entry_price)+'</span><span>Stop: '+fmt$(t.stop_loss)+'</span><span>TP: '+fmt$(t.take_profit)+'</span>';
-    if(t.time_horizon)h+='<span>'+esc(t.time_horizon)+'</span>';
-    h+='<span>'+timeAgo(t.created_at)+'</span></div>';
-    if(exp){
-      h+='<div class="thesis-details"><div class="thesis-detail-grid">';
-      if(t.market_regime)h+='<div class="thesis-detail-item"><span class="thesis-detail-label">Regime </span><span class="thesis-detail-val">'+esc(t.market_regime)+'</span></div>';
-      if(t.technical_score!=null)h+='<div class="thesis-detail-item"><span class="thesis-detail-label">Tech Score </span><span class="thesis-detail-val">'+t.technical_score+'</span></div>';
-      h+='<div class="thesis-detail-item"><span class="thesis-detail-label">Entry </span><span class="thesis-detail-val">'+fmt$(t.entry_price)+'</span></div>';
-      h+='<div class="thesis-detail-item"><span class="thesis-detail-label">Stop Loss </span><span class="thesis-detail-val">'+fmt$(t.stop_loss)+'</span></div>';
-      h+='<div class="thesis-detail-item"><span class="thesis-detail-label">Take Profit </span><span class="thesis-detail-val">'+fmt$(t.take_profit)+'</span></div>';
-      if(t.vote_count)h+='<div class="thesis-detail-item"><span class="thesis-detail-label">Votes </span><span class="thesis-detail-val">'+esc(t.vote_count)+'</span></div>';
-      h+='</div>';
-      if(t.sources&&t.sources.length){h+='<div class="thesis-sources">';t.sources.forEach(function(s){h+='<span class="thesis-source-tag">'+esc(s)+'</span>';});h+='</div>';}
-      h+='</div>';
-    }
-    h+='</div>';
   });
   el.innerHTML=h;
 }
@@ -830,40 +781,33 @@ function renderPolyTheses(theses){
   el.innerHTML=h;
 }
 
-function fngColor(v){if(v<=25)return'var(--red)';if(v<=40)return'var(--amber)';if(v<=60)return'var(--text-secondary)';if(v<=75)return'var(--green)';return'var(--green-bright)';}
-function renderScout(s){
-  var el=document.getElementById('scoutCard');
-  if(!s||(!s.crypto_summary&&!s.pm_theses_count&&!s.fear_greed)){el.innerHTML='<div class="empty">No recent scout data</div>';return;}
-  var h='<div class="scout-intel">';
-  if(s.fear_greed){
-    var fg=s.fear_greed;
-    h+='<div class="scout-label">Fear &amp; Greed Index</div>';
-    h+='<div class="fng-gauge">';
-    h+='<div><div class="fng-val" style="color:'+fngColor(fg.value)+'">'+fg.value+'</div>';
-    h+='<div class="fng-label" style="color:'+fngColor(fg.value)+'">'+esc(fg.classification)+'</div></div>';
-    h+='<div class="fng-bar"><div class="fng-marker" style="left:'+fg.value+'%;background:'+fngColor(fg.value)+'"></div></div>';
-    h+='</div>';
-    if(fg.regime_signal)h+='<div class="scout-time">Signal: '+esc(fg.regime_signal)+'</div>';
-    h+='<div class="divider"></div>';
+function renderWhaleIntelligence(wi){
+  var el=document.getElementById('whaleCard');
+  if(!wi||(!wi.tracked_wallets||!wi.tracked_wallets.length)){
+    document.getElementById('whaleCount').textContent='0';
+    el.innerHTML='<div class="empty">No tracked wallets</div>';return;
   }
-  if(s.crypto_summary){
-    h+='<div class="scout-label">Crypto Intelligence';
-    if(s.crypto_regime){
-      var rc=s.crypto_regime==='BULLISH'||s.crypto_regime==='TRENDING'?'green':s.crypto_regime==='BEARISH'?'red':s.crypto_regime==='VOLATILE'?'amber':'cyan';
-      h+='<span class="scout-regime" style="background:var(--'+rc+'-dim,var(--cyan-dim));color:var(--'+rc+',var(--cyan))">'+esc(s.crypto_regime)+'</span>';
-    }
-    h+='</div>';
-    h+='<div class="scout-text">'+esc(s.crypto_summary)+'</div>';
-    if(s.crypto_last_run)h+='<div class="scout-time">Last scan: '+timeAgo(s.crypto_last_run)+' \u00b7 '+s.crypto_theses_count+' active theses</div>';
-  }
-  if(s.pm_theses_count>0){
-    if(s.crypto_summary||s.fear_greed)h+='<div class="divider"></div>';
-    h+='<div class="scout-label">Polymarket Intelligence</div>';
-    h+='<div class="scout-text">'+s.pm_theses_count+' active thes'+(s.pm_theses_count===1?'is':'es')+'</div>';
-    if(s.pm_top_thesis)h+='<div class="scout-time">Top: '+esc(s.pm_top_thesis)+'</div>';
-    if(s.pm_last_run)h+='<div class="scout-time">Last scan: '+timeAgo(s.pm_last_run)+'</div>';
-  }
-  h+='</div>';
+  var wallets=wi.tracked_wallets;
+  var perf=wi.performance||[];
+  document.getElementById('whaleCount').textContent=wallets.length;
+  var h='';
+  wallets.forEach(function(w){
+    var p=perf.find(function(x){return x.wallet_address===w.address;});
+    var wr=w.win_rate||0;
+    var wc=wr>=70?'green':wr>=50?'amber':'red';
+    h+='<div class="pos-item">';
+    h+='<div class="pos-top"><span class="pos-asset">'+esc(w.alias)+' <span class="pill" style="background:var(--'+wc+'-dim);color:var(--'+wc+')">'+wr.toFixed(0)+'% WR</span>';
+    if(!w.enabled)h+='<span class="pill" style="background:var(--red-dim);color:var(--red);font-size:0.4rem">DISABLED</span>';
+    h+='</span>';
+    var totalPnl=p?p.total_pnl:w.pnl||0;
+    h+='<span class="pos-pnl '+(totalPnl>=0?'green':'red')+'">'+(totalPnl>=0?'+':'')+fmt$(totalPnl)+'</span></div>';
+    h+='<div class="pos-meta">';
+    h+='<span>Niche: <strong>'+esc(w.niche)+'</strong></span>';
+    h+='<span>Trades: <strong>'+(p?p.total_copy_trades:w.total_trades||0)+'</strong></span>';
+    if(p&&p.wins!==undefined)h+='<span>W/L: <strong>'+p.wins+'/'+p.losses+'</strong></span>';
+    if(w.last_checked)h+='<span>Checked: '+timeAgo(w.last_checked)+'</span>';
+    h+='</div></div>';
+  });
   el.innerHTML=h;
 }
 
@@ -912,8 +856,8 @@ function renderResearch(r){
   var el=document.getElementById('researchCard');
   if(!r){el.innerHTML='<div class="empty">No research data</div>';return;}
   var h='<div class="research-grid">';
-  h+='<div class="research-item"><div class="research-label">Crypto Iterations</div><div class="research-val">'+r.crypto_history_count+'</div><div class="research-sub">parameter sets tested</div></div>';
-  h+='<div class="research-item"><div class="research-label">PM Iterations</div><div class="research-val">'+r.polymarket_history_count+'</div><div class="research-sub">parameter sets tested</div></div>';
+  h+='<div class="research-item"><div class="research-label">PM Iterations</div><div class="research-val">'+(r.polymarket_history_count||0)+'</div><div class="research-sub">parameter sets tested</div></div>';
+  h+='<div class="research-item"><div class="research-label">Total Iterations</div><div class="research-val">'+((r.crypto_history_count||0)+(r.polymarket_history_count||0))+'</div><div class="research-sub">all domains</div></div>';
   h+='</div>';
   if(r.recent_experiments&&r.recent_experiments.length){
     h+='<div class="card flush" style="margin-top:0.35rem">';
@@ -938,7 +882,7 @@ function renderHealth(h){
   var items=[
     {label:'Kill',val:h.kill_switch?'ACTIVE':'Off',c:h.kill_switch?'red':'green'},
     {label:'System',val:h.paused?'PAUSED':'Running',c:h.paused?'amber':'green'},
-    {label:'Scout',val:h.scout_last_run?timeAgo(h.scout_last_run):'N/A',c:h.scout_healthy?'green':'amber'},
+    {label:'PM Scout',val:h.pm_scout_last_run?timeAgo(h.pm_scout_last_run):'N/A',c:h.pm_scout_healthy?'green':'amber'},
     {label:'Monitor',val:h.monitor_last_tick?timeAgo(h.monitor_last_tick):'N/A',c:h.monitor_healthy?'green':'red'},
     {label:'Oversight',val:h.oversight_last_run?timeAgo(h.oversight_last_run):'N/A',c:h.oversight_healthy?'green':'amber'},
     {label:'Dead Man',val:h.deadman_healthy?'Alive':'STALE',c:h.deadman_healthy?'green':'red'},
