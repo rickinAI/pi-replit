@@ -48,8 +48,6 @@ function getJobSavePath(jobId: string, dateStr: string, safeName: string): strin
   if (jobId === "weekly-inbox-deep-clean") return `Scheduled Reports/Inbox Cleanup/${dateStr}-weekly-summary.md`;
   if (jobId === "baby-dashboard-weekly-update") return `Scheduled Reports/Baby Dashboard/${dateStr}-Weekly-Log.md`;
   if (jobId === "birthday-calendar-sync") return `Scheduled Reports/Birthday Sync/${dateStr}-Sync.md`;
-  if (jobId === "scout-micro-scan") return `Scheduled Reports/Wealth Engines/Scout/${dateStr}-Micro-Scan.md`;
-  if (jobId === "scout-full-cycle") return `Scheduled Reports/Wealth Engines/Scout/${dateStr}-Full-Cycle.md`;
   if (jobId === "polymarket-activity-scan") return `Scheduled Reports/Wealth Engines/Polymarket/${dateStr}-Activity-Scan.md`;
   if (jobId === "polymarket-full-cycle") return `Scheduled Reports/Wealth Engines/Polymarket/${dateStr}-Full-Cycle.md`;
   if (jobId === "weekly-memory-reflect") return `Scheduled Reports/Memory/${dateStr}-Weekly-Digest.md`;
@@ -768,22 +766,6 @@ Process everything autonomously. Be thorough but efficient.`,
     enabled: true,
   },
   {
-    id: "scout-micro-scan",
-    name: "SCOUT Micro-Scan (DISABLED — crypto removed)",
-    agentId: "scout",
-    prompt: `Crypto scout has been removed. DarkNode is now prediction-markets only. This job is disabled.`,
-    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 60 },
-    enabled: false,
-  },
-  {
-    id: "scout-full-cycle",
-    name: "SCOUT Full Cycle (DISABLED — crypto removed)",
-    agentId: "scout",
-    prompt: `Crypto scout has been removed. DarkNode is now prediction-markets only. This job is disabled.`,
-    schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 240 },
-    enabled: false,
-  },
-  {
     id: "polymarket-activity-scan",
     name: "Polymarket Activity Scan",
     agentId: "polymarket-scout",
@@ -1204,7 +1186,6 @@ export async function init(): Promise<void> {
 
       let costOptApplied = false;
       const costOptJobs: Record<string, { intervalMinutes?: number; prompt?: string; enabled?: boolean; toolSubset?: string[] }> = {
-        "scout-micro-scan": { intervalMinutes: 60, enabled: false },
         "polymarket-activity-scan": { intervalMinutes: 120, toolSubset: ["polymarket_whale_activity", "polymarket_consensus", "polymarket_details", "notes_create"] },
         "bankr-execute": { intervalMinutes: 60, toolSubset: ["polymarket_theses", "bankr_positions", "bankr_risk_check", "bankr_open_position", "signal_quality", "notes_create"] },
         "oversight-shadow-refresh": { intervalMinutes: 120, toolSubset: ["oversight_shadow_refresh", "notes_create"] },
@@ -1253,7 +1234,6 @@ DO NOT call signal_quality — it is informational only and must not affect exec
     }
 
     const WE_PAUSE_IDS = new Set([
-      "scout-micro-scan", "scout-full-cycle",
       "polymarket-activity-scan", "polymarket-full-cycle",
       "bankr-execute",
       "oversight-health", "oversight-weekly", "oversight-daily-summary", "oversight-shadow-refresh",
@@ -1810,7 +1790,6 @@ After processing, briefly confirm what you did.`;
 }
 
 const WE_JOB_IDS = new Set([
-  "scout-micro-scan", "scout-full-cycle",
   "polymarket-activity-scan", "polymarket-full-cycle",
   "bankr-execute",
   "oversight-health", "oversight-weekly", "oversight-daily-summary", "oversight-shadow-refresh",
@@ -1942,31 +1921,6 @@ async function checkJobs(): Promise<void> {
           durationMs: Date.now() - jobStartMs,
         }).catch(err => console.warn("[scheduled-jobs] Telegram notification failed:", err));
 
-        if (job.id === "scout-full-cycle" || job.id === "scout-micro-scan") {
-          try {
-            const pool = dbPoolFn ? dbPoolFn() : null;
-            if (pool) {
-              const briefKey = job.id === "scout-full-cycle" ? "scout_latest_brief" : "scout_latest_micro_scan";
-              await pool.query(
-                `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
-                 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
-                [briefKey, JSON.stringify(result.slice(0, 10000)), Date.now()]
-              );
-              console.log(`[scheduled-jobs] Saved SCOUT brief to ${briefKey}`);
-            }
-          } catch (e) {
-            console.warn(`[scheduled-jobs] Failed to save SCOUT brief:`, e);
-          }
-
-          if (job.id === "scout-full-cycle") {
-            try {
-              await sendScoutBrief(result);
-              console.log(`[scheduled-jobs] Sent SCOUT brief via Telegram`);
-            } catch (briefErr) {
-              console.warn(`[scheduled-jobs] Failed to send SCOUT brief via Telegram:`, briefErr instanceof Error ? briefErr.message : briefErr);
-            }
-          }
-        }
 
         if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit" || job.id === "weekly-inbox-deep-clean" || job.id === "baby-dashboard-weekly-update") && kbListFn && kbMoveFn) {
           await archiveOldReports();
@@ -2140,23 +2094,6 @@ export async function triggerJob(jobId: string): Promise<string> {
         vaultSaved = true;
       } catch {}
       try { await writeJobStatus(job.id, { lastRun: job.lastRun, status: job.lastStatus!, savedTo: vaultSaved ? savePath : null, error: vaultSaved ? null : "vault save failed" }); } catch {}
-    }
-
-    if (job.id === "scout-full-cycle" || job.id === "scout-micro-scan") {
-      try {
-        const pool = dbPoolFn ? dbPoolFn() : null;
-        if (pool) {
-          const briefKey = job.id === "scout-full-cycle" ? "scout_latest_brief" : "scout_latest_micro_scan";
-          await pool.query(
-            `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
-             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
-            [briefKey, JSON.stringify(result.slice(0, 10000)), Date.now()]
-          );
-          console.log(`[scheduled-jobs] Saved SCOUT brief to ${briefKey} (manual trigger)`);
-        }
-      } catch (e) {
-        console.warn(`[scheduled-jobs] Failed to save SCOUT brief:`, e);
-      }
     }
 
     if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit" || job.id === "weekly-inbox-deep-clean" || job.id === "baby-dashboard-weekly-update") && kbListFn && kbMoveFn) {

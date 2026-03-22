@@ -797,7 +797,7 @@ async function handleHelpCommand(): Promise<string> {
     "/status — System health & mode",
     "/portfolio — Open positions & P&L",
     "/intel — Latest SCOUT brief",
-    "/scout — Active crypto theses",
+    "/scout — Active theses (legacy)",
     "/polymarket — Active PM theses",
     "/trades [n] — Last N trades (default 5)",
     "/risk — Risk dashboard",
@@ -811,7 +811,7 @@ async function handleHelpCommand(): Promise<string> {
     "/public on|off — Toggle dashboard access",
     "/alerts — Bot connection status",
     "/notify [smart|immediate|digest] — Notification mode",
-    "/research [crypto|polymarket|status] — Autoresearch",
+    "/research — (disabled, prediction-markets only)",
     "/help — This message",
   ].join("\n");
 }
@@ -1186,7 +1186,6 @@ export async function sendScoutBrief(brief: string, chartUrls?: string[]): Promi
   await sendMessage(`${mode} 🔍 *SCOUT Morning Brief*\n\n${truncated}`);
 }
 
-let lastScoutNotifyHash = "";
 let lastPmNotifyHash = "";
 
 interface DigestEvent {
@@ -1250,7 +1249,6 @@ export async function sendJobCompletionNotification(params: {
   const notifyMode = await getNotificationMode();
 
   const weJobIds = new Set([
-    "scout-micro-scan", "scout-full-cycle",
     "polymarket-activity-scan", "polymarket-full-cycle",
     "bankr-execute", "oversight-health", "oversight-weekly",
     "oversight-daily-summary", "oversight-shadow-refresh",
@@ -1264,19 +1262,6 @@ export async function sendJobCompletionNotification(params: {
   }
 
   if (notifyMode === "smart") {
-    if (params.jobId === "scout-micro-scan") {
-      try {
-        const res = await pool.query(`SELECT value FROM app_config WHERE key = 'scout_active_theses'`);
-        if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
-          const active = res.rows[0].value.filter((t: any) => !t.expires_at || t.expires_at > Date.now());
-          const fingerprint = active.map((t: any) => `${t.asset}:${t.direction}:${t.confidence || "?"}`).sort().join("|");
-          const hash = `micro_${fingerprint}`;
-          if (hash === lastScoutNotifyHash) return;
-          lastScoutNotifyHash = hash;
-        }
-      } catch {}
-    }
-
     if (params.jobId === "polymarket-activity-scan") {
       try {
         const res = await pool.query(`SELECT value FROM app_config WHERE key = 'polymarket_scout_active_theses'`);
@@ -1295,7 +1280,6 @@ export async function sendJobCompletionNotification(params: {
   const statusIcon = params.status === "partial" ? "⚠️" : "✅";
 
   const icons: Record<string, string> = {
-    "scout-micro-scan": "🔍", "scout-full-cycle": "🔍",
     "polymarket-activity-scan": "🎰", "polymarket-full-cycle": "🎰",
     "bankr-execute": "💰", "oversight-health": "🛡️",
     "oversight-weekly": "🛡️", "oversight-daily-summary": "📊",
@@ -1305,26 +1289,7 @@ export async function sendJobCompletionNotification(params: {
 
   let detailLines: string[] = [];
   try {
-    if (params.jobId.startsWith("scout-")) {
-      const res = await pool.query(`SELECT value FROM app_config WHERE key = 'scout_active_theses'`);
-      if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
-        const now = Date.now();
-        const active = res.rows[0].value.filter((t: any) => !t.expires_at || t.expires_at > now);
-        const newTheses = active.filter((t: any) => t.created_at && (now - t.created_at) < 3600000);
-        detailLines.push(`*Theses:* ${active.length} active${newTheses.length > 0 ? ` (${newTheses.length} new)` : ""}`);
-        if (active.length > 0) {
-          const regimes = [...new Set(active.map((t: any) => t.market_regime || t.regime).filter(Boolean))];
-          if (regimes.length > 0) detailLines.push(`*Regime:* ${regimes.join(", ")}`);
-          for (const t of active.slice(0, 3)) {
-            const vc = t.vote_count ?? t.votes;
-            const votes = vc != null ? (typeof vc === "string" && vc.includes("/") ? vc : `${vc}/6`) : "";
-            const score = t.technical_score != null ? `score=${t.technical_score.toFixed(2)}` : "";
-            const parts = [`${t.asset} ${t.direction}`, t.confidence, votes, score].filter(Boolean);
-            detailLines.push(`  • ${parts.join(" | ")}`);
-          }
-        }
-      }
-    } else if (params.jobId.startsWith("polymarket-")) {
+    if (params.jobId.startsWith("polymarket-")) {
       const res = await pool.query(`SELECT value FROM app_config WHERE key = 'polymarket_scout_active_theses'`);
       if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
         const now = Date.now();
@@ -1530,7 +1495,7 @@ export async function sendDarkNodeSummary(): Promise<void> {
 
   try {
     const configRes = await pool.query(
-      `SELECT key, value FROM app_config WHERE key IN ('wealth_engines_portfolio_value', 'scout_active_theses', 'polymarket_scout_active_theses', 'oversight_shadow_trades', 'oversight_health_reports', 'wealth_engines_paused', 'wealth_engines_kill_switch')`
+      `SELECT key, value FROM app_config WHERE key IN ('wealth_engines_portfolio_value', 'polymarket_scout_active_theses', 'oversight_shadow_trades', 'oversight_health_reports', 'wealth_engines_paused', 'wealth_engines_kill_switch')`
     );
     const cm: Record<string, any> = {};
     for (const row of configRes.rows) cm[row.key] = row.value;
@@ -1539,9 +1504,6 @@ export async function sendDarkNodeSummary(): Promise<void> {
     paused = cm['wealth_engines_paused'] === true;
     killSwitch = cm['wealth_engines_kill_switch'] === true;
 
-    if (Array.isArray(cm['scout_active_theses'])) {
-      thesisCount = cm['scout_active_theses'].filter((t: any) => !t.expires_at || t.expires_at > Date.now()).length;
-    }
     if (Array.isArray(cm['polymarket_scout_active_theses'])) {
       pmThesisCount = cm['polymarket_scout_active_theses'].filter((t: any) => t.status === "active").length;
     }
