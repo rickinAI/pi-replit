@@ -394,11 +394,6 @@ Auth via custom OAuth flow using `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`. To
 - `x_user_timeline` — User's recent tweets with view counts and engagement stats
 - `x_search` — Search tweets by query (keywords, @mentions, #hashtags, from:user). Supports "Latest" and "Top" modes
 
-## Stock Tracker
-
-1 custom tool using free APIs (no API key):
-- `stock_quote` — Real-time stock price via Yahoo Finance (price, change, volume, day range)
-
 ## Maps & Directions
 
 2 custom tools using free APIs (no API key):
@@ -501,7 +496,6 @@ Config-driven specialist agents that RICKIN can delegate complex tasks to. Each 
 ## src/ Modules
 - **src/db.ts** — Shared PostgreSQL pool and table initialization
 - **src/twitter.ts** — X/Twitter reader via Twitter241 RapidAPI (profiles, tweets, timelines, search)
-- **src/stocks.ts** — Stock quotes (Yahoo Finance)
 - **src/maps.ts** — Directions (Nominatim + OSRM) and place search (Nominatim)
 - **src/youtube.ts** — YouTube Data API v3 integration (search, video details, channel info, trending)
 - **src/alerts.ts** — Alert & briefing scheduler (background checks, brief generation, SSE broadcast)
