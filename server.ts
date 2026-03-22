@@ -4600,7 +4600,7 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
           const sigRes = await ctPool.query(`SELECT value FROM app_config WHERE key = $1`, ["copy_trading_signals"]);
           if (sigRes.rows.length > 0 && Array.isArray(sigRes.rows[0].value)) {
             return sigRes.rows[0].value
-              .sort((a: any, b: any) => (b.detected_at || 0) - (a.detected_at || 0))
+              .sort((a: any, b: any) => (Number(b.detected_at) || 0) - (Number(a.detected_at) || 0))
               .slice(0, 10)
               .map((s: any) => ({
                 wallet_alias: s.wallet_alias, market_question: (s.market_question || "").slice(0, 80),
