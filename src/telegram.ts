@@ -934,7 +934,7 @@ async function handleRemoveWalletCommand(args: string): Promise<string> {
     const wallets = await getWhaleWatchlist();
     const idx = wallets.findIndex(w =>
       w.address.toLowerCase() === query.toLowerCase() ||
-      w.alias.toLowerCase() === query.toLowerCase()
+      (w.alias || "").toLowerCase() === query.toLowerCase()
     );
 
     if (idx === -1) {
@@ -970,7 +970,7 @@ async function handleBlacklistWalletCommand(args: string): Promise<string> {
     const wallets = await getWhaleWatchlist();
     const idx = wallets.findIndex(w =>
       w.address.toLowerCase() === query.toLowerCase() ||
-      w.alias.toLowerCase() === query.toLowerCase()
+      (w.alias || "").toLowerCase() === query.toLowerCase()
     );
 
     let address: string;
@@ -978,7 +978,7 @@ async function handleBlacklistWalletCommand(args: string): Promise<string> {
 
     if (idx !== -1) {
       address = wallets[idx].address.toLowerCase();
-      aliasLabel = wallets[idx].alias;
+      aliasLabel = wallets[idx].alias || address.slice(0, 10);
     } else if (/^0x[a-fA-F0-9]{40}$/i.test(query)) {
       address = query.toLowerCase();
       aliasLabel = `${address.slice(0, 10)}…`;
