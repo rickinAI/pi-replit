@@ -30,7 +30,7 @@ export interface PipelineStats {
   last_event_at: number | null;
 }
 
-export async function initPipelineTable(): Promise<void> {
+export async function ensurePipelineTable(): Promise<void> {
   const pool = getPool();
   await pool.query(`
     CREATE TABLE IF NOT EXISTS email_pipeline (
@@ -83,7 +83,7 @@ export async function logPipelineEvent(event: PipelineEvent): Promise<number> {
 
 export async function updatePipelineEvent(
   id: number,
-  updates: Partial<Pick<PipelineEvent, "status" | "metadata">>
+  updates: { status?: string; metadata?: Partial<PipelineEventMetadata> }
 ): Promise<void> {
   const pool = getPool();
   if (updates.metadata) {

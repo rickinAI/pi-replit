@@ -1,5 +1,6 @@
 import { classifyEmail, shouldWriteToVault, type ClassifiedEmail, type InboxType } from "./email-classifier.js";
-import { logPipelineEvent, updatePipelineEvent, type PipelineEventMetadata } from "./pipeline-store.js";
+import { logPipelineEvent, updatePipelineEvent } from "./pipeline-store.js";
+import type { PipelineEventMetadata } from "./pipeline-store.js";
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || "";
@@ -149,8 +150,8 @@ export async function handleInboundWebhook(
     });
     console.log(`[resend] Pipeline event #${pipelineId} logged to DB`);
   } catch (err) {
-    console.error("[resend] Pipeline DB write failed:", err instanceof Error ? err.message : err);
-    pipelineId = -1;
+    console.error("[resend] Pipeline DB write failed (fail-closed):", err instanceof Error ? err.message : err);
+    return { status: "error", error: "Pipeline DB write failed — email not processed" };
   }
 
   let vaultPath: string | null = null;
@@ -160,12 +161,12 @@ export async function handleInboundWebhook(
       try {
         if (vaultPath) {
           await updatePipelineEvent(pipelineId, {
-            metadata: { vault_written: true, vault_path: vaultPath } as any,
+            metadata: { vault_written: true, vault_path: vaultPath },
           });
         } else {
           await updatePipelineEvent(pipelineId, {
             status: "error",
-            metadata: { vault_written: false, reject_reason: "vault_write_failed" } as any,
+            metadata: { vault_written: false, reject_reason: "vault_write_failed" },
           });
         }
       } catch {}

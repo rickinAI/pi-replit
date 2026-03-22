@@ -8122,13 +8122,6 @@ async function sendStartupNotification(googleStatus: { connected: boolean; email
 
 async function startServer(maxRetries = 5) {
   await db.init();
-  try {
-    const { initPipelineTable } = await import("./src/pipeline-store.js");
-    await initPipelineTable();
-    console.log("[boot] email_pipeline table ready");
-  } catch (err) {
-    console.error("[boot] email_pipeline init failed:", err instanceof Error ? err.message : err);
-  }
   await conversations.init();
   await gmail.init();
   await tasks.init();

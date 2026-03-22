@@ -106,13 +106,28 @@ export async function init(): Promise<pg.Pool> {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_vault_inbox_created ON vault_inbox(created_at DESC)`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_vault_inbox_url ON vault_inbox(url)`);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS email_pipeline (
+      id SERIAL PRIMARY KEY,
+      inbox TEXT NOT NULL,
+      category TEXT NOT NULL,
+      sender TEXT NOT NULL,
+      subject TEXT,
+      status TEXT NOT NULL,
+      metadata JSONB NOT NULL DEFAULT '{}',
+      created_at BIGINT NOT NULL
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_email_pipeline_inbox ON email_pipeline(inbox)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_email_pipeline_created ON email_pipeline(created_at DESC)`);
+
   try {
     await pool.query(`CREATE EXTENSION IF NOT EXISTS vector`);
   } catch (err) {
     console.warn("[db] pgvector extension not available (semantic features will be disabled):", err);
   }
 
-  console.log("[db] PostgreSQL initialized (shared pool, 7 tables + pgvector)");
+  console.log("[db] PostgreSQL initialized (shared pool, 8 tables + pgvector)");
   return pool;
 }
 
