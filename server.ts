@@ -4436,7 +4436,7 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
     available_usdc: parseFloat(availableUsdc.toFixed(2)),
     initial_capital: summary.initial_capital || 10000,
     eoy_target: eoyTarget,
-    total_trades: tradeHistory.length,
+    total_trades: allTradesCombined.length,
     win_rate: parseFloat(winRate.toFixed(1)),
     mode: summary.mode,
     paused: summary.paused,
