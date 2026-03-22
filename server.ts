@@ -1534,7 +1534,7 @@ function buildCoinGeckoTools(): ToolDefinition[] {
     {
       name: "signal_quality",
       label: "Signal Quality Scores",
-      description: "Get signal quality scores — historical win rates by source (crypto_scout, polymarket_scout) and asset class. Shows rolling win rate, avg P&L, total wins/losses, and recent trade results. Use this before generating theses to understand which signal sources are performing well. Sources with >60% win rate deserve a confidence boost, <40% deserve a penalty.",
+      description: "Get signal quality scores — historical performance by source (crypto_scout, polymarket_scout) and asset class. Shows rolling win rate, profit factor (gross profit / gross loss), avg P&L, per-asset breakdown, total wins/losses, and recent trade results. Requires minimum 8 completed trades before modifiers apply. Boost: win rate >55% AND profit factor >1.2. Penalty: win rate <40% OR profit factor <0.5. Use before generating theses to understand signal source performance.",
       parameters: Type.Object({}),
       async execute() {
         try {
