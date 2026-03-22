@@ -865,12 +865,14 @@ Do NOT use notes_create — the system saves automatically.`,
     id: "bankr-execute",
     name: "BANKR Execute",
     agentId: "bankr",
-    prompt: `EXECUTION CYCLE: Check theses and execute trades.
-1. scout_theses — active HIGH/MEDIUM crypto theses
-2. polymarket_theses — active HIGH/MEDIUM polymarket theses
-3. bankr_positions — skip theses with existing positions
-4. For new theses: bankr_risk_check → if passed, bankr_open_position (all tiers execute automatically)
-5. Output: theses evaluated, trades executed/skipped, portfolio state.`,
+    prompt: `EXECUTION CYCLE — YOU MUST EXECUTE TRADES. Follow these steps exactly:
+1. scout_theses — get active crypto theses
+2. polymarket_theses — get active polymarket theses  
+3. bankr_positions — get current open positions
+4. For EVERY thesis that does NOT have an existing open position for the same asset+direction: call bankr_open_position with the thesis details. Use leverage=2, confidence from thesis, entry_price from current market price.
+5. Do NOT skip theses for any reason. Do NOT apply your own risk judgment. bankr_open_position handles ALL risk checks, position sizing, and mode logic internally. SHADOW mode is normal operation.
+6. You MUST call bankr_open_position for each eligible thesis. If you finish without calling it, you have failed.
+DO NOT call signal_quality — it is informational only and must not affect execution decisions.`,
     schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 60 },
     enabled: true,
     toolSubset: ["scout_theses", "polymarket_theses", "bankr_positions", "bankr_risk_check", "bankr_open_position", "signal_quality", "notes_create"],
@@ -1271,6 +1273,20 @@ export async function init(): Promise<void> {
       }
       if (costOptApplied) {
         console.log("[scheduled-jobs] Migrated: cost optimization — wider intervals, tool subsets, reduced summaries");
+        await saveConfig();
+      }
+
+      const bankrJob = config.jobs.find(j => j.id === "bankr-execute");
+      if (bankrJob && !bankrJob.prompt?.includes("YOU MUST EXECUTE TRADES")) {
+        bankrJob.prompt = `EXECUTION CYCLE — YOU MUST EXECUTE TRADES. Follow these steps exactly:
+1. scout_theses — get active crypto theses
+2. polymarket_theses — get active polymarket theses  
+3. bankr_positions — get current open positions
+4. For EVERY thesis that does NOT have an existing open position for the same asset+direction: call bankr_open_position with the thesis details. Use leverage=2, confidence from thesis, entry_price from current market price.
+5. Do NOT skip theses for any reason. Do NOT apply your own risk judgment. bankr_open_position handles ALL risk checks, position sizing, and mode logic internally. SHADOW mode is normal operation.
+6. You MUST call bankr_open_position for each eligible thesis. If you finish without calling it, you have failed.
+DO NOT call signal_quality — it is informational only and must not affect execution decisions.`;
+        console.log("[scheduled-jobs] Migrated: BANKR prompt updated to force execution");
         await saveConfig();
       }
     } else {
@@ -1949,27 +1965,8 @@ async function checkJobs(): Promise<void> {
 
           if (job.id === "scout-full-cycle") {
             try {
-              let enrichedBrief = result;
-              const chartUrls: string[] = [];
-
-              const urlMatches = result.match(/https?:\/\/[^\s)]+\.(?:png|jpg|jpeg|webp|gif)/gi);
-              if (urlMatches) chartUrls.push(...urlMatches.slice(0, 5));
-
-              const trendingCandidates = await getBnkrTrendingCandidates();
-              if (trendingCandidates.length > 0) {
-                enrichedBrief += `\n\n📊 *BNKR Trending Cross-Ref:* ${trendingCandidates.slice(0, 8).join(', ')}`;
-              }
-
-              const activeTheses = await getActiveTheses();
-              if (activeTheses.length > 0) {
-                const { theses: enrichedTheses, chartUrls: thesisCharts } = await enrichThesesWithBnkr(activeTheses);
-                await saveTheses(enrichedTheses);
-                chartUrls.push(...thesisCharts);
-                console.log(`[scheduled-jobs] BNKR-enriched ${enrichedTheses.length} theses, ${thesisCharts.length} charts`);
-              }
-
-              await sendScoutBrief(enrichedBrief, chartUrls.length > 0 ? chartUrls : undefined);
-              console.log(`[scheduled-jobs] Sent SCOUT brief via Telegram with ${chartUrls.length} charts`);
+              await sendScoutBrief(result);
+              console.log(`[scheduled-jobs] Sent SCOUT brief via Telegram`);
             } catch (briefErr) {
               console.warn(`[scheduled-jobs] Failed to send SCOUT brief via Telegram:`, briefErr instanceof Error ? briefErr.message : briefErr);
             }

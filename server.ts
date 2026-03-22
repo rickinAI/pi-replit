@@ -2026,13 +2026,6 @@ function buildCoinGeckoTools(): ToolDefinition[] {
           if (!riskCheck.passed) {
             return { content: [{ type: "text" as const, text: JSON.stringify({ executed: false, tier: riskCheck.tier, reason: riskCheck.rejection_reason, checks: riskCheck.checks }) }], details: {} };
           }
-          let chartUrl: string | undefined;
-          try {
-            const chart = await bnkr.getChart(params.asset);
-            if (chart.chartUrl) chartUrl = chart.chartUrl;
-          } catch (chartErr) {
-            console.warn(`[bankr] Chart fetch failed: ${chartErr instanceof Error ? chartErr.message : chartErr}`);
-          }
 
           if (riskCheck.tier === "dead_zone") {
             await telegram.sendTradeAlert({
@@ -2051,13 +2044,6 @@ function buildCoinGeckoTools(): ToolDefinition[] {
             return { content: [{ type: "text" as const, text: JSON.stringify({ executed: false, reason: "Position already open for this thesis", existing_position_id: result.position?.id }) }], details: {} };
           }
 
-          if (chartUrl) {
-            try {
-              await telegram.sendPhoto(chartUrl, `📊 ${params.asset} ${params.direction} — Chart at entry`);
-            } catch (photoErr) {
-              console.warn(`[bankr] Chart photo send failed: ${photoErr instanceof Error ? photoErr.message : photoErr}`);
-            }
-          }
           await telegram.sendTradeAlert({
             type: "executed",
             asset: params.asset,
