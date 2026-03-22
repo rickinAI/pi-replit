@@ -3646,6 +3646,7 @@ interface SessionEntry {
   isAgentRunning: boolean;
   pendingMessages: PendingMessage[];
   startupContext?: string;
+  promptGeneration: number;
 }
 const sessions = new Map<string, SessionEntry>();
 
@@ -3798,6 +3799,8 @@ async function processNextPendingMessage(sessionId: string) {
   const pending = entry.pendingMessages.shift()!;
   entry.isAgentRunning = true;
   entry.currentAgentText = "";
+  entry.promptGeneration++;
+  const thisGeneration = entry.promptGeneration;
 
   const startEvent = JSON.stringify({ type: "agent_start" });
   for (const sub of entry.subscribers) {
@@ -3824,6 +3827,10 @@ async function processNextPendingMessage(sessionId: string) {
     await Promise.race([actualPromise, timeoutPromise]);
     console.log(`[prompt] queued prompt completed in ${((Date.now() - queuedPromptStart) / 1000).toFixed(1)}s`);
   } catch (err) {
+    if (entry.promptGeneration !== thisGeneration) {
+      console.log(`[prompt] queued cancelled (gen ${thisGeneration} vs current ${entry.promptGeneration}) after ${((Date.now() - queuedPromptStart) / 1000).toFixed(1)}s`);
+      return;
+    }
     const elapsed = ((Date.now() - queuedPromptStart) / 1000).toFixed(1);
     const isTimeout = String(err).includes("timed out");
     console.error(`[prompt] queued ${isTimeout ? "timeout" : "error"} after ${elapsed}s:`, err);
@@ -3834,12 +3841,14 @@ async function processNextPendingMessage(sessionId: string) {
     if (isTimeout) {
       console.log(`[prompt] queued agent still running in background — new messages will be queued`);
       actualPromise.then(() => {
+        if (entry.promptGeneration !== thisGeneration) return;
         console.log(`[prompt] queued background prompt completed after ${((Date.now() - queuedPromptStart) / 1000).toFixed(1)}s total`);
         entry.isAgentRunning = false;
         entry.currentToolName = null;
         processingQueue.delete(sessionId);
         processNextPendingMessage(sessionId);
       }).catch(() => {
+        if (entry.promptGeneration !== thisGeneration) return;
         console.log(`[prompt] queued background prompt failed after ${((Date.now() - queuedPromptStart) / 1000).toFixed(1)}s total`);
         entry.isAgentRunning = false;
         entry.currentToolName = null;
@@ -6548,6 +6557,7 @@ app.post("/api/session", async (req: Request, res: Response) => {
       activeModelName: FULL_MODEL_ID,
       isAgentRunning: false,
       pendingMessages: [],
+      promptGeneration: 0,
     };
     sessions.set(sessionId, entry);
 
@@ -6802,6 +6812,8 @@ app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
 
   entry.isAgentRunning = true;
   entry.currentAgentText = "";
+  entry.promptGeneration++;
+  const thisGeneration = entry.promptGeneration;
 
   const startEvent = JSON.stringify({ type: "agent_start" });
   for (const sub of entry.subscribers) {
@@ -6841,6 +6853,10 @@ app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
     entry.currentToolName = null;
     processNextPendingMessage(sessionId);
   } catch (err) {
+    if (entry.promptGeneration !== thisGeneration) {
+      console.log(`[prompt] cancelled (gen ${thisGeneration} vs current ${entry.promptGeneration}) after ${((Date.now() - promptStart) / 1000).toFixed(1)}s`);
+      return;
+    }
     const elapsed = ((Date.now() - promptStart) / 1000).toFixed(1);
     const isTimeout = String(err).includes("timed out");
     console.error(`[prompt] ${isTimeout ? "timeout" : "error"} after ${elapsed}s:`, err);
@@ -6851,11 +6867,13 @@ app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
     if (isTimeout) {
       console.log(`[prompt] agent still running in background — new messages will be queued`);
       actualPromise.then(() => {
+        if (entry.promptGeneration !== thisGeneration) return;
         console.log(`[prompt] background prompt finally completed after ${((Date.now() - promptStart) / 1000).toFixed(1)}s total`);
         entry.isAgentRunning = false;
         entry.currentToolName = null;
         processNextPendingMessage(sessionId);
       }).catch(() => {
+        if (entry.promptGeneration !== thisGeneration) return;
         console.log(`[prompt] background prompt failed after ${((Date.now() - promptStart) / 1000).toFixed(1)}s total`);
         entry.isAgentRunning = false;
         entry.currentToolName = null;
@@ -6866,6 +6884,36 @@ app.post("/api/session/:id/prompt", async (req: Request, res: Response) => {
       entry.currentToolName = null;
     }
   }
+});
+
+app.post("/api/session/:id/cancel", async (req: Request, res: Response) => {
+  const sessionId = req.params["id"] as string;
+  const entry = sessions.get(sessionId);
+  if (!entry) { res.status(404).json({ error: "Session not found" }); return; }
+  if (!entry.isAgentRunning) { res.json({ ok: true, wasRunning: false }); return; }
+
+  console.log(`[cancel] Cancel requested for session ${sessionId.slice(0, 8)}`);
+  entry.promptGeneration++;
+  entry.pendingMessages = [];
+
+  try {
+    await entry.session.abort();
+    console.log(`[cancel] Session abort completed`);
+  } catch (err) {
+    console.log(`[cancel] Session abort error (may be expected):`, String(err).slice(0, 200));
+  }
+
+  entry.isAgentRunning = false;
+  entry.currentToolName = null;
+  entry.currentAgentText = "";
+  processingQueue.delete(sessionId);
+
+  const cancelEvent = JSON.stringify({ type: "cancel_ack" });
+  for (const sub of entry.subscribers) {
+    try { sub.write(`data: ${cancelEvent}\n\n`); } catch {}
+  }
+
+  res.json({ ok: true, wasRunning: true });
 });
 
 app.put("/api/session/:id/model-mode", (req: Request, res: Response) => {

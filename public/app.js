@@ -238,6 +238,7 @@ if (window.visualViewport) {
             renderInterviewForm(status.pendingInterview);
           } else if (status.agentRunning) {
             isAgentRunning = true;
+            updateSendButton();
             if (status.currentAgentText) {
               removeEmptyState();
               agentBubble = appendBubble("agent", "");
@@ -346,6 +347,7 @@ function cleanupCurrentSession() {
   agentBubble = null;
   agentText = "";
   isAgentRunning = false;
+  updateSendButton();
   hasMessages = false;
   reconnectAttempts = 0;
   setConnected(false);
@@ -1266,11 +1268,13 @@ async function catchUpSession(sid, retryCount = 0, wasReconnecting = false) {
         textOffsetAfterCatchUp = 0;
       }
       isAgentRunning = true;
+      updateSendButton();
       if (!thinkingStartTime) startThinkingTimer();
       const toolLabel = getToolStatusLabel(status.currentToolName);
       showStatus(status.pendingCount > 0 ? `${toolLabel} ${status.pendingCount} QUEUED` : toolLabel);
     } else {
       isAgentRunning = false;
+      updateSendButton();
       agentBubble = null;
       agentText = "";
       textOffsetAfterCatchUp = 0;
@@ -1396,10 +1400,11 @@ window.addEventListener("online", () => {
 
 function handleAgentEvent(event) {
   if (event.type === "ping") return;
-  if (catchUpInProgress && !["brief", "alert", "agent_end", "agent_start", "message_queued"].includes(event.type)) return;
+  if (catchUpInProgress && !["brief", "alert", "agent_end", "agent_start", "message_queued", "cancel_ack"].includes(event.type)) return;
   switch (event.type) {
     case "agent_start":
       isAgentRunning = true;
+      updateSendButton();
       agentBubble = null;
       agentText = "";
       textOffsetAfterCatchUp = 0;
@@ -1524,6 +1529,7 @@ function handleAgentEvent(event) {
       const thinkingDuration = thinkingStartTime ? Math.floor((Date.now() - thinkingStartTime) / 1000) : 0;
       const completedText = agentText;
       isAgentRunning = false;
+      updateSendButton();
       agentBubble = null;
       agentText = "";
       stopThinkingTimer();
@@ -1536,6 +1542,14 @@ function handleAgentEvent(event) {
       }
       break;
 
+    case "cancel_ack":
+      isAgentRunning = false;
+      updateSendButton();
+      stopThinkingTimer();
+      hideStatus();
+      input.focus();
+      break;
+
     case "timeout":
       stopThinkingTimer();
       removeLastRetryError();
@@ -1544,6 +1558,7 @@ function handleAgentEvent(event) {
         showSystemMsg("TIMEOUT — RETRYING...");
         hideStatus();
         isAgentRunning = false;
+        updateSendButton();
         setTimeout(() => {
           if (!lastSentMessage || !sessionId) return;
           const body = { message: lastSentMessage.text || undefined };
@@ -1557,6 +1572,7 @@ function handleAgentEvent(event) {
       } else {
         showErrorWithRetry(event.error);
         isAgentRunning = false;
+        updateSendButton();
         hideStatus();
       }
       break;
@@ -1566,6 +1582,7 @@ function handleAgentEvent(event) {
       removeLastRetryError();
       showErrorWithRetry(event.error);
       isAgentRunning = false;
+      updateSendButton();
       hideStatus();
       break;
 
@@ -2085,7 +2102,49 @@ async function sendMessage() {
   }
 }
 
-sendBtn.addEventListener("click", sendMessage);
+const SEND_ICON_SVG = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>';
+const STOP_ICON_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>';
+let cancelInFlight = false;
+
+function updateSendButton() {
+  if (isAgentRunning) {
+    sendBtn.innerHTML = STOP_ICON_SVG;
+    sendBtn.classList.add("stop-mode");
+    sendBtn.disabled = false;
+    sendBtn.setAttribute("aria-label", "Stop");
+  } else {
+    sendBtn.innerHTML = SEND_ICON_SVG;
+    sendBtn.classList.remove("stop-mode");
+    sendBtn.disabled = false;
+    sendBtn.setAttribute("aria-label", "Send");
+  }
+}
+
+async function stopAgent() {
+  if (!sessionId || cancelInFlight) return;
+  cancelInFlight = true;
+  try {
+    const res = await fetch(`/api/session/${sessionId}/cancel`, { method: "POST" });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.wasRunning) {
+        showSystemMsg("\u23f9 Response stopped");
+      }
+    }
+  } catch (err) {
+    console.error("[cancel] error:", err);
+  } finally {
+    cancelInFlight = false;
+  }
+}
+
+sendBtn.addEventListener("click", () => {
+  if (isAgentRunning) {
+    stopAgent();
+  } else {
+    sendMessage();
+  }
+});
 
 const micBtn = document.getElementById("mic-btn");
 let speechRecognition = null;

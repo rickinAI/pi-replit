@@ -1056,6 +1056,20 @@ body.light-theme #mic-btn.recording {
   transform: none;
 }
 
+#send-btn.stop-mode {
+  color: #ff4444;
+}
+
+#send-btn.stop-mode:hover {
+  background: rgba(255, 68, 68, 0.12);
+  box-shadow: 0 0 8px rgba(255, 68, 68, 0.3);
+}
+
+#send-btn.stop-mode:active {
+  transform: scale(0.9);
+  background: rgba(255, 68, 68, 0.15);
+}
+
 #upload-btn {
   flex-shrink: 0;
   background: none;
