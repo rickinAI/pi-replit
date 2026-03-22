@@ -1701,8 +1701,6 @@ async function runDarkNodeSummary(job: ScheduledJob): Promise<void> {
     job.lastStatus = "error";
     await saveConfig();
   }
-  jobRunning = false;
-  currentRunningJobId = null;
 }
 
 async function runInboxMonitor(job: ScheduledJob): Promise<void> {

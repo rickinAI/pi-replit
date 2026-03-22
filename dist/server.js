@@ -13154,8 +13154,6 @@ async function runDarkNodeSummary(job) {
     job.lastStatus = "error";
     await saveConfig2();
   }
-  jobRunning = false;
-  currentRunningJobId = null;
 }
 async function runInboxMonitor(job) {
   console.log(`[scheduled-jobs] Inbox monitor: checking for @darknode emails...`);
