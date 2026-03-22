@@ -2,7 +2,9 @@ import { getPool } from "./db.js";
 import { getDarkNodeEmails, markDarkNodeProcessed } from "./gmail.js";
 import * as gws from "./gws.js";
 import { findOrCreateCalendar, createRecurringEvent } from "./calendar.js";
-import { sendJobCompletionNotification } from "./telegram.js";
+import { sendJobCompletionNotification, sendScoutBrief } from "./telegram.js";
+import * as bnkr from "./bnkr.js";
+import { enrichThesesWithBnkr, getBnkrTrendingCandidates, getActiveTheses, saveTheses } from "./crypto-scout.js";
 
 export interface ScheduledJob {
   id: string;
@@ -789,15 +791,18 @@ No thesis generation, no Nansen/X, no web searches.`,
 
 1. Check signal_quality FIRST — review your historical win rate for crypto signals. Note the modifier (boost/penalty/neutral) and factor it into confidence levels below.
 2. Start with BTC technical_analysis — check BTC momentum for alt confirmation filter
+2b. Run bnkr_trending to cross-reference BNKR's trending tokens with CoinGecko movers — note any tokens appearing in both as high-signal candidates
 3. Check crypto_trending and crypto_movers for candidates
 4. Run technical_analysis on top 20 candidates, filter for vote_count >= 3/6
 5. Run crypto_backtest on top 5 candidates (30-day data)
 6. Check nansen_smart_money on top candidates (gracefully handle if API key not set)
 7. Search X for sentiment on top 3 candidates
 8. Generate thesis for each candidate meeting entry criteria (votes >= 4/6)
+8b. For each thesis candidate, run bnkr_research to get BNKR AI's fundamental analysis — incorporate key findings into thesis reasoning
+8c. For each thesis candidate, run bnkr_chart to get a chart image — include chart URLs in the brief for visual context
 9. CONFIDENCE ADJUSTMENT: If signal_quality shows win rate >60%, you may upgrade MEDIUM→HIGH confidence. If win rate <40%, downgrade HIGH→MEDIUM. Include "Signal quality: X% win rate (N trades)" in thesis reasoning.
-10. Include: vote count, technical score, regime, Nansen flow, backtest score, entry/stop/target
-11. Provide a brief market overview at the top (BTC dominance, market regime, sector rotations)
+10. Include: vote count, technical score, regime, Nansen flow, backtest score, BNKR research summary, entry/stop/target
+11. Provide a brief market overview at the top (BTC dominance, market regime, sector rotations, BNKR trending highlights)
 12. List any watchlist changes (assets added/removed)
 
 Output the full brief — the system will save it automatically. Do NOT use notes_create.`,
@@ -1940,6 +1945,34 @@ async function checkJobs(): Promise<void> {
             }
           } catch (e) {
             console.warn(`[scheduled-jobs] Failed to save SCOUT brief:`, e);
+          }
+
+          if (job.id === "scout-full-cycle") {
+            try {
+              let enrichedBrief = result;
+              const chartUrls: string[] = [];
+
+              const urlMatches = result.match(/https?:\/\/[^\s)]+\.(?:png|jpg|jpeg|webp|gif)/gi);
+              if (urlMatches) chartUrls.push(...urlMatches.slice(0, 5));
+
+              const trendingCandidates = await getBnkrTrendingCandidates();
+              if (trendingCandidates.length > 0) {
+                enrichedBrief += `\n\n📊 *BNKR Trending Cross-Ref:* ${trendingCandidates.slice(0, 8).join(', ')}`;
+              }
+
+              const activeTheses = await getActiveTheses();
+              if (activeTheses.length > 0) {
+                const { theses: enrichedTheses, chartUrls: thesisCharts } = await enrichThesesWithBnkr(activeTheses);
+                await saveTheses(enrichedTheses);
+                chartUrls.push(...thesisCharts);
+                console.log(`[scheduled-jobs] BNKR-enriched ${enrichedTheses.length} theses, ${thesisCharts.length} charts`);
+              }
+
+              await sendScoutBrief(enrichedBrief, chartUrls.length > 0 ? chartUrls : undefined);
+              console.log(`[scheduled-jobs] Sent SCOUT brief via Telegram with ${chartUrls.length} charts`);
+            } catch (briefErr) {
+              console.warn(`[scheduled-jobs] Failed to send SCOUT brief via Telegram:`, briefErr instanceof Error ? briefErr.message : briefErr);
+            }
           }
         }
 

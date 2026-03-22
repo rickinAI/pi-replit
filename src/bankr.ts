@@ -528,15 +528,54 @@ export async function openPosition(params: {
 
   if (bnkr.isConfigured()) {
     if (params.asset_class === "crypto") {
-      const order = await bnkr.openCryptoPosition({
-        asset: params.asset,
-        direction: params.direction as "LONG" | "SHORT",
-        leverage: params.leverage,
-        size,
-        stop_price: params.stop_price,
-      });
-      bnkrOrderId = order.order_id;
-      if (order.entry_price > 0) params.entry_price = order.entry_price;
+      const stopLossPct = params.stop_price > 0 && params.entry_price > 0
+        ? Math.abs((params.entry_price - params.stop_price) / params.entry_price) * 100
+        : undefined;
+      const takeProfitPct = params.entry_price > 0 && params.atr_value > 0
+        ? (params.atr_value * 5.5 * 2 / params.entry_price) * 100
+        : undefined;
+
+      let usedTwap = false;
+      if (bnkr.shouldUseTwap(size * params.entry_price)) {
+        try {
+          const twapResult = await bnkr.twapOrder({
+            asset: params.asset,
+            direction: params.direction === "LONG" ? "buy" : "sell",
+            totalAmount: size * params.entry_price,
+            durationHours: 2,
+          });
+          if (twapResult.status === "completed") {
+            const twapOrderId = twapResult.richData?.orderDetails?.order_id
+              || twapResult.richData?.orderDetails?.orderId
+              || twapResult.richData?.twapId;
+            if (twapOrderId) {
+              bnkrOrderId = twapOrderId;
+              usedTwap = true;
+              console.log(`[bankr] TWAP order accepted for ${params.asset}: ${twapResult.status}, orderId=${twapOrderId}`);
+            } else {
+              console.warn(`[bankr] TWAP returned ${twapResult.status} but no order ID — falling back to standard execution`);
+            }
+          } else {
+            console.warn(`[bankr] TWAP order status '${twapResult.status}' is not actionable — falling back to standard execution`);
+          }
+        } catch (twapErr) {
+          console.warn(`[bankr] TWAP order failed, proceeding with standard execution: ${twapErr instanceof Error ? twapErr.message : twapErr}`);
+        }
+      }
+
+      if (!usedTwap) {
+        const order = await bnkr.openCryptoPosition({
+          asset: params.asset,
+          direction: params.direction as "LONG" | "SHORT",
+          leverage: params.leverage,
+          size,
+          stop_price: params.stop_price,
+          stop_loss_pct: stopLossPct ? parseFloat(stopLossPct.toFixed(1)) : undefined,
+          take_profit_pct: takeProfitPct ? parseFloat(takeProfitPct.toFixed(1)) : undefined,
+        });
+        bnkrOrderId = order.order_id;
+        if (order.entry_price > 0) params.entry_price = order.entry_price;
+      }
     } else if (params.asset_class === "polymarket") {
       if (!params.market_id) {
         throw new Error("market_id is required for Polymarket positions via BNKR");
@@ -594,9 +633,39 @@ export async function closePosition(positionId: string, exitPrice: number, close
   if (pos.bnkr_order_id && bnkr.isConfigured()) {
     try {
       if (pos.asset_class === "crypto") {
-        const result = await bnkr.closeCryptoPosition(pos.bnkr_order_id);
-        if (result.exit_price > 0) exitPrice = result.exit_price;
-        txHash = txHash || result.tx_hash;
+        const positionValue = pos.size * exitPrice;
+        const urgentReasons = new Set(["kill_switch", "circuit_breaker", "stop_loss", "take_profit", "trailing_stop", "rsi_exit"]);
+        if (bnkr.shouldUseTwap(positionValue) && !urgentReasons.has(closeReason)) {
+          try {
+            const twapResult = await bnkr.twapOrder({
+              asset: pos.asset,
+              direction: pos.direction === "LONG" || pos.direction === "YES" ? "sell" : "buy",
+              totalAmount: positionValue,
+              durationHours: 1,
+            });
+            if (twapResult.status === "completed" &&
+                (twapResult.richData?.orderDetails?.order_id || twapResult.richData?.orderDetails?.orderId || twapResult.richData?.twapId)) {
+              const twapExitPrice = twapResult.richData?.orderDetails?.exit_price || twapResult.richData?.orderDetails?.exitPrice;
+              if (twapExitPrice && twapExitPrice > 0) exitPrice = twapExitPrice;
+              txHash = txHash || twapResult.richData?.orderDetails?.tx_hash || twapResult.richData?.orderDetails?.txHash;
+              console.log(`[bankr] TWAP close completed for ${pos.asset}`);
+            } else {
+              console.warn(`[bankr] TWAP close returned '${twapResult.status}' — falling back to standard close`);
+              const result = await bnkr.closeCryptoPosition(pos.bnkr_order_id);
+              if (result.exit_price > 0) exitPrice = result.exit_price;
+              txHash = txHash || result.tx_hash;
+            }
+          } catch (twapErr) {
+            console.warn(`[bankr] TWAP close failed, using standard close: ${twapErr instanceof Error ? twapErr.message : twapErr}`);
+            const result = await bnkr.closeCryptoPosition(pos.bnkr_order_id);
+            if (result.exit_price > 0) exitPrice = result.exit_price;
+            txHash = txHash || result.tx_hash;
+          }
+        } else {
+          const result = await bnkr.closeCryptoPosition(pos.bnkr_order_id);
+          if (result.exit_price > 0) exitPrice = result.exit_price;
+          txHash = txHash || result.tx_hash;
+        }
       } else if (pos.asset_class === "polymarket") {
         const result = await bnkr.closePolymarketPosition(pos.bnkr_order_id);
         if (result.exit_odds > 0) exitPrice = result.exit_odds;

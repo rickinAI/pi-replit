@@ -1,4 +1,5 @@
 import { getPool } from "./db.js";
+import * as bnkr from "./bnkr.js";
 
 export interface TradeThesis {
   id: string;
@@ -194,4 +195,48 @@ export function formatThesis(t: TradeThesis): string {
 export function formatThesesSummary(theses: TradeThesis[]): string {
   if (theses.length === 0) return "No active theses.";
   return theses.map(formatThesis).join("\n\n");
+}
+
+export async function enrichThesesWithBnkr(theses: TradeThesis[]): Promise<{ theses: TradeThesis[]; chartUrls: string[] }> {
+  if (!bnkr.isPromptConfigured() || theses.length === 0) {
+    return { theses, chartUrls: [] };
+  }
+
+  const chartUrls: string[] = [];
+  const enriched: TradeThesis[] = [];
+
+  for (const thesis of theses.slice(0, 5)) {
+    let updated = { ...thesis };
+    try {
+      const research = await bnkr.researchToken(thesis.asset);
+      if (research.analysis) {
+        const summary = research.analysis.length > 300 ? research.analysis.slice(0, 300) + '...' : research.analysis;
+        updated.reasoning = `${updated.reasoning}\n\nBNKR Research: ${summary}`;
+        if (!updated.sources.includes("bnkr_research")) {
+          updated.sources = [...updated.sources, "bnkr_research"];
+        }
+      }
+      if (research.chartUrl) {
+        chartUrls.push(research.chartUrl);
+      }
+    } catch (err) {
+      console.warn(`[crypto-scout] BNKR enrichment for ${thesis.asset} failed:`, err instanceof Error ? err.message : err);
+    }
+    enriched.push(updated);
+  }
+
+  return { theses: [...enriched, ...theses.slice(5)], chartUrls };
+}
+
+export async function getBnkrTrendingCandidates(): Promise<string[]> {
+  if (!bnkr.isPromptConfigured()) return [];
+  try {
+    const trending = await bnkr.getTrendingTokens();
+    if (trending.tokens && trending.tokens.length > 0) {
+      return trending.tokens.map(t => t.symbol.toLowerCase());
+    }
+  } catch (err) {
+    console.warn("[crypto-scout] BNKR trending fetch failed:", err instanceof Error ? err.message : err);
+  }
+  return [];
 }

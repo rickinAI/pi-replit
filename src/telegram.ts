@@ -99,6 +99,25 @@ export async function sendMessage(text: string, parseMode: string = "Markdown"):
   }
 }
 
+export async function sendPhoto(photoUrl: string, caption?: string, parseMode: string = "Markdown"): Promise<number | null> {
+  if (!isConfigured()) return null;
+  try {
+    const body: Record<string, any> = {
+      chat_id: CHAT_ID,
+      photo: photoUrl,
+    };
+    if (caption) {
+      body.caption = caption.length > 1024 ? caption.slice(0, 1020) + "..." : caption;
+      body.parse_mode = parseMode;
+    }
+    const result = await tgFetch("sendPhoto", body);
+    return result.result?.message_id || null;
+  } catch (err) {
+    console.error("[telegram] sendPhoto failed:", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
 export async function sendMessageWithKeyboard(
   text: string,
   keyboard: Array<Array<{ text: string; callback_data: string }>>,
@@ -763,11 +782,20 @@ export async function requestTradeApproval(params: {
   takeProfit: string;
   riskAmount: string;
   reason: string;
+  chartUrl?: string;
 }): Promise<"approve" | "skip" | "hold"> {
   const mode = await getMode();
   if (!isConfigured()) {
     console.warn("[telegram] Trade approval requested but Telegram not configured — auto-skipping");
     return "skip";
+  }
+
+  if (params.chartUrl) {
+    try {
+      await sendPhoto(params.chartUrl, `📊 ${params.asset} — Chart for trade approval`);
+    } catch (err) {
+      console.warn("[telegram] Failed to send chart with trade approval:", err instanceof Error ? err.message : err);
+    }
   }
 
   const text = [
@@ -1097,8 +1125,19 @@ export async function sendTradeAlert(params: {
   await sendMessage(lines.join("\n"));
 }
 
-export async function sendScoutBrief(brief: string): Promise<void> {
+export async function sendScoutBrief(brief: string, chartUrls?: string[]): Promise<void> {
   const mode = await getMode();
+
+  if (chartUrls && chartUrls.length > 0) {
+    for (const url of chartUrls.slice(0, 3)) {
+      try {
+        await sendPhoto(url, `${mode} 📊 SCOUT chart`);
+      } catch (err) {
+        console.warn("[telegram] Failed to send scout chart:", err instanceof Error ? err.message : err);
+      }
+    }
+  }
+
   const truncated = brief.length > 3500 ? brief.slice(0, 3500) + "\n\n_(truncated)_" : brief;
   await sendMessage(`${mode} 🔍 *SCOUT Morning Brief*\n\n${truncated}`);
 }

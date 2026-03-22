@@ -45,6 +45,7 @@ import * as cryptoScout from "./src/crypto-scout.js";
 import * as polymarket from "./src/polymarket.js";
 import * as polymarketScout from "./src/polymarket-scout.js";
 import * as bankr from "./src/bankr.js";
+import * as bnkr from "./src/bnkr.js";
 import * as maps from "./src/maps.js";
 import * as gws from "./src/gws.js";
 import * as youtube from "./src/youtube.js";
@@ -1681,6 +1682,102 @@ function buildCoinGeckoTools(): ToolDefinition[] {
       },
     },
     {
+      name: "bnkr_analyze",
+      label: "BNKR AI Analysis",
+      description: "Query BNKR's AI for market research, charts, technical analysis, trending tokens, or token research. Accepts a natural language prompt (e.g. 'technical analysis for ETH', 'show BTC chart', 'what tokens are trending on base', 'research VIRTUAL token'). Returns BNKR's AI response text plus any rich data (chart URLs, trending tokens, token research).",
+      parameters: Type.Object({
+        prompt: Type.String({ description: "Natural language prompt for BNKR AI (e.g. 'run TA on SOL', 'show me a BTC chart', 'what tokens are trending', 'research BNKR token fundamentals')" }),
+      }),
+      async execute(_toolCallId: string, params: { prompt: string }) {
+        try {
+          const result = await bnkr.bnkrAnalyze(params.prompt);
+          return {
+            content: [{
+              type: "text" as const,
+              text: JSON.stringify({
+                status: result.status,
+                response: result.response,
+                chartUrl: result.richData?.chartUrl || null,
+                chartUrls: result.richData?.chartUrls || null,
+                trendingTokens: result.richData?.trendingTokens || null,
+                tokenResearch: result.richData?.tokenResearch || null,
+                error: result.error || null,
+              }),
+            }],
+            details: {},
+          };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "bnkr_chart",
+      label: "BNKR Price Chart",
+      description: "Get a price chart image URL for any cryptocurrency via BNKR. Returns a chart URL that can be shared in Telegram or displayed to the user, plus brief analysis text.",
+      parameters: Type.Object({
+        asset: Type.String({ description: "Asset name or ticker (e.g. 'SOL', 'ETH', 'BTC', 'BNKR')" }),
+      }),
+      async execute(_toolCallId: string, params: { asset: string }) {
+        try {
+          const result = await bnkr.getChart(params.asset);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "bnkr_trending",
+      label: "BNKR Trending Tokens",
+      description: "Get trending tokens and top movers via BNKR's AI. Supplements CoinGecko trending data with BNKR's on-chain intelligence. Returns trending token list and analysis.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const result = await bnkr.getTrendingTokens();
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "bnkr_research",
+      label: "BNKR Token Research",
+      description: "Get detailed AI-powered research on a specific token via BNKR. Returns fundamentals, price action analysis, chart URL, and research summary. Use during thesis validation to supplement CoinGecko and Nansen data.",
+      parameters: Type.Object({
+        token: Type.String({ description: "Token name or ticker to research (e.g. 'SOL', 'VIRTUAL', 'BNKR')" }),
+      }),
+      async execute(_toolCallId: string, params: { token: string }) {
+        try {
+          const result = await bnkr.researchToken(params.token);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
+      name: "bnkr_twap",
+      label: "BNKR TWAP Order",
+      description: "Execute a TWAP (Time-Weighted Average Price) order via BNKR to split a large buy/sell into equal slices over a time period, reducing slippage. Use for positions exceeding the TWAP threshold (~$500).",
+      parameters: Type.Object({
+        asset: Type.String({ description: "Asset to trade (e.g. 'SOL', 'ETH')" }),
+        direction: Type.Union([Type.Literal("buy"), Type.Literal("sell")]),
+        totalAmount: Type.Number({ description: "Total USD amount to trade" }),
+        durationHours: Type.Number({ description: "Time period to spread the order over (in hours)" }),
+        slices: Type.Optional(Type.Number({ description: "Number of equal slices (default: max(4, ceil(durationHours)))" })),
+      }),
+      async execute(_toolCallId: string, params: { asset: string; direction: "buy" | "sell"; totalAmount: number; durationHours: number; slices?: number }) {
+        try {
+          const result = await bnkr.twapOrder(params);
+          return { content: [{ type: "text" as const, text: JSON.stringify({ status: result.status, response: result.response, orderDetails: result.richData?.orderDetails || null, error: result.error || null }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      },
+    },
+    {
       name: "polymarket_search",
       label: "Polymarket Search",
       description: "Search Polymarket for prediction markets by topic/tag. Returns markets with odds, volume, liquidity, and end dates.",
@@ -1933,25 +2030,15 @@ function buildCoinGeckoTools(): ToolDefinition[] {
           if (mode === "SHADOW") {
             return { content: [{ type: "text" as const, text: JSON.stringify({ executed: false, tier: riskCheck.tier, reason: "SHADOW mode — trade logged but not executed", checks: riskCheck.checks }) }], details: {} };
           }
-          if (riskCheck.tier === "human_required") {
-            const portfolio = await bankr.getPortfolioValue();
-            const rc = await bankr.getRiskConfig();
-            const riskAmount = portfolio * (rc.risk_per_trade_pct / 100);
-            const approval = await telegram.requestTradeApproval({
-              thesisId: params.thesis_id,
-              asset: params.asset,
-              direction: params.direction,
-              leverage: `${params.leverage}x`,
-              entryPrice: params.entry_price.toFixed(2),
-              stopLoss: params.stop_price.toFixed(2),
-              takeProfit: "TBD",
-              riskAmount: riskAmount.toFixed(2),
-              reason: `Tier: HUMAN REQUIRED. Mode: ${mode}`,
-            });
-            if (approval !== "approve") {
-              return { content: [{ type: "text" as const, text: JSON.stringify({ executed: false, tier: "human_required", reason: `Trade ${approval} via Telegram` }) }], details: {} };
-            }
-          } else if (riskCheck.tier === "dead_zone") {
+          let chartUrl: string | undefined;
+          try {
+            const chart = await bnkr.getChart(params.asset);
+            if (chart.chartUrl) chartUrl = chart.chartUrl;
+          } catch (chartErr) {
+            console.warn(`[bankr] Chart fetch failed: ${chartErr instanceof Error ? chartErr.message : chartErr}`);
+          }
+
+          if (riskCheck.tier === "dead_zone") {
             await telegram.sendTradeAlert({
               type: "flagged",
               asset: params.asset,
@@ -1962,6 +2049,14 @@ function buildCoinGeckoTools(): ToolDefinition[] {
             });
           }
           const result = await bankr.openPosition({ ...params, source: params.source });
+
+          if (chartUrl) {
+            try {
+              await telegram.sendPhoto(chartUrl, `📊 ${params.asset} ${params.direction} — Chart at entry`);
+            } catch (photoErr) {
+              console.warn(`[bankr] Chart photo send failed: ${photoErr instanceof Error ? photoErr.message : photoErr}`);
+            }
+          }
           await telegram.sendTradeAlert({
             type: "executed",
             asset: params.asset,
@@ -5353,7 +5448,7 @@ app.get("/api/wealth-engine/config", async (req: Request, res: Response) => {
     }));
     res.json({
       risk: config, portfolio, peak, mode, paused, kill_switch: killSwitch,
-      bnkr_configured: (await import("./src/bnkr.js")).isConfigured(),
+      bnkr_configured: bnkr.isConfigured(),
       positions_count: positions.length,
       boot_time: bootTime, monitor_tick: monitorTick,
       shadow_open: shadowOpen, shadow_closed: shadowClosed,
@@ -8148,7 +8243,7 @@ async function runStartupRecovery() {
 async function sendStartupNotification(googleStatus: { connected: boolean; email?: string; error?: string }) {
   const jobs = scheduledJobs.getJobs();
   const enabledJobs = jobs.filter(j => j.enabled).length;
-  const bnkrStatus = (await import("./src/bnkr.js")).isConfigured() ? "Live" : "Shadow";
+  const bnkrStatus = bnkr.isConfigured() ? "Live" : "Shadow";
   const googleLine = googleStatus.connected ? `✅ ${googleStatus.email}` : `❌ Disconnected`;
   const now = new Date().toLocaleString("en-US", { timeZone: "America/New_York" });
 

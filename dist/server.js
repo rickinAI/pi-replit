@@ -1336,14 +1336,318 @@ var init_signal_sources = __esm({
   }
 });
 
+// src/bnkr.ts
+function isConfigured6() {
+  return BNKR_API_KEY.length > 0 && BNKR_WALLET.length > 0;
+}
+function isPromptConfigured() {
+  return BNKR_API_KEY.length > 0;
+}
+async function bnkrFetch(path8, body) {
+  const url = `${BNKR_BASE_URL}${path8}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15e3);
+  try {
+    const opts = {
+      method: body ? "POST" : "GET",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${BNKR_API_KEY}`,
+        "X-Wallet-Address": BNKR_WALLET
+      },
+      signal: controller.signal
+    };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch(url, opts);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`BNKR API ${path8} failed (${res.status}): ${text}`);
+    }
+    return res.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+async function promptFetch(path8, method = "GET", body) {
+  const url = `${BNKR_PROMPT_BASE_URL}${path8}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3e4);
+  try {
+    const opts = {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-Key": BNKR_API_KEY
+      },
+      signal: controller.signal
+    };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch(url, opts);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`BNKR Prompt API ${path8} failed (${res.status}): ${text}`);
+    }
+    return res.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+async function submitPrompt(prompt) {
+  const result = await promptFetch("/agent/prompt", "POST", {
+    prompt,
+    wallet: BNKR_WALLET || void 0
+  });
+  return result.jobId || result.job_id || result.id;
+}
+async function pollJob(jobId, maxAttempts = 30, intervalMs = 2e3) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const result = await promptFetch(`/agent/job/${jobId}`);
+    const status = result.status || "pending";
+    if (status === "completed") {
+      return {
+        jobId,
+        status: "completed",
+        response: result.response || result.result || "",
+        richData: extractRichData(result)
+      };
+    }
+    if (status === "failed" || status === "error") {
+      return {
+        jobId,
+        status: "failed",
+        response: "",
+        richData: null,
+        error: result.error || result.message || "Job failed"
+      };
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return {
+    jobId,
+    status: "pending",
+    response: "",
+    richData: null,
+    error: `Job ${jobId} timed out after ${maxAttempts * intervalMs / 1e3}s`
+  };
+}
+function extractRichData(result) {
+  const richData = {};
+  const rd = result.richData || result.rich_data || result.data || {};
+  if (rd.chartUrl || rd.chart_url) {
+    richData.chartUrl = rd.chartUrl || rd.chart_url;
+  }
+  if (rd.chartUrls || rd.chart_urls) {
+    richData.chartUrls = rd.chartUrls || rd.chart_urls;
+  }
+  if (rd.trendingTokens || rd.trending_tokens) {
+    richData.trendingTokens = rd.trendingTokens || rd.trending_tokens;
+  }
+  if (rd.tokenResearch || rd.token_research) {
+    richData.tokenResearch = rd.tokenResearch || rd.token_research;
+  }
+  if (rd.orderDetails || rd.order_details) {
+    richData.orderDetails = rd.orderDetails || rd.order_details;
+  }
+  const responseText = result.response || result.result || "";
+  if (!richData.chartUrl && typeof responseText === "string") {
+    const chartMatch = responseText.match(/https?:\/\/[^\s)]+\.(png|jpg|jpeg|gif|webp|svg)(\?[^\s)]*)?/i);
+    if (chartMatch) {
+      richData.chartUrl = chartMatch[0];
+    }
+  }
+  if (Object.keys(richData).length === 0) return null;
+  for (const key of Object.keys(rd)) {
+    if (!(key in richData)) {
+      richData[key] = rd[key];
+    }
+  }
+  return richData;
+}
+async function bnkrAnalyze(prompt) {
+  if (!isPromptConfigured()) {
+    console.log(`[bnkr] SHADOW: bnkrAnalyze prompt="${prompt.slice(0, 80)}..."`);
+    return {
+      jobId: `shadow_prompt_${Date.now()}`,
+      status: "completed",
+      response: `[SHADOW] BNKR analysis not available \u2014 API key not configured. Prompt: "${prompt}"`,
+      richData: null
+    };
+  }
+  try {
+    console.log(`[bnkr] Submitting prompt: "${prompt.slice(0, 100)}..."`);
+    const jobId = await submitPrompt(prompt);
+    console.log(`[bnkr] Job submitted: ${jobId}`);
+    const result = await pollJob(jobId);
+    console.log(`[bnkr] Job ${jobId} completed: status=${result.status}, hasRichData=${!!result.richData}`);
+    return result;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[bnkr] bnkrAnalyze failed: ${msg}`);
+    return {
+      jobId: `error_${Date.now()}`,
+      status: "failed",
+      response: "",
+      richData: null,
+      error: msg
+    };
+  }
+}
+async function getChart(asset) {
+  const result = await bnkrAnalyze(`show me a technical analysis chart for ${asset}`);
+  return {
+    chartUrl: result.richData?.chartUrl || result.richData?.chartUrls?.[0] || null,
+    analysis: result.response
+  };
+}
+async function getTrendingTokens() {
+  const result = await bnkrAnalyze("what tokens are trending right now? show me the top movers");
+  return {
+    tokens: result.richData?.trendingTokens || void 0,
+    analysis: result.response
+  };
+}
+async function researchToken(token) {
+  const result = await bnkrAnalyze(`give me a detailed analysis and research on ${token} including price action, fundamentals, and chart`);
+  return {
+    research: result.richData?.tokenResearch || void 0,
+    analysis: result.response,
+    chartUrl: result.richData?.chartUrl || null
+  };
+}
+async function openCryptoPosition(params) {
+  if (!isConfigured6()) {
+    console.log(`[bnkr] SHADOW: openCryptoPosition ${params.asset} ${params.direction} ${params.leverage}x size=${params.size}`);
+    return {
+      order_id: `shadow_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      asset: params.asset,
+      direction: params.direction,
+      leverage: params.leverage,
+      size: params.size,
+      entry_price: 0,
+      status: "filled",
+      tx_hash: null
+    };
+  }
+  if (isPromptConfigured() && (params.stop_loss_pct || params.take_profit_pct)) {
+    try {
+      return await openCryptoPositionViaPrompt(params);
+    } catch (err) {
+      console.warn(`[bnkr] Prompt-based open failed, falling back to raw API: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+  const result = await bnkrFetch("/crypto/open", {
+    asset: params.asset,
+    direction: params.direction,
+    leverage: params.leverage,
+    size: params.size,
+    stop_price: params.stop_price,
+    wallet: BNKR_WALLET
+  });
+  return result;
+}
+async function openCryptoPositionViaPrompt(params) {
+  const dir = params.direction.toLowerCase();
+  let prompt = `${dir} ${params.size.toFixed(6)} ${params.asset} with ${params.leverage}x leverage`;
+  if (params.stop_loss_pct) {
+    prompt += `, ${params.stop_loss_pct}% stop loss`;
+  }
+  if (params.take_profit_pct) {
+    prompt += `, ${params.take_profit_pct}% take profit`;
+  }
+  console.log(`[bnkr] Opening position via prompt: "${prompt}"`);
+  const result = await bnkrAnalyze(prompt);
+  if (result.status === "failed") {
+    throw new Error(`BNKR prompt execution failed: ${result.error}`);
+  }
+  const orderDetails = result.richData?.orderDetails;
+  if (!orderDetails || !orderDetails.order_id && !orderDetails.orderId) {
+    throw new Error(`BNKR prompt order returned no order details \u2014 response may be pending or unrecognized. Raw: ${result.response.slice(0, 200)}`);
+  }
+  return {
+    order_id: orderDetails.order_id || orderDetails.orderId,
+    asset: params.asset,
+    direction: params.direction,
+    leverage: params.leverage,
+    size: params.size,
+    entry_price: orderDetails.entry_price || orderDetails.entryPrice || 0,
+    status: orderDetails.status || "pending",
+    tx_hash: orderDetails.tx_hash || orderDetails.txHash || null
+  };
+}
+async function twapOrder(params) {
+  const slices = params.slices || Math.max(4, Math.ceil(params.durationHours));
+  const prompt = `${params.direction} $${params.totalAmount.toFixed(2)} of ${params.asset} using TWAP over ${params.durationHours} hours in ${slices} equal slices`;
+  console.log(`[bnkr] TWAP order via prompt: "${prompt}"`);
+  if (!isPromptConfigured()) {
+    console.log(`[bnkr] SHADOW: twapOrder ${params.asset} ${params.direction} $${params.totalAmount} over ${params.durationHours}h`);
+    return {
+      jobId: `shadow_twap_${Date.now()}`,
+      status: "completed",
+      response: `[SHADOW] TWAP order: ${params.direction} $${params.totalAmount} of ${params.asset} over ${params.durationHours}h in ${slices} slices`,
+      richData: null
+    };
+  }
+  return bnkrAnalyze(prompt);
+}
+function shouldUseTwap(sizeUsd) {
+  return sizeUsd >= TWAP_SIZE_THRESHOLD;
+}
+async function closeCryptoPosition(orderId) {
+  if (!isConfigured6()) {
+    console.log(`[bnkr] SHADOW: closeCryptoPosition ${orderId}`);
+    return { tx_hash: "", exit_price: 0 };
+  }
+  return bnkrFetch("/crypto/close", { order_id: orderId, wallet: BNKR_WALLET });
+}
+async function openPolymarketPosition(params) {
+  if (!isConfigured6()) {
+    console.log(`[bnkr] SHADOW: openPolymarketPosition market=${params.market_id} ${params.direction} $${params.amount_usd}`);
+    return {
+      order_id: `shadow_pm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      market_id: params.market_id,
+      direction: params.direction,
+      amount_usd: params.amount_usd,
+      entry_odds: 0,
+      status: "filled",
+      tx_hash: null
+    };
+  }
+  return bnkrFetch("/polymarket/open", {
+    market_id: params.market_id,
+    direction: params.direction,
+    amount_usd: params.amount_usd,
+    wallet: BNKR_WALLET
+  });
+}
+async function closePolymarketPosition(orderId) {
+  if (!isConfigured6()) {
+    console.log(`[bnkr] SHADOW: closePolymarketPosition ${orderId}`);
+    return { tx_hash: "", exit_odds: 0 };
+  }
+  return bnkrFetch("/polymarket/close", { order_id: orderId, wallet: BNKR_WALLET });
+}
+var BNKR_API_KEY, BNKR_WALLET, BNKR_BASE_URL, BNKR_PROMPT_BASE_URL, TWAP_SIZE_THRESHOLD;
+var init_bnkr = __esm({
+  "src/bnkr.ts"() {
+    "use strict";
+    BNKR_API_KEY = process.env.BNKR_API_KEY || "";
+    BNKR_WALLET = process.env.BNKR_WALLET_ADDRESS || "";
+    BNKR_BASE_URL = process.env.BNKR_API_URL || "https://api.bnkr.com/v1";
+    BNKR_PROMPT_BASE_URL = process.env.BNKR_PROMPT_API_URL || "https://api.bankr.bot";
+    TWAP_SIZE_THRESHOLD = parseFloat(process.env.BNKR_TWAP_THRESHOLD || "500");
+  }
+});
+
 // src/crypto-scout.ts
 var crypto_scout_exports = {};
 __export(crypto_scout_exports, {
   buildThesis: () => buildThesis,
   createThesisId: () => createThesisId,
+  enrichThesesWithBnkr: () => enrichThesesWithBnkr,
   formatThesesSummary: () => formatThesesSummary,
   formatThesis: () => formatThesis,
   getActiveTheses: () => getActiveTheses,
+  getBnkrTrendingCandidates: () => getBnkrTrendingCandidates,
   getSignalParameters: () => getSignalParameters,
   getWatchlist: () => getWatchlist,
   retireThesis: () => retireThesis,
@@ -1488,11 +1792,53 @@ function formatThesesSummary(theses) {
   if (theses.length === 0) return "No active theses.";
   return theses.map(formatThesis).join("\n\n");
 }
+async function enrichThesesWithBnkr(theses) {
+  if (!isPromptConfigured() || theses.length === 0) {
+    return { theses, chartUrls: [] };
+  }
+  const chartUrls = [];
+  const enriched = [];
+  for (const thesis of theses.slice(0, 5)) {
+    let updated = { ...thesis };
+    try {
+      const research = await researchToken(thesis.asset);
+      if (research.analysis) {
+        const summary = research.analysis.length > 300 ? research.analysis.slice(0, 300) + "..." : research.analysis;
+        updated.reasoning = `${updated.reasoning}
+
+BNKR Research: ${summary}`;
+        if (!updated.sources.includes("bnkr_research")) {
+          updated.sources = [...updated.sources, "bnkr_research"];
+        }
+      }
+      if (research.chartUrl) {
+        chartUrls.push(research.chartUrl);
+      }
+    } catch (err) {
+      console.warn(`[crypto-scout] BNKR enrichment for ${thesis.asset} failed:`, err instanceof Error ? err.message : err);
+    }
+    enriched.push(updated);
+  }
+  return { theses: [...enriched, ...theses.slice(5)], chartUrls };
+}
+async function getBnkrTrendingCandidates() {
+  if (!isPromptConfigured()) return [];
+  try {
+    const trending = await getTrendingTokens();
+    if (trending.tokens && trending.tokens.length > 0) {
+      return trending.tokens.map((t) => t.symbol.toLowerCase());
+    }
+  } catch (err) {
+    console.warn("[crypto-scout] BNKR trending fetch failed:", err instanceof Error ? err.message : err);
+  }
+  return [];
+}
 var THESIS_EXPIRY_MS;
 var init_crypto_scout = __esm({
   "src/crypto-scout.ts"() {
     "use strict";
     init_db();
+    init_bnkr();
     THESIS_EXPIRY_MS = 72 * 60 * 60 * 1e3;
   }
 });
@@ -1656,131 +2002,6 @@ var init_polymarket = __esm({
     cache = /* @__PURE__ */ new Map();
     MARKET_TTL = 5 * 60 * 1e3;
     WALLET_TTL = 15 * 60 * 1e3;
-  }
-});
-
-// src/bnkr.ts
-var bnkr_exports = {};
-__export(bnkr_exports, {
-  closeCryptoPosition: () => closeCryptoPosition,
-  closePolymarketPosition: () => closePolymarketPosition,
-  getCryptoPositionPnL: () => getCryptoPositionPnL,
-  getCryptoPositions: () => getCryptoPositions,
-  getPolymarketPositionPnL: () => getPolymarketPositionPnL,
-  getPolymarketPositions: () => getPolymarketPositions,
-  isConfigured: () => isConfigured6,
-  openCryptoPosition: () => openCryptoPosition,
-  openPolymarketPosition: () => openPolymarketPosition
-});
-function isConfigured6() {
-  return BNKR_API_KEY.length > 0 && BNKR_WALLET.length > 0;
-}
-async function bnkrFetch(path8, body) {
-  const url = `${BNKR_BASE_URL}${path8}`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15e3);
-  try {
-    const opts = {
-      method: body ? "POST" : "GET",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${BNKR_API_KEY}`,
-        "X-Wallet-Address": BNKR_WALLET
-      },
-      signal: controller.signal
-    };
-    if (body) opts.body = JSON.stringify(body);
-    const res = await fetch(url, opts);
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`BNKR API ${path8} failed (${res.status}): ${text}`);
-    }
-    return res.json();
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-async function openCryptoPosition(params) {
-  if (!isConfigured6()) {
-    console.log(`[bnkr] SHADOW: openCryptoPosition ${params.asset} ${params.direction} ${params.leverage}x size=${params.size}`);
-    return {
-      order_id: `shadow_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      asset: params.asset,
-      direction: params.direction,
-      leverage: params.leverage,
-      size: params.size,
-      entry_price: 0,
-      status: "filled",
-      tx_hash: null
-    };
-  }
-  const result = await bnkrFetch("/crypto/open", {
-    asset: params.asset,
-    direction: params.direction,
-    leverage: params.leverage,
-    size: params.size,
-    stop_price: params.stop_price,
-    wallet: BNKR_WALLET
-  });
-  return result;
-}
-async function closeCryptoPosition(orderId) {
-  if (!isConfigured6()) {
-    console.log(`[bnkr] SHADOW: closeCryptoPosition ${orderId}`);
-    return { tx_hash: "", exit_price: 0 };
-  }
-  return bnkrFetch("/crypto/close", { order_id: orderId, wallet: BNKR_WALLET });
-}
-async function getCryptoPositions() {
-  if (!isConfigured6()) return [];
-  return bnkrFetch("/crypto/positions");
-}
-async function getCryptoPositionPnL(orderId) {
-  if (!isConfigured6()) return { pnl: 0, pnl_pct: 0, current_price: 0 };
-  return bnkrFetch(`/crypto/pnl/${orderId}`);
-}
-async function openPolymarketPosition(params) {
-  if (!isConfigured6()) {
-    console.log(`[bnkr] SHADOW: openPolymarketPosition market=${params.market_id} ${params.direction} $${params.amount_usd}`);
-    return {
-      order_id: `shadow_pm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      market_id: params.market_id,
-      direction: params.direction,
-      amount_usd: params.amount_usd,
-      entry_odds: 0,
-      status: "filled",
-      tx_hash: null
-    };
-  }
-  return bnkrFetch("/polymarket/open", {
-    market_id: params.market_id,
-    direction: params.direction,
-    amount_usd: params.amount_usd,
-    wallet: BNKR_WALLET
-  });
-}
-async function closePolymarketPosition(orderId) {
-  if (!isConfigured6()) {
-    console.log(`[bnkr] SHADOW: closePolymarketPosition ${orderId}`);
-    return { tx_hash: "", exit_odds: 0 };
-  }
-  return bnkrFetch("/polymarket/close", { order_id: orderId, wallet: BNKR_WALLET });
-}
-async function getPolymarketPositions() {
-  if (!isConfigured6()) return [];
-  return bnkrFetch("/polymarket/positions");
-}
-async function getPolymarketPositionPnL(orderId) {
-  if (!isConfigured6()) return { pnl: 0, pnl_pct: 0, current_odds: 0 };
-  return bnkrFetch(`/polymarket/pnl/${orderId}`);
-}
-var BNKR_API_KEY, BNKR_WALLET, BNKR_BASE_URL;
-var init_bnkr = __esm({
-  "src/bnkr.ts"() {
-    "use strict";
-    BNKR_API_KEY = process.env.BNKR_API_KEY || "";
-    BNKR_WALLET = process.env.BNKR_WALLET_ADDRESS || "";
-    BNKR_BASE_URL = process.env.BNKR_API_URL || "https://api.bnkr.com/v1";
   }
 });
 
@@ -2371,6 +2592,7 @@ __export(telegram_exports, {
   sendJobCompletionNotification: () => sendJobCompletionNotification,
   sendMessage: () => sendMessage,
   sendMessageWithKeyboard: () => sendMessageWithKeyboard,
+  sendPhoto: () => sendPhoto,
   sendScoutBrief: () => sendScoutBrief,
   sendShadowTradeNotification: () => sendShadowTradeNotification,
   sendTradeAlert: () => sendTradeAlert,
@@ -2434,6 +2656,24 @@ async function sendMessage(text, parseMode = "Markdown") {
     return result.result?.message_id || null;
   } catch (err) {
     console.error("[telegram] sendMessage failed:", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+async function sendPhoto(photoUrl, caption, parseMode = "Markdown") {
+  if (!isConfigured7()) return null;
+  try {
+    const body = {
+      chat_id: CHAT_ID,
+      photo: photoUrl
+    };
+    if (caption) {
+      body.caption = caption.length > 1024 ? caption.slice(0, 1020) + "..." : caption;
+      body.parse_mode = parseMode;
+    }
+    const result = await tgFetch("sendPhoto", body);
+    return result.result?.message_id || null;
+  } catch (err) {
+    console.error("[telegram] sendPhoto failed:", err instanceof Error ? err.message : err);
     return null;
   }
 }
@@ -3067,6 +3307,13 @@ async function requestTradeApproval(params) {
     console.warn("[telegram] Trade approval requested but Telegram not configured \u2014 auto-skipping");
     return "skip";
   }
+  if (params.chartUrl) {
+    try {
+      await sendPhoto(params.chartUrl, `\u{1F4CA} ${params.asset} \u2014 Chart for trade approval`);
+    } catch (err) {
+      console.warn("[telegram] Failed to send chart with trade approval:", err instanceof Error ? err.message : err);
+    }
+  }
   const text = [
     `${mode} \u{1F514} *Trade Approval Required*`,
     "",
@@ -3375,8 +3622,17 @@ async function sendTradeAlert(params) {
   if (params.reason) lines.push(`*Reason:* ${params.reason}`);
   await sendMessage(lines.join("\n"));
 }
-async function sendScoutBrief(brief) {
+async function sendScoutBrief(brief, chartUrls) {
   const mode = await getMode();
+  if (chartUrls && chartUrls.length > 0) {
+    for (const url of chartUrls.slice(0, 3)) {
+      try {
+        await sendPhoto(url, `${mode} \u{1F4CA} SCOUT chart`);
+      } catch (err) {
+        console.warn("[telegram] Failed to send scout chart:", err instanceof Error ? err.message : err);
+      }
+    }
+  }
   const truncated = brief.length > 3500 ? brief.slice(0, 3500) + "\n\n_(truncated)_" : brief;
   await sendMessage(`${mode} \u{1F50D} *SCOUT Morning Brief*
 
@@ -5744,15 +6000,46 @@ async function openPosition(params) {
   const source = params.source || (params.asset_class === "polymarket" ? "polymarket_scout" : "crypto_scout");
   if (isConfigured6()) {
     if (params.asset_class === "crypto") {
-      const order = await openCryptoPosition({
-        asset: params.asset,
-        direction: params.direction,
-        leverage: params.leverage,
-        size,
-        stop_price: params.stop_price
-      });
-      bnkrOrderId = order.order_id;
-      if (order.entry_price > 0) params.entry_price = order.entry_price;
+      const stopLossPct = params.stop_price > 0 && params.entry_price > 0 ? Math.abs((params.entry_price - params.stop_price) / params.entry_price) * 100 : void 0;
+      const takeProfitPct = params.entry_price > 0 && params.atr_value > 0 ? params.atr_value * 5.5 * 2 / params.entry_price * 100 : void 0;
+      let usedTwap = false;
+      if (shouldUseTwap(size * params.entry_price)) {
+        try {
+          const twapResult = await twapOrder({
+            asset: params.asset,
+            direction: params.direction === "LONG" ? "buy" : "sell",
+            totalAmount: size * params.entry_price,
+            durationHours: 2
+          });
+          if (twapResult.status === "completed") {
+            const twapOrderId = twapResult.richData?.orderDetails?.order_id || twapResult.richData?.orderDetails?.orderId || twapResult.richData?.twapId;
+            if (twapOrderId) {
+              bnkrOrderId = twapOrderId;
+              usedTwap = true;
+              console.log(`[bankr] TWAP order accepted for ${params.asset}: ${twapResult.status}, orderId=${twapOrderId}`);
+            } else {
+              console.warn(`[bankr] TWAP returned ${twapResult.status} but no order ID \u2014 falling back to standard execution`);
+            }
+          } else {
+            console.warn(`[bankr] TWAP order status '${twapResult.status}' is not actionable \u2014 falling back to standard execution`);
+          }
+        } catch (twapErr) {
+          console.warn(`[bankr] TWAP order failed, proceeding with standard execution: ${twapErr instanceof Error ? twapErr.message : twapErr}`);
+        }
+      }
+      if (!usedTwap) {
+        const order = await openCryptoPosition({
+          asset: params.asset,
+          direction: params.direction,
+          leverage: params.leverage,
+          size,
+          stop_price: params.stop_price,
+          stop_loss_pct: stopLossPct ? parseFloat(stopLossPct.toFixed(1)) : void 0,
+          take_profit_pct: takeProfitPct ? parseFloat(takeProfitPct.toFixed(1)) : void 0
+        });
+        bnkrOrderId = order.order_id;
+        if (order.entry_price > 0) params.entry_price = order.entry_price;
+      }
     } else if (params.asset_class === "polymarket") {
       if (!params.market_id) {
         throw new Error("market_id is required for Polymarket positions via BNKR");
@@ -5801,9 +6088,38 @@ async function closePosition(positionId, exitPrice, closeReason, txHash) {
   if (pos.bnkr_order_id && isConfigured6()) {
     try {
       if (pos.asset_class === "crypto") {
-        const result = await closeCryptoPosition(pos.bnkr_order_id);
-        if (result.exit_price > 0) exitPrice = result.exit_price;
-        txHash = txHash || result.tx_hash;
+        const positionValue = pos.size * exitPrice;
+        const urgentReasons = /* @__PURE__ */ new Set(["kill_switch", "circuit_breaker", "stop_loss", "take_profit", "trailing_stop", "rsi_exit"]);
+        if (shouldUseTwap(positionValue) && !urgentReasons.has(closeReason)) {
+          try {
+            const twapResult = await twapOrder({
+              asset: pos.asset,
+              direction: pos.direction === "LONG" || pos.direction === "YES" ? "sell" : "buy",
+              totalAmount: positionValue,
+              durationHours: 1
+            });
+            if (twapResult.status === "completed" && (twapResult.richData?.orderDetails?.order_id || twapResult.richData?.orderDetails?.orderId || twapResult.richData?.twapId)) {
+              const twapExitPrice = twapResult.richData?.orderDetails?.exit_price || twapResult.richData?.orderDetails?.exitPrice;
+              if (twapExitPrice && twapExitPrice > 0) exitPrice = twapExitPrice;
+              txHash = txHash || twapResult.richData?.orderDetails?.tx_hash || twapResult.richData?.orderDetails?.txHash;
+              console.log(`[bankr] TWAP close completed for ${pos.asset}`);
+            } else {
+              console.warn(`[bankr] TWAP close returned '${twapResult.status}' \u2014 falling back to standard close`);
+              const result = await closeCryptoPosition(pos.bnkr_order_id);
+              if (result.exit_price > 0) exitPrice = result.exit_price;
+              txHash = txHash || result.tx_hash;
+            }
+          } catch (twapErr) {
+            console.warn(`[bankr] TWAP close failed, using standard close: ${twapErr instanceof Error ? twapErr.message : twapErr}`);
+            const result = await closeCryptoPosition(pos.bnkr_order_id);
+            if (result.exit_price > 0) exitPrice = result.exit_price;
+            txHash = txHash || result.tx_hash;
+          }
+        } else {
+          const result = await closeCryptoPosition(pos.bnkr_order_id);
+          if (result.exit_price > 0) exitPrice = result.exit_price;
+          txHash = txHash || result.tx_hash;
+        }
       } else if (pos.asset_class === "polymarket") {
         const result = await closePolymarketPosition(pos.bnkr_order_id);
         if (result.exit_odds > 0) exitPrice = result.exit_odds;
@@ -10199,6 +10515,7 @@ async function meetsThesisThresholds(params) {
 
 // server.ts
 init_bankr();
+init_bnkr();
 
 // src/maps.ts
 var TIMEOUT_MS6 = 1e4;
@@ -11829,6 +12146,7 @@ init_telegram();
 // src/scheduled-jobs.ts
 init_db();
 init_telegram();
+init_bnkr();
 function getJobSavePath(jobId, dateStr, safeName) {
   if (jobId === "moodys-daily-intel") return `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Brief.md`;
   if (jobId === "moodys-profile-updates") return `Scheduled Reports/Moody's Intelligence/Daily/${dateStr}-Profile-Updates.md`;
@@ -12580,15 +12898,18 @@ No thesis generation, no Nansen/X, no web searches.`,
 
 1. Check signal_quality FIRST \u2014 review your historical win rate for crypto signals. Note the modifier (boost/penalty/neutral) and factor it into confidence levels below.
 2. Start with BTC technical_analysis \u2014 check BTC momentum for alt confirmation filter
+2b. Run bnkr_trending to cross-reference BNKR's trending tokens with CoinGecko movers \u2014 note any tokens appearing in both as high-signal candidates
 3. Check crypto_trending and crypto_movers for candidates
 4. Run technical_analysis on top 20 candidates, filter for vote_count >= 3/6
 5. Run crypto_backtest on top 5 candidates (30-day data)
 6. Check nansen_smart_money on top candidates (gracefully handle if API key not set)
 7. Search X for sentiment on top 3 candidates
 8. Generate thesis for each candidate meeting entry criteria (votes >= 4/6)
+8b. For each thesis candidate, run bnkr_research to get BNKR AI's fundamental analysis \u2014 incorporate key findings into thesis reasoning
+8c. For each thesis candidate, run bnkr_chart to get a chart image \u2014 include chart URLs in the brief for visual context
 9. CONFIDENCE ADJUSTMENT: If signal_quality shows win rate >60%, you may upgrade MEDIUM\u2192HIGH confidence. If win rate <40%, downgrade HIGH\u2192MEDIUM. Include "Signal quality: X% win rate (N trades)" in thesis reasoning.
-10. Include: vote count, technical score, regime, Nansen flow, backtest score, entry/stop/target
-11. Provide a brief market overview at the top (BTC dominance, market regime, sector rotations)
+10. Include: vote count, technical score, regime, Nansen flow, backtest score, BNKR research summary, entry/stop/target
+11. Provide a brief market overview at the top (BTC dominance, market regime, sector rotations, BNKR trending highlights)
 12. List any watchlist changes (assets added/removed)
 
 Output the full brief \u2014 the system will save it automatically. Do NOT use notes_create.`,
@@ -13663,6 +13984,52 @@ ${result}`);
             }
           } catch (e) {
             console.warn(`[scheduled-jobs] Failed to save SCOUT brief:`, e);
+          }
+          if (job.id === "scout-full-cycle") {
+            try {
+              let enrichedBrief = result;
+              const chartUrls = [];
+              const urlMatches = result.match(/https?:\/\/[^\s)]+\.(?:png|jpg|jpeg|webp|gif)/gi);
+              if (urlMatches) chartUrls.push(...urlMatches.slice(0, 5));
+              if (isPromptConfigured()) {
+                try {
+                  const trending = await getTrendingTokens();
+                  if (trending.tokens && trending.tokens.length > 0) {
+                    const trendingLine = trending.tokens.slice(0, 5).map((t) => `${t.symbol}${t.change24h ? ` (${t.change24h > 0 ? "+" : ""}${t.change24h.toFixed(1)}%)` : ""}`).join(", ");
+                    enrichedBrief += `
+
+\u{1F4CA} *BNKR Trending Cross-Ref:* ${trendingLine}`;
+                  }
+                } catch (err) {
+                  console.warn(`[scheduled-jobs] BNKR trending enrichment failed:`, err instanceof Error ? err.message : err);
+                }
+                const assetMatches = result.match(/\*\*?([A-Z]{2,10})\*\*?\s*—\s*(?:📈|📉|LONG|SHORT)/g);
+                if (assetMatches) {
+                  for (const match of assetMatches.slice(0, 3)) {
+                    const symbol = match.match(/\*\*?([A-Z]{2,10})\*\*?/)?.[1];
+                    if (!symbol) continue;
+                    try {
+                      const research = await researchToken(symbol);
+                      if (research.analysis) {
+                        const summary = research.analysis.length > 200 ? research.analysis.slice(0, 200) + "..." : research.analysis;
+                        enrichedBrief += `
+
+\u{1F52C} *BNKR Research \u2014 ${symbol}:* ${summary}`;
+                      }
+                      if (research.chartUrl && !chartUrls.includes(research.chartUrl)) {
+                        chartUrls.push(research.chartUrl);
+                      }
+                    } catch (err) {
+                      console.warn(`[scheduled-jobs] BNKR research for ${symbol} failed:`, err instanceof Error ? err.message : err);
+                    }
+                  }
+                }
+              }
+              await sendScoutBrief(enrichedBrief, chartUrls.length > 0 ? chartUrls : void 0);
+              console.log(`[scheduled-jobs] Sent SCOUT brief via Telegram with ${chartUrls.length} charts`);
+            } catch (briefErr) {
+              console.warn(`[scheduled-jobs] Failed to send SCOUT brief via Telegram:`, briefErr instanceof Error ? briefErr.message : briefErr);
+            }
           }
         }
         if ((job.id.startsWith("moodys") || job.id.startsWith("real-estate") || job.id === "life-audit" || job.id === "weekly-inbox-deep-clean" || job.id === "baby-dashboard-weekly-update") && kbListFn && kbMoveFn) {
@@ -16611,6 +16978,102 @@ ${sqNote}`,
       }
     },
     {
+      name: "bnkr_analyze",
+      label: "BNKR AI Analysis",
+      description: "Query BNKR's AI for market research, charts, technical analysis, trending tokens, or token research. Accepts a natural language prompt (e.g. 'technical analysis for ETH', 'show BTC chart', 'what tokens are trending on base', 'research VIRTUAL token'). Returns BNKR's AI response text plus any rich data (chart URLs, trending tokens, token research).",
+      parameters: Type.Object({
+        prompt: Type.String({ description: "Natural language prompt for BNKR AI (e.g. 'run TA on SOL', 'show me a BTC chart', 'what tokens are trending', 'research BNKR token fundamentals')" })
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const result = await bnkrAnalyze(params.prompt);
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                status: result.status,
+                response: result.response,
+                chartUrl: result.richData?.chartUrl || null,
+                chartUrls: result.richData?.chartUrls || null,
+                trendingTokens: result.richData?.trendingTokens || null,
+                tokenResearch: result.richData?.tokenResearch || null,
+                error: result.error || null
+              })
+            }],
+            details: {}
+          };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "bnkr_chart",
+      label: "BNKR Price Chart",
+      description: "Get a price chart image URL for any cryptocurrency via BNKR. Returns a chart URL that can be shared in Telegram or displayed to the user, plus brief analysis text.",
+      parameters: Type.Object({
+        asset: Type.String({ description: "Asset name or ticker (e.g. 'SOL', 'ETH', 'BTC', 'BNKR')" })
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const result = await getChart(params.asset);
+          return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "bnkr_trending",
+      label: "BNKR Trending Tokens",
+      description: "Get trending tokens and top movers via BNKR's AI. Supplements CoinGecko trending data with BNKR's on-chain intelligence. Returns trending token list and analysis.",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const result = await getTrendingTokens();
+          return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "bnkr_research",
+      label: "BNKR Token Research",
+      description: "Get detailed AI-powered research on a specific token via BNKR. Returns fundamentals, price action analysis, chart URL, and research summary. Use during thesis validation to supplement CoinGecko and Nansen data.",
+      parameters: Type.Object({
+        token: Type.String({ description: "Token name or ticker to research (e.g. 'SOL', 'VIRTUAL', 'BNKR')" })
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const result = await researchToken(params.token);
+          return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
+      name: "bnkr_twap",
+      label: "BNKR TWAP Order",
+      description: "Execute a TWAP (Time-Weighted Average Price) order via BNKR to split a large buy/sell into equal slices over a time period, reducing slippage. Use for positions exceeding the TWAP threshold (~$500).",
+      parameters: Type.Object({
+        asset: Type.String({ description: "Asset to trade (e.g. 'SOL', 'ETH')" }),
+        direction: Type.Union([Type.Literal("buy"), Type.Literal("sell")]),
+        totalAmount: Type.Number({ description: "Total USD amount to trade" }),
+        durationHours: Type.Number({ description: "Time period to spread the order over (in hours)" }),
+        slices: Type.Optional(Type.Number({ description: "Number of equal slices (default: max(4, ceil(durationHours)))" }))
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const result = await twapOrder(params);
+          return { content: [{ type: "text", text: JSON.stringify({ status: result.status, response: result.response, orderDetails: result.richData?.orderDetails || null, error: result.error || null }) }], details: {} };
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+        }
+      }
+    },
+    {
       name: "polymarket_search",
       label: "Polymarket Search",
       description: "Search Polymarket for prediction markets by topic/tag. Returns markets with odds, volume, liquidity, and end dates.",
@@ -16860,6 +17323,13 @@ ${sqNote}`
             const portfolio = await getPortfolioValue();
             const rc = await getRiskConfig();
             const riskAmount = portfolio * (rc.risk_per_trade_pct / 100);
+            let chartUrl;
+            try {
+              const chart = await getChart(params.asset);
+              if (chart.chartUrl) chartUrl = chart.chartUrl;
+            } catch (chartErr) {
+              console.warn(`[bankr] Chart fetch for approval failed: ${chartErr instanceof Error ? chartErr.message : chartErr}`);
+            }
             const approval = await requestTradeApproval({
               thesisId: params.thesis_id,
               asset: params.asset,
@@ -16869,7 +17339,8 @@ ${sqNote}`
               stopLoss: params.stop_price.toFixed(2),
               takeProfit: "TBD",
               riskAmount: riskAmount.toFixed(2),
-              reason: `Tier: HUMAN REQUIRED. Mode: ${mode}`
+              reason: `Tier: HUMAN REQUIRED. Mode: ${mode}`,
+              chartUrl
             });
             if (approval !== "approve") {
               return { content: [{ type: "text", text: JSON.stringify({ executed: false, tier: "human_required", reason: `Trade ${approval} via Telegram` }) }], details: {} };
@@ -20282,7 +20753,7 @@ app.get("/api/wealth-engine/config", async (req, res) => {
       mode,
       paused,
       kill_switch: killSwitch,
-      bnkr_configured: (await Promise.resolve().then(() => (init_bnkr(), bnkr_exports))).isConfigured(),
+      bnkr_configured: isConfigured6(),
       positions_count: positions.length,
       boot_time: bootTime,
       monitor_tick: monitorTick,
@@ -23120,7 +23591,7 @@ ${missedJobs.map((j) => `\u2022 ${j}`).join("\n")}`).catch(() => {
 async function sendStartupNotification(googleStatus) {
   const jobs = getJobs();
   const enabledJobs = jobs.filter((j) => j.enabled).length;
-  const bnkrStatus = (await Promise.resolve().then(() => (init_bnkr(), bnkr_exports))).isConfigured() ? "Live" : "Shadow";
+  const bnkrStatus = isConfigured6() ? "Live" : "Shadow";
   const googleLine = googleStatus.connected ? `\u2705 ${googleStatus.email}` : `\u274C Disconnected`;
   const now = (/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "America/New_York" });
   const msg = [
