@@ -864,7 +864,7 @@ async function handleAddWalletCommand(args: string): Promise<string> {
   const alias = parts.slice(1).join(" ") || undefined;
 
   if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
-    return `${mode} ❌ Usage: /addwallet <0x address> [alias]\nAddress must be a valid 42-char hex address.`;
+    return `${mode} ❌ Usage: /add-wallet <0x address> [alias]\nAddress must be a valid 42-char hex address.`;
   }
 
   try {
@@ -926,7 +926,7 @@ async function handleRemoveWalletCommand(args: string): Promise<string> {
   const query = args.trim();
 
   if (!query) {
-    return `${mode} ❌ Usage: /removewallet <address or alias>`;
+    return `${mode} ❌ Usage: /remove-wallet <address or alias>`;
   }
 
   try {
@@ -962,7 +962,7 @@ async function handleBlacklistWalletCommand(args: string): Promise<string> {
   const query = args.trim();
 
   if (!query) {
-    return `${mode} ❌ Usage: /blacklistwallet <address or alias>`;
+    return `${mode} ❌ Usage: /blacklist-wallet <address or alias>`;
   }
 
   try {

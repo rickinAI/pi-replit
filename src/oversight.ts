@@ -342,7 +342,7 @@ async function checkWalletHealth(): Promise<HealthCheck> {
               disabled++;
 
               await notifyTelegram(
-                `⚠️ *Wallet Auto-Disabled*\n\n*${wallet.alias}* (${wallet.niche})\nWin rate: ${(winRate * 100).toFixed(0)}% (30d, ${resolved.length} resolved)\nDegraded ${wallet.degraded_count} consecutive checks\n\n_Wallet disabled. Use /addwallet to re-enable after review._`
+                `⚠️ *Wallet Auto-Disabled*\n\n*${wallet.alias}* (${wallet.niche})\nWin rate: ${(winRate * 100).toFixed(0)}% (30d, ${resolved.length} resolved)\nDegraded ${wallet.degraded_count} consecutive checks\n\n_Wallet disabled. Use /add-wallet to re-enable after review._`
               );
             } else {
               degraded++;
