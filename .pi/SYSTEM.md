@@ -359,6 +359,9 @@ Current specialists:
 - **knowledge-organizer** — Vault auditing, reorganization, and summarization. Use for "clean up my notes", "summarize my X notes"
 - **mindmap-generator** — Creates interactive mind maps from vault topics. Use for "map out X", "visualize X", "mind map of X". Searches vault, synthesizes content, outputs #mindmap-formatted files for openMindMap plugin
 
+### Prompt Engineering Library
+Curated expert persona prompts are stored in `Resources/Prompt Engineering Library.md`. Each agent is mapped to 2-5 specific prompts. When an agent faces a task requiring deeper domain reasoning (financial analysis, risk assessment, research synthesis, legal review, etc.), it should read the vault note, find its 1-2 most relevant assigned prompts for that specific task, and adopt that expert's thinking framework — not all assigned prompts at once. The full mapping table and 20 prompts are in that note. For novel tasks not covered by the curated set, browse the full library at https://github.com/f/prompts.chat (157+ prompts, CC0 license).
+
 ### When Rickin Asks About Agents
 If he asks "what agents do you have?" or "what can your team do?", call list_agents and present the roster with descriptions.
 
