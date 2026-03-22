@@ -559,26 +559,21 @@ async function doCheckAlerts() {
     try {
       const minutesBefore = config.alerts.calendarReminder.minutesBefore || 30;
       const windowEnd = new Date(now.getTime() + minutesBefore * 60 * 1000);
-      const result = await calendar.listEvents({ timeMin: now.toISOString(), timeMax: windowEnd.toISOString(), maxResults: 5 });
-      if (!result.includes("No upcoming events")) {
-        const lines = result.split("\n").filter(l => l.trim());
-        for (const line of lines) {
-          const eventKey = line.trim().slice(0, 80);
-          if (alertedCalendarEvents.has(eventKey)) continue;
-          if (/^\d+\./.test(line.trim())) {
-            const eventContent = line.trim().replace(/^\d+\.\s*/, "");
-            if (isCalendarSystemEvent(eventContent)) continue;
-            alertedCalendarEvents.add(eventKey);
-            persistAlertDedup();
-            broadcastFn?.({
-              type: "alert",
-              alertType: "calendar",
-              title: "Upcoming Event",
-              content: eventContent,
-              timestamp: now.toISOString(),
-            });
-          }
-        }
+      const events = await calendar.listEventsStructured({ timeMin: now.toISOString(), timeMax: windowEnd.toISOString(), maxResults: 5 });
+      for (const event of events) {
+        const eventKey = `${event.title.trim().toLowerCase()}|${event.startRaw}`;
+        if (alertedCalendarEvents.has(eventKey)) continue;
+        const eventContent = event.title;
+        if (isCalendarSystemEvent(event.title)) continue;
+        alertedCalendarEvents.add(eventKey);
+        persistAlertDedup();
+        broadcastFn?.({
+          type: "alert",
+          alertType: "calendar",
+          title: "Upcoming Event",
+          content: eventContent,
+          timestamp: now.toISOString(),
+        });
       }
     } catch (err) {
       console.error("[alerts] Calendar alert check failed:", err);

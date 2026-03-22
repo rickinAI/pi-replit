@@ -112,13 +112,23 @@ export async function listEvents(options?: { maxResults?: number; timeMin?: stri
       }
     }
 
-    allEvents.sort((a: any, b: any) => {
+    const seen = new Set<string>();
+    const uniqueEvents: any[] = [];
+    for (const ev of allEvents) {
+      const dedupKey = `${(ev.summary || "").trim().toLowerCase()}|${ev.start?.dateTime || ev.start?.date || ""}`;
+      if (!seen.has(dedupKey)) {
+        seen.add(dedupKey);
+        uniqueEvents.push(ev);
+      }
+    }
+
+    uniqueEvents.sort((a: any, b: any) => {
       const aTime = a.start?.dateTime || a.start?.date || "";
       const bTime = b.start?.dateTime || b.start?.date || "";
       return aTime.localeCompare(bTime);
     });
 
-    const events = allEvents.slice(0, maxResults);
+    const events = uniqueEvents.slice(0, maxResults);
     console.log(`[calendar] Found ${allEvents.length} event(s), returning ${events.length}`);
 
     if (events.length === 0) return "No upcoming events found.";
@@ -151,7 +161,7 @@ export async function listEvents(options?: { maxResults?: number; timeMin?: stri
   }
 }
 
-export async function listEventsStructured(options?: { maxResults?: number; timeMin?: string; timeMax?: string }): Promise<Array<{ title: string; time: string; calendar: string }>> {
+export async function listEventsStructured(options?: { maxResults?: number; timeMin?: string; timeMax?: string }): Promise<Array<{ title: string; time: string; startRaw: string; calendar: string }>> {
   try {
     const cal = await getCalendarClient();
     const now = new Date();
@@ -182,13 +192,23 @@ export async function listEventsStructured(options?: { maxResults?: number; time
       } catch {}
     }
 
-    allEvents.sort((a, b) => {
+    const seen = new Set<string>();
+    const uniqueEvents: Array<{ event: any; calName: string }> = [];
+    for (const entry of allEvents) {
+      const dedupKey = `${(entry.event.summary || "").trim().toLowerCase()}|${entry.event.start?.dateTime || entry.event.start?.date || ""}`;
+      if (!seen.has(dedupKey)) {
+        seen.add(dedupKey);
+        uniqueEvents.push(entry);
+      }
+    }
+
+    uniqueEvents.sort((a, b) => {
       const aT = a.event.start?.dateTime || a.event.start?.date || "";
       const bT = b.event.start?.dateTime || b.event.start?.date || "";
       return aT.localeCompare(bT);
     });
 
-    return allEvents.slice(0, maxResults).map(({ event, calName }) => {
+    return uniqueEvents.slice(0, maxResults).map(({ event, calName }) => {
       const start = event.start?.dateTime
         ? new Date(event.start.dateTime).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
         : event.start?.date
@@ -200,6 +220,7 @@ export async function listEventsStructured(options?: { maxResults?: number; time
       return {
         title: event.summary || "(No title)",
         time: `${start}${end ? " - " + end : ""}`,
+        startRaw: event.start?.dateTime || event.start?.date || "",
         calendar: calName,
       };
     });
