@@ -1547,8 +1547,10 @@ function buildCoinGeckoTools(): ToolDefinition[] {
             losses: s.losses,
             total_pnl: s.total_pnl,
             avg_pnl: s.avg_pnl,
+            profit_factor: s.profit_factor || 0,
             sample_size: s.recent_results.length,
             modifier: bankr.getSignalQualityModifier(scores, s.source, s.asset_class).modifier,
+            asset_breakdown: s.asset_breakdown || {},
           }));
           return { content: [{ type: "text" as const, text: JSON.stringify({ scores: summary }) }], details: {} };
         } catch (err) {
@@ -1613,13 +1615,13 @@ function buildCoinGeckoTools(): ToolDefinition[] {
           const CONFIDENCE_TIERS: Record<string, number> = { HIGH: 3, MEDIUM: 2, LOW: 1 };
           const TIER_FROM_RANK: Record<number, string> = { 3: "HIGH", 2: "MEDIUM", 1: "LOW" };
           let finalConfidence = params.confidence as string;
-          if (sqMod.sampleSize >= 3) {
+          if (sqMod.sampleSize >= 8) {
             let rank = CONFIDENCE_TIERS[finalConfidence] || 2;
             if (sqMod.modifier === "boost") rank = Math.min(rank + 1, 3);
             else if (sqMod.modifier === "penalty") rank = Math.max(rank - 1, 1);
             finalConfidence = TIER_FROM_RANK[rank] || finalConfidence;
           }
-          const sqNote = `[signal_quality: ${sqMod.modifier}, win_rate=${sqMod.winRate}%, n=${sqMod.sampleSize}${finalConfidence !== params.confidence ? `, adjusted ${params.confidence}→${finalConfidence}` : ""}]`;
+          const sqNote = `[signal_quality: ${sqMod.modifier}, win_rate=${sqMod.winRate}%, pf=${sqMod.profitFactor}, n=${sqMod.sampleSize}${finalConfidence !== params.confidence ? `, adjusted ${params.confidence}→${finalConfidence}` : ""}]`;
 
           const thesis = cryptoScout.buildThesis({
             asset: params.asset,
@@ -1929,13 +1931,13 @@ function buildCoinGeckoTools(): ToolDefinition[] {
           const PM_TIERS: Record<string, number> = { HIGH: 4, MEDIUM: 3, LOW: 2, SPECULATIVE: 1 };
           const PM_FROM_RANK: Record<number, string> = { 4: "HIGH", 3: "MEDIUM", 2: "LOW", 1: "SPECULATIVE" };
           let finalConfidence = resolvedConfidence as string;
-          if (sqMod.sampleSize >= 3) {
+          if (sqMod.sampleSize >= 8) {
             let rank = PM_TIERS[finalConfidence] || 2;
             if (sqMod.modifier === "boost") rank = Math.min(rank + 1, 4);
             else if (sqMod.modifier === "penalty") rank = Math.max(rank - 1, 1);
             finalConfidence = PM_FROM_RANK[rank] || finalConfidence;
           }
-          const sqNote = `[signal_quality: ${sqMod.modifier}, win_rate=${sqMod.winRate}%, n=${sqMod.sampleSize}${finalConfidence !== resolvedConfidence ? `, adjusted ${resolvedConfidence}→${finalConfidence}` : ""}]`;
+          const sqNote = `[signal_quality: ${sqMod.modifier}, win_rate=${sqMod.winRate}%, pf=${sqMod.profitFactor}, n=${sqMod.sampleSize}${finalConfidence !== resolvedConfidence ? `, adjusted ${resolvedConfidence}→${finalConfidence}` : ""}]`;
 
           const thesis = polymarketScout.buildThesis({
             market,
@@ -5302,8 +5304,10 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
           losses: s.losses,
           total_pnl: s.total_pnl,
           avg_pnl: s.avg_pnl,
+          profit_factor: s.profit_factor || 0,
           sample_size: s.recent_results.length,
           modifier: bankr.getSignalQualityModifier(scores, s.source, s.asset_class).modifier,
+          asset_breakdown: s.asset_breakdown || {},
         }));
       } catch { return []; }
     })(),

@@ -1035,18 +1035,24 @@ export async function closeShadowTrade(
   trade.hypothetical_pnl = (exitPrice - trade.entry_price) * multiplier;
 
   await setConfigValue(SHADOW_TRADES_KEY, trades);
-  console.log(`[oversight] Shadow trade closed: ${trade.asset} P&L: $${trade.hypothetical_pnl.toFixed(2)}`);
+  console.log(`[oversight] Shadow trade closed: ${trade.asset} P&L: $${trade.hypothetical_pnl.toFixed(2)} reason: ${reason}`);
 
-  try {
-    const { updateSignalQuality } = await import("./bankr.js");
-    await updateSignalQuality({
-      source: (trade.source as "crypto_scout" | "polymarket_scout") || "crypto_scout",
-      asset_class: trade.asset_class,
-      pnl: trade.hypothetical_pnl,
-      asset: trade.asset,
-    });
-  } catch (e) {
-    console.warn("[oversight] Signal quality update on shadow close:", e instanceof Error ? e.message : e);
+  const LEARNING_REASONS = ["stop_hit", "target_hit", "expired", "rsi_exit", "time_exit", "manual"];
+  if (LEARNING_REASONS.includes(reason)) {
+    try {
+      const { updateSignalQuality } = await import("./bankr.js");
+      await updateSignalQuality({
+        source: (trade.source as "crypto_scout" | "polymarket_scout") || "crypto_scout",
+        asset_class: trade.asset_class,
+        pnl: trade.hypothetical_pnl,
+        asset: trade.asset,
+        trade_id: trade.id,
+      });
+    } catch (e) {
+      console.warn("[oversight] Signal quality update on shadow close:", e instanceof Error ? e.message : e);
+    }
+  } else {
+    console.log(`[oversight] Skipping signal quality update for non-terminal close reason: ${reason}`);
   }
 
   try {
@@ -1192,6 +1198,7 @@ export async function refreshShadowTradesFromMarket(): Promise<{
         asset_class: trade.asset_class,
         pnl: trade.hypothetical_pnl,
         asset: trade.asset,
+        trade_id: trade.id,
       });
     } catch (e) {
       console.warn("[oversight] Signal quality update on shadow refresh close:", e instanceof Error ? e.message : e);

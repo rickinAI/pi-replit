@@ -751,6 +751,7 @@ export async function closePosition(positionId: string, exitPrice: number, close
       asset_class: pos.asset_class,
       pnl: parseFloat(pnl.toFixed(4)),
       asset: pos.asset,
+      trade_id: pos.id,
     });
   } catch (e) {
     console.error("[bankr] Signal quality update on close:", e instanceof Error ? e.message : e);
@@ -1214,7 +1215,9 @@ export interface SignalQualityRecord {
   total_pnl: number;
   avg_pnl: number;
   win_rate: number;
-  recent_results: Array<{ pnl: number; ts: number; asset: string }>;
+  profit_factor: number;
+  recent_results: Array<{ pnl: number; ts: number; asset: string; trade_id?: string }>;
+  asset_breakdown?: Record<string, { wins: number; losses: number; win_rate: number; avg_pnl: number }>;
 }
 
 const SIGNAL_QUALITY_KEY = "signal_quality_scores";
@@ -1237,6 +1240,22 @@ export async function getSignalQuality(): Promise<SignalQualityRecord[]> {
           const recentPnl = record.recent_results.reduce((s, r) => s + r.pnl, 0);
           record.win_rate = recentTotal > 0 ? parseFloat((recentWins / recentTotal * 100).toFixed(1)) : 0;
           record.avg_pnl = recentTotal > 0 ? parseFloat((recentPnl / recentTotal).toFixed(4)) : 0;
+          const grossProfit = record.recent_results.filter(r => r.pnl > 0).reduce((s, r) => s + r.pnl, 0);
+          const grossLoss = Math.abs(record.recent_results.filter(r => r.pnl < 0).reduce((s, r) => s + r.pnl, 0));
+          record.profit_factor = grossLoss > 0 ? parseFloat((grossProfit / grossLoss).toFixed(2)) : grossProfit > 0 ? 99 : 0;
+          const breakdown: Record<string, { wins: number; losses: number; win_rate: number; avg_pnl: number }> = {};
+          for (const r of record.recent_results) {
+            if (!breakdown[r.asset]) breakdown[r.asset] = { wins: 0, losses: 0, win_rate: 0, avg_pnl: 0 };
+            if (r.pnl > 0) breakdown[r.asset].wins++;
+            else breakdown[r.asset].losses++;
+          }
+          for (const [asset, stats] of Object.entries(breakdown)) {
+            const total = stats.wins + stats.losses;
+            const pnl = record.recent_results.filter(r => r.asset === asset).reduce((s, r) => s + r.pnl, 0);
+            stats.win_rate = total > 0 ? parseFloat((stats.wins / total * 100).toFixed(1)) : 0;
+            stats.avg_pnl = total > 0 ? parseFloat((pnl / total).toFixed(4)) : 0;
+          }
+          record.asset_breakdown = breakdown;
         }
       }
       return records;
@@ -1252,6 +1271,7 @@ export async function updateSignalQuality(params: {
   asset_class: "crypto" | "polymarket";
   pnl: number;
   asset: string;
+  trade_id?: string;
 }): Promise<void> {
   if (params.source === "manual") return;
 
@@ -1283,12 +1303,20 @@ export async function updateSignalQuality(params: {
         total_pnl: 0,
         avg_pnl: 0,
         win_rate: 0,
+        profit_factor: 0,
         recent_results: [],
+        asset_breakdown: {},
       };
       records.push(record);
     }
 
-    record.recent_results.push({ pnl: params.pnl, ts: now, asset: params.asset });
+    if (params.trade_id && record.recent_results.some(r => r.trade_id === params.trade_id)) {
+      await client.query("ROLLBACK");
+      console.log(`[bankr] Signal quality skip: trade ${params.trade_id} already recorded`);
+      return;
+    }
+
+    record.recent_results.push({ pnl: params.pnl, ts: now, asset: params.asset, trade_id: params.trade_id });
     record.recent_results = record.recent_results
       .filter(r => r.ts > cutoff)
       .slice(-SIGNAL_QUALITY_MAX_RECENT);
@@ -1304,13 +1332,29 @@ export async function updateSignalQuality(params: {
     record.win_rate = recentTotal > 0 ? parseFloat((recentWins / recentTotal * 100).toFixed(1)) : 0;
     record.avg_pnl = recentTotal > 0 ? parseFloat((recentPnl / recentTotal).toFixed(4)) : 0;
 
+    const grossProfit = record.recent_results.filter(r => r.pnl > 0).reduce((s, r) => s + r.pnl, 0);
+    const grossLoss = Math.abs(record.recent_results.filter(r => r.pnl < 0).reduce((s, r) => s + r.pnl, 0));
+    record.profit_factor = grossLoss > 0 ? parseFloat((grossProfit / grossLoss).toFixed(2)) : grossProfit > 0 ? 99 : 0;
+
+    if (!record.asset_breakdown) record.asset_breakdown = {};
+    const assetResults = record.recent_results.filter(r => r.asset === params.asset);
+    const assetWins = assetResults.filter(r => r.pnl > 0).length;
+    const assetTotal = assetResults.length;
+    const assetPnl = assetResults.reduce((s, r) => s + r.pnl, 0);
+    record.asset_breakdown[params.asset] = {
+      wins: assetWins,
+      losses: assetTotal - assetWins,
+      win_rate: assetTotal > 0 ? parseFloat((assetWins / assetTotal * 100).toFixed(1)) : 0,
+      avg_pnl: assetTotal > 0 ? parseFloat((assetPnl / assetTotal).toFixed(4)) : 0,
+    };
+
     await client.query(
       `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
       [SIGNAL_QUALITY_KEY, JSON.stringify(records), now]
     );
     await client.query("COMMIT");
-    console.log(`[bankr] Signal quality updated: ${params.source}/${params.asset_class} — ${params.pnl > 0 ? "WIN" : "LOSS"} $${params.pnl.toFixed(2)}, win rate: ${record.win_rate}%`);
+    console.log(`[bankr] Signal quality updated: ${params.source}/${params.asset_class} — ${params.pnl > 0 ? "WIN" : "LOSS"} $${params.pnl.toFixed(2)}, win rate: ${record.win_rate}%, profit factor: ${record.profit_factor}`);
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;
@@ -1319,14 +1363,17 @@ export async function updateSignalQuality(params: {
   }
 }
 
-export function getSignalQualityModifier(scores: SignalQualityRecord[], source: "crypto_scout" | "polymarket_scout", assetClass: "crypto" | "polymarket"): { modifier: string; winRate: number; sampleSize: number } {
+export function getSignalQualityModifier(scores: SignalQualityRecord[], source: "crypto_scout" | "polymarket_scout", assetClass: "crypto" | "polymarket"): { modifier: string; winRate: number; sampleSize: number; profitFactor: number } {
+  const MIN_SAMPLE_SIZE = 8;
   const record = scores.find(r => r.source === source && r.asset_class === assetClass);
-  if (!record || record.recent_results.length < 3) {
-    return { modifier: "neutral", winRate: 0, sampleSize: record?.recent_results.length || 0 };
+  if (!record || record.recent_results.length < MIN_SAMPLE_SIZE) {
+    return { modifier: "neutral", winRate: 0, sampleSize: record?.recent_results.length || 0, profitFactor: 0 };
   }
-  if (record.win_rate > 60) return { modifier: "boost", winRate: record.win_rate, sampleSize: record.recent_results.length };
-  if (record.win_rate < 40) return { modifier: "penalty", winRate: record.win_rate, sampleSize: record.recent_results.length };
-  return { modifier: "neutral", winRate: record.win_rate, sampleSize: record.recent_results.length };
+  const pf = record.profit_factor || 0;
+  const wr = record.win_rate;
+  if (wr > 55 && pf > 1.2) return { modifier: "boost", winRate: wr, sampleSize: record.recent_results.length, profitFactor: pf };
+  if (wr < 40 || pf < 0.5) return { modifier: "penalty", winRate: wr, sampleSize: record.recent_results.length, profitFactor: pf };
+  return { modifier: "neutral", winRate: wr, sampleSize: record.recent_results.length, profitFactor: pf };
 }
 
 export async function detectWashSales(): Promise<TaxLot[]> {

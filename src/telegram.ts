@@ -436,6 +436,50 @@ async function handlePublicCommand(args: string): Promise<string> {
   }
 }
 
+async function handleResetCommand(args: string): Promise<string> {
+  const mode = await getMode();
+  const pool = getPool();
+  const rawCapital = args.trim() ? parseFloat(args.trim()) : 10000;
+  const capital = isFinite(rawCapital) && rawCapital > 0 ? rawCapital : 10000;
+  try {
+    const now = Date.now();
+    const resets: [string, unknown][] = [
+      ["wealth_engines_portfolio_value", capital],
+      ["wealth_engines_peak_portfolio", capital],
+      ["wealth_engines_consecutive_losses", 0],
+      ["wealth_engines_trade_history", []],
+      ["wealth_engines_positions", []],
+      ["oversight_shadow_trades", []],
+      ["signal_quality_scores", []],
+      ["wealth_engines_paused", false],
+      ["wealth_engines_kill_switch", false],
+    ];
+    for (const [key, value] of resets) {
+      await pool.query(
+        `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+        [key, JSON.stringify(value), now]
+      );
+    }
+    console.log(`[telegram] FULL RESET via Telegram — capital: $${capital}`);
+    return [
+      `${mode} 🔄 *Full Portfolio Reset*`,
+      "",
+      `💰 Capital: $${capital.toLocaleString()}`,
+      "✅ Positions cleared",
+      "✅ Trade history cleared",
+      "✅ Shadow trades cleared",
+      "✅ Signal quality scores cleared",
+      "✅ Kill switch & pause reset",
+      "",
+      "_System is ready for fresh learning cycle._",
+    ].join("\n");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `${mode} ❌ Reset failed: ${msg}`;
+  }
+}
+
 async function handleKillCommand(): Promise<string> {
   const mode = await getMode();
   const pool = getPool();
@@ -529,7 +573,16 @@ async function handleRiskCommand(): Promise<string> {
       lines.push("", "*Signal Quality:*");
       for (const s of scores) {
         const emoji = s.win_rate > 60 ? "🟢" : s.win_rate < 40 ? "🔴" : "🟡";
-        lines.push(`${emoji} ${s.source}/${s.asset_class}: ${s.win_rate}% win (${s.recent_results.length} trades, avg $${s.avg_pnl.toFixed(2)})`);
+        const pf = (s as any).profit_factor != null ? ` PF:${(s as any).profit_factor}` : "";
+        lines.push(`${emoji} ${s.source}/${s.asset_class}: ${s.win_rate}% win (${s.recent_results.length} trades, avg $${s.avg_pnl.toFixed(2)}${pf})`);
+        const bd = (s as any).asset_breakdown;
+        if (bd && typeof bd === "object") {
+          for (const [asset, stats] of Object.entries(bd)) {
+            const a = stats as { wins: number; losses: number; win_rate: number; avg_pnl: number };
+            const ae = a.win_rate > 60 ? "🟢" : a.win_rate < 40 ? "🔴" : "🟡";
+            lines.push(`  ${ae} ${asset}: ${a.win_rate}% (${a.wins}W/${a.losses}L, avg $${a.avg_pnl.toFixed(2)})`);
+          }
+        }
       }
     }
   } catch {}
@@ -761,6 +814,7 @@ async function handleHelpCommand(): Promise<string> {
     "/oversight — Oversight agent status",
     "/shadow — Shadow trading stats",
     "/tax — YTD tax summary",
+    "/reset [capital] — Full portfolio reset (default $10K)",
     "/kill — Emergency kill switch",
     "/pause — Halt all Wealth Engine jobs",
     "/resume — Resume Wealth Engine jobs",
@@ -1748,6 +1802,7 @@ export async function init(): Promise<void> {
   registerCommand("scout", async () => handleScoutCommand());
   registerCommand("trades", async (args) => handleTradesCommand(args));
   registerCommand("public", async (args) => handlePublicCommand(args));
+  registerCommand("reset", async (args) => handleResetCommand(args));
   registerCommand("kill", async () => handleKillCommand());
   registerCommand("risk", async () => handleRiskCommand());
   registerCommand("polymarket", async () => handlePolymarketCommand());
