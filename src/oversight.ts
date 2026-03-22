@@ -352,8 +352,9 @@ async function checkWalletHealth(): Promise<HealthCheck> {
             healthy++;
           }
         }
-      } catch {
-        healthy++;
+      } catch (fetchErr) {
+        console.warn(`[oversight] Wallet health fetch failed for ${wallet.alias}:`, fetchErr instanceof Error ? fetchErr.message : fetchErr);
+        degraded++;
       }
 
       await new Promise(r => setTimeout(r, 300));
