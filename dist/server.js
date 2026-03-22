@@ -1778,9 +1778,9 @@ var BNKR_API_KEY, BNKR_WALLET, BNKR_BASE_URL;
 var init_bnkr = __esm({
   "src/bnkr.ts"() {
     "use strict";
-    BNKR_API_KEY = process.env.BANKR_API_KEY || "";
-    BNKR_WALLET = process.env.BANKR_WALLET_ADDRESS || "";
-    BNKR_BASE_URL = process.env.BANKR_API_URL || "https://api.bnkr.com/v1";
+    BNKR_API_KEY = process.env.BNKR_API_KEY || "";
+    BNKR_WALLET = process.env.BNKR_WALLET_ADDRESS || "";
+    BNKR_BASE_URL = process.env.BNKR_API_URL || "https://api.bnkr.com/v1";
   }
 });
 

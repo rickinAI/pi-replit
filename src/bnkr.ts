@@ -1,6 +1,6 @@
-const BNKR_API_KEY = process.env.BANKR_API_KEY || "";
-const BNKR_WALLET = process.env.BANKR_WALLET_ADDRESS || "";
-const BNKR_BASE_URL = process.env.BANKR_API_URL || "https://api.bnkr.com/v1";
+const BNKR_API_KEY = process.env.BNKR_API_KEY || "";
+const BNKR_WALLET = process.env.BNKR_WALLET_ADDRESS || "";
+const BNKR_BASE_URL = process.env.BNKR_API_URL || "https://api.bnkr.com/v1";
 
 export function isConfigured(): boolean {
   return BNKR_API_KEY.length > 0 && BNKR_WALLET.length > 0;
