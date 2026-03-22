@@ -207,9 +207,6 @@ export async function runHealthCheck(): Promise<HealthReport> {
   const checks: HealthCheck[] = [];
   const now = Date.now();
 
-  const scoutCheck = await checkAgentFreshness(pool, "scout", "SCOUT", 6);
-  checks.push(scoutCheck);
-
   const bankrCheck = await checkAgentFreshness(pool, "bankr", "BANKR", 8);
   checks.push(bankrCheck);
 
