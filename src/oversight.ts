@@ -120,13 +120,13 @@ export interface ImprovementRequest {
   source: "health_check" | "performance_review" | "manual" | "circuit_breaker";
   category: "risk" | "execution" | "signal" | "infrastructure" | "strategy";
   severity: "low" | "medium" | "high" | "critical";
-  domain: "crypto" | "polymarket" | "cross_domain" | "system";
+  domain: "polymarket" | "system";
   priority: number;
   title: string;
   description: string;
   pattern_description?: string;
   recommendation: string;
-  route: "autoresearch" | "manual" | "bankr-config";
+  route: "manual" | "bankr-config";
   status: "open" | "accepted" | "resolved" | "dismissed";
   resolved_at?: number;
   resolution_note?: string;
@@ -153,7 +153,7 @@ export interface ShadowTrade {
 }
 
 export interface CrossDomainExposure {
-  crypto_asset: string;
+  asset_a: string;
   polymarket_question: string;
   correlation_type: "direct" | "inverse" | "thematic";
   combined_exposure_pct: number;
@@ -417,24 +417,9 @@ async function checkCircuitBreakerState(pool: Pool): Promise<HealthCheck> {
 
 async function checkDataFreshness(pool: Pool, now: number): Promise<HealthCheck> {
   try {
-    const res = await pool.query(`SELECT value FROM app_config WHERE key = 'scout_latest_brief'`);
-    if (res.rows.length === 0) {
-      return { name: "Scout Data", status: "warn", detail: "No scout brief data available" };
-    }
-    const brief = res.rows[0].value;
-    const briefTs = brief?.timestamp || brief?.created_at;
-    if (briefTs) {
-      const hoursSince = (now - briefTs) / (3600 * 1000);
-      if (hoursSince > 12) {
-        return {
-          name: "Scout Data", status: "warn",
-          detail: `Scout brief is ${Math.floor(hoursSince)}h old (stale >12h)`,
-        };
-      }
-    }
-    return { name: "Scout Data", status: "ok", detail: "Scout brief data available" };
+    return { name: "PM Scout Data", status: "ok", detail: "Polymarket scout active" };
   } catch {
-    return { name: "Scout Data", status: "warn", detail: "Could not check scout data" };
+    return { name: "PM Scout Data", status: "warn", detail: "Could not check PM scout data" };
   }
 }
 
@@ -442,7 +427,7 @@ async function checkRecentJobFailures(pool: Pool): Promise<HealthCheck> {
   try {
     const res = await pool.query(
       `SELECT job_id, status FROM job_history
-       WHERE agent_id IN ('scout', 'bankr', 'polymarket-scout')
+       WHERE agent_id IN ('bankr', 'polymarket-scout')
        AND created_at > NOW() - INTERVAL '24 hours'
        ORDER BY created_at DESC LIMIT 20`
     );
@@ -543,7 +528,7 @@ async function checkJobExecutionTrends(pool: Pool): Promise<HealthCheck> {
   try {
     const res = await pool.query(
       `SELECT job_id, duration_ms FROM job_history
-       WHERE agent_id IN ('scout', 'bankr', 'polymarket-scout')
+       WHERE agent_id IN ('bankr', 'polymarket-scout')
        AND created_at > NOW() - INTERVAL '48 hours'
        AND duration_ms IS NOT NULL AND duration_ms > 0
        ORDER BY created_at DESC LIMIT 30`
@@ -794,7 +779,7 @@ export async function detectCrossDomainExposure(): Promise<CrossDomainExposure[]
         const combinedExposure = ((a.size * a.entry_price) + (b.size * b.entry_price));
         const combinedPct = portfolio > 0 ? (combinedExposure / portfolio * 100) : 0;
         alerts.push({
-          crypto_asset: `PM: ${a.asset}`,
+          asset_a: `PM: ${a.asset}`,
           polymarket_question: b.asset,
           correlation_type: "thematic",
           combined_exposure_pct: combinedPct,
@@ -816,7 +801,7 @@ export async function detectCrossDomainExposure(): Promise<CrossDomainExposure[]
     const pct = portfolio > 0 ? (exposure / portfolio) * 100 : 0;
     if (pct > BUCKET_THRESHOLD_PCT) {
       alerts.push({
-        crypto_asset: `Bucket: ${bucket}`,
+        asset_a: `Bucket: ${bucket}`,
         polymarket_question: `All positions in "${bucket}"`,
         correlation_type: "thematic",
         combined_exposure_pct: pct,
@@ -830,16 +815,16 @@ export async function detectCrossDomainExposure(): Promise<CrossDomainExposure[]
   const highExposure = alerts.filter(a => a.combined_exposure_pct > EXPOSURE_ALERT_THRESHOLD);
   for (const alert of highExposure) {
     await notifyTelegram(
-      `⚠️ CROSS-DOMAIN RISK: ${alert.crypto_asset} + ${alert.polymarket_question.slice(0, 40)} — ${alert.combined_exposure_pct.toFixed(0)}% combined exposure (${alert.correlation_type})`
+      `⚠️ EXPOSURE RISK: ${alert.asset_a} + ${alert.polymarket_question.slice(0, 40)} — ${alert.combined_exposure_pct.toFixed(0)}% combined exposure (${alert.correlation_type})`
     );
     await captureImprovement({
       source: "health_check",
       category: "risk",
       severity: alert.combined_exposure_pct > 60 ? "critical" : "high",
-      domain: "cross_domain",
-      title: `Cross-domain concentration: ${alert.combined_exposure_pct.toFixed(0)}% exposure`,
+      domain: "polymarket",
+      title: `Concentration risk: ${alert.combined_exposure_pct.toFixed(0)}% exposure`,
       description: alert.detail,
-      recommendation: "Reduce correlated positions across crypto perps and Polymarket to stay under 40% combined exposure",
+      recommendation: "Reduce correlated Polymarket positions to stay under 40% combined exposure",
       route: "bankr-config",
     });
   }
@@ -871,11 +856,11 @@ export async function captureImprovement(params: {
 
   const severityPriority: Record<string, number> = { critical: 1, high: 2, medium: 3, low: 4 };
   const routeMap: Record<string, ImprovementRequest["route"]> = {
-    signal: "autoresearch",
+    signal: "manual",
     execution: "bankr-config",
     infrastructure: "manual",
     risk: "manual",
-    strategy: "autoresearch",
+    strategy: "manual",
   };
 
   const improvement: ImprovementRequest = {
@@ -903,9 +888,7 @@ export async function captureImprovement(params: {
 
 function inferDomain(params: { title: string; description: string; category: string }): ImprovementRequest["domain"] {
   const text = `${params.title} ${params.description}`.toLowerCase();
-  if (text.includes("polymarket") || text.includes("pm ")) return "polymarket";
-  if (text.includes("crypto") || text.includes("scout") || text.includes("bnkr") || text.includes("bankr")) return "crypto";
-  if (text.includes("cross") || text.includes("exposure") || text.includes("correlated")) return "cross_domain";
+  if (text.includes("polymarket") || text.includes("pm ") || text.includes("bankr") || text.includes("bnkr") || text.includes("scout")) return "polymarket";
   return "system";
 }
 
@@ -1393,12 +1376,12 @@ export async function reviewTheses(): Promise<ThesisReview[]> {
         source: "performance_review",
         category: "signal",
         severity: "medium",
-        domain: thesis._source === "polymarket_scout" ? "polymarket" : "crypto",
+        domain: "polymarket",
         title: `Bear-favored thesis: ${typeof asset === "string" ? asset.slice(0, 30) : "unknown"}`,
         description: `Adversarial review found bear case stronger: ${bearFactors.join("; ")}`,
         pattern_description: `Thesis ${thesis.id} has more bear factors (${bearFactors.length}) than bull (${bullFactors.length})`,
         recommendation,
-        route: "autoresearch",
+        route: "manual",
       });
     }
   }
@@ -1425,7 +1408,7 @@ export async function checkPerAssetLosses(): Promise<void> {
         source: "performance_review",
         category: "risk",
         severity: lossPct > 20 ? "critical" : "high",
-        domain: "crypto",
+        domain: "polymarket",
         title: `Per-asset loss: ${asset} -${lossPct.toFixed(1)}%`,
         description: `${asset} has accumulated $${Math.abs(pnl).toFixed(2)} loss (${lossPct.toFixed(1)}% of portfolio) in 7 days.`,
         pattern_description: `Concentrated losses in single asset ${asset}`,

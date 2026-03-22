@@ -200,31 +200,6 @@ export async function bnkrAnalyze(prompt: string): Promise<BnkrPromptResponse> {
   }
 }
 
-export async function getChart(asset: string): Promise<{ chartUrl: string | null; analysis: string }> {
-  const result = await bnkrAnalyze(`show me a technical analysis chart for ${asset}`);
-  return {
-    chartUrl: result.richData?.chartUrl || (result.richData?.chartUrls?.[0]) || null,
-    analysis: result.response,
-  };
-}
-
-export async function getTrendingTokens(): Promise<{ tokens: BnkrRichData["trendingTokens"] | undefined; analysis: string }> {
-  const result = await bnkrAnalyze("what tokens are trending right now? show me the top movers");
-  return {
-    tokens: result.richData?.trendingTokens || undefined,
-    analysis: result.response,
-  };
-}
-
-export async function researchToken(token: string): Promise<{ research: BnkrRichData["tokenResearch"] | undefined; analysis: string; chartUrl: string | null }> {
-  const result = await bnkrAnalyze(`give me a detailed analysis and research on ${token} including price action, fundamentals, and chart`);
-  return {
-    research: result.richData?.tokenResearch || undefined,
-    analysis: result.response,
-    chartUrl: result.richData?.chartUrl || null,
-  };
-}
-
 export interface BnkrPolymarketOrder {
   order_id: string;
   market_id: string;

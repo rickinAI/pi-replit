@@ -1630,7 +1630,7 @@ function buildOversightTools(): ToolDefinition[] {
         pattern_description: Type.Optional(Type.String({ description: "Description of the pattern or trend that led to this improvement" })),
         recommendation: Type.String({ description: "Recommended action to address this" }),
         route: Type.Optional(Type.Union([
-          Type.Literal("autoresearch"), Type.Literal("manual"), Type.Literal("bankr-config"),
+          Type.Literal("manual"), Type.Literal("bankr-config"),
         ], { description: "Where to route this improvement for resolution" })),
       }),
       async execute(_toolCallId, params: {
@@ -1641,7 +1641,7 @@ function buildOversightTools(): ToolDefinition[] {
         priority?: number;
         title: string; description: string; recommendation: string;
         pattern_description?: string;
-        route?: "autoresearch" | "manual" | "bankr-config";
+        route?: "manual" | "bankr-config";
       }) {
         try {
           const item = await oversight.captureImprovement(params);
@@ -4329,22 +4329,8 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
   const totalRealizedPnl = allTradesCombined.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
 
   const pool = (await import("./src/db.js")).getPool();
-  let scoutLastRun: string | null = null;
-  let scoutSummary: string | null = null;
   let monitorLastTick: string | null = null;
   let pmLastRun: string | null = null;
-
-  let scoutRegime: string | null = null;
-  try {
-    const scoutRes = await pool.query(`SELECT created_at, summary FROM job_history WHERE job_id IN ('scout-micro-scan', 'scout-full-cycle') ORDER BY created_at DESC LIMIT 1`);
-    if (scoutRes.rows.length > 0) {
-      scoutLastRun = scoutRes.rows[0].created_at;
-      const raw = scoutRes.rows[0].summary || "";
-      scoutSummary = raw.length > 500 ? raw.slice(0, 500) + "..." : raw;
-      const regimeMatch = raw.match(/(?:Regime\s*[:\|]\s*|[\|]\s*)(TRENDING|RANGING|VOLATILE|BEARISH|BULLISH)(?:\s*[\|])/i);
-      if (regimeMatch) scoutRegime = regimeMatch[1].toUpperCase();
-    }
-  } catch (err) { console.warn("[wealth-engines] scout query failed:", err instanceof Error ? err.message : err); }
 
   try {
     const pmRes = await pool.query(`SELECT created_at FROM job_history WHERE job_id IN ('polymarket-activity-scan', 'polymarket-full-cycle') ORDER BY created_at DESC LIMIT 1`);
@@ -4369,7 +4355,7 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
   } catch {}
 
   const now = Date.now();
-  const scoutHealthy = scoutLastRun ? (now - new Date(scoutLastRun).getTime()) < 6 * 60 * 60_000 : false;
+  const pmHealthy = pmLastRun ? (now - new Date(pmLastRun).getTime()) < 6 * 60 * 60_000 : false;
   const monitorHealthy = monitorLastTick ? (now - new Date(monitorLastTick).getTime()) < 30 * 60_000 : false;
   const oversightHealthy = oversightLastRun ? (now - new Date(oversightLastRun).getTime()) < 8 * 60 * 60_000 : false;
 
@@ -4448,9 +4434,6 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
       created_at: t.created_at, expires_at: t.expires_at, status: t.status,
     })),
     scout: {
-      last_run: scoutLastRun,
-      regime: scoutRegime,
-      summary: scoutSummary,
       pm_theses_count: pmTheses.length,
       pm_top_thesis: topPmThesis,
       pm_last_run: pmLastRun,
@@ -4504,8 +4487,8 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
       kill_switch: summary.kill_switch,
       paused: summary.paused,
       mode: summary.mode,
-      scout_last_run: scoutLastRun,
-      scout_healthy: scoutHealthy,
+      pm_scout_last_run: pmLastRun,
+      pm_scout_healthy: pmHealthy,
       monitor_last_tick: monitorLastTick,
       monitor_healthy: monitorHealthy,
       oversight_last_run: oversightLastRun,

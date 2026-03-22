@@ -203,14 +203,11 @@ async function handleStatusCommand(): Promise<string> {
     }
   } catch {}
 
-  let scoutLastRun = "never";
   let bankrLastRun = "never";
   let pmLastRun = "never";
   try {
     const jobRes = await pool.query(`
       SELECT DISTINCT ON (grp) grp, created_at FROM (
-        SELECT 'scout' AS grp, created_at FROM job_history WHERE agent_id = 'scout'
-        UNION ALL
         SELECT 'bankr' AS grp, created_at FROM job_history WHERE agent_id = 'bankr'
         UNION ALL
         SELECT 'pm' AS grp, created_at FROM job_history WHERE job_id IN ('polymarket-activity-scan','polymarket-full-cycle')
@@ -218,8 +215,7 @@ async function handleStatusCommand(): Promise<string> {
     `);
     for (const row of jobRes.rows) {
       const ts = timeAgo(new Date(row.created_at).getTime());
-      if (row.grp === "scout") scoutLastRun = ts;
-      else if (row.grp === "bankr") bankrLastRun = ts;
+      if (row.grp === "bankr") bankrLastRun = ts;
       else if (row.grp === "pm") pmLastRun = ts;
     }
   } catch {}
@@ -232,7 +228,6 @@ async function handleStatusCommand(): Promise<string> {
     `🔴 Kill Switch: ${killSwitchActive ? "ACTIVE" : "OFF"}`,
     `⏸ Paused: ${pauseActive ? "YES" : "NO"}`,
   ];
-  lines.push(`🔍 SCOUT: ${scoutLastRun}`);
   lines.push(`🎰 PM SCOUT: ${pmLastRun}`);
   lines.push(`💰 BANKR: ${bankrLastRun}`);
   if (healthLine) lines.push(healthLine);
@@ -281,12 +276,12 @@ async function handleIntelCommand(): Promise<string> {
   const pool = getPool();
 
   try {
-    const res = await pool.query(`SELECT value FROM app_config WHERE key = 'scout_latest_brief'`);
+    const res = await pool.query(`SELECT value FROM app_config WHERE key = 'polymarket_scout_active_theses'`);
     if (res.rows.length > 0 && res.rows[0].value) {
-      const brief = res.rows[0].value;
-      const summary = typeof brief === "string" ? brief : (brief.summary || JSON.stringify(brief));
+      const theses = res.rows[0].value;
+      const summary = Array.isArray(theses) ? theses.filter((t: any) => t.status === "active").map((t: any) => `• ${t.question || t.market_question || "?"} (${t.direction}, ${t.confidence})`).join("\n") : JSON.stringify(theses);
       const truncated = summary.length > 3000 ? summary.slice(0, 3000) + "\n\n_(truncated)_" : summary;
-      return `${mode} *Latest SCOUT Intel*\n\n${truncated}`;
+      return `${mode} *PM SCOUT Active Theses*\n\n${truncated || "No active theses"}`;
     }
   } catch {}
 
@@ -1033,29 +1028,29 @@ async function checkDeadManSwitches(): Promise<void> {
   const scoutEnabled = await isJobEnabled(pool, "scout");
   if (scoutEnabled) {
     try {
-      const scoutRes = await pool.query(
-        `SELECT created_at FROM job_history WHERE agent_id = 'scout' ORDER BY created_at DESC LIMIT 1`
+      const pmScoutRes = await pool.query(
+        `SELECT created_at FROM job_history WHERE job_id IN ('polymarket-activity-scan','polymarket-full-cycle') ORDER BY created_at DESC LIMIT 1`
       );
-      if (scoutRes.rows.length > 0) {
-        const lastRun = new Date(scoutRes.rows[0].created_at).getTime();
+      if (pmScoutRes.rows.length > 0) {
+        const lastRun = new Date(pmScoutRes.rows[0].created_at).getTime();
         const hoursSince = (Date.now() - lastRun) / (3600 * 1000);
         if (hoursSince > 6) {
-          const lastAlert = lastDeadManAlert["scout"] || 0;
+          const lastAlert = lastDeadManAlert["pm-scout"] || 0;
           if (Date.now() - lastAlert > 4 * 3600 * 1000) {
-            lastDeadManAlert["scout"] = Date.now();
+            lastDeadManAlert["pm-scout"] = Date.now();
             await sendMessage(
-              `${mode} ⚠️ *Dead Man's Switch: SCOUT*\n\nSCOUT has not run in ${Math.floor(hoursSince)}h (threshold: 6h).\nLast run: ${timeAgo(lastRun)}\n\nCheck scheduled jobs or run manually.`
+              `${mode} ⚠️ *Dead Man's Switch: PM SCOUT*\n\nPM SCOUT has not run in ${Math.floor(hoursSince)}h (threshold: 6h).\nLast run: ${timeAgo(lastRun)}\n\nCheck scheduled jobs or run manually.`
             );
           }
         } else {
-          delete lastDeadManAlert["scout"];
+          delete lastDeadManAlert["pm-scout"];
         }
       }
     } catch (err) {
-      console.error("[telegram] Dead man switch SCOUT check failed:", err);
+      console.error("[telegram] Dead man switch PM SCOUT check failed:", err);
     }
   } else {
-    delete lastDeadManAlert["scout"];
+    delete lastDeadManAlert["pm-scout"];
   }
 
   try {
@@ -1544,20 +1539,20 @@ export async function sendDarkNodeSummary(): Promise<void> {
   const fgValue = "N/A";
   const fgClass = "disabled";
 
-  let scoutLastRun = "never";
   let bankrLastRun = "never";
+  let pmScoutLastRun = "never";
   try {
     const jobRes = await pool.query(`
       SELECT DISTINCT ON (grp) grp, created_at FROM (
-        SELECT 'scout' AS grp, created_at FROM job_history WHERE agent_id = 'scout'
-        UNION ALL
         SELECT 'bankr' AS grp, created_at FROM job_history WHERE agent_id = 'bankr'
+        UNION ALL
+        SELECT 'pm' AS grp, created_at FROM job_history WHERE job_id IN ('polymarket-activity-scan','polymarket-full-cycle')
       ) sub ORDER BY grp, created_at DESC
     `);
     for (const row of jobRes.rows) {
       const ts = timeAgo(new Date(row.created_at).getTime());
-      if (row.grp === "scout") scoutLastRun = ts;
-      else if (row.grp === "bankr") bankrLastRun = ts;
+      if (row.grp === "bankr") bankrLastRun = ts;
+      else if (row.grp === "pm") pmScoutLastRun = ts;
     }
   } catch {}
 
@@ -1575,7 +1570,6 @@ export async function sendDarkNodeSummary(): Promise<void> {
     `💰 *Portfolio:* $${portfolioValue.toFixed(2)}`,
     `😱 *Fear & Greed:* ${fgValue} (${fgClass})`,
     "",
-    `🔍 *Crypto Theses:* ${thesisCount} active`,
     `🎰 *PM Theses:* ${pmThesisCount} active`,
     `👻 *Shadow:* ${shadowOpen} open | W:${shadowWins} L:${shadowLosses} (${winRate}%)`,
     `💰 *Shadow P&L:* ${pnlStr}`,
@@ -1588,7 +1582,7 @@ export async function sendDarkNodeSummary(): Promise<void> {
   }
 
   lines.push("");
-  lines.push(`🔍 SCOUT: ${scoutLastRun}`);
+  lines.push(`🎰 PM SCOUT: ${pmScoutLastRun}`);
   lines.push(`💰 BANKR: ${bankrLastRun}`);
 
   if (alerts.length > 0) {
