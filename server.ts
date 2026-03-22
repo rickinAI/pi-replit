@@ -3934,6 +3934,7 @@ async function authMiddleware(req: Request, res: Response, next: NextFunction) {
   if (req.path === "/api/gmail/callback") { next(); return; }
   if (req.path === "/api/gmail/auth") { next(); return; }
   if (req.path === "/api/telegram/webhook") { next(); return; }
+  if (req.path === "/api/resend/webhook") { next(); return; }
 
   if (req.path === "/pages/wealth-engines" || req.path === "/pages/wealth-engines-pnl" || req.path === "/api/wealth-engines/data" || req.path === "/api/wealth-engines/pnl-data") {
     try {
@@ -7772,6 +7773,36 @@ app.get("/api/vault/smart-connections", async (req: Request, res: Response) => {
   } catch (err: any) {
     console.error("[api] smart-connections error:", err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/resend/webhook", express.raw({ type: "*/*" }), async (req, res) => {
+  try {
+    const resend = await import("./src/resend.js");
+    if (!resend.isResendConfigured()) {
+      console.warn("[resend] Webhook received but RESEND_API_KEY not configured");
+      res.sendStatus(200);
+      return;
+    }
+    if (!resend.hasWebhookSecret()) {
+      console.warn("[resend] Webhook received but RESEND_WEBHOOK_SECRET not configured — rejecting (fail-closed)");
+      res.sendStatus(403);
+      return;
+    }
+    const rawPayload = Buffer.isBuffer(req.body) ? req.body.toString("utf-8") : String(req.body);
+    const result = await resend.handleInboundWebhook(
+      rawPayload,
+      {
+        id: req.headers["svix-id"] as string | undefined,
+        timestamp: req.headers["svix-timestamp"] as string | undefined,
+        signature: req.headers["svix-signature"] as string | undefined,
+      }
+    );
+    console.log(`[resend] Webhook result: ${result.status}${result.error ? ` — ${result.error}` : ""}`);
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("[resend] Webhook handler error:", err);
+    res.sendStatus(200);
   }
 });
 
