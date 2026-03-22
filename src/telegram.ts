@@ -330,41 +330,7 @@ async function handleResumeCommand(): Promise<string> {
 }
 
 async function handleScoutCommand(): Promise<string> {
-  const mode = await getMode();
-  const pool = getPool();
-
-  try {
-    const res = await pool.query(`SELECT value FROM app_config WHERE key = 'scout_active_theses'`);
-    if (res.rows.length > 0 && Array.isArray(res.rows[0].value) && res.rows[0].value.length > 0) {
-      const theses = res.rows[0].value;
-      const now = Date.now();
-      const active = theses.filter((t: any) => !t.expires_at || t.expires_at > now);
-      if (active.length === 0) {
-        return `${mode} *Active SCOUT Theses*\n\nAll theses have expired. Waiting for next SCOUT cycle.`;
-      }
-      const lines = [`${mode} *Active SCOUT Theses* (${active.length})`, ""];
-      for (const t of active.slice(0, 10)) {
-        const conf = t.confidence || "?";
-        const dir = t.direction || "?";
-        const vc = t.vote_count ?? t.votes;
-        const votes = vc != null ? (typeof vc === "string" && vc.includes("/") ? vc : `${vc}/6`) : "?";
-        const score = t.technical_score != null ? t.technical_score.toFixed(2) : "?";
-        const regime = t.market_regime || t.regime || "?";
-        const nansenFlow = t.nansen_flow_direction || t.nansen_flow || "";
-        const target = t.exit_price || t.target_price || "?";
-        const age = t.created_at ? `${Math.floor((now - t.created_at) / 3600000)}h ago` : "";
-        lines.push(`• *${t.asset}* — ${dir} ${conf}`);
-        lines.push(`  Votes: ${votes} | Score: ${score} | ${regime}`);
-        if (t.entry_price) lines.push(`  Entry: $${t.entry_price} | Stop: $${t.stop_price || "?"} | Target: $${target}`);
-        if (nansenFlow) lines.push(`  Nansen: ${nansenFlow}`);
-        if (age) lines.push(`  _${age}_`);
-        lines.push("");
-      }
-      return lines.join("\n");
-    }
-  } catch {}
-
-  return `${mode} *Active SCOUT Theses*\n\nNo active theses. SCOUT has not generated any yet.`;
+  return `Scout command has been replaced. Use /intel for active Polymarket theses.`;
 }
 
 async function handleTradesCommand(args: string): Promise<string> {
@@ -792,7 +758,7 @@ async function handleHelpCommand(): Promise<string> {
     "/status — System health & mode",
     "/portfolio — Open positions & P&L",
     "/intel — Latest SCOUT brief",
-    "/scout — Active theses (legacy)",
+    "/scout — (redirects to /intel)",
     "/polymarket — Active PM theses",
     "/trades [n] — Last N trades (default 5)",
     "/risk — Risk dashboard",
