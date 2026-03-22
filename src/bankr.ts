@@ -1,6 +1,4 @@
 import { getPool } from "./db.js";
-import { analyzeAsset, checkCooldown, recordSignal, loadCryptoSignalParams, type OHLCVCandle } from "./technical-signals.js";
-import { getHistoricalOHLCV } from "./coingecko.js";
 import * as polymarket from "./polymarket.js";
 import * as bnkr from "./bnkr.js";
 import type { PolymarketThesis } from "./polymarket-scout.js";
@@ -506,7 +504,6 @@ export async function openPosition(params: {
     const positions = await getPositions();
     positions.push(shadowPosition);
     await savePositions(positions);
-    recordSignal(params.asset.toLowerCase(), "entry");
 
     console.log(`[bankr] SHADOW position opened: ${params.asset} ${params.direction} size=${shadowSize.toFixed(4)} entry=$${params.entry_price}`);
     return { position: shadowPosition, trade_id: shadowTradeId };
@@ -536,56 +533,7 @@ export async function openPosition(params: {
   const source = params.source || (params.asset_class === "polymarket" ? "polymarket_scout" : "crypto_scout");
 
   if (bnkr.isConfigured()) {
-    if (params.asset_class === "crypto") {
-      const stopLossPct = params.stop_price > 0 && params.entry_price > 0
-        ? Math.abs((params.entry_price - params.stop_price) / params.entry_price) * 100
-        : undefined;
-      const takeProfitPct = params.entry_price > 0 && params.atr_value > 0
-        ? (params.atr_value * 5.5 * 2 / params.entry_price) * 100
-        : undefined;
-
-      let usedTwap = false;
-      if (bnkr.shouldUseTwap(size * params.entry_price)) {
-        try {
-          const twapResult = await bnkr.twapOrder({
-            asset: params.asset,
-            direction: params.direction === "LONG" ? "buy" : "sell",
-            totalAmount: size * params.entry_price,
-            durationHours: 2,
-          });
-          if (twapResult.status === "completed") {
-            const twapOrderId = twapResult.richData?.orderDetails?.order_id
-              || twapResult.richData?.orderDetails?.orderId
-              || twapResult.richData?.twapId;
-            if (twapOrderId) {
-              bnkrOrderId = twapOrderId;
-              usedTwap = true;
-              console.log(`[bankr] TWAP order accepted for ${params.asset}: ${twapResult.status}, orderId=${twapOrderId}`);
-            } else {
-              console.warn(`[bankr] TWAP returned ${twapResult.status} but no order ID — falling back to standard execution`);
-            }
-          } else {
-            console.warn(`[bankr] TWAP order status '${twapResult.status}' is not actionable — falling back to standard execution`);
-          }
-        } catch (twapErr) {
-          console.warn(`[bankr] TWAP order failed, proceeding with standard execution: ${twapErr instanceof Error ? twapErr.message : twapErr}`);
-        }
-      }
-
-      if (!usedTwap) {
-        const order = await bnkr.openCryptoPosition({
-          asset: params.asset,
-          direction: params.direction as "LONG" | "SHORT",
-          leverage: params.leverage,
-          size,
-          stop_price: params.stop_price,
-          stop_loss_pct: stopLossPct ? parseFloat(stopLossPct.toFixed(1)) : undefined,
-          take_profit_pct: takeProfitPct ? parseFloat(takeProfitPct.toFixed(1)) : undefined,
-        });
-        bnkrOrderId = order.order_id;
-        if (order.entry_price > 0) params.entry_price = order.entry_price;
-      }
-    } else if (params.asset_class === "polymarket") {
+    if (params.asset_class === "polymarket") {
       if (!params.market_id) {
         throw new Error("market_id is required for Polymarket positions via BNKR");
       }
@@ -627,8 +575,6 @@ export async function openPosition(params: {
   positions.push(position);
   await savePositions(positions);
 
-  recordSignal(params.asset.toLowerCase(), "entry");
-
   return { position, trade_id: tradeId, bnkr_order_id: bnkrOrderId };
 }
 
@@ -641,41 +587,7 @@ export async function closePosition(positionId: string, exitPrice: number, close
 
   if (pos.bnkr_order_id && bnkr.isConfigured()) {
     try {
-      if (pos.asset_class === "crypto") {
-        const positionValue = pos.size * exitPrice;
-        const urgentReasons = new Set(["kill_switch", "circuit_breaker", "stop_loss", "take_profit", "trailing_stop", "rsi_exit"]);
-        if (bnkr.shouldUseTwap(positionValue) && !urgentReasons.has(closeReason)) {
-          try {
-            const twapResult = await bnkr.twapOrder({
-              asset: pos.asset,
-              direction: pos.direction === "LONG" || pos.direction === "YES" ? "sell" : "buy",
-              totalAmount: positionValue,
-              durationHours: 1,
-            });
-            if (twapResult.status === "completed" &&
-                (twapResult.richData?.orderDetails?.order_id || twapResult.richData?.orderDetails?.orderId || twapResult.richData?.twapId)) {
-              const twapExitPrice = twapResult.richData?.orderDetails?.exit_price || twapResult.richData?.orderDetails?.exitPrice;
-              if (twapExitPrice && twapExitPrice > 0) exitPrice = twapExitPrice;
-              txHash = txHash || twapResult.richData?.orderDetails?.tx_hash || twapResult.richData?.orderDetails?.txHash;
-              console.log(`[bankr] TWAP close completed for ${pos.asset}`);
-            } else {
-              console.warn(`[bankr] TWAP close returned '${twapResult.status}' — falling back to standard close`);
-              const result = await bnkr.closeCryptoPosition(pos.bnkr_order_id);
-              if (result.exit_price > 0) exitPrice = result.exit_price;
-              txHash = txHash || result.tx_hash;
-            }
-          } catch (twapErr) {
-            console.warn(`[bankr] TWAP close failed, using standard close: ${twapErr instanceof Error ? twapErr.message : twapErr}`);
-            const result = await bnkr.closeCryptoPosition(pos.bnkr_order_id);
-            if (result.exit_price > 0) exitPrice = result.exit_price;
-            txHash = txHash || result.tx_hash;
-          }
-        } else {
-          const result = await bnkr.closeCryptoPosition(pos.bnkr_order_id);
-          if (result.exit_price > 0) exitPrice = result.exit_price;
-          txHash = txHash || result.tx_hash;
-        }
-      } else if (pos.asset_class === "polymarket") {
+      if (pos.asset_class === "polymarket") {
         const result = await bnkr.closePolymarketPosition(pos.bnkr_order_id);
         if (result.exit_odds > 0) exitPrice = result.exit_odds;
         txHash = txHash || result.tx_hash;
@@ -757,8 +669,6 @@ export async function closePosition(positionId: string, exitPrice: number, close
     console.error("[bankr] Signal quality update on close:", e instanceof Error ? e.message : e);
   }
 
-  recordSignal(pos.asset.toLowerCase(), "exit");
-
   try {
     const openShadows = await getShadowTrades("open");
     for (const shadow of openShadows) {
@@ -838,9 +748,7 @@ export async function runPositionMonitor(): Promise<{ checked: number; closed: T
 
   for (const pos of positions) {
     try {
-      if (pos.asset_class === "crypto") {
-        await monitorCryptoPosition(pos, closed);
-      } else if (pos.asset_class === "polymarket") {
+      if (pos.asset_class === "polymarket") {
         await monitorPolymarketPosition(pos, closed);
       }
     } catch (err) {
@@ -874,78 +782,6 @@ export async function runPositionMonitor(): Promise<{ checked: number; closed: T
   }
 
   return { checked: positions.length, closed, errors };
-}
-
-async function monitorCryptoPosition(pos: Position, closed: TradeRecord[]): Promise<void> {
-  let currentPrice: number;
-  try {
-    const candles = await getHistoricalOHLCV(pos.asset, 7);
-    if (candles.length === 0) return;
-    currentPrice = candles[candles.length - 1].close;
-  } catch {
-    return;
-  }
-
-  const positions = await getPositions();
-  const livePos = positions.find(p => p.id === pos.id);
-  if (!livePos) return;
-
-  livePos.current_price = currentPrice;
-  const isLong = livePos.direction === "LONG";
-
-  if (isLong && currentPrice > livePos.peak_price) {
-    livePos.peak_price = currentPrice;
-    livePos.atr_stop_price = currentPrice - livePos.atr_value * 5.5;
-  } else if (!isLong && currentPrice < livePos.peak_price) {
-    livePos.peak_price = currentPrice;
-    livePos.atr_stop_price = currentPrice + livePos.atr_value * 5.5;
-  }
-
-  const priceDiff = isLong ? currentPrice - livePos.entry_price : livePos.entry_price - currentPrice;
-  livePos.unrealized_pnl = parseFloat((priceDiff * livePos.size).toFixed(4));
-
-  await savePositions(positions);
-
-  if (isLong && currentPrice <= livePos.atr_stop_price) {
-    console.log(`[bankr] Trailing stop hit for ${pos.asset} at $${currentPrice}`);
-    const record = await closePosition(pos.id, currentPrice, "trailing_stop");
-    if (record) closed.push(record);
-    return;
-  }
-  if (!isLong && currentPrice >= livePos.atr_stop_price) {
-    console.log(`[bankr] Trailing stop hit for ${pos.asset} SHORT at $${currentPrice}`);
-    const record = await closePosition(pos.id, currentPrice, "trailing_stop");
-    if (record) closed.push(record);
-    return;
-  }
-
-  try {
-    const candles = await getHistoricalOHLCV(pos.asset, 14);
-    if (candles.length >= 30) {
-      const dbSignalParams = await loadCryptoSignalParams();
-      const result = analyzeAsset(candles, dbSignalParams);
-      if (isLong && result.votes.rsi_overbought) {
-        console.log(`[bankr] RSI exit (overbought) for ${pos.asset}`);
-        const record = await closePosition(pos.id, currentPrice, "rsi_exit");
-        if (record) closed.push(record);
-        return;
-      }
-      if (!isLong && result.votes.rsi_oversold) {
-        console.log(`[bankr] RSI exit (oversold) for ${pos.asset} SHORT`);
-        const record = await closePosition(pos.id, currentPrice, "rsi_exit");
-        if (record) closed.push(record);
-        return;
-      }
-    }
-  } catch {}
-
-  const hoursOpen = (Date.now() - new Date(pos.opened_at).getTime()) / (60 * 60 * 1000);
-  if (hoursOpen > 72) {
-    console.log(`[bankr] Time exit (${hoursOpen.toFixed(0)}h > 72h) for ${pos.asset}`);
-    const record = await closePosition(pos.id, currentPrice, "time_exit");
-    if (record) closed.push(record);
-    return;
-  }
 }
 
 async function monitorPolymarketPosition(pos: Position, closed: TradeRecord[]): Promise<void> {

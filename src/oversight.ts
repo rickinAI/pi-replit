@@ -1,7 +1,6 @@
 import { getPool } from "./db.js";
 import type { Pool } from "pg";
 import type { Position, TradeRecord } from "./bankr.js";
-import { getHistoricalOHLCV } from "./coingecko.js";
 import * as polymarket from "./polymarket.js";
 
 interface TimestampedRecord {
@@ -1129,10 +1128,7 @@ export async function refreshShadowTradesFromMarket(): Promise<{
   const priceResults = await Promise.allSettled(
     nonExpiredTrades.map(async (trade) => {
       let latestPrice: number | null = null;
-      if (trade.asset_class === "crypto") {
-        const candles = await getHistoricalOHLCV(trade.asset, 1);
-        if (candles.length > 0) latestPrice = candles[candles.length - 1].close;
-      } else if (trade.asset_class === "polymarket" && trade.market_id) {
+      if (trade.asset_class === "polymarket" && trade.market_id) {
         const market = await polymarket.getMarketDetails(trade.market_id);
         if (market && market.outcome_prices && market.outcome_prices.length > 0) {
           const parsed = parseFloat(String(market.outcome_prices[0]));
@@ -1542,12 +1538,12 @@ export async function autoTrackShadowTrade(params: {
   let targetPrice = params.target_price;
   if (!stopPrice || !targetPrice) {
     try {
-      const { getActiveTheses } = await import("./crypto-scout.js");
-      const theses: Array<{ id: string; asset: string; direction: string; stop_price: number; exit_price: number }> = await getActiveTheses();
+      const { getActiveTheses: getPmTheses } = await import("./polymarket-scout.js");
+      const theses: Array<{ id: string; asset: string; direction: string; stop_price?: number; exit_price?: number; exit_odds?: number; entry_odds?: number }> = await getPmTheses();
       const thesis = theses.find(t => t.id === params.thesis_id || (t.asset === params.asset && t.direction === params.direction));
       if (thesis) {
         if (!stopPrice && thesis.stop_price) stopPrice = thesis.stop_price;
-        if (!targetPrice && thesis.exit_price) targetPrice = thesis.exit_price;
+        if (!targetPrice && (thesis.exit_price || thesis.exit_odds)) targetPrice = thesis.exit_price || thesis.exit_odds;
       }
     } catch (e) {
       console.warn(`[oversight] Thesis lookup for shadow levels failed: ${e instanceof Error ? e.message : String(e)}`);

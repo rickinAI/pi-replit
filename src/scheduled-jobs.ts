@@ -4,7 +4,6 @@ import * as gws from "./gws.js";
 import { findOrCreateCalendar, createRecurringEvent } from "./calendar.js";
 import { sendJobCompletionNotification, sendScoutBrief } from "./telegram.js";
 import * as bnkr from "./bnkr.js";
-import { enrichThesesWithBnkr, getBnkrTrendingCandidates, getActiveTheses, saveTheses } from "./crypto-scout.js";
 
 export interface ScheduledJob {
   id: string;
@@ -59,7 +58,6 @@ function getJobSavePath(jobId: string, dateStr: string, safeName: string): strin
   if (jobId === "oversight-weekly") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Weekly-Review.md`;
   if (jobId === "oversight-daily-summary") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Daily-Summary.md`;
   if (jobId === "oversight-shadow-refresh") return `Scheduled Reports/Wealth Engines/Oversight/${dateStr}-Shadow-Refresh.md`;
-  if (jobId === "autoresearch-weekly") return `Scheduled Reports/Wealth Engines/Autoresearch/${dateStr}-Weekly-Optimization.md`;
   return `Scheduled Reports/${dateStr}-${safeName}.md`;
 }
 
@@ -771,43 +769,19 @@ Process everything autonomously. Be thorough but efficient.`,
   },
   {
     id: "scout-micro-scan",
-    name: "SCOUT Micro-Scan",
+    name: "SCOUT Micro-Scan (DISABLED — crypto removed)",
     agentId: "scout",
-    prompt: `MICRO-SCAN: Quick signal refresh only.
-1. scout_watchlist → get assets
-2. technical_analysis on each asset
-3. Output a table: Asset | Votes | Score | Regime | Signal
-4. Flag vote changes, new entry signals, or RSI exits.
-No thesis generation, no Nansen/X, no web searches.`,
+    prompt: `Crypto scout has been removed. DarkNode is now prediction-markets only. This job is disabled.`,
     schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 60 },
-    enabled: true,
-    toolSubset: ["scout_watchlist", "technical_analysis", "crypto_price", "notes_create"],
+    enabled: false,
   },
   {
     id: "scout-full-cycle",
-    name: "SCOUT Full Cycle",
+    name: "SCOUT Full Cycle (DISABLED — crypto removed)",
     agentId: "scout",
-    prompt: `Run a FULL CYCLE analysis. This is a comprehensive market scan.
-
-1. Check signal_quality FIRST — review your historical win rate for crypto signals. Note the modifier (boost/penalty/neutral) and factor it into confidence levels below.
-2. Start with BTC technical_analysis — check BTC momentum for alt confirmation filter
-2b. Run bnkr_trending to cross-reference BNKR's trending tokens with CoinGecko movers — note any tokens appearing in both as high-signal candidates
-3. Check crypto_trending and crypto_movers for candidates
-4. Run technical_analysis on top 20 candidates, filter for vote_count >= 3/6
-5. Run crypto_backtest on top 5 candidates (30-day data)
-6. Check nansen_smart_money on top candidates (gracefully handle if API key not set)
-7. Search X for sentiment on top 3 candidates
-8. Generate thesis for each candidate meeting entry criteria (votes >= 4/6)
-8b. For each thesis candidate, run bnkr_research to get BNKR AI's fundamental analysis — incorporate key findings into thesis reasoning
-8c. For each thesis candidate, run bnkr_chart to get a chart image — include chart URLs in the brief for visual context
-9. CONFIDENCE ADJUSTMENT: If signal_quality shows win rate >60%, you may upgrade MEDIUM→HIGH confidence. If win rate <40%, downgrade HIGH→MEDIUM. Include "Signal quality: X% win rate (N trades)" in thesis reasoning.
-10. Include: vote count, technical score, regime, Nansen flow, backtest score, BNKR research summary, entry/stop/target
-11. Provide a brief market overview at the top (BTC dominance, market regime, sector rotations, BNKR trending highlights)
-12. List any watchlist changes (assets added/removed)
-
-Output the full brief — the system will save it automatically. Do NOT use notes_create.`,
+    prompt: `Crypto scout has been removed. DarkNode is now prediction-markets only. This job is disabled.`,
     schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 240 },
-    enabled: true,
+    enabled: false,
   },
   {
     id: "polymarket-activity-scan",
@@ -866,9 +840,8 @@ Do NOT use notes_create — the system saves automatically.`,
     name: "BANKR Execute",
     agentId: "bankr",
     prompt: `EXECUTION CYCLE — Review theses and execute the best opportunities. Follow these steps:
-1. scout_theses — get active crypto theses
-2. polymarket_theses — get active polymarket theses
-3. bankr_positions — get current open positions
+1. polymarket_theses — get active polymarket theses
+2. bankr_positions — get current open positions
 4. Review each thesis that does NOT have an existing open position for the same asset+direction. Evaluate:
    - Confidence level (prefer HIGH, be selective with MEDIUM)
    - Risk/reward ratio (stop loss distance vs take profit target)
@@ -879,7 +852,7 @@ Do NOT use notes_create — the system saves automatically.`,
 SHADOW mode is normal operation — positions are tracked virtually.`,
     schedule: { type: "interval", hour: 0, minute: 0, intervalMinutes: 60 },
     enabled: true,
-    toolSubset: ["scout_theses", "polymarket_theses", "bankr_positions", "bankr_risk_check", "bankr_open_position", "signal_quality", "notes_create"],
+    toolSubset: ["polymarket_theses", "bankr_positions", "bankr_risk_check", "bankr_open_position", "signal_quality", "notes_create"],
   },
   {
     id: "weekly-memory-reflect",
@@ -1015,23 +988,6 @@ Keep it quick — the daily summary is meant to be a 30-second glance at the day
     agentId: "oversight",
     prompt: "Send the DarkNode summary to Telegram.",
     schedule: { type: "daily", hour: 21, minute: 0 },
-    enabled: true,
-  },
-  {
-    id: "autoresearch-weekly",
-    name: "Autoresearch Strategy Optimization",
-    agentId: "scout",
-    prompt: `Run the WEEKLY AUTORESEARCH STRATEGY OPTIMIZATION.
-
-1. Call autoresearch_run with domain "both" and experiments_per_domain 15.
-2. This runs parameter mutation experiments against crypto signals and polymarket thresholds.
-3. Each experiment backtests a parameter variation and keeps improvements >0.5%.
-4. Report the results: experiments run, improvements found, score progression, parameters changed.
-5. If improvements were found, note which parameters evolved and by how much.
-6. Save the full results summary to the vault.
-
-This autonomously evolves trading parameters based on recent market data.`,
-    schedule: { type: "weekly", hour: 3, minute: 0, daysOfWeek: [0] },
     enabled: true,
   },
 ];
@@ -1248,9 +1204,9 @@ export async function init(): Promise<void> {
 
       let costOptApplied = false;
       const costOptJobs: Record<string, { intervalMinutes?: number; prompt?: string; enabled?: boolean; toolSubset?: string[] }> = {
-        "scout-micro-scan": { intervalMinutes: 60, toolSubset: ["scout_watchlist", "technical_analysis", "crypto_price", "notes_create"] },
+        "scout-micro-scan": { intervalMinutes: 60, enabled: false },
         "polymarket-activity-scan": { intervalMinutes: 120, toolSubset: ["polymarket_whale_activity", "polymarket_consensus", "polymarket_details", "notes_create"] },
-        "bankr-execute": { intervalMinutes: 60, toolSubset: ["scout_theses", "polymarket_theses", "bankr_positions", "bankr_risk_check", "bankr_open_position", "signal_quality", "notes_create"] },
+        "bankr-execute": { intervalMinutes: 60, toolSubset: ["polymarket_theses", "bankr_positions", "bankr_risk_check", "bankr_open_position", "signal_quality", "notes_create"] },
         "oversight-shadow-refresh": { intervalMinutes: 120, toolSubset: ["oversight_shadow_refresh", "notes_create"] },
         "darknode-summary-12": { enabled: false },
         "darknode-summary-18": { enabled: false },
@@ -1283,12 +1239,11 @@ export async function init(): Promise<void> {
       const bankrJob = config.jobs.find(j => j.id === "bankr-execute");
       if (bankrJob && !bankrJob.prompt?.includes("YOU MUST EXECUTE TRADES")) {
         bankrJob.prompt = `EXECUTION CYCLE — YOU MUST EXECUTE TRADES. Follow these steps exactly:
-1. scout_theses — get active crypto theses
-2. polymarket_theses — get active polymarket theses  
-3. bankr_positions — get current open positions
-4. For EVERY thesis that does NOT have an existing open position for the same asset+direction: call bankr_open_position with the thesis details. Use leverage=2, confidence from thesis, entry_price from current market price.
-5. Do NOT skip theses for any reason. Do NOT apply your own risk judgment. bankr_open_position handles ALL risk checks, position sizing, and mode logic internally. SHADOW mode is normal operation.
-6. You MUST call bankr_open_position for each eligible thesis. If you finish without calling it, you have failed.
+1. polymarket_theses — get active polymarket theses  
+2. bankr_positions — get current open positions
+3. For EVERY thesis that does NOT have an existing open position for the same asset+direction: call bankr_open_position with the thesis details. Use leverage=2, confidence from thesis, entry_price from current market price.
+4. Do NOT skip theses for any reason. Do NOT apply your own risk judgment. bankr_open_position handles ALL risk checks, position sizing, and mode logic internally. SHADOW mode is normal operation.
+5. You MUST call bankr_open_position for each eligible thesis. If you finish without calling it, you have failed.
 DO NOT call signal_quality — it is informational only and must not affect execution decisions.`;
         console.log("[scheduled-jobs] Migrated: BANKR prompt updated to force execution");
         await saveConfig();
@@ -1302,7 +1257,6 @@ DO NOT call signal_quality — it is informational only and must not affect exec
       "polymarket-activity-scan", "polymarket-full-cycle",
       "bankr-execute",
       "oversight-health", "oversight-weekly", "oversight-daily-summary", "oversight-shadow-refresh",
-      "autoresearch-weekly",
     ]);
     let wePauseNeeded = false;
     for (const j of config.jobs) {
@@ -1860,7 +1814,6 @@ const WE_JOB_IDS = new Set([
   "polymarket-activity-scan", "polymarket-full-cycle",
   "bankr-execute",
   "oversight-health", "oversight-weekly", "oversight-daily-summary", "oversight-shadow-refresh",
-  "autoresearch-weekly",
 ]);
 
 async function isWealthEnginesPaused(): Promise<boolean> {

@@ -1,5 +1,4 @@
 import { getPool } from "./db.js";
-import * as autoresearch from "./autoresearch.js";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID || "";
@@ -225,13 +224,6 @@ async function handleStatusCommand(): Promise<string> {
     }
   } catch {}
 
-  let fgLine = "";
-  try {
-    const { getFearGreedIndex } = await import("./signal-sources.js");
-    const fg = await getFearGreedIndex();
-    fgLine = `😱 Fear & Greed: ${fg.value} (${fg.classification})`;
-  } catch {}
-
   const notifyMode = await getNotificationMode();
 
   const lines = [
@@ -240,7 +232,6 @@ async function handleStatusCommand(): Promise<string> {
     `🔴 Kill Switch: ${killSwitchActive ? "ACTIVE" : "OFF"}`,
     `⏸ Paused: ${pauseActive ? "YES" : "NO"}`,
   ];
-  if (fgLine) lines.push(fgLine);
   lines.push(`🔍 SCOUT: ${scoutLastRun}`);
   lines.push(`🎰 PM SCOUT: ${pmLastRun}`);
   lines.push(`💰 BANKR: ${bankrLastRun}`);
@@ -1225,7 +1216,7 @@ async function flushDigestQueue(): Promise<void> {
   const lines = [`${mode} 📊 *Wealth Engines Digest*`, ""];
   const groupIcons: Record<string, string> = {
     scout: "🔍", polymarket: "🎰", bankr: "💰",
-    oversight: "🛡️", autoresearch: "🔬",
+    oversight: "🛡️",
   };
 
   for (const [group, evts] of Object.entries(grouped)) {
@@ -1263,7 +1254,6 @@ export async function sendJobCompletionNotification(params: {
     "polymarket-activity-scan", "polymarket-full-cycle",
     "bankr-execute", "oversight-health", "oversight-weekly",
     "oversight-daily-summary", "oversight-shadow-refresh",
-    "autoresearch-weekly",
   ]);
   if (!weJobIds.has(params.jobId)) return;
 
@@ -1309,7 +1299,7 @@ export async function sendJobCompletionNotification(params: {
     "polymarket-activity-scan": "🎰", "polymarket-full-cycle": "🎰",
     "bankr-execute": "💰", "oversight-health": "🛡️",
     "oversight-weekly": "🛡️", "oversight-daily-summary": "📊",
-    "oversight-shadow-refresh": "👻", "autoresearch-weekly": "🔬",
+    "oversight-shadow-refresh": "👻",
   };
   const icon = icons[params.jobId] || "⚙️";
 
@@ -1334,11 +1324,6 @@ export async function sendJobCompletionNotification(params: {
           }
         }
       }
-      try {
-        const { getFearGreedIndex } = await import("./signal-sources.js");
-        const fg = await getFearGreedIndex();
-        detailLines.push(`*F&G:* ${fg.value} (${fg.classification})`);
-      } catch {}
     } else if (params.jobId.startsWith("polymarket-")) {
       const res = await pool.query(`SELECT value FROM app_config WHERE key = 'polymarket_scout_active_theses'`);
       if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
@@ -1594,14 +1579,8 @@ export async function sendDarkNodeSummary(): Promise<void> {
     }
   } catch {}
 
-  let fgValue = "?";
-  let fgClass = "";
-  try {
-    const { getFearGreedIndex } = await import("./signal-sources.js");
-    const fg = await getFearGreedIndex();
-    fgValue = String(fg.value);
-    fgClass = fg.classification;
-  } catch {}
+  const fgValue = "N/A";
+  const fgClass = "disabled";
 
   let scoutLastRun = "never";
   let bankrLastRun = "never";
@@ -1731,56 +1710,9 @@ export async function handleWebhookUpdate(update: any): Promise<void> {
   }
 }
 
-async function handleResearchCommand(args: string): Promise<string> {
+async function handleResearchCommand(_args: string): Promise<string> {
   const mode = await getMode();
-  const parts = args.trim().toLowerCase().split(/\s+/);
-
-  if (parts[0] === "rollback") {
-    const domain = parts[1] === "polymarket" ? "polymarket" as const : "crypto" as const;
-    const result = await autoresearch.rollbackParams(domain);
-    return `${mode} ${result.success ? "✅" : "❌"} ${result.message}`;
-  }
-
-  if (parts[0] === "status") {
-    const status = await autoresearch.getResearchStatus();
-    const lines = [
-      `${mode} 🔬 *Autoresearch Status*`,
-      "",
-      `*Crypto Parameters:*`,
-      ...Object.entries(status.crypto_params).slice(0, 8).map(([k, v]) => `  ${k}: ${v}`),
-      `  ... (${Object.keys(status.crypto_params).length} total)`,
-      "",
-      `*Polymarket Parameters:*`,
-      ...Object.entries(status.polymarket_params).slice(0, 8).map(([k, v]) => `  ${k}: ${v}`),
-      `  ... (${Object.keys(status.polymarket_params).length} total)`,
-      "",
-      `*History:* ${status.crypto_history_count} crypto, ${status.polymarket_history_count} polymarket rollback sets`,
-      `*Recent Experiments:* ${status.recent_experiments.length} logged`,
-    ];
-
-    if (status.recent_experiments.length > 0) {
-      const last3 = status.recent_experiments.slice(-3);
-      lines.push("");
-      for (const e of last3) {
-        lines.push(`  ${e.domain}: ${e.outcome} (${e.delta_pct.toFixed(1)}%) — ${Object.keys(e.parameters_changed).join(", ")}`);
-      }
-    }
-
-    return lines.join("\n");
-  }
-
-  await sendMessage(`${mode} 🔬 Starting autoresearch...`);
-
-  let summaries: autoresearch.ResearchRunSummary[];
-  if (parts[0] === "crypto") {
-    summaries = [await autoresearch.runCryptoResearch()];
-  } else if (parts[0] === "polymarket") {
-    summaries = [await autoresearch.runPolymarketResearch()];
-  } else {
-    summaries = await autoresearch.runFullResearch();
-  }
-
-  return autoresearch.formatResearchSummary(summaries);
+  return `${mode} ❌ Autoresearch has been removed — DarkNode is now prediction-markets only.`;
 }
 
 export async function init(): Promise<void> {
@@ -1924,7 +1856,7 @@ export async function forwardAlertToTelegram(event: { type: string; briefType?: 
   const mode = await getMode();
 
   const personalAlertTypes = new Set(["calendar", "stock", "task", "email"]);
-  const tradingEventTypes = new Set(["scout", "bankr", "oversight", "autoresearch", "circuit_breaker"]);
+  const tradingEventTypes = new Set(["scout", "bankr", "oversight", "circuit_breaker"]);
 
   if (event.type === "brief") {
     if (!isAlertsBotConfigured()) return;
@@ -1963,7 +1895,6 @@ export async function forwardAlertToTelegram(event: { type: string; briefType?: 
       scout: "🔍",
       bankr: "💰",
       oversight: "🛡️",
-      autoresearch: "🔬",
       circuit_breaker: "🚨",
     };
     const icon = tradingIcons[event.type] || "🔔";

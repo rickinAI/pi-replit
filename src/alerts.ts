@@ -3,7 +3,6 @@ import { getPool } from "./db.js";
 import * as calendar from "./calendar.js";
 import * as tasks from "./tasks.js";
 import * as weather from "./weather.js";
-import * as stocks from "./stocks.js";
 import * as news from "./news.js";
 import * as gmail from "./gmail.js";
 
@@ -300,13 +299,30 @@ async function gatherSection(name: string): Promise<string> {
           try {
             const label = w.displaySymbol || w.symbol.toUpperCase();
             if (w.type === "crypto") {
-              const data = await stocks.getCryptoPrice(w.symbol);
-              const priceLine = data.split("\n").slice(0, 3).join(" | ");
-              items.push(`${label}: ${priceLine}`);
+              const coinId = w.symbol.toLowerCase();
+              const url = `https://api.coingecko.com/api/v3/coins/${coinId}?localization=false&tickers=false&community_data=false&developer_data=false&sparkline=false`;
+              const res = await fetch(url, { headers: { "User-Agent": "darknode/1.0" } });
+              if (res.ok) {
+                const d = await res.json() as any;
+                const p = d.market_data?.current_price?.usd;
+                const c = d.market_data?.price_change_percentage_24h;
+                items.push(`${label}: $${p?.toLocaleString() ?? "?"} (${c?.toFixed(1) ?? "?"}% 24h)`);
+              } else {
+                items.push(`${label}: [unavailable]`);
+              }
             } else {
-              const data = await stocks.getStockQuote(w.symbol);
-              const priceLine = data.split("\n").slice(0, 3).join(" | ");
-              items.push(`${label}: ${priceLine}`);
+              const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(w.symbol.toUpperCase())}?range=1d&interval=1d`;
+              const res = await fetch(url, { headers: { "User-Agent": "darknode/1.0" } });
+              if (res.ok) {
+                const d = await res.json() as any;
+                const meta = d?.chart?.result?.[0]?.meta;
+                const price = meta?.regularMarketPrice;
+                const prev = meta?.chartPreviousClose || meta?.previousClose;
+                const pct = prev ? ((price - prev) / prev * 100).toFixed(1) : "?";
+                items.push(`${label}: $${price?.toLocaleString() ?? "?"} (${pct}%)`);
+              } else {
+                items.push(`${label}: [unavailable]`);
+              }
             }
           } catch {
             items.push(`${w.displaySymbol || w.symbol}: [unavailable]`);
@@ -588,13 +604,20 @@ async function doCheckAlerts() {
         let currentPrice: number | null = null;
 
         if (w.type === "crypto") {
-          const data = await stocks.getCryptoPrice(w.symbol);
-          const priceMatch = data.match(/Price:\s*\$([0-9,]+\.?\d*)/);
-          if (priceMatch) currentPrice = parseFloat(priceMatch[1].replace(/,/g, ""));
+          const coinId = w.symbol.toLowerCase();
+          const url = `https://api.coingecko.com/api/v3/coins/${coinId}?localization=false&tickers=false&community_data=false&developer_data=false&sparkline=false`;
+          const res = await fetch(url, { headers: { "User-Agent": "darknode/1.0" } });
+          if (res.ok) {
+            const d = await res.json() as any;
+            currentPrice = d.market_data?.current_price?.usd ?? null;
+          }
         } else {
-          const data = await stocks.getStockQuote(w.symbol);
-          const priceMatch = data.match(/Price:\s*\$([0-9,]+\.?\d*)/);
-          if (priceMatch) currentPrice = parseFloat(priceMatch[1].replace(/,/g, ""));
+          const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(w.symbol.toUpperCase())}?range=1d&interval=1d`;
+          const res = await fetch(url, { headers: { "User-Agent": "darknode/1.0" } });
+          if (res.ok) {
+            const d = await res.json() as any;
+            currentPrice = d?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null;
+          }
         }
 
         if (currentPrice !== null) {
