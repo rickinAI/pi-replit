@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 
 const POLYMARKET_API = "https://clob.polymarket.com";
 const GAMMA_API = "https://gamma-api.polymarket.com";
+const DATA_API = "https://data-api.polymarket.com";
 
 interface PolymarketCache {
   data: any;
@@ -56,15 +57,23 @@ export interface PolymarketMarket {
 export interface WhaleWallet {
   address: string;
   alias: string;
+  niche: string;
   win_rate: number;
   roi: number;
   total_volume: number;
-  category_scores: Record<string, number>;
-  last_active: number;
-  added_date: number;
+  total_trades: number;
   total_markets: number;
   resolved_markets: number;
+  category_scores: Record<string, number>;
   composite_score: number;
+  last_active: number;
+  last_checked: number;
+  added_at: number;
+  source: "trade_mining" | "anomaly" | "manual";
+  enabled: boolean;
+  observation_only: boolean;
+  degraded_count: number;
+  pending_eviction: boolean;
   status: "active" | "probation" | "removed";
 }
 
@@ -176,7 +185,7 @@ export function scoreWallet(wallet: Omit<WhaleWallet, "composite_score">): numbe
   const avgCategory = categoryValues.length > 0 ? categoryValues.reduce((a, b) => a + b, 0) / categoryValues.length : 0;
   const categoryScore = Math.min(avgCategory, 1) * 0.20;
 
-  const monthsSinceAdded = Math.max(1, (Date.now() - wallet.added_date) / (30 * 24 * 60 * 60 * 1000));
+  const monthsSinceAdded = Math.max(1, (Date.now() - (wallet as any).added_at) / (30 * 24 * 60 * 60 * 1000));
   const marketsPerMonth = wallet.total_markets / monthsSinceAdded;
   const volumeScore = Math.min(marketsPerMonth / 10, 1) * 0.10;
 
