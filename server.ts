@@ -4850,7 +4850,7 @@ app.post("/api/wealth-engine/config", async (req: Request, res: Response) => {
   try {
     const updates = req.body;
     if (!updates || typeof updates !== "object") { res.status(400).json({ error: "Body must be a JSON object" }); return; }
-    const allowed = ["max_leverage", "risk_per_trade_pct", "max_positions", "exposure_cap_pct", "correlation_limit", "circuit_breaker_7d_pct", "circuit_breaker_drawdown_pct", "notification_mode"];
+    const allowed = ["risk_per_trade_pct", "max_positions", "exposure_cap_pct", "correlation_limit", "circuit_breaker_7d_pct", "circuit_breaker_drawdown_pct", "notification_mode"];
     const filtered: any = {};
     for (const k of Object.keys(updates)) {
       if (allowed.includes(k)) filtered[k] = updates[k];
