@@ -237,3 +237,20 @@ export function classifyEmail(params: {
     allowed: true,
   };
 }
+
+export function shouldWriteToVault(inbox: InboxType, bodyLength: number): boolean {
+  switch (inbox) {
+    case "intel":
+      return true;
+    case "vault":
+      return true;
+    case "node":
+      return true;
+    case "engine":
+      return bodyLength > 500;
+    case "access":
+      return false;
+    default:
+      return false;
+  }
+}

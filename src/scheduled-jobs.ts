@@ -1321,6 +1321,17 @@ DO NOT call signal_quality — it is informational only and must not affect exec
     console.error("[scheduled-jobs] Boot sequence error:", err instanceof Error ? err.message : err);
   }
 
+  try {
+    const { pruneOldEvents } = await import("./pipeline-store.js");
+    await pruneOldEvents(30);
+    if ((globalThis as any).__pipelinePruneTimer) clearInterval((globalThis as any).__pipelinePruneTimer);
+    (globalThis as any).__pipelinePruneTimer = setInterval(async () => {
+      try { await pruneOldEvents(30); } catch {}
+    }, 24 * 60 * 60 * 1000);
+  } catch (err) {
+    console.error("[scheduled-jobs] Pipeline prune init failed:", err instanceof Error ? err.message : err);
+  }
+
   console.log(`[scheduled-jobs] initialized (${config.jobs.length} jobs, ${config.jobs.filter(j => j.enabled).length} enabled)`);
 }
 

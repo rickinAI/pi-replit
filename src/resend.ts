@@ -1,4 +1,5 @@
-import { classifyEmail, type ClassifiedEmail, type InboxType } from "./email-classifier.js";
+import { classifyEmail, shouldWriteToVault, type ClassifiedEmail, type InboxType } from "./email-classifier.js";
+import { logPipelineEvent, updatePipelineEvent, type PipelineEventMetadata } from "./pipeline-store.js";
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || "";
@@ -68,6 +69,11 @@ export async function fetchInboundEmail(emailId: string): Promise<InboundEmail |
   }
 }
 
+function extractSenderDomain(sender: string): string {
+  const match = sender.match(/@([^>]+)/);
+  return match ? match[1].toLowerCase() : "unknown";
+}
+
 export async function handleInboundWebhook(
   payload: string,
   headers: { id?: string | null; timestamp?: string | null; signature?: string | null }
@@ -103,7 +109,8 @@ export async function handleInboundWebhook(
     email = await fetchInboundEmail(event.data.email_id);
   }
 
-  const bodyPreview = (email?.text || "").slice(0, 500);
+  const bodyText = email?.text || email?.html?.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() || "";
+  const bodyPreview = bodyText.slice(0, 500);
 
   const classification = classifyEmail({
     to: recipient,
@@ -114,28 +121,74 @@ export async function handleInboundWebhook(
 
   console.log(`[resend] Classified: inbox=${classification.inbox} category=${classification.category} folder=${classification.vaultFolder} allowed=${classification.allowed}`);
 
-  if (!classification.allowed) {
-    console.warn(`[resend] Rejected: ${classification.rejectReason}`);
-    await saveToVault(classification, sender, subject, email);
-    await sendTelegramNotification(classification, sender, subject, true);
-    return { status: "rejected", classification, error: classification.rejectReason };
+  const isRejected = !classification.allowed;
+  const writeVault = isRejected || shouldWriteToVault(classification.inbox, bodyText.length);
+
+  const metadata: PipelineEventMetadata = {
+    inbox: classification.inbox,
+    category: classification.category,
+    sender_domain: extractSenderDomain(sender),
+    classification_confidence: "rule_match",
+    vault_written: false,
+    vault_path: null,
+    reject_reason: classification.rejectReason || null,
+    body_length: bodyText.length,
+    parsed_signals: [],
+  };
+
+  let pipelineId: number;
+  try {
+    pipelineId = await logPipelineEvent({
+      inbox: classification.inbox,
+      category: classification.category,
+      sender,
+      subject,
+      status: isRejected ? "rejected" : "processed",
+      metadata,
+      created_at: Date.now(),
+    });
+    console.log(`[resend] Pipeline event #${pipelineId} logged to DB`);
+  } catch (err) {
+    console.error("[resend] Pipeline DB write failed:", err instanceof Error ? err.message : err);
+    pipelineId = -1;
   }
 
-  await saveToVault(classification, sender, subject, email);
-  await sendTelegramNotification(classification, sender, subject, false);
+  let vaultPath: string | null = null;
+  if (writeVault) {
+    vaultPath = await saveToVault(classification, sender, subject, email, bodyText);
+    if (pipelineId > 0) {
+      try {
+        if (vaultPath) {
+          await updatePipelineEvent(pipelineId, {
+            metadata: { vault_written: true, vault_path: vaultPath } as any,
+          });
+        } else {
+          await updatePipelineEvent(pipelineId, {
+            status: "error",
+            metadata: { vault_written: false, reject_reason: "vault_write_failed" } as any,
+          });
+        }
+      } catch {}
+    }
+  } else {
+    console.log(`[resend] Vault write skipped for ${classification.inbox}@ (bodyLength=${bodyText.length})`);
+  }
 
-  return { status: "processed", classification };
+  await sendTelegramNotification(classification, sender, subject, isRejected, vaultPath);
+
+  return isRejected
+    ? { status: "rejected", classification, error: classification.rejectReason }
+    : { status: "processed", classification };
 }
 
 async function saveToVault(
   classification: ClassifiedEmail,
   from: string,
   subject: string,
-  email: InboundEmail | null
-): Promise<void> {
+  email: InboundEmail | null,
+  bodyText: string
+): Promise<string | null> {
   try {
-    const { getPool } = await import("./db.js");
-
     const dateStr = new Date().toISOString().slice(0, 10);
     const cleanSubject = subject
       .replace(/[<>:"/\\|?*]/g, "")
@@ -156,7 +209,7 @@ async function saveToVault(
       "---",
     ].join("\n");
 
-    const body = email?.text || email?.html?.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() || "(empty body)";
+    const body = bodyText || "(empty body)";
 
     const content = [
       frontmatter,
@@ -177,14 +230,16 @@ async function saveToVault(
     ].join("\n");
 
     const vaultLocal = await import("./vault-local.js");
+    let savedPath = fullPath;
     try {
       await vaultLocal.createNote(fullPath, content);
     } catch {
-      await vaultLocal.createNote(`Library/Inbox/${filename}`, content);
+      savedPath = `Library/Inbox/${filename}`;
+      await vaultLocal.createNote(savedPath, content);
       console.warn(`[resend] Failed to write to ${fullPath}, fell back to Library/Inbox/`);
     }
 
-    const logLine = `- ${new Date().toISOString().slice(0, 16).replace("T", " ")} | email | ${subject.slice(0, 60)} | ${from} → ${fullPath}\n`;
+    const logLine = `- ${new Date().toISOString().slice(0, 16).replace("T", " ")} | email | ${subject.slice(0, 60)} | ${from} → ${savedPath}\n`;
     const logPath = "Library/Vault-Inbox-Log.md";
     try {
       await vaultLocal.appendToNote(logPath, logLine);
@@ -195,16 +250,19 @@ async function saveToVault(
     }
 
     try {
+      const { getPool } = await import("./db.js");
       const pool = getPool();
       await pool.query(
         `INSERT INTO agent_activity (agent, task, saved_to, created_at) VALUES ($1, $2, $3, $4)`,
-        ["resend-inbox", `Email: ${subject}`.slice(0, 200), fullPath, Date.now()]
+        ["resend-inbox", `Email: ${subject}`.slice(0, 200), savedPath, Date.now()]
       );
     } catch {}
 
-    console.log(`[resend] Saved to vault: ${fullPath}`);
+    console.log(`[resend] Saved to vault: ${savedPath}`);
+    return savedPath;
   } catch (err) {
     console.error("[resend] Vault save failed:", err instanceof Error ? err.message : err);
+    return null;
   }
 }
 
@@ -212,7 +270,8 @@ async function sendTelegramNotification(
   classification: ClassifiedEmail,
   from: string,
   subject: string,
-  isRejected: boolean
+  isRejected: boolean,
+  vaultPath: string | null
 ): Promise<void> {
   try {
     const { sendAlertsBotMessage } = await import("./telegram.js");
@@ -244,7 +303,11 @@ async function sendTelegramNotification(
       lines.push("", `⚠️ Saved to <code>System/Email-Unrouted/</code> for review`);
     } else {
       lines.push(`<b>Category:</b> ${fmt.escapeHtml(classification.category)}`);
-      lines.push(`<b>Filed to:</b> <code>${fmt.escapeHtml(classification.vaultFolder)}/</code>`);
+      if (vaultPath) {
+        lines.push(`<b>Filed to:</b> <code>${fmt.escapeHtml(vaultPath)}</code>`);
+      } else {
+        lines.push(`<i>Vault write skipped (DB-only)</i>`);
+      }
     }
 
     await sendAlertsBotMessage(lines.join("\n"), "HTML");

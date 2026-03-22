@@ -7806,6 +7806,36 @@ app.post("/api/resend/webhook", express.raw({ type: "*/*" }), async (req, res) =
   }
 });
 
+app.get("/api/pipeline/events", async (req, res) => {
+  try {
+    const { queryPipelineEvents } = await import("./src/pipeline-store.js");
+    const filters: any = {};
+    if (req.query.inbox) filters.inbox = String(req.query.inbox);
+    if (req.query.category) filters.category = String(req.query.category);
+    if (req.query.since) {
+      const sinceDate = new Date(String(req.query.since));
+      if (!isNaN(sinceDate.getTime())) filters.since = sinceDate.getTime();
+    }
+    if (req.query.limit) filters.limit = Math.min(parseInt(String(req.query.limit), 10) || 20, 100);
+    const events = await queryPipelineEvents(filters);
+    res.json({ events, count: events.length });
+  } catch (err: any) {
+    console.error("[api] pipeline events error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/pipeline/stats", async (req, res) => {
+  try {
+    const { getPipelineStats } = await import("./src/pipeline-store.js");
+    const stats = await getPipelineStats();
+    res.json(stats);
+  } catch (err: any) {
+    console.error("[api] pipeline stats error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post("/api/telegram/webhook", express.json(), async (req, res) => {
   const secretHeader = req.headers["x-telegram-bot-api-secret-token"];
   if (secretHeader !== telegram.getWebhookSecret()) {
@@ -8092,6 +8122,13 @@ async function sendStartupNotification(googleStatus: { connected: boolean; email
 
 async function startServer(maxRetries = 5) {
   await db.init();
+  try {
+    const { initPipelineTable } = await import("./src/pipeline-store.js");
+    await initPipelineTable();
+    console.log("[boot] email_pipeline table ready");
+  } catch (err) {
+    console.error("[boot] email_pipeline init failed:", err instanceof Error ? err.message : err);
+  }
   await conversations.init();
   await gmail.init();
   await tasks.init();
@@ -8128,7 +8165,7 @@ async function startServer(maxRetries = 5) {
   } catch (err) {
     console.error("[boot] Vault semantic layer init failed:", err);
   }
-  console.log("[boot] PostgreSQL ready (shared pool, 8 tables + pgvector)");
+  console.log("[boot] PostgreSQL ready (shared pool, 9 tables + pgvector)");
 
   let googleStatus: { connected: boolean; email?: string; error?: string } = { connected: false };
   try {
