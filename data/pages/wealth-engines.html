@@ -865,7 +865,7 @@ function renderWhaleIntelligence(wi){
     document.getElementById('whaleCount').textContent='0';
     el.innerHTML='<div class="empty">No tracked wallets</div>';return;
   }
-  var wallets=wi.tracked_wallets;
+  var wallets=wi.tracked_wallets.slice().sort(function(a,b){return(b.win_rate||0)-(a.win_rate||0)||(b.pnl||0)-(a.pnl||0);});
   var perf=wi.performance||[];
   var signals=wi.recent_signals||[];
   document.getElementById('whaleCount').textContent=wallets.length;

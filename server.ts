@@ -4599,8 +4599,9 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
           const ctPool = (await import("./src/db.js")).getPool();
           const sigRes = await ctPool.query(`SELECT value FROM app_config WHERE key = $1`, ["copy_trading_signals"]);
           if (sigRes.rows.length > 0 && Array.isArray(sigRes.rows[0].value)) {
+            const parseTs = (v: any): number => { if (typeof v === "number") return v; if (typeof v === "string") return new Date(v).getTime() || 0; return 0; };
             return sigRes.rows[0].value
-              .sort((a: any, b: any) => (Number(b.detected_at) || 0) - (Number(a.detected_at) || 0))
+              .sort((a: any, b: any) => parseTs(b.detected_at) - parseTs(a.detected_at))
               .slice(0, 10)
               .map((s: any) => ({
                 wallet_alias: s.wallet_alias, market_question: (s.market_question || "").slice(0, 80),
