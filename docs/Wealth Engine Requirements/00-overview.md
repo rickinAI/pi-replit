@@ -71,4 +71,4 @@ The following were removed as DarkNode pivoted to prediction-markets-only copy t
 - Backtesting engine
 - Signal aggregator (Fear & Greed, Binance funding)
 
-See `03-crypto-scout.md` and `07-autoresearch.md` for archive notices.
+See `07-autoresearch.md` for archive notices. `03-crypto-scout.md` has been removed (crypto pivot complete).
