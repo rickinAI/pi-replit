@@ -724,7 +724,7 @@ function buildApiRequestTools(): ToolDefinition[] {
 
           return {
             content: [{ type: "text" as const, text: `HTTP ${resp.status} ${resp.statusText}\n\n${responseText}` }],
-            details: { status: resp.status, method: params.method, path },
+            details: { status: resp.status, method: params.method, path: rawPath },
           };
         } catch (err: any) {
           const msg = err instanceof Error ? err.message : String(err);
