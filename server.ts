@@ -4844,8 +4844,7 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
 
   const closedShadowTrades = buildClosedShadowTrades(shadowPerf);
   const allTradesCombined = [...tradeHistory, ...closedShadowTrades]
-    .map((t: any) => { if (!t.asset_class) t.asset_class = "polymarket"; return t; })
-    .filter((t: any) => t.asset_class === "polymarket");
+    .map((t: any) => { if (!t.asset_class) t.asset_class = "polymarket"; return t; });
   allTradesCombined.sort((a: any, b: any) => new Date(b.closed_at || 0).getTime() - new Date(a.closed_at || 0).getTime());
   const taxSummary = await bankr.getTaxSummary(closedShadowTrades).catch(() => null);
 
@@ -5148,8 +5147,7 @@ async function buildPnlDashboardData(): Promise<any> {
 
   const closedShadowTrades = buildClosedShadowTrades(shadowPerf);
   const allTradesCombined = [...tradeHistory, ...closedShadowTrades]
-    .map((t: any) => { if (!t.asset_class) t.asset_class = "polymarket"; return t; })
-    .filter((t: any) => t.asset_class === "polymarket");
+    .map((t: any) => { if (!t.asset_class) t.asset_class = "polymarket"; return t; });
   allTradesCombined.sort((a: any, b: any) => new Date(b.closed_at || 0).getTime() - new Date(a.closed_at || 0).getTime());
   const taxSummary = await bankr.getTaxSummary(closedShadowTrades).catch(() => null);
 

@@ -888,7 +888,8 @@ function renderWhaleIntelligence(wi){
   }
   wallets.forEach(function(w){
     var p=perf.find(function(x){return x.wallet_address===w.address;});
-    var wr=w.win_rate||0;
+    var wrRaw=w.win_rate||0;
+    var wr=wrRaw<=1?wrRaw*100:wrRaw;
     var wc=wr>=70?'green':wr>=50?'amber':'red';
     h+='<div class="pos-item">';
     h+='<div class="pos-top"><span class="pos-asset">'+esc(w.alias)+' <span class="pill" style="background:var(--'+wc+'-dim);color:var(--'+wc+')">'+wr.toFixed(0)+'% WR</span>';
