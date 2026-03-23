@@ -5490,6 +5490,207 @@ app.post("/api/wealth-engine/jobs/:jobId", async (req: Request, res: Response) =
   }
 });
 
+app.get("/api/controls", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const paused = await bankr.isPaused();
+    const killSwitch = await bankr.isKillSwitchActive();
+    const mode = await bankr.getMode();
+    const rc = await bankr.getRiskConfig();
+    const portfolio = await bankr.getPortfolioValue();
+    const peak = await bankr.getPeakPortfolioValue();
+    const drawdownPct = peak > 0 ? ((portfolio - peak) / peak) * 100 : 0;
+    const positions = await bankr.getPositions();
+    res.json({
+      paused,
+      killSwitch,
+      mode,
+      circuitBreaker: {
+        drawdownThreshold: rc.circuit_breaker_drawdown_pct,
+        currentDrawdownPct: parseFloat(drawdownPct.toFixed(2)),
+        active: drawdownPct <= rc.circuit_breaker_drawdown_pct,
+      },
+      portfolio: { value: portfolio, peak, positions: positions.length },
+      riskConfig: rc,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.put("/api/controls", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const { paused, killSwitch, mode } = req.body;
+    const changes: string[] = [];
+
+    const pool = db.getPool();
+    if (typeof paused === "boolean") {
+      await pool.query(
+        `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_paused', $1, $2)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+        [JSON.stringify(paused), Date.now()]
+      );
+      if (!paused) {
+        await pool.query(
+          `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_kill_switch', $1, $2)
+           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+          [JSON.stringify(false), Date.now()]
+        );
+      }
+      changes.push(`paused=${paused}`);
+    }
+    if (typeof killSwitch === "boolean") {
+      await pool.query(
+        `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_kill_switch', $1, $2)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+        [JSON.stringify(killSwitch), Date.now()]
+      );
+      changes.push(`killSwitch=${killSwitch}`);
+    }
+    if (mode && ["SHADOW", "LIVE", "BETA"].includes(mode)) {
+      await pool.query(
+        `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+        ["wealth_engines_mode", JSON.stringify(mode), Date.now()]
+      );
+      changes.push(`mode=${mode}`);
+    }
+
+    weDashboardCache = null;
+
+    if (changes.length > 0) {
+      try {
+        const tg = await import("./src/telegram.js");
+        await tg.sendMessage(`⚙️ <b>Controls updated</b> (source: API)\n\n${changes.join("\n")}`, "HTML");
+      } catch {}
+    }
+
+    res.json({ ok: true, changes });
+  } catch (err: any) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.post("/api/telegram/send", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const { message, parseMode } = req.body;
+    if (!message || typeof message !== "string") { res.status(400).json({ error: "message (string) is required" }); return; }
+    if (message.length > 4000) { res.status(400).json({ error: "message exceeds 4000 char limit" }); return; }
+    const tg = await import("./src/telegram.js");
+    const msgId = await tg.sendMessage(message, parseMode || "Markdown");
+    res.json({ ok: true, messageId: msgId });
+  } catch (err: any) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.get("/api/whale-registry", async (_req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((_req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const wallets = await polymarket.getWhaleWatchlist();
+    const bl = await polymarket.getBlacklist();
+    res.json({ wallets, blacklist: bl, count: wallets.length });
+  } catch (err: any) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.post("/api/whale-registry", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const { address, alias, skipDecode } = req.body;
+    if (!address || typeof address !== "string") { res.status(400).json({ error: "address is required" }); return; }
+
+    const bl = await polymarket.getBlacklist();
+    if (bl.includes(address.toLowerCase())) { res.status(409).json({ error: "Address is blacklisted" }); return; }
+    const wallets = await polymarket.getWhaleWatchlist();
+    if (wallets.some(w => w.address.toLowerCase() === address.toLowerCase())) { res.status(409).json({ error: "Already in registry" }); return; }
+
+    if (skipDecode === true) {
+      const wallet = await polymarket.buildWalletFromActivity(address, "manual");
+      if (alias) wallet.alias = alias;
+      wallets.push(wallet);
+      await polymarket.saveWhaleWatchlist(wallets);
+      res.json({ ok: true, wallet, decoded: false });
+    } else {
+      const ct = await import("./src/copy-trading.js");
+      const wallet = await ct.addWallet({ address, alias, source: "manual" });
+      res.json({ ok: true, wallet, decoded: true });
+    }
+  } catch (err: any) {
+    res.status(400).json({ error: String(err.message || err) });
+  }
+});
+
+app.put("/api/whale-registry/:address", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const addr = req.params.address.toLowerCase();
+    const wallets = await polymarket.getWhaleWatchlist();
+    const wallet = wallets.find(w => w.address.toLowerCase() === addr);
+    if (!wallet) { res.status(404).json({ error: "Wallet not found in registry" }); return; }
+
+    const allowed = ["alias", "niche", "enabled", "observation_only", "status", "strategy", "maxCopyPrice", "minTradeSize", "decodeReasoning"];
+    const updates: string[] = [];
+    for (const key of allowed) {
+      if (req.body[key] !== undefined) {
+        (wallet as any)[key] = req.body[key];
+        updates.push(`${key}=${JSON.stringify(req.body[key])}`);
+      }
+    }
+
+    if (req.body.status === "blacklisted") {
+      const bl = await polymarket.getBlacklist();
+      if (!bl.includes(addr)) {
+        bl.push(addr);
+        await polymarket.saveBlacklist(bl);
+      }
+      const evictIdx = wallets.findIndex(w => w.address.toLowerCase() === addr);
+      if (evictIdx !== -1) wallets.splice(evictIdx, 1);
+      await polymarket.saveWhaleWatchlist(wallets);
+      weDashboardCache = null;
+      res.json({ ok: true, evicted: true, blacklisted: true, alias: wallet.alias, updates });
+      return;
+    }
+
+    await polymarket.saveWhaleWatchlist(wallets);
+    weDashboardCache = null;
+    res.json({ ok: true, wallet, updates });
+  } catch (err: any) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.delete("/api/whale-registry/:address", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const addr = req.params.address.toLowerCase();
+    const { blacklist } = req.body || {};
+
+    const wallets = await polymarket.getWhaleWatchlist();
+    const idx = wallets.findIndex(w => w.address.toLowerCase() === addr);
+    if (idx === -1) { res.status(404).json({ error: "Wallet not found in registry" }); return; }
+
+    const removed = wallets.splice(idx, 1)[0];
+    await polymarket.saveWhaleWatchlist(wallets);
+
+    if (blacklist) {
+      const bl = await polymarket.getBlacklist();
+      if (!bl.includes(addr)) {
+        bl.push(addr);
+        await polymarket.saveBlacklist(bl);
+      }
+    }
+
+    weDashboardCache = null;
+    res.json({ ok: true, removed: removed.alias, blacklisted: !!blacklist });
+  } catch (err: any) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 app.get("/api/x-intelligence/data", async (_req: Request, res: Response) => {
   try {
     const forceRefresh = _req.query.force === "1";

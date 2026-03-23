@@ -454,6 +454,46 @@ api_request({ method: "POST", path: "/api/vault-inbox", body: { url: "https://ex
 
 **Key endpoints:** `/api/agents`, `/api/scheduled-jobs`, `/api/vault-inbox`, `/api/glance`, `/api/conversations`, `/api/sitemap`
 
+#### Autonomous WE Control Endpoints
+These endpoints give you full programmatic control over the Wealth Engines system:
+
+**System State:**
+- `GET /api/controls` — full system state snapshot (paused, killSwitch, mode, circuitBreaker, portfolio, riskConfig)
+- `PUT /api/controls` — update system state. Body: `{ paused?: boolean, killSwitch?: boolean, mode?: "SHADOW"|"LIVE"|"BETA" }`. Sends Telegram alert on change.
+
+**BANKR Config:**
+- `GET /api/wealth-engine/config` — current risk config (riskPerTrade, maxPositions, exposureCap, circuitBreakers, etc.)
+- `POST /api/wealth-engine/config` — update risk params. Body: partial RiskConfig object.
+
+**Execution Controls:**
+- `POST /api/wealth-engines/pause` — pause all execution
+- `POST /api/wealth-engines/resume` — resume execution
+- `POST /api/wealth-engines/kill` — activate kill switch (close all positions)
+- `POST /api/wealth-engine/mode` — set mode. Body: `{ mode: "SHADOW"|"LIVE"|"BETA" }`
+
+**Telegram:**
+- `POST /api/telegram/send` — send arbitrary Telegram message. Body: `{ message: string, parseMode?: "Markdown"|"HTML" }`. Max 4000 chars.
+
+**Whale Registry CRUD:**
+- `GET /api/whale-registry` — list all tracked wallets + blacklist
+- `POST /api/whale-registry` — add wallet. Body: `{ address: string, alias?: string, skipDecode?: boolean }`. Runs decode gate by default; set `skipDecode: true` for manual curation.
+- `PUT /api/whale-registry/:address` — update wallet fields (alias, niche, enabled, observation_only, status, strategy, maxCopyPrice, minTradeSize). Set `status: "blacklisted"` to evict + blacklist.
+- `DELETE /api/whale-registry/:address` — remove wallet. Body: `{ blacklist?: true }` to also blacklist.
+
+**Data & Monitoring:**
+- `GET /api/wealth-engines/data` — full WE dashboard data (portfolio, P&L, positions, whale intel)
+- `GET /api/wealth-engines/positions` — open positions
+- `GET /api/wealth-engines/trades` — trade history
+- `GET /api/wealth-engines/pnl-data` — P&L + equity curve data
+- `GET /api/wealth-engines/oversight` — oversight reports
+- `GET /api/wealth-engines/polymarket/theses` — active theses
+- `GET /api/cost-summary` — API cost breakdown by model/agent
+
+**Jobs:**
+- `GET /api/scheduled-jobs` — list all jobs
+- `POST /api/scheduled-jobs/:id/trigger` — force-run a job immediately
+- `GET /api/scheduled-jobs/history` — job run history (optional `?limit=N`)
+
 **Rules:** For any mutating call (POST/PUT/DELETE), confirm with Rickin first — Plan → Confirm → Execute.
 
 ### Creating a Custom Agent (API Flow)
