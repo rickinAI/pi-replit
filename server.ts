@@ -675,7 +675,7 @@ function buildApiRequestTools(): ToolDefinition[] {
           Type.Literal("DELETE"),
         ], { description: "HTTP method" }),
         path: Type.String({ description: "API path starting with /api/ (e.g., /api/scheduled-jobs)" }),
-        body: Type.Optional(Type.Any({ description: "JSON request body for POST/PUT requests" })),
+        body: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "JSON request body for POST/PUT requests" })),
       }),
       async execute(_toolCallId, params) {
         try {
@@ -696,7 +696,13 @@ function buildApiRequestTools(): ToolDefinition[] {
           }
 
           const apiKey = process.env.DARKNODE_API_KEY;
-          if (apiKey) parsed.searchParams.set("apikey", apiKey);
+          if (!apiKey) {
+            return {
+              content: [{ type: "text" as const, text: "Error: DARKNODE_API_KEY environment variable is not set — cannot authenticate API requests." }],
+              details: { error: "missing_api_key" },
+            };
+          }
+          parsed.searchParams.set("apikey", apiKey);
           const url = parsed.toString();
 
           const fetchOpts: RequestInit = {
