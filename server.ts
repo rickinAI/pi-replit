@@ -660,6 +660,84 @@ function buildWebFetchTools(): ToolDefinition[] {
   ];
 }
 
+function buildApiRequestTools(): ToolDefinition[] {
+  return [
+    {
+      name: "api_request",
+      label: "API Request",
+      description:
+        "Make an authenticated HTTP request to a DarkNode API endpoint. Use this to manage scheduled jobs, agents, vault inbox, and other server resources programmatically. The request is automatically authenticated — you never need to handle API keys. Only /api/* paths are allowed.\n\nCommon endpoints:\n- GET /api/agents — list specialist agents\n- GET /api/scheduled-jobs — list scheduled jobs\n- POST /api/scheduled-jobs — create a job (body: { name, agentId, prompt, schedule?, enabled? })\n- PUT /api/scheduled-jobs/:id — update a job\n- DELETE /api/scheduled-jobs/:id — delete a job\n- POST /api/vault-inbox — submit a URL ({ url })\n- GET /api/glance — day-at-a-glance summary\n- GET /api/conversations — list conversations\n- GET /api/sitemap — full navigation manifest\n\nFor mutating calls (POST/PUT/DELETE), always confirm with Rickin first (Plan → Confirm → Execute).",
+      parameters: Type.Object({
+        method: Type.Union([
+          Type.Literal("GET"),
+          Type.Literal("POST"),
+          Type.Literal("PUT"),
+          Type.Literal("DELETE"),
+        ], { description: "HTTP method" }),
+        path: Type.String({ description: "API path starting with /api/ (e.g., /api/scheduled-jobs)" }),
+        body: Type.Optional(Type.Any({ description: "JSON request body for POST/PUT requests" })),
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const rawPath = params.path.trim();
+          if (!rawPath.startsWith("/api/") || /\.\.|%2e/i.test(rawPath) || /\\/.test(rawPath)) {
+            return {
+              content: [{ type: "text" as const, text: `Error: Path must start with /api/ and cannot contain traversal sequences — got "${rawPath}"` }],
+              details: { error: "invalid_path" },
+            };
+          }
+
+          const parsed = new URL(rawPath, `http://localhost:${PORT}`);
+          if (!parsed.pathname.startsWith("/api/")) {
+            return {
+              content: [{ type: "text" as const, text: `Error: Resolved path escapes /api/ namespace — got "${parsed.pathname}"` }],
+              details: { error: "invalid_path" },
+            };
+          }
+
+          const apiKey = process.env.DARKNODE_API_KEY;
+          if (apiKey) parsed.searchParams.set("apikey", apiKey);
+          const url = parsed.toString();
+
+          const fetchOpts: RequestInit = {
+            method: params.method,
+            headers: { "Content-Type": "application/json" },
+            signal: AbortSignal.timeout(30000),
+          };
+          if (params.body && (params.method === "POST" || params.method === "PUT")) {
+            fetchOpts.body = JSON.stringify(params.body);
+          }
+
+          const resp = await fetch(url, fetchOpts);
+          let responseText: string;
+          const ct = resp.headers.get("content-type") || "";
+          if (ct.includes("application/json")) {
+            const json = await resp.json();
+            responseText = JSON.stringify(json, null, 2);
+          } else {
+            responseText = await resp.text();
+          }
+
+          if (responseText.length > 80000) {
+            responseText = responseText.slice(0, 80000) + "\n\n[truncated — response exceeded 80,000 chars]";
+          }
+
+          return {
+            content: [{ type: "text" as const, text: `HTTP ${resp.status} ${resp.statusText}\n\n${responseText}` }],
+            details: { status: resp.status, method: params.method, path },
+          };
+        } catch (err: any) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return {
+            content: [{ type: "text" as const, text: `API request failed: ${msg}` }],
+            details: { error: msg },
+          };
+        }
+      },
+    },
+  ];
+}
+
 function buildImageTools(): ToolDefinition[] {
   if (!ANTHROPIC_KEY) return [];
   return [
@@ -6569,6 +6647,7 @@ const cachedStaticTools: ToolDefinition[] = [
   ...buildWeatherTools(),
   ...buildSearchTools(),
   ...buildWebFetchTools(),
+  ...buildApiRequestTools(),
   ...buildImageTools(),
   ...buildRenderPageTools(),
   ...buildTaskTools(),
