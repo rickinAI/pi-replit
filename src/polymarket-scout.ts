@@ -135,6 +135,8 @@ export async function clearThesisBlacklist(thesisId: string): Promise<boolean> {
   const target = allTheses.find(t => t.id === thesisId);
   if (!target) return false;
 
+  if (target.status !== "invalidated") return false;
+
   const updated = allTheses.map(t => {
     if (t.id === thesisId && t.status === "invalidated") {
       return { ...t, status: "active" as const, blacklist_until: undefined };

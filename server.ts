@@ -5676,6 +5676,233 @@ app.post("/api/controls/reset-portfolio", async (req: Request, res: Response) =>
   }
 });
 
+app.post("/api/controls/close-position", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const { position_id, reason } = req.body;
+    if (!position_id || typeof position_id !== "string") { res.status(400).json({ error: "position_id (string) is required" }); return; }
+    const positions = await bankr.getPositions();
+    const pos = positions.find(p => p.id === position_id);
+    if (!pos) { res.status(404).json({ error: `Position ${position_id} not found` }); return; }
+    const closeReason = (typeof reason === "string" && reason.length > 0) ? reason : "api_manual_close";
+    const record = await bankr.closePosition(position_id, pos.current_price, closeReason);
+    if (!record) { res.status(500).json({ error: "Close returned null" }); return; }
+    weDashboardCache = null;
+    try {
+      const tg = await import("./src/telegram.js");
+      await tg.sendMessage(
+        `📤 <b>Position Closed</b> (source: API)\n\n` +
+        `<b>Asset:</b> ${record.asset.slice(0, 80)}\n` +
+        `<b>Direction:</b> ${record.direction}\n` +
+        `<b>Entry:</b> ${(record.entry_price * 100).toFixed(0)}% → Exit: ${(record.exit_price * 100).toFixed(0)}%\n` +
+        `<b>PnL:</b> $${record.pnl.toFixed(2)} (${record.pnl_pct.toFixed(1)}%)\n` +
+        `<b>Reason:</b> ${closeReason}`,
+        "HTML"
+      );
+    } catch {}
+    res.json({ ok: true, trade: record });
+  } catch (err: any) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.post("/api/controls/close-all-positions", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const reason = (typeof req.body?.reason === "string" && req.body.reason.length > 0) ? req.body.reason : "api_close_all";
+    const positionsBefore = await bankr.getPositions();
+    const openBefore = positionsBefore.length;
+    const records = await bankr.closeAllPositions(reason);
+    const failed = openBefore - records.length;
+    weDashboardCache = null;
+    try {
+      const tg = await import("./src/telegram.js");
+      if (records.length > 0 || failed > 0) {
+        const totalPnl = records.reduce((s, r) => s + r.pnl, 0);
+        await tg.sendMessage(
+          `📤 <b>All Positions Closed</b> (source: API)\n\n` +
+          `<b>Open before:</b> ${openBefore}\n` +
+          `<b>Closed:</b> ${records.length}${failed > 0 ? ` ⚠️ Failed: ${failed}` : ""}\n` +
+          `<b>Total PnL:</b> $${totalPnl.toFixed(2)}\n` +
+          `<b>Reason:</b> ${reason}`,
+          "HTML"
+        );
+      }
+    } catch {}
+    const status = failed > 0 ? 207 : 200;
+    res.status(status).json({ ok: failed === 0, open_before: openBefore, closed: records.length, failed, trades: records });
+  } catch (err: any) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.post("/api/controls/thesis", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const { action, thesis_id, blacklist_hours } = req.body;
+    if (!thesis_id || typeof thesis_id !== "string") { res.status(400).json({ error: "thesis_id (string) is required" }); return; }
+    const pmScout = await import("./src/polymarket-scout.js");
+    if (action === "retire") {
+      await pmScout.retireThesis(thesis_id);
+      res.json({ ok: true, action: "retired", thesis_id });
+    } else if (action === "invalidate") {
+      const hours = (typeof blacklist_hours === "number" && blacklist_hours > 0) ? blacklist_hours : 48;
+      const result = await pmScout.invalidateThesis(thesis_id, hours * 60 * 60 * 1000);
+      if (!result) { res.status(404).json({ error: `Thesis ${thesis_id} not found` }); return; }
+      try {
+        const tg = await import("./src/telegram.js");
+        await tg.sendMessage(
+          `🚫 <b>BLACKLIST</b> Thesis manually invalidated (source: API)\n\n` +
+          `<b>Market:</b> ${result.asset.slice(0, 80)}\n` +
+          `<b>Thesis:</b> ${thesis_id}\n` +
+          `<b>Blacklisted for:</b> ${hours}h`,
+          "HTML"
+        );
+      } catch {}
+      res.json({ ok: true, action: "invalidated", thesis_id, blacklist_hours: hours });
+    } else if (action === "clear_blacklist") {
+      const cleared = await pmScout.clearThesisBlacklist(thesis_id);
+      if (!cleared) { res.status(404).json({ error: `Thesis ${thesis_id} not found or not blacklisted` }); return; }
+      res.json({ ok: true, action: "cleared_blacklist", thesis_id });
+    } else {
+      res.status(400).json({ error: "action must be 'retire', 'invalidate', or 'clear_blacklist'" });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.get("/api/controls/theses", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const pmScout = await import("./src/polymarket-scout.js");
+    const active = await pmScout.getActiveTheses();
+    const blacklisted = await pmScout.getBlacklistedTheses();
+    const allRaw = await pmScout.getAllThesesRaw();
+    const now = Date.now();
+    res.json({
+      active: active.map(t => ({ id: t.id, asset: t.asset, market_id: t.market_id, direction: t.direction, confidence: t.confidence, whale_consensus: t.whale_consensus, status: t.status, created_at: t.created_at, expires_at: t.expires_at })),
+      blacklisted: blacklisted.map(t => ({ id: t.id, asset: t.asset, market_id: t.market_id, blacklist_until: t.blacklist_until, hours_remaining: t.blacklist_until ? parseFloat(((t.blacklist_until - now) / (60 * 60 * 1000)).toFixed(1)) : 0 })),
+      total_raw: allRaw.length,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.post("/api/controls/reset-circuit-breaker", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const pool = db.getPool();
+    const now = Date.now();
+    await pool.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_consecutive_losses', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(0), now]
+    );
+    const portfolio = await bankr.getPortfolioValue();
+    await pool.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_peak_portfolio', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(portfolio), now]
+    );
+    await pool.query(
+      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_paused', $1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(false), now]
+    );
+    weDashboardCache = null;
+    try {
+      const tg = await import("./src/telegram.js");
+      await tg.sendMessage(
+        `⚡ <b>Circuit Breaker Reset</b> (source: API)\n\n` +
+        `<b>Peak portfolio:</b> reset to $${portfolio.toFixed(2)} (current value)\n` +
+        `<b>Consecutive losses:</b> reset to 0\n` +
+        `<b>Paused:</b> false\n\n` +
+        `⚠️ 7d rolling P&L is trade-history based and will clear naturally as losing trades age past 7 days.`,
+        "HTML"
+      );
+    } catch {}
+    res.json({
+      ok: true,
+      reset: {
+        peak_portfolio: portfolio,
+        consecutive_losses: 0,
+        paused: false,
+        note: "7d rolling P&L clears naturally as trades age past 7 days — trade history not modified",
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.get("/api/controls/shadow-trades", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const oversight = await import("./src/oversight.js");
+    const status = (req.query.status as string) || undefined;
+    const validStatus = status === "open" || status === "closed" ? status : undefined;
+    const trades = await oversight.getShadowTrades(validStatus);
+    const perf = await oversight.getShadowPerformance();
+    res.json({ trades, performance: perf });
+  } catch (err: any) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.post("/api/controls/shadow-trades/close", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const { shadow_id, exit_price, reason } = req.body;
+    if (!shadow_id || typeof shadow_id !== "string") { res.status(400).json({ error: "shadow_id (string) is required" }); return; }
+    if (typeof exit_price !== "number" || exit_price <= 0) { res.status(400).json({ error: "exit_price (positive number) is required" }); return; }
+    const oversight = await import("./src/oversight.js");
+    const result = await oversight.closeShadowTrade(shadow_id, exit_price, reason || "api_manual_close");
+    if (!result) { res.status(404).json({ error: `Shadow trade ${shadow_id} not found` }); return; }
+    res.json({ ok: true, trade: result });
+  } catch (err: any) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.put("/api/controls/risk-config", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const updates = req.body;
+    if (!updates || typeof updates !== "object") { res.status(400).json({ error: "Body must be a JSON object" }); return; }
+    const allowed = ["risk_per_trade_pct", "max_positions", "exposure_cap_pct", "correlation_limit", "circuit_breaker_7d_pct", "circuit_breaker_drawdown_pct", "notification_mode", "min_confidence_for_execution", "thesis_blacklist_hours"];
+    const filtered: any = {};
+    for (const k of Object.keys(updates)) {
+      if (allowed.includes(k)) filtered[k] = updates[k];
+    }
+    if (Object.keys(filtered).length === 0) { res.status(400).json({ error: `No valid config keys. Allowed: ${allowed.join(", ")}` }); return; }
+    const numericKeys = ["risk_per_trade_pct", "max_positions", "exposure_cap_pct", "correlation_limit", "circuit_breaker_7d_pct", "circuit_breaker_drawdown_pct", "thesis_blacklist_hours"];
+    for (const k of numericKeys) {
+      if (k in filtered && (typeof filtered[k] !== "number" || filtered[k] <= 0)) { res.status(400).json({ error: `${k} must be a positive number` }); return; }
+    }
+    const validConfidence = ["SPECULATIVE", "LOW", "MEDIUM", "HIGH"];
+    if ("min_confidence_for_execution" in filtered && !validConfidence.includes(filtered.min_confidence_for_execution)) {
+      res.status(400).json({ error: `min_confidence_for_execution must be one of: ${validConfidence.join(", ")}` }); return;
+    }
+    if ("notification_mode" in filtered && !["all", "important", "critical"].includes(filtered.notification_mode)) {
+      res.status(400).json({ error: "notification_mode must be 'all', 'important', or 'critical'" }); return;
+    }
+    const result = await bankr.setRiskConfig(filtered);
+    weDashboardCache = null;
+    try {
+      const tg = await import("./src/telegram.js");
+      await tg.sendMessage(
+        `⚙️ <b>Risk Config Updated</b> (source: API)\n\n${Object.entries(filtered).map(([k, v]) => `${k}: ${v}`).join("\n")}`,
+        "HTML"
+      );
+    } catch {}
+    res.json({ ok: true, config: result });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || String(err) });
+  }
+});
+
 app.post("/api/telegram/send", async (req: Request, res: Response) => {
   if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
   try {
