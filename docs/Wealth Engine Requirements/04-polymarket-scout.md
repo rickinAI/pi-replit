@@ -33,17 +33,18 @@ Each tracked wallet is scored on a rolling basis:
 ### Wallet Data (WhaleWallet Interface)
 
 ```
-address, alias, win_rate, roi, total_volume, total_trades,
-niche: "politics" | "sports" | "crypto" | "weather" | "esports" | "general",
+address, alias, niche, win_rate, roi, total_volume, total_trades,
+total_markets, resolved_markets, composite_score,
 category_scores: { politics: 0.72, crypto: 0.85, sports: 0.45 },
-last_active, added_at, total_markets, resolved_markets,
+last_active (timestamp), last_checked (timestamp), added_at (timestamp),
+source: "trade_mining" | "anomaly" | "manual",
 enabled, observation_only, degraded_count, pending_eviction,
-source: "auto-discovery" | "anomaly-scanner" | "manual" | "seed",
-strategy: string,          // decoded strategy classification
-maxCopyPrice: number,      // per-wallet price ceiling (set by decode)
-minTradeSize: number,      // per-wallet minimum trade (set by decode)
-decoded: boolean,          // whether decodeWallet() has run
-decodeResult: object       // full decode output (niche, anti-patterns, thresholds)
+status: "active" | "probation" | "removed",
+strategy?: "sports" | "politics" | "crypto" | "weather" | "general" | "scraper" | "market-maker",
+maxCopyPrice?: number,     // per-wallet price ceiling (set by decode)
+minTradeSize?: number,     // per-wallet minimum trade (set by decode)
+decodeReasoning?: string,  // human-readable decode summary
+decodedAt?: number         // timestamp of decode
 ```
 
 ## Wallet Decode on Admission

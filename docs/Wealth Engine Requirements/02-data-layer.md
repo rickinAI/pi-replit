@@ -12,7 +12,7 @@ All persistent state lives in PostgreSQL via the `app_config` table (key-value J
 |-----|------|-------------|-----|
 | `polymarket_scout_active_theses` | TradeThesis[] | Active prediction market theses | Auto-expire on resolution |
 | `polymarket_whale_watchlist` | WhaleWallet[] | Unified whale tracking registry | Managed by SCOUT + API |
-| `polymarket_whale_blacklist` | string[] | Blacklisted addresses (protocol contracts, MMs, scrapers) | Permanent |
+| `wallet_blacklist` | string[] | Blacklisted addresses (protocol contracts, MMs, scrapers) | Permanent |
 | `wealth_engines_positions` | Position[] | Open positions | Updated by BANKR |
 | `wealth_engines_trade_history` | TradeRecord[] | Closed trade log with outcomes | Append-only |
 | `wealth_engines_kill_switch` | boolean | Emergency stop — closes all positions | Manual or API |
@@ -20,13 +20,14 @@ All persistent state lives in PostgreSQL via the `app_config` table (key-value J
 | `wealth_engines_mode` | "BETA" \| "LIVE" \| "SHADOW" | Operating mode | Manual or API |
 | `wealth_engines_public` | boolean | Dashboard public access toggle | Manual |
 | `wealth_engine_config` | RiskConfig | Dynamic risk parameters | API or Control Panel |
-| `oversight_latest_health` | HealthReport | Most recent 4h health check | Overwritten |
+| `oversight_health_reports` | HealthReport[] | Health check reports | Overwritten |
+| `oversight_last_health_check` | number | Timestamp of last health check | Overwritten |
 | `oversight_improvement_queue` | ImprovementRequest[] | Open improvement requests | Lifecycle managed |
 | `oversight_shadow_trades` | ShadowTrade[] | Paper trading log | Append-only |
 | `shadow_streak` | StreakData | Win/loss streak tracking for shadow trades | Weekly reset Monday |
 | `wealth_goal` | number | EOY wealth target (default $50K) | Via /goal command |
 | `signal_quality_scores` | SignalQualityMap | Per-source win/loss with time decay | Rolling |
-| `copy_trade_snapshots` | SnapshotMap | Per-wallet position snapshots for diffing | Overwritten each scan |
+| `copy_trading_snapshots` | SnapshotMap | Per-wallet position snapshots for diffing | Overwritten each scan |
 | `market_price_stats` | PriceStatsMap | 72h rolling price windows for z-score | Rolling |
 
 ### Removed Keys (Crypto Pivot)
@@ -60,35 +61,29 @@ All persistent state lives in PostgreSQL via the `app_config` table (key-value J
 interface WhaleWallet {
   address: string;
   alias: string;
+  niche: string;
   win_rate: number;
   roi: number;
   total_volume: number;
   total_trades: number;
-  niche: "politics" | "sports" | "crypto" | "weather" | "esports" | "general";
-  category_scores: Record<string, number>;
-  last_active: string;
-  added_at: string;
   total_markets: number;
   resolved_markets: number;
+  category_scores: Record<string, number>;
+  composite_score: number;
+  last_active: number;
+  last_checked: number;
+  added_at: number;
+  source: "trade_mining" | "anomaly" | "manual";
   enabled: boolean;
   observation_only: boolean;
   degraded_count: number;
   pending_eviction: boolean;
-  source: "auto-discovery" | "anomaly-scanner" | "manual" | "seed";
-  strategy: string;
-  maxCopyPrice: number;
-  minTradeSize: number;
-  decoded: boolean;
-  decodeResult: {
-    niche: string;
-    isScraper: boolean;
-    isMarketMaker: boolean;
-    maxCopyPrice: number;
-    minTradeSize: number;
-    tradeCount: number;
-    avgEntryPrice: number;
-    medianTradeSize: number;
-  };
+  status: "active" | "probation" | "removed";
+  strategy?: "sports" | "politics" | "crypto" | "weather" | "general" | "scraper" | "market-maker";
+  maxCopyPrice?: number;
+  minTradeSize?: number;
+  decodeReasoning?: string;
+  decodedAt?: number;
 }
 ```
 

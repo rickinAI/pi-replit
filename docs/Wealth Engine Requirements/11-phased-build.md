@@ -1,11 +1,6 @@
 # Phased Build Plan
 
-> **PARTIALLY ARCHIVED — March 22, 2026**
-> Phases 0-4 and 7 are complete. Phase 5 (Autoresearch) was removed in the crypto pivot.
-> Phase 6 (Mac Mini migration) is deferred. Current system architecture uses Polymarket
-> copy trading (see `00-overview.md`) instead of the original crypto SCOUT + autoresearch pipeline.
-> New features: Copy Trading Engine (Task #67), Wallet Management (Task #68),
-> Telegram Notification Overhaul (Task #69).
+> **Updated:** March 23, 2026 — All Core Phases Complete
 
 ## Design Principle: Each Phase is Self-Contained
 
@@ -26,211 +21,160 @@ Every phase produces a working, testable system. You can stop after any phase an
 
 **Tasks:** #31 (CoinGecko), #32 (Telegram) — both MERGED
 
-**Acceptance:** All commands respond correctly. Pause/resume toggles work. Dead man switches fire on threshold.
+---
+
+## Phase 1: CRYPTO SCOUT Intelligence (COMPLETE → REMOVED)
+
+**Status:** Built and merged (Task #33), then fully removed in the March 22, 2026 crypto pivot. All crypto scout modules deleted.
 
 ---
 
-## Phase 1: CRYPTO SCOUT Intelligence — Task #33
+## Phase 2: POLYMARKET SCOUT (COMPLETE)
 
-**What gets built:**
-1. Upgrade technical signals to 6-signal Nunchi voting ensemble (all 6 active)
-2. Vote counting (bull/bear out of 6) with 4/6 entry gate
-3. BTC confirmation filter for alt trades
-4. 2-bar cooldown tracking
-5. Very-short momentum signal (6-bar)
-6. Dynamic vol-adjusted entry threshold
-7. Backtesting module (bar-by-bar OHLCV replay, Nunchi scoring)
-8. Nansen API integration (smart money, token holders, hot contracts)
-9. Thesis data model and persistence (72h auto-expire)
-10. SCOUT agent definition with full system prompt
-11. Two scheduled jobs: micro-scan (30min) + full cycle (4h)
-12. Watchlist management in DB
-13. Enriched `/scout` and `/intel` commands
+**What was built:**
+- Polymarket API integration (CLOB + Data API + Gamma API)
+- Whale watchlist with 5-metric composite scoring
+- Activity scanner (30-min interval → 2h optimized)
+- Thesis generation when whale consensus meets thresholds
+- Agent definition + scheduled jobs
+- `/polymarket` Telegram command
+- Market categorization: weather/politics/sports/crypto/esports/general
+- NOAA weather edge signal (6 cities)
 
-**Testing criteria:**
-- [ ] Run `analyzeAsset()` on BTC — returns 6 active signals with vote count
-- [ ] Run backtest on BTC 30-day data — returns Sharpe, drawdown, trade count
-- [ ] Nansen API calls return cached data (or graceful degradation if no API key)
-- [ ] SCOUT micro-scan executes on schedule, updates watchlist scores
-- [ ] SCOUT full cycle generates at least 1 thesis from real market data
-- [ ] Thesis saved to DB, visible via `/scout` command
-- [ ] Thesis auto-expires after 72 hours
-- [ ] BTC filter prevents alt entry when BTC momentum opposes
-
-**Done when:** SCOUT is generating real theses from real market data on a schedule, visible via Telegram.
+**Tasks:** #38 — MERGED
 
 ---
 
-## Phase 2: POLYMARKET SCOUT — Task #38
+## Phase 3: BANKR Execution Engine (COMPLETE)
 
-**What gets built:**
-1. Polymarket API integration (markets, wallet positions, wallet history)
-2. Whale watchlist with scoring (win rate, ROI, category expertise)
-3. Activity scanner (30-min interval)
-4. Thesis generation when whale activity meets thresholds
-5. Context validation (news/X cross-reference)
-6. Agent definition + scheduled jobs
-7. `/polymarket` Telegram command
-8. Weekly wallet review job
+**What was built:**
+- BNKR API integration for Polymarket execution on Base
+- Pre-execution risk checks (all per-trade + portfolio-level)
+- Position monitor (2-min independent interval)
+- Odds target, stop loss, whale flip, underwater exit, resolution proximity
+- Kill switch enforcement
+- Shadow mode with streak tracking
+- Tax lot creation (FIFO) + Form 8949 CSV export
+- Signal quality feedback loop with 30-day time decay
+- Copy trade support: is_copy_trade flag, source_wallet, fixed sizing
+- `/portfolio`, `/trades`, `/tax`, `/shadow` commands
 
-**Testing criteria:**
-- [ ] Polymarket API returns market data and wallet positions
-- [ ] Whale scoring produces sensible scores from historical data
-- [ ] Activity scanner detects mock whale position changes
-- [ ] Thesis generated when consensus + wallet score thresholds met
-- [ ] `/polymarket` shows formatted thesis data
-- [ ] Theses use same unified format as crypto theses
-
-**Done when:** POLYMARKET SCOUT generates theses from real whale activity, visible via Telegram.
+**Tasks:** #34 — MERGED
 
 ---
 
-## Phase 3: BANKR Execution Engine — Task #34
+## Phase 4: OVERSIGHT AGENT (COMPLETE)
 
-**What gets built:**
-1. BNKR API integration (open/close perp positions) — BNKR-only venue
-2. ~~Coinbase Wallet integration~~ (removed — Coinbase is manual funding-only rail)
-3. Pre-execution risk checks (all per-trade + portfolio-level)
-4. Telegram approval flow integration
-5. Position monitor (5-min independent interval)
-6. Trailing stop, RSI exit, kill switch enforcement
-7. Slippage tracking (expected vs actual fill)
-8. Correlation/exposure bucket check
-9. Shadow mode (log hypothetical trades without execution)
-10. Tax lot creation (FIFO)
-11. Wash sale detection
-12. Form 8949 CSV export
-13. `/portfolio`, `/trades`, `/tax` command enrichment
-14. `/kill` command for emergency stop
+**What was built:**
+- Health checker (every 4h) — subsystem freshness, dead man switches
+- Performance review — win rate, Sharpe, slippage, source attribution
+- Improvement capture — pattern analysis, structured requests with routing
+- Drawdown circuit breaker (-15% auto-pause, -25% kill switch)
+- Cross-domain exposure detection
+- Shadow trading mode integration
+- `/oversight` and `/risk` commands
 
-**Testing criteria (SHADOW MODE FIRST):**
-- [ ] BANKR receives thesis, runs all pre-execution checks
-- [ ] Telegram approval flow: approve → shadow trade logged
-- [ ] Shadow trade tracks hypothetical P&L using real prices
-- [ ] Position monitor runs every 5 min, updates shadow positions
-- [ ] Trailing stop triggers correctly on shadow positions
-- [ ] Tax lot created for each shadow trade
-- [ ] Wash sale flagged when re-entry within 30 days of shadow loss
-- [ ] Form 8949 CSV generates valid output
-- [ ] Correlation check prevents concentrated exposure
-- [ ] `/shadow` shows paper trading performance
-
-**Testing criteria (LIVE MODE — only after shadow validation):**
-- [ ] BNKR order submission works on testnet/small amount
-- [ ] Actual fill price recorded, slippage calculated
-- [ ] Real position monitor updates from venue
-- [ ] Kill switch closes real position on BNKR
-- [ ] Tax lot with real transaction hash recorded
-
-**Done when:** System runs in shadow mode for 2+ weeks with positive hypothetical P&L before switching to live.
+**Tasks:** #39 — MERGED
 
 ---
 
-## Phase 4: OVERSIGHT AGENT — Task #39
+## Phase 5: AUTORESEARCH (REMOVED)
 
-**What gets built:**
-1. Health checker (every 4h) — agent uptime, API errors, data freshness
-2. Performance review (daily) — win rate, Sharpe, signal attribution, slippage
-3. Improvement capture (weekly) — pattern analysis, bull/bear review, fix requests
-4. Drawdown circuit breaker (-15% auto-pause)
-5. Cross-domain exposure detection
-6. Shadow trading mode integration
-7. Improvement request data model and persistence
-8. Agent definition + scheduled jobs
-9. `/oversight` and `/risk` Telegram commands
-10. Daily performance summary to Telegram
-11. Data export API for Mac Mini migration
-
-**Testing criteria:**
-- [ ] Health check runs, produces structured report
-- [ ] Daily summary calculates correct metrics from trade history
-- [ ] Signal attribution correctly identifies per-signal win rates
-- [ ] Drawdown circuit breaker triggers at -15% (test with mock data)
-- [ ] Improvement requests generated and stored in DB
-- [ ] `/oversight` shows health + improvements
-- [ ] Export API returns full state dump
-
-**Done when:** Oversight agent produces daily summaries and weekly improvement reports from real (or shadow) trade data.
+**Status:** Removed in the March 22, 2026 crypto pivot. Parameter evolution via backtesting is not applicable to the copy trading strategy.
 
 ---
 
-## Phase 5: AUTORESEARCH — Task #37
+## Phase 6: Mac Mini Migration (DEFERRED)
 
-**What gets built:**
-1. Shared autoresearch engine (pluggable backtest interface)
-2. Crypto parameter space and mutation generator
-3. Polymarket parameter space and mutation generator
-4. Crypto backtest (OHLCV replay with Nunchi scoring)
-5. Polymarket backtest (historical outcome replay)
-6. Experiment logging with full metadata
-7. Parameter adoption/reversion with safety guardrails
-8. Rollback history (5 per domain)
-9. Oversight hypothesis integration
-10. Weekly scheduled job + `/research` Telegram commands
-
-**Testing criteria:**
-- [ ] Candidate generation produces valid parameter sets within ranges
-- [ ] Crypto backtest produces consistent scores for same parameters
-- [ ] Improvement > 0.5% results in parameter adoption
-- [ ] Improvement < 0.5% results in reversion
-- [ ] Parameter drift cap prevents > 30% change per run
-- [ ] Rollback restores previous parameter set
-- [ ] Scouts load updated parameters at runtime
-- [ ] Experiment log persists all attempts
-
-**Done when:** Autoresearch can run a 10-experiment crypto cycle and produce measurable parameter improvements (or confirm current parameters are optimal).
+**Status:** Deferred. Current system runs entirely on Replit. Will revisit when compute needs justify local infrastructure.
 
 ---
 
-## Phase 6: Mac Mini Migration
+## Phase 7: DASHBOARD (COMPLETE)
 
-**What gets migrated:**
-1. Install OpenClaw + Ollama on Mac Mini
-2. Configure heartbeat scheduler for oversight + autoresearch
-3. Set up Telegram integration via OpenClaw
-4. Configure hybrid model (local Ollama + Claude fallback)
-5. Test data sync: Mac Mini pulls export, pushes reports
-6. Validate local model quality against Claude baseline
-7. Cut over oversight + autoresearch from Replit to Mac Mini
+**What was built:**
+- DarkNode Command Center (wealth-engines.html)
+- P&L & Tax Dashboard (wealth-engines-pnl.html)
+- Control Panel (wealth-engine-controls.html)
+- Portfolio view with live P&L, equity curve, drawdown visualization
+- Whale Intelligence section with per-wallet performance
+- Public/private access control
 
-**Testing criteria:**
-- [ ] OpenClaw runs 24/7 on Mac Mini without intervention
-- [ ] Ollama generates acceptable quality analysis (manual review)
-- [ ] Data sync endpoint pulls/pushes correctly
-- [ ] Telegram alerts work from both Replit and Mac Mini
-- [ ] Autoresearch produces similar-quality experiments locally vs cloud
-
-**Done when:** Oversight and autoresearch run locally for 1 week with no issues.
+**Tasks:** #36 — MERGED
 
 ---
 
-## Phase 7: DASHBOARD — Task #36
+## Phase 8: COPY TRADING ENGINE (COMPLETE)
 
-**What gets built:**
-1. Portfolio view with live P&L
-2. Thesis list (both domains)
-3. Trade history with filters
-4. Oversight reports
-5. Performance charts
-6. Tax summary view
-7. Shadow portfolio view
-8. Public/private access control
+**What was built:**
+- 5-minute whale snapshot diffing
+- 8-signal scoring engine: VPIN, whale consensus, niche match, z-score, NOAA weather
+- Tiered copy sizing: $50 (score≥8), $25 (score 4-7), skip (<4)
+- buyOnly mode (only copies new entries, not exits)
+- Observation_only wallet auto-clear (5min)
+- Whale exit mirroring
+- Auto-redeem resolved markets
+- Telegram alerts with full signal breakdown
 
-**Done when:** Dashboard provides full visibility into all Wealth Engines data without needing Telegram.
+**Tasks:** #67 (Copy Trading), #68 (Wallet Management), #69 (Telegram Overhaul) — MERGED
+
+---
+
+## Phase 9: WALLET DECODE ON ADMISSION (COMPLETE)
+
+**What was built:**
+- `decodeWallet()` — one-time strategy classification on admission
+- Scraper detection: avg entry >$0.90 AND >50% buys above $0.90
+- Market maker detection: 4-signal heuristic (≥3 of 4)
+- Per-wallet `maxCopyPrice` (niche-based: sports 0.80, politics 0.92, crypto 0.75, weather/general 0.85)
+- Per-wallet `minTradeSize` (median × 0.3, min $25)
+- Decode gate on `scoreAndPromoteCandidate()` and `addWallet()`
+- Rejected wallets auto-blacklisted + Telegram alert
+- Admitted wallets get Telegram notification with strategy/thresholds
+
+**Completed:** March 23, 2026
+
+---
+
+## Phase 10: AUTONOMOUS WE CONTROL API (COMPLETE)
+
+**What was built:**
+- `GET/PUT /api/controls` — unified system state with Telegram alerts on change
+- `POST /api/telegram/send` — arbitrary Telegram messaging
+- `GET/POST/PUT/DELETE /api/whale-registry` — full whale registry CRUD with decode gate
+- `PUT /api/whale-registry/:address` with `status: "blacklisted"` — evict + blacklist
+- `GET /api/cost-summary` — API spend monitoring
+- `POST /api/scheduled-jobs/:id/trigger` — force-run jobs
+- All endpoints WE_CONTROL_USERS gated (rickin, darknode)
+- DarkNode system prompt updated with full endpoint reference
+
+**Tasks:** #74-76, #79 — MERGED. Completed: March 23, 2026
+
+---
+
+## Pending Work
+
+| Item | Status | Blocker |
+|------|--------|---------|
+| Go-live (SHADOW → LIVE) | Pending | Need shadow win rate >55% over 50+ trades |
+| Kill switch stress test | Pending | Need 50+ shadow trades first |
+| Agent Autopilot (Task #77) | Proposed | Parked |
+| Kreo Signal Ingestion (Task #78) | Proposed | User gathering sample alert messages |
 
 ---
 
 ## Summary Timeline
 
-| Phase | Task | Depends On | Key Milestone |
-|-------|------|------------|---------------|
-| 0 | Foundation | — | CoinGecko + Telegram working |
-| 1 | CRYPTO SCOUT | Phase 0 | Real crypto theses on schedule |
-| 2 | POLYMARKET SCOUT | Phase 0 | Real whale-based theses on schedule |
-| 3 | BANKR | Phase 1 + 2 | Shadow trading with paper P&L |
-| 4 | OVERSIGHT | Phase 1 + 2 + 3 | Daily performance reports |
-| 5 | AUTORESEARCH | Phase 1 + 2 + 4 | Self-improving parameters |
-| 6 | Mac Mini | Phase 4 + 5 | Local compute for batch work |
-| 7 | DASHBOARD | Phase 3 | Full web visibility |
-
-Phases 1 and 2 can run in parallel. Everything else is sequential.
+| Phase | What | Status | Key Milestone |
+|-------|------|--------|---------------|
+| 0 | Foundation | ✅ Complete | CoinGecko + Telegram working |
+| 1 | CRYPTO SCOUT | ❌ Removed | Crypto pivot |
+| 2 | POLYMARKET SCOUT | ✅ Complete | Whale-based theses on schedule |
+| 3 | BANKR | ✅ Complete | Shadow trading with paper P&L |
+| 4 | OVERSIGHT | ✅ Complete | Daily performance reports |
+| 5 | AUTORESEARCH | ❌ Removed | Crypto pivot |
+| 6 | Mac Mini | ⏸️ Deferred | Local compute for batch work |
+| 7 | DASHBOARD | ✅ Complete | Full web visibility |
+| 8 | COPY TRADING | ✅ Complete | 5-min snapshot diffing + 8-signal scoring |
+| 9 | WALLET DECODE | ✅ Complete | Scraper/MM gate + per-wallet thresholds |
+| 10 | AUTONOMOUS API | ✅ Complete | DarkNode self-management |

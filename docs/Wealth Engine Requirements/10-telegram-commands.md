@@ -1,6 +1,6 @@
 # Telegram Command Reference
 
-> **Updated:** March 22, 2026 — Post Notification Overhaul
+> **Updated:** March 23, 2026 — Post Notification Overhaul + Autonomous API
 
 ## Two-Bot Architecture
 
@@ -86,8 +86,19 @@ All WE notifications use category header badges via `telegram-format.ts`:
 - **Streak tracking**: currentStreak, streakType, longestStreak, weeklyWins/Losses/Pnl
 - **Wealth goal**: Configurable via `/goal`, defaults to $50K, stored in `wealth_goal` DB key
 
+## Autonomous Telegram API
+
+DarkNode can send Telegram messages programmatically without going through the bot command flow:
+
+| Endpoint | Method | Body | Purpose |
+|----------|--------|------|---------|
+| `/api/telegram/send` | POST | `{ message, parseMode? }` | Send arbitrary message (max 4000 chars) |
+
+Supports `"Markdown"` and `"HTML"` parse modes. WE_CONTROL_USERS gated (rickin, darknode).
+
 ## Message Format
 
 - Direct notifications: HTML parse mode with `escapeHtml()` for special characters
 - Command responses: Markdown (shared dispatch — no HTML tags in return strings)
 - Direct notifications truncated to 4096-char Telegram limit via `truncateToTelegramLimit()`
+- API messages (`/api/telegram/send`): support both Markdown and HTML parse modes

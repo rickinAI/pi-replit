@@ -1,9 +1,10 @@
 # OVERSIGHT AGENT: Operational Risk & Feedback Loop
 
-> **PARTIALLY OUTDATED — March 22, 2026**
+> **PARTIALLY OUTDATED — March 23, 2026**
 > References to autoresearch, Nansen weighting, and dual scout pipelines (crypto + polymarket)
 > are no longer applicable. System now operates on Polymarket copy trading only.
-> Oversight notifications now use category header badges via telegram-format.ts (HTML parse mode).
+> Oversight notifications use category header badges via telegram-format.ts (HTML parse mode).
+> DarkNode can now read system health via `GET /api/controls` (includes circuitBreaker status).
 > See `src/oversight.ts` for current implementation.
 
 ## Purpose
