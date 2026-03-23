@@ -4019,8 +4019,8 @@ app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(cookieParser(SESSION_SECRET));
 
-try { fs.mkdirSync("data/public", { recursive: true }); } catch {}
-app.use("/open", express.static("data/public", { fallthrough: false }), (_err: Error, _req: Request, res: Response, _next: NextFunction) => { res.status(404).send("Not found"); });
+try { fs.mkdirSync("data/vault/Open", { recursive: true }); } catch {}
+app.use("/open", express.static("data/vault/Open", { fallthrough: false }), (_err: Error, _req: Request, res: Response, _next: NextFunction) => { res.status(404).send("Not found"); });
 
 const AUTH_PUBLIC_PATHS = new Set(["/login.html", "/login.css", "/api/login", "/health", "/manifest.json", "/baby-manifest.json", "/icons/icon-180.png", "/icons/icon-192.png", "/icons/icon-512.png", "/icons/baby/icon-180.png", "/icons/baby/icon-192.png", "/icons/baby/icon-512.png", "/api/healthcheck"]);
 
