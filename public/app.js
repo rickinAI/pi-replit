@@ -1219,17 +1219,6 @@ async function catchUpSession(sid, retryCount = 0, wasReconnecting = false) {
       agentBubble = null;
       agentText = "";
       const newCount = serverMessages.length - domCount;
-      if (newCount > 0 && wasReconnecting) {
-        const badge = document.createElement("div");
-        badge.className = "reconnect-badge";
-        const agentMsgs = serverMessages.slice(domCount).filter(m => m.role === "agent").length;
-        if (agentMsgs > 0) {
-          badge.textContent = `✓ ${agentMsgs} response${agentMsgs > 1 ? "s" : ""} completed while away`;
-        } else {
-          badge.textContent = `↓ ${newCount} new message${newCount > 1 ? "s" : ""}`;
-        }
-        messages.appendChild(badge);
-      }
       for (let i = domCount; i < serverMessages.length; i++) {
         const msg = serverMessages[i];
         if (msg.role === "user") appendBubble("user", msg.text, msg.timestamp);
