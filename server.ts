@@ -3960,10 +3960,15 @@ async function authMiddleware(req: Request, res: Response, next: NextFunction) {
   if (token && USERS[token]) { (req as any).user = token; next(); return; }
   if (token === "authenticated") { (req as any).user = "rickin"; next(); return; }
 
+  const darknodeApiKey = process.env.DARKNODE_API_KEY;
+  if (darknodeApiKey) {
+    const keyFromQuery = req.query.apikey as string | undefined;
+    if (keyFromQuery === darknodeApiKey) { (req as any).user = "rickin"; next(); return; }
+  }
+
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith("Bearer ")) {
     const bearerToken = authHeader.slice(7);
-    const darknodeApiKey = process.env.DARKNODE_API_KEY;
     if (darknodeApiKey && bearerToken === darknodeApiKey) { (req as any).user = "rickin"; next(); return; }
     for (const [uname, u] of Object.entries(USERS)) {
       if (u.password && bearerToken === u.password) { (req as any).user = uname; next(); return; }
