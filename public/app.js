@@ -1140,7 +1140,7 @@ function openEventStream(id) {
     const wasReconnecting = reconnectAttempts > 0;
     reconnectAttempts = 0;
     if (wasReconnecting) {
-      catchUpSession(id, 0, true);
+      catchUpSession(id);
       hideStatus();
     }
   });
@@ -1171,7 +1171,7 @@ function openEventStream(id) {
   });
 }
 
-async function catchUpSession(sid, retryCount = 0, wasReconnecting = false) {
+async function catchUpSession(sid, retryCount = 0) {
   if (catchUpInProgress) return;
   catchUpInProgress = true;
   try {
