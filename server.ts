@@ -5866,6 +5866,16 @@ app.post("/api/controls/shadow-trades/close", async (req: Request, res: Response
   }
 });
 
+app.get("/api/controls/risk-config", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const config = await bankr.getRiskConfig();
+    res.json(config);
+  } catch (err: any) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 app.put("/api/controls/risk-config", async (req: Request, res: Response) => {
   if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
   try {
