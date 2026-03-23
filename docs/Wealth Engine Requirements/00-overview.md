@@ -1,6 +1,6 @@
 # Wealth Engines: System Overview
 
-> **Updated:** March 22, 2026 — Prediction Markets Only
+> **Updated:** March 23, 2026 — Wallet Decode + Autonomous API
 
 ## Mission
 
@@ -15,7 +15,7 @@ We don't run our own signal models. We track proven Polymarket whale wallets and
 Signal scoring (VPIN, z-score, whale consensus, niche match, NOAA weather) is deterministic code. LLMs are used only for oversight reviews and thesis synthesis. All automated jobs use Haiku for cost efficiency.
 
 ### 3. Zero Human Intervention
-The system runs autonomously — 5-minute copy trade scanning, automatic position mirroring, whale exit tracking, market resolution auto-redemption, and wallet health decay with auto-disable.
+The system runs autonomously — 5-minute copy trade scanning, automatic position mirroring, whale exit tracking, market resolution auto-redemption, wallet health decay with auto-disable, and wallet decode on admission. DarkNode has full API access to manage its own controls, whale registry, and Telegram messaging.
 
 ### 4. Test Before You Trade
 Shadow mode validates the system on paper before real capital is at risk. Every phase has acceptance criteria that must pass before advancing.
@@ -49,10 +49,12 @@ Agent-driven jobs (activity scan, BANKR execute) use Haiku with toolSubset filte
 |-----------|------|--------|
 | COPY TRADING ENGINE | 5-min whale snapshot diffing + 8-signal scoring | Built ✅ |
 | POLYMARKET SCOUT | Whale discovery, anomaly scanning, thesis generation | Built ✅ |
+| WALLET DECODE | One-time strategy classification on admission (scraper/MM detection, price ceilings, min trade size) | Built ✅ |
 | BANKR | Execute trades, manage positions, track taxes | Built ✅ |
 | OVERSIGHT AGENT | Health monitoring, performance review, shadow trading | Built ✅ |
 | TELEGRAM | Command center + categorized notifications | Built ✅ |
 | DASHBOARD | Web UI for portfolio visualization | Built ✅ |
+| AUTONOMOUS API | DarkNode self-management: controls, whale registry CRUD, Telegram send | Built ✅ |
 
 ## Data Flow
 
@@ -60,6 +62,26 @@ Agent-driven jobs (activity scan, BANKR execute) use Haiku with toolSubset filte
 Whale Wallets → Snapshot Diffing (5min) → Signal Engine (8 signals) → BANKR Execution → OVERSIGHT → Telegram
                                                                                           ↓
                                                                                    Wallet Health Decay
+```
+
+### Wallet Admission Flow
+
+```
+Candidate Wallet → decodeWallet() → Scraper Check → MM Check → Niche Classification
+                                         ↓                ↓              ↓
+                                    REJECT + blacklist  REJECT      Set maxCopyPrice + minTradeSize
+                                                                         ↓
+                                                                   Admit to Registry → Telegram Alert
+```
+
+### Autonomous Control Flow
+
+```
+DarkNode Agent → api_request → /api/controls      → Read/update system state
+                             → /api/whale-registry → CRUD wallets (with decode gate)
+                             → /api/telegram/send  → Send notifications
+                             → /api/cost-summary   → Monitor API spend
+                             → /api/scheduled-jobs  → Trigger jobs on demand
 ```
 
 ## Removed Components (Crypto Pivot — March 22, 2026)

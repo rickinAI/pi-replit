@@ -1,9 +1,6 @@
 # Data Layer: Storage, Schema & API Design
 
-> **PARTIALLY OUTDATED — March 22, 2026**
-> Some keys below (crypto_signal_parameters, autoresearch_*) are no longer used after the crypto pivot.
-> New keys added: `polymarket_whale_watchlist`, `shadow_streak`, `wealth_goal`, `signal_quality_scores`.
-> See `Wealth Engines Status.md` in vault for the current key inventory.
+> **Updated:** March 23, 2026 — Wallet Decode Fields + Autonomous API Keys
 
 ## Storage Strategy
 
@@ -13,92 +10,100 @@ All persistent state lives in PostgreSQL via the `app_config` table (key-value J
 
 | Key | Type | Description | TTL |
 |-----|------|-------------|-----|
-| `scout_active_theses` | TradeThesis[] | Active crypto trading theses | 72h auto-expire |
 | `polymarket_scout_active_theses` | TradeThesis[] | Active prediction market theses | Auto-expire on resolution |
-| `scout_watchlist` | string[] | CoinGecko IDs for micro-scan | Updated by full cycle |
-| `scout_latest_brief` | string | Most recent SCOUT analysis text | Overwritten each cycle |
-| `crypto_signal_parameters` | SignalConfig | Current best signal parameters | Updated by autoresearch |
-| `polymarket_scout_parameters` | PolymarketConfig | Current best PM parameters | Updated by autoresearch |
-| `wealth_engines_positions` | Position[] | Open positions (crypto + PM) | Updated by BANKR |
+| `polymarket_whale_watchlist` | WhaleWallet[] | Unified whale tracking registry | Managed by SCOUT + API |
+| `polymarket_whale_blacklist` | string[] | Blacklisted addresses (protocol contracts, MMs, scrapers) | Permanent |
+| `wealth_engines_positions` | Position[] | Open positions | Updated by BANKR |
 | `wealth_engines_trade_history` | TradeRecord[] | Closed trade log with outcomes | Append-only |
-| `wealth_engines_kill_switch` | boolean | Emergency stop — closes all positions | Manual |
-| `wealth_engines_paused` | boolean | Pause all WE scheduled jobs | Manual or circuit breaker |
-| `wealth_engines_mode` | "BETA" \| "LIVE" \| "SHADOW" | Operating mode | Manual |
+| `wealth_engines_kill_switch` | boolean | Emergency stop — closes all positions | Manual or API |
+| `wealth_engines_paused` | boolean | Pause all WE scheduled jobs | Manual, circuit breaker, or API |
+| `wealth_engines_mode` | "BETA" \| "LIVE" \| "SHADOW" | Operating mode | Manual or API |
 | `wealth_engines_public` | boolean | Dashboard public access toggle | Manual |
+| `wealth_engine_config` | RiskConfig | Dynamic risk parameters | API or Control Panel |
 | `oversight_latest_health` | HealthReport | Most recent 4h health check | Overwritten |
 | `oversight_improvement_queue` | ImprovementRequest[] | Open improvement requests | Lifecycle managed |
 | `oversight_shadow_trades` | ShadowTrade[] | Paper trading log | Append-only |
-| `autoresearch_experiment_log` | Experiment[] | Full experiment history | Append-only |
-| `autoresearch_parameter_history` | ParameterSnapshot[] | Previous N parameter sets | Rolling 5 |
+| `shadow_streak` | StreakData | Win/loss streak tracking for shadow trades | Weekly reset Monday |
+| `wealth_goal` | number | EOY wealth target (default $50K) | Via /goal command |
+| `signal_quality_scores` | SignalQualityMap | Per-source win/loss with time decay | Rolling |
+| `copy_trade_snapshots` | SnapshotMap | Per-wallet position snapshots for diffing | Overwritten each scan |
+| `market_price_stats` | PriceStatsMap | 72h rolling price windows for z-score | Rolling |
 
-### Existing Tables (No Changes Needed)
+### Removed Keys (Crypto Pivot)
+
+| Key | Status |
+|-----|--------|
+| `scout_active_theses` | Removed — crypto theses no longer generated |
+| `scout_watchlist` | Removed — no CoinGecko micro-scan |
+| `scout_latest_brief` | Removed — crypto brief no longer generated |
+| `crypto_signal_parameters` | Removed — no crypto signals |
+| `autoresearch_experiment_log` | Removed — no autoresearch |
+| `autoresearch_parameter_history` | Removed — no autoresearch |
+
+### Existing Tables
 
 | Table | Used By |
 |-------|---------|
 | `app_config` | All WE components (key-value store) |
 | `job_history` | Scheduled job execution log |
 | `agent_activity` | Agent run tracking |
+| `conversations` | Chat session persistence |
+| `tasks` | Task manager |
+| `oauth_tokens` | Google OAuth |
+| `vault_inbox` | URL queue |
+| `vault_embeddings` | Semantic search vectors |
+| `email_pipeline` | Resend webhook events |
 
-### Data Interfaces
+### WhaleWallet Interface
 
 ```typescript
-interface TradeThesis {
-  id: string;                    // unique thesis ID
-  asset: string;                 // "bitcoin", "ETH > $5000 by June"
-  asset_class: "crypto" | "polymarket";
-  direction: "LONG" | "SHORT" | "YES" | "NO";
-  confidence: "HIGH" | "MEDIUM" | "LOW";
-  technical_score: number;       // 0.0-1.0 weighted ensemble
-  vote_count: string;            // "5/6" for crypto, null for PM
-  market_regime: string;         // "TRENDING" | "RANGING" | "VOLATILE"
-  entry_price: number;
-  exit_price: number;            // target
-  stop_price: number;            // ATR-based for crypto, odds-based for PM
-  atr_value: number;
-  time_horizon: string;          // "24h", "7d", etc.
-  sources: string[];             // ["coingecko", "nansen", "x_sentiment"]
-  backtest_score: number | null;
-  nansen_flow_direction: string | null;  // "inflow" | "outflow" | null
-  whale_consensus: number | null;        // for polymarket
-  created_at: number;
-  expires_at: number;
-  status: "active" | "executed" | "expired" | "retired";
+interface WhaleWallet {
+  address: string;
+  alias: string;
+  win_rate: number;
+  roi: number;
+  total_volume: number;
+  total_trades: number;
+  niche: "politics" | "sports" | "crypto" | "weather" | "esports" | "general";
+  category_scores: Record<string, number>;
+  last_active: string;
+  added_at: string;
+  total_markets: number;
+  resolved_markets: number;
+  enabled: boolean;
+  observation_only: boolean;
+  degraded_count: number;
+  pending_eviction: boolean;
+  source: "auto-discovery" | "anomaly-scanner" | "manual" | "seed";
+  strategy: string;
+  maxCopyPrice: number;
+  minTradeSize: number;
+  decoded: boolean;
+  decodeResult: {
+    niche: string;
+    isScraper: boolean;
+    isMarketMaker: boolean;
+    maxCopyPrice: number;
+    minTradeSize: number;
+    tradeCount: number;
+    avgEntryPrice: number;
+    medianTradeSize: number;
+  };
 }
+```
 
-interface TradeRecord {
-  id: string;
-  thesis_id: string;            // links back to thesis
-  asset: string;
-  asset_class: "crypto" | "polymarket";
-  direction: string;
-  leverage: string;
-  entry_price: number;
-  exit_price: number;
-  expected_entry_price: number;  // from thesis — for slippage tracking
-  pnl: number;
-  pnl_pct: number;
-  fees: number;
-  opened_at: string;
-  closed_at: string;
-  close_reason: string;         // "stop_loss" | "take_profit" | "rsi_exit" | "manual" | "kill_switch"
-  signals_at_entry: SignalSnapshot;  // for attribution analysis
-  tax_lot: TaxLot;              // FIFO tracking
-}
+### RiskConfig Interface
 
-interface Position {
-  id: string;
-  thesis_id: string;
-  asset: string;
-  asset_class: "crypto" | "polymarket";
-  direction: string;
-  leverage: string;
-  entry_price: number;
-  current_price: number;
-  unrealized_pnl: number;
-  peak_price: number;           // for trailing stop
-  atr_stop_price: number;
-  opened_at: string;
-  venue: "bnkr";
+```typescript
+interface RiskConfig {
+  max_leverage: number;          // default 5
+  risk_per_trade_pct: number;    // default 5%
+  max_positions: number;         // default 3
+  exposure_cap_pct: number;      // default 60%
+  correlation_limit: number;     // default 1 per bucket
+  circuit_breaker_7d_pct: number;     // default -15%
+  circuit_breaker_drawdown_pct: number; // default -25%
+  notification_mode: string;
 }
 ```
 
@@ -106,15 +111,23 @@ interface Position {
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/wealth-engines/theses` | GET | Active theses (crypto + polymarket) |
+| `/api/controls` | GET | Unified system state snapshot |
+| `/api/controls` | PUT | Update system state (paused, killSwitch, mode) |
+| `/api/whale-registry` | GET | Tracked wallets + blacklist |
+| `/api/whale-registry` | POST | Add wallet (with decode gate) |
+| `/api/whale-registry/:address` | PUT | Update wallet fields; `status: "blacklisted"` evicts + blacklists |
+| `/api/whale-registry/:address` | DELETE | Remove wallet (optional blacklist) |
+| `/api/telegram/send` | POST | Send arbitrary Telegram message |
+| `/api/wealth-engine/config` | GET | Full WE config |
+| `/api/wealth-engine/config` | POST | Update risk parameters |
+| `/api/wealth-engines/data` | GET | Dashboard data (portfolio, P&L, positions, health) |
 | `/api/wealth-engines/positions` | GET | Open positions with P&L |
 | `/api/wealth-engines/trades` | GET | Trade history with filters |
+| `/api/wealth-engines/pnl-data` | GET | P&L + equity curve data |
 | `/api/wealth-engines/oversight` | GET | Latest health report + improvement queue |
-| `/api/wealth-engines/export` | GET | Full state dump for Mac Mini sync |
-| `/api/wealth-engines/oversight-report` | POST | Receive oversight results from Mac Mini |
-| `/api/wealth-engines/parameters` | GET | Current signal parameters (both domains) |
-| `/api/wealth-engines/tax/summary` | GET | Tax summary (YTD, quarterly) |
-| `/api/wealth-engines/tax/8949` | GET | Form 8949 CSV export |
+| `/api/wealth-engines/polymarket/theses` | GET | Active theses |
+| `/api/cost-summary` | GET | API cost breakdown |
+| `/api/scheduled-jobs/:id/trigger` | POST | Force-run a job |
 
 ### Data Retention
 
@@ -122,8 +135,8 @@ interface Position {
 |-----------|-----------|--------|
 | Trade history | Permanent | Tax compliance + performance analysis |
 | Tax lots | Permanent | IRS requirement |
-| Active theses | 72h auto-expire | Stale theses are dangerous |
+| Active theses | Auto-expire on resolution | Stale theses are dangerous |
 | Health reports | 30 days | Trend analysis |
-| Experiment log | Permanent | Autoresearch needs full history |
-| Parameter snapshots | Last 5 per domain | Rollback capability |
 | Shadow trades | 90 days | Validation window |
+| Whale blacklist | Permanent | Prevent re-admission of bad actors |
+| Signal quality scores | Rolling with 30-day decay | Adaptive quality tracking |
