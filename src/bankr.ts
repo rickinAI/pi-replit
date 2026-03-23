@@ -93,6 +93,8 @@ export interface RiskConfig {
   circuit_breaker_7d_pct: number;
   circuit_breaker_drawdown_pct: number;
   notification_mode: "all" | "trades-only" | "silent";
+  min_confidence_for_execution: "HIGH" | "MEDIUM" | "LOW" | "SPECULATIVE";
+  thesis_blacklist_hours: number;
 }
 
 const DEFAULT_RISK_CONFIG: RiskConfig = {
@@ -104,7 +106,15 @@ const DEFAULT_RISK_CONFIG: RiskConfig = {
   circuit_breaker_7d_pct: -15,
   circuit_breaker_drawdown_pct: -25,
   notification_mode: "all",
+  min_confidence_for_execution: "MEDIUM",
+  thesis_blacklist_hours: 48,
 };
+
+const CONFIDENCE_RANK: Record<string, number> = { HIGH: 4, MEDIUM: 3, LOW: 2, SPECULATIVE: 1 };
+
+function meetsConfidenceGate(thesisConfidence: string, minRequired: string): boolean {
+  return (CONFIDENCE_RANK[thesisConfidence] || 0) >= (CONFIDENCE_RANK[minRequired] || 0);
+}
 
 export async function getRiskConfig(): Promise<RiskConfig> {
   const pool = getPool();
@@ -319,6 +329,9 @@ export async function runPreExecutionChecks(params: {
   stop_price: number;
   risk_amount?: number;
   confidence?: number;
+  thesis_id?: string;
+  confidence_level?: "HIGH" | "MEDIUM" | "LOW" | "SPECULATIVE";
+  whale_count?: number;
 }): Promise<RiskCheckResult> {
   const checks: { name: string; passed: boolean; detail: string }[] = [];
   let allPassed = true;
@@ -341,6 +354,38 @@ export async function runPreExecutionChecks(params: {
   if (paused) allPassed = false;
 
   checks.push({ name: "mode_check", passed: true, detail: `Mode: ${mode}${mode === "SHADOW" ? " (shadow trades only)" : ""}` });
+
+  let resolvedConfidence = params.confidence_level;
+  let resolvedWhaleCount = params.whale_count;
+  if (params.thesis_id) {
+    const { getAllThesesRaw } = await import("./polymarket-scout.js");
+    const allTheses = await getAllThesesRaw();
+    const thesis = allTheses.find(t => t.id === params.thesis_id);
+    if (thesis) {
+      if (thesis.status === "invalidated") {
+        const hoursLeft = thesis.blacklist_until ? ((thesis.blacklist_until - Date.now()) / (60 * 60 * 1000)).toFixed(1) : "∞";
+        checks.push({ name: "thesis_blacklist", passed: false, detail: `Thesis ${params.thesis_id} is blacklisted (${hoursLeft}h remaining) — stopped-out market` });
+        allPassed = false;
+      } else {
+        checks.push({ name: "thesis_blacklist", passed: true, detail: "Thesis not blacklisted" });
+      }
+      if (!resolvedConfidence && thesis.confidence) {
+        resolvedConfidence = thesis.confidence;
+      }
+      if (resolvedWhaleCount === undefined && thesis.whale_consensus !== undefined) {
+        resolvedWhaleCount = thesis.whale_consensus;
+      }
+    } else {
+      checks.push({ name: "thesis_blacklist", passed: true, detail: `Thesis ${params.thesis_id} not found in DB (new or external)` });
+    }
+  }
+
+  if (resolvedConfidence) {
+    const confOk = meetsConfidenceGate(resolvedConfidence, rc.min_confidence_for_execution);
+    const whaleInfo = resolvedWhaleCount !== undefined ? `, whales: ${resolvedWhaleCount}` : "";
+    checks.push({ name: "confidence_gate", passed: confOk, detail: `Confidence: ${resolvedConfidence} (min: ${rc.min_confidence_for_execution}${whaleInfo})` });
+    if (!confOk) allPassed = false;
+  }
 
   const levOk = params.leverage <= rc.max_leverage;
   checks.push({ name: "leverage_cap", passed: levOk, detail: `Requested: ${params.leverage}x, Max: ${rc.max_leverage}x` });
@@ -695,6 +740,37 @@ export async function closePosition(positionId: string, exitPrice: number, close
     }
   } catch (e) {
     console.error("[bankr] Shadow trade close sync:", e instanceof Error ? e.message : e);
+  }
+
+  if (closeReason === "pm_stop_loss" || closeReason === "pm_stop_loss_no_thesis") {
+    try {
+      const rc = await getRiskConfig();
+      const blacklistMs = rc.thesis_blacklist_hours * 60 * 60 * 1000;
+      const { invalidateThesis } = await import("./polymarket-scout.js");
+      const invalidated = await invalidateThesis(pos.thesis_id, blacklistMs);
+      if (invalidated) {
+        console.log(`[bankr] Thesis ${pos.thesis_id} blacklisted for ${rc.thesis_blacklist_hours}h after stop-loss`);
+        try {
+          const tg = await import("./telegram.js");
+          const blacklistExpiry = new Date(Date.now() + blacklistMs).toISOString().slice(0, 16).replace("T", " ");
+          await tg.sendMessage(
+            `🚫 <b>BLACKLIST</b> Thesis invalidated after stop-loss\n\n` +
+            `<b>Market:</b> ${invalidated.asset.slice(0, 80)}\n` +
+            `<b>Thesis:</b> ${pos.thesis_id}\n` +
+            `<b>Direction:</b> ${pos.direction}\n` +
+            `<b>Entry:</b> ${(pos.entry_price * 100).toFixed(0)}% → Exit: ${(exitPrice * 100).toFixed(0)}%\n` +
+            `<b>PnL:</b> $${tradeRecord.pnl.toFixed(2)}\n` +
+            `<b>Blacklisted until:</b> ${blacklistExpiry} UTC\n` +
+            `<b>Reason:</b> ${closeReason}`,
+            "HTML"
+          );
+        } catch (tgErr) {
+          console.error("[bankr] Telegram blacklist notification:", tgErr instanceof Error ? tgErr.message : tgErr);
+        }
+      }
+    } catch (e) {
+      console.error("[bankr] Thesis invalidation on stop-loss:", e instanceof Error ? e.message : e);
+    }
   }
 
   return tradeRecord;

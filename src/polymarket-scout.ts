@@ -24,7 +24,8 @@ export interface PolymarketThesis {
   reasoning: string;
   created_at: number;
   expires_at: number;
-  status: "active" | "executed" | "expired" | "retired";
+  status: "active" | "executed" | "expired" | "retired" | "invalidated";
+  blacklist_until?: number;
 }
 
 const PM_THESIS_EXPIRY_MS = 72 * 60 * 60 * 1000;
@@ -51,29 +52,39 @@ export function createPMThesisId(marketSlug: string): string {
   return `pm_${date}_${slug}_${rand}`;
 }
 
-export async function getActiveTheses(): Promise<PolymarketThesis[]> {
+export async function getAllThesesRaw(): Promise<PolymarketThesis[]> {
   const pool = getPool();
   try {
     const res = await pool.query(`SELECT value FROM app_config WHERE key = 'polymarket_scout_active_theses'`);
     if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
-      const now = Date.now();
-      return res.rows[0].value.filter((t: PolymarketThesis) => t.status === "active" && t.expires_at > now);
+      return res.rows[0].value;
     }
   } catch (err) {
-    console.error("[polymarket-scout] getActiveTheses error:", err);
+    console.error("[polymarket-scout] getAllThesesRaw error:", err);
   }
   return [];
 }
 
+export async function getActiveTheses(): Promise<PolymarketThesis[]> {
+  const now = Date.now();
+  const all = await getAllThesesRaw();
+  return all.filter((t: PolymarketThesis) =>
+    t.status === "active" &&
+    t.expires_at > now &&
+    (!t.blacklist_until || t.blacklist_until <= now)
+  );
+}
+
 export async function saveTheses(theses: PolymarketThesis[]): Promise<void> {
   const pool = getPool();
-  const existing = await getActiveTheses();
+  const allRaw = await getAllThesesRaw();
   const now = Date.now();
 
-  const activeExisting = existing.filter(t => t.expires_at > now && t.status === "active");
+  const nonActive = allRaw.filter(t => t.status !== "active" || t.expires_at <= now || (t.blacklist_until && t.blacklist_until > now));
+  const activeExisting = allRaw.filter(t => t.status === "active" && t.expires_at > now && (!t.blacklist_until || t.blacklist_until <= now));
   const newMarketIds = new Set(theses.map(t => t.market_id));
   const kept = activeExisting.filter(t => !newMarketIds.has(t.market_id));
-  const merged = [...kept, ...theses];
+  const merged = [...nonActive, ...kept, ...theses];
 
   await pool.query(
     `INSERT INTO app_config (key, value, updated_at) VALUES ('polymarket_scout_active_theses', $1, $2)
@@ -84,13 +95,66 @@ export async function saveTheses(theses: PolymarketThesis[]): Promise<void> {
 
 export async function retireThesis(thesisId: string): Promise<void> {
   const pool = getPool();
-  const theses = await getActiveTheses();
+  const theses = await getAllThesesRaw();
   const updated = theses.map(t => t.id === thesisId ? { ...t, status: "retired" as const } : t);
   await pool.query(
     `INSERT INTO app_config (key, value, updated_at) VALUES ('polymarket_scout_active_theses', $1, $2)
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
     [JSON.stringify(updated), Date.now()]
   );
+}
+
+export async function invalidateThesis(thesisId: string, blacklistMs: number): Promise<PolymarketThesis | null> {
+  const pool = getPool();
+  const allTheses = await getAllThesesRaw();
+  const target = allTheses.find(t => t.id === thesisId);
+  if (!target) return null;
+
+  const updated = allTheses.map(t => {
+    if (t.id === thesisId) {
+      return { ...t, status: "invalidated" as const, blacklist_until: Date.now() + blacklistMs };
+    }
+    if (t.market_id === target.market_id && t.status === "active") {
+      return { ...t, status: "invalidated" as const, blacklist_until: Date.now() + blacklistMs };
+    }
+    return t;
+  });
+
+  await pool.query(
+    `INSERT INTO app_config (key, value, updated_at) VALUES ('polymarket_scout_active_theses', $1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [JSON.stringify(updated), Date.now()]
+  );
+
+  return target;
+}
+
+export async function clearThesisBlacklist(thesisId: string): Promise<boolean> {
+  const pool = getPool();
+  const allTheses = await getAllThesesRaw();
+  const target = allTheses.find(t => t.id === thesisId);
+  if (!target) return false;
+
+  const updated = allTheses.map(t => {
+    if (t.id === thesisId && t.status === "invalidated") {
+      return { ...t, status: "active" as const, blacklist_until: undefined };
+    }
+    return t;
+  });
+
+  await pool.query(
+    `INSERT INTO app_config (key, value, updated_at) VALUES ('polymarket_scout_active_theses', $1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [JSON.stringify(updated), Date.now()]
+  );
+
+  return true;
+}
+
+export async function getBlacklistedTheses(): Promise<PolymarketThesis[]> {
+  const now = Date.now();
+  const all = await getAllThesesRaw();
+  return all.filter(t => t.status === "invalidated" && t.blacklist_until && t.blacklist_until > now);
 }
 
 export function buildThesis(params: {

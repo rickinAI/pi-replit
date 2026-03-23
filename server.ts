@@ -1511,6 +1511,7 @@ function buildPredictionMarketTools(): ToolDefinition[] {
             entry_price: params.entry_price,
             stop_price: params.stop_price,
             confidence: params.confidence,
+            thesis_id: params.thesis_id,
           });
           if (!riskCheck.passed) {
             return { content: [{ type: "text" as const, text: JSON.stringify({ executed: false, tier: riskCheck.tier, reason: riskCheck.rejection_reason, checks: riskCheck.checks }) }], details: {} };
@@ -5501,6 +5502,8 @@ app.get("/api/controls", async (req: Request, res: Response) => {
     const peak = await bankr.getPeakPortfolioValue();
     const drawdownPct = peak > 0 ? ((portfolio - peak) / peak) * 100 : 0;
     const positions = await bankr.getPositions();
+    const pmScout = await import("./src/polymarket-scout.js");
+    const blacklistedTheses = await pmScout.getBlacklistedTheses();
     res.json({
       paused,
       killSwitch,
@@ -5512,6 +5515,13 @@ app.get("/api/controls", async (req: Request, res: Response) => {
       },
       portfolio: { value: portfolio, peak, positions: positions.length },
       riskConfig: rc,
+      blacklistedTheses: blacklistedTheses.map(t => ({
+        id: t.id,
+        asset: t.asset,
+        market_id: t.market_id,
+        blacklist_until: t.blacklist_until,
+        hours_remaining: t.blacklist_until ? parseFloat(((t.blacklist_until - Date.now()) / (60 * 60 * 1000)).toFixed(1)) : 0,
+      })),
     });
   } catch (err: any) {
     res.status(500).json({ error: String(err) });
@@ -5521,7 +5531,7 @@ app.get("/api/controls", async (req: Request, res: Response) => {
 app.put("/api/controls", async (req: Request, res: Response) => {
   if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
   try {
-    const { paused, killSwitch, mode } = req.body;
+    const { paused, killSwitch, mode, min_confidence_for_execution, thesis_blacklist_hours, clear_blacklist } = req.body;
     const changes: string[] = [];
 
     const pool = db.getPool();
@@ -5555,6 +5565,38 @@ app.put("/api/controls", async (req: Request, res: Response) => {
         ["wealth_engines_mode", JSON.stringify(mode), Date.now()]
       );
       changes.push(`mode=${mode}`);
+    }
+
+    if (min_confidence_for_execution && ["HIGH", "MEDIUM", "LOW", "SPECULATIVE"].includes(min_confidence_for_execution)) {
+      const rc = await bankr.getRiskConfig();
+      const updatedRc = { ...rc, min_confidence_for_execution };
+      await pool.query(
+        `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engine_config', $1, $2)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+        [JSON.stringify(updatedRc), Date.now()]
+      );
+      changes.push(`min_confidence=${min_confidence_for_execution}`);
+    }
+
+    if (typeof thesis_blacklist_hours === "number" && thesis_blacklist_hours >= 0) {
+      const rc = await bankr.getRiskConfig();
+      const updatedRc = { ...rc, thesis_blacklist_hours };
+      await pool.query(
+        `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engine_config', $1, $2)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+        [JSON.stringify(updatedRc), Date.now()]
+      );
+      changes.push(`thesis_blacklist_hours=${thesis_blacklist_hours}`);
+    }
+
+    if (clear_blacklist && typeof clear_blacklist === "string") {
+      const pmScout = await import("./src/polymarket-scout.js");
+      const cleared = await pmScout.clearThesisBlacklist(clear_blacklist);
+      if (cleared) {
+        changes.push(`cleared_blacklist=${clear_blacklist}`);
+      } else {
+        changes.push(`clear_blacklist_failed=${clear_blacklist} (not found)`);
+      }
     }
 
     weDashboardCache = null;

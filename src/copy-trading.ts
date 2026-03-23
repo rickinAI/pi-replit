@@ -654,6 +654,22 @@ export async function runCopyTradeScan(): Promise<{
       continue;
     }
 
+    try {
+      const rc = await bankr.getRiskConfig();
+      const confRank: Record<string, number> = { HIGH: 4, MEDIUM: 3, LOW: 2, SPECULATIVE: 1 };
+      const signalRank = confRank[signalResult.confidence] || 0;
+      const minRank = confRank[rc.min_confidence_for_execution] || 0;
+      if (signalRank < minRank) {
+        console.log(`[copy-trading] Confidence gate: ${signalResult.confidence} below min ${rc.min_confidence_for_execution} — skipping ${entry.market_question.slice(0, 60)}`);
+        errors.push(`Confidence gate: ${signalResult.confidence} < ${rc.min_confidence_for_execution} for ${entry.market_question.slice(0, 40)}`);
+        continue;
+      }
+    } catch (gateErr) {
+      console.error(`[copy-trading] Confidence gate error — skipping trade for safety:`, gateErr instanceof Error ? gateErr.message : gateErr);
+      errors.push(`Confidence gate error for ${entry.market_question.slice(0, 40)}`);
+      continue;
+    }
+
     const evaluation = await evaluateCopyTradeSignal(entry);
     if (evaluation.passed) {
       const result = await executeCopyTrade(entry, signalResult.positionSize);
