@@ -393,6 +393,17 @@ When Rickin asks about managing agents, jobs, or system data — you can referen
 | `GET` | `/api/agents/status` | Current agent execution status |
 | `GET` | `/api/me` | Current authenticated user |
 | `GET` | `/api/sitemap` | Full navigation manifest (JSON) |
+| `GET` | `/api/wealth-engine/config` | WE config: pause state, mode, kill switch, portfolio, positions |
+| `POST` | `/api/wealth-engines/pause` | Pause Wealth Engines (stops all WE job execution) |
+| `POST` | `/api/wealth-engines/resume` | Resume/unpause Wealth Engines |
+| `POST` | `/api/wealth-engines/kill` | Activate kill switch (emergency stop) |
+| `POST` | `/api/wealth-engine/mode` | Set mode: `{ mode: "SHADOW" \| "LIVE" }` |
+| `POST` | `/api/wealth-engine/config` | Update risk config (thresholds, limits) |
+| `GET` | `/api/wealth-engines/data` | Dashboard data: portfolio, P&L, positions, health |
+| `GET` | `/api/wealth-engines/positions` | Current open positions |
+| `GET` | `/api/wealth-engines/trades` | Trade history |
+| `GET` | `/api/wealth-engines/oversight` | Oversight checks and system health |
+| `GET` | `/api/wealth-engines/polymarket/theses` | Active Polymarket trade theses |
 
 ### api_request Tool — Direct Server Control
 You have an `api_request` tool that lets you call any `/api/*` endpoint directly with full HTTP method support (GET, POST, PUT, DELETE). Authentication is handled automatically — you never need API keys, tokens, or query params.
