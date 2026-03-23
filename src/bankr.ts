@@ -435,6 +435,16 @@ export async function runPreExecutionChecks(params: {
   const drawdownPct = peakPortfolio > 0 ? ((portfolio - peakPortfolio) / peakPortfolio) * 100 : 0;
   const drawdownOk = drawdownPct > rc.circuit_breaker_drawdown_pct;
   checks.push({ name: "peak_drawdown", passed: drawdownOk, detail: `Drawdown from peak: ${drawdownPct.toFixed(1)}% (limit: ${rc.circuit_breaker_drawdown_pct}%)` });
+  if (!drawdownOk) allPassed = false;
+
+  const history = await getTradeHistory();
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const recentTrades = history.filter(t => new Date(t.closed_at).getTime() > sevenDaysAgo);
+  const rolling7dPnl = recentTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
+  const rolling7dPct = portfolio > 0 ? (rolling7dPnl / portfolio) * 100 : 0;
+  const rolling7dOk = rolling7dPct >= rc.circuit_breaker_7d_pct;
+  checks.push({ name: "rolling_7d_pnl", passed: rolling7dOk, detail: `7d P&L: ${rolling7dPct.toFixed(1)}% (limit: ${rc.circuit_breaker_7d_pct}%)` });
+  if (!rolling7dOk) allPassed = false;
 
   const capitalPct = portfolio > 0 ? (newExposure / portfolio) * 100 : 0;
   const firstForAsset = await isFirstTradeForAsset(params.asset, params.asset_class);

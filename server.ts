@@ -5502,6 +5502,13 @@ app.get("/api/controls", async (req: Request, res: Response) => {
     const peak = await bankr.getPeakPortfolioValue();
     const drawdownPct = peak > 0 ? ((portfolio - peak) / peak) * 100 : 0;
     const positions = await bankr.getPositions();
+    const history = await bankr.getTradeHistory();
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const recentTrades = history.filter(t => new Date(t.closed_at).getTime() > sevenDaysAgo);
+    const rolling7dPnl = recentTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
+    const rolling7dPct = portfolio > 0 ? (rolling7dPnl / portfolio) * 100 : 0;
+    const drawdownTriggered = drawdownPct <= rc.circuit_breaker_drawdown_pct;
+    const rolling7dTriggered = rolling7dPct < rc.circuit_breaker_7d_pct;
     const pmScout = await import("./src/polymarket-scout.js");
     const blacklistedTheses = await pmScout.getBlacklistedTheses();
     res.json({
@@ -5511,7 +5518,11 @@ app.get("/api/controls", async (req: Request, res: Response) => {
       circuitBreaker: {
         drawdownThreshold: rc.circuit_breaker_drawdown_pct,
         currentDrawdownPct: parseFloat(drawdownPct.toFixed(2)),
-        active: drawdownPct <= rc.circuit_breaker_drawdown_pct,
+        rolling7dThreshold: rc.circuit_breaker_7d_pct,
+        currentRolling7dPct: parseFloat(rolling7dPct.toFixed(2)),
+        rolling7dPnl: parseFloat(rolling7dPnl.toFixed(2)),
+        active: drawdownTriggered || rolling7dTriggered,
+        trigger: drawdownTriggered ? "drawdown" : rolling7dTriggered ? "rolling_7d" : null,
       },
       portfolio: { value: portfolio, peak, positions: positions.length },
       riskConfig: rc,
