@@ -5625,6 +5625,57 @@ app.put("/api/controls", async (req: Request, res: Response) => {
   }
 });
 
+app.post("/api/controls/reset-portfolio", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const { capital } = req.body;
+    const resetCapital = (typeof capital === "number" && isFinite(capital) && capital > 0) ? capital : 10000;
+    const pool = db.getPool();
+    const now = Date.now();
+    const resets: [string, unknown][] = [
+      ["wealth_engines_portfolio_value", resetCapital],
+      ["wealth_engines_peak_portfolio", resetCapital],
+      ["wealth_engines_consecutive_losses", 0],
+      ["wealth_engines_trade_history", []],
+      ["wealth_engines_positions", []],
+      ["oversight_shadow_trades", []],
+      ["signal_quality_scores", []],
+      ["wealth_engines_paused", false],
+      ["wealth_engines_kill_switch", false],
+    ];
+    for (const [key, value] of resets) {
+      await pool.query(
+        `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+        [key, JSON.stringify(value), now]
+      );
+    }
+    weDashboardCache = null;
+    console.log(`[controls] FULL RESET via API — capital: $${resetCapital}`);
+    try {
+      const tg = await import("./src/telegram.js");
+      await tg.sendMessage(
+        `🔄 <b>Full Portfolio Reset</b> (source: API)\n\n` +
+        `💰 Capital: $${resetCapital.toLocaleString()}\n` +
+        `📊 Peak: $${resetCapital.toLocaleString()}\n` +
+        `📜 Trade history: cleared\n` +
+        `📂 Positions: cleared\n` +
+        `👻 Shadow trades: cleared\n` +
+        `⏸️ Paused: false\n` +
+        `🔴 Kill switch: false`,
+        "HTML"
+      );
+    } catch {}
+    res.json({
+      ok: true,
+      capital: resetCapital,
+      cleared: ["portfolio_value", "peak_portfolio", "consecutive_losses", "trade_history", "positions", "shadow_trades", "signal_quality", "paused", "kill_switch"],
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 app.post("/api/telegram/send", async (req: Request, res: Response) => {
   if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
   try {
