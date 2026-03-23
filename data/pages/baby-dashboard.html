@@ -1,977 +1,445 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="theme-color" content="#7c3aed">
-<link rel="manifest" href="/baby-manifest.json">
-<link rel="apple-touch-icon" href="/icons/baby/icon-180.png">
-<title>Baby Chikki #2</title>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-  :root {
-    --bg: #f0f4f8;
-    --card: #ffffff;
-    --accent: #6366f1;
-    --accent-light: #eef2ff;
-    --accent-dark: #4338ca;
-    --warm: #f97316;
-    --warm-light: #fff7ed;
-    --pink: #ec4899;
-    --pink-light: #fdf2f8;
-    --teal: #14b8a6;
-    --teal-light: #f0fdfa;
-    --text: #1e293b;
-    --text-secondary: #64748b;
-    --text-muted: #94a3b8;
-    --border: #e2e8f0;
-    --radius: 20px;
-    --radius-sm: 14px;
-    --shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.06);
-    --shadow-lg: 0 4px 24px rgba(0,0,0,0.08);
-  }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html { -webkit-text-size-adjust: 100%; }
-  body {
-    font-family: 'Inter', -apple-system, sans-serif;
-    background: var(--bg);
-    min-height: 100vh;
-    min-height: 100dvh;
-    color: var(--text);
-    padding-bottom: env(safe-area-inset-bottom, 0);
-    -webkit-font-smoothing: antialiased;
-  }
-  .container { max-width: 480px; margin: 0 auto; padding: 0 1rem 2rem; }
-
-  .hero {
-    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a78bfa 100%);
-    padding: 3.5rem 1.5rem 2rem;
-    text-align: center;
-    color: white;
-    position: relative;
-    overflow: hidden;
-    margin-bottom: -1.5rem;
-    border-radius: 0 0 32px 32px;
-  }
-  .hero::before {
-    content: '';
-    position: absolute;
-    top: -40%;
-    right: -20%;
-    width: 300px;
-    height: 300px;
-    background: radial-gradient(circle, rgba(255,255,255,0.12) 0%, transparent 70%);
-    border-radius: 50%;
-  }
-  .hero-emoji { font-size: 3rem; margin-bottom: 0.5rem; display: block; }
-  .hero h1 { font-size: 1.75rem; font-weight: 800; letter-spacing: -0.5px; margin-bottom: 0.25rem; }
-  .hero .subtitle { font-size: 0.85rem; opacity: 0.8; font-weight: 400; margin-bottom: 1.5rem; }
-
-  .countdown-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 0.5rem;
-    margin-bottom: 1.25rem;
-  }
-  .cd-item {
-    background: rgba(255,255,255,0.15);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border: 1px solid rgba(255,255,255,0.2);
-    border-radius: 14px;
-    padding: 0.75rem 0.25rem;
-    text-align: center;
-  }
-  .cd-num { font-size: 1.6rem; font-weight: 800; line-height: 1; }
-  .cd-label { font-size: 0.55rem; text-transform: uppercase; letter-spacing: 1px; opacity: 0.7; margin-top: 4px; font-weight: 600; }
-
-  .hero-actions { display: flex; justify-content: center; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
-  .hero-btn {
-    display: inline-flex; align-items: center; gap: 0.35rem;
-    background: rgba(255,255,255,0.2); color: white; text-decoration: none;
-    padding: 0.45rem 1rem; border-radius: 99px; font-size: 0.75rem; font-weight: 600;
-    border: 1px solid rgba(255,255,255,0.25);
-    transition: background 0.2s;
-  }
-  .hero-btn:active { background: rgba(255,255,255,0.3); }
-  #sync-badge { font-size: 0.7rem; font-weight: 600; cursor: default; }
-
-  .section { padding-top: 2rem; }
-  .section-title {
-    font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 1.2px; color: var(--text-muted);
-    padding: 0 0.25rem; margin-bottom: 0.75rem;
-  }
-
-  .card {
-    background: var(--card);
-    border-radius: var(--radius);
-    padding: 1.25rem;
-    margin-bottom: 0.75rem;
-    box-shadow: var(--shadow);
-    border: 1px solid var(--border);
-  }
-  .card-header {
-    display: flex; align-items: center; gap: 0.5rem;
-    margin-bottom: 1rem;
-  }
-  .card-icon {
-    width: 36px; height: 36px; border-radius: 10px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 1.1rem; flex-shrink: 0;
-  }
-  .card-icon.purple { background: var(--accent-light); }
-  .card-icon.orange { background: var(--warm-light); }
-  .card-icon.pink { background: var(--pink-light); }
-  .card-icon.teal { background: var(--teal-light); }
-  .card-title { font-size: 0.95rem; font-weight: 700; color: var(--text); }
-  .card-subtitle { font-size: 0.72rem; color: var(--text-muted); font-weight: 400; }
-
-  .stats-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 0.75rem;
-    padding-top: 2rem;
-  }
-  .stat-card {
-    background: var(--card);
-    border-radius: var(--radius-sm);
-    padding: 1rem;
-    box-shadow: var(--shadow);
-    border: 1px solid var(--border);
-    text-align: center;
-  }
-  .stat-icon { font-size: 1.5rem; margin-bottom: 0.35rem; }
-  .stat-val { font-size: 1.4rem; font-weight: 800; color: var(--text); }
-  .stat-label { font-size: 0.62rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.8px; margin-top: 2px; font-weight: 600; }
-
-  .size-card {
-    background: linear-gradient(135deg, var(--accent-light) 0%, #f5f3ff 100%);
-    border-radius: var(--radius);
-    padding: 1.5rem;
-    margin-bottom: 0.75rem;
-    text-align: center;
-    border: 1px solid #ddd6fe;
-    box-shadow: var(--shadow);
-  }
-  .size-emoji-big { font-size: 4rem; line-height: 1; margin-bottom: 0.5rem; }
-  .size-overline { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 1.5px; color: var(--accent); font-weight: 700; margin-bottom: 0.25rem; }
-  .size-name { font-size: 1.3rem; font-weight: 800; color: var(--accent-dark); margin-bottom: 0.35rem; }
-  .size-desc { font-size: 0.82rem; color: var(--text-secondary); line-height: 1.55; margin-bottom: 0.75rem; }
-  .size-pills { display: flex; justify-content: center; gap: 0.4rem; flex-wrap: wrap; }
-  .size-pill {
-    background: white; border: 1px solid #ddd6fe; border-radius: 99px;
-    padding: 0.3rem 0.75rem; font-size: 0.72rem; font-weight: 600; color: var(--accent-dark);
-  }
-
-  .progress-section { margin-bottom: 1rem; }
-  .progress-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
-  .progress-text { font-size: 0.78rem; color: var(--text-secondary); font-weight: 500; }
-  .progress-pct { font-size: 0.82rem; font-weight: 700; color: var(--accent); }
-  .progress-track { height: 8px; background: var(--accent-light); border-radius: 99px; overflow: hidden; }
-  .progress-fill { height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--accent), #8b5cf6); transition: width 0.5s ease; }
-
-  .tri-row { display: flex; gap: 0.4rem; margin-top: 0.75rem; flex-wrap: wrap; }
-  .tri-badge { padding: 0.3rem 0.65rem; border-radius: 99px; font-size: 0.68rem; font-weight: 600; }
-  .tri-badge.active { background: var(--accent); color: white; }
-  .tri-badge.done { background: #f1f5f9; color: #cbd5e1; text-decoration: line-through; }
-  .tri-badge.upcoming { background: #f8fafc; color: #cbd5e1; border: 1px solid var(--border); }
-
-  .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; margin-top: 1rem; }
-  .info-cell {
-    background: #f8fafc; border-radius: var(--radius-sm);
-    padding: 0.85rem; border: 1px solid var(--border);
-  }
-  .info-label {
-    font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.8px;
-    color: var(--text-muted); margin-bottom: 0.3rem; font-weight: 700;
-  }
-  .info-value { font-size: 0.8rem; font-weight: 500; line-height: 1.5; color: var(--text); }
-
-  .ms-list { list-style: none; }
-  .ms-item {
-    display: flex; align-items: flex-start; gap: 0.65rem;
-    padding: 0.65rem 0; border-bottom: 1px solid #f1f5f9;
-  }
-  .ms-item:last-child { border-bottom: none; }
-  .ms-week {
-    width: 38px; height: 38px; border-radius: 10px; flex-shrink: 0;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    font-weight: 800; font-size: 0.95rem; line-height: 1;
-    background: var(--accent-light); color: var(--accent);
-  }
-  .ms-week small { font-size: 0.45rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 1px; }
-  .ms-item.current .ms-week { background: var(--accent); color: white; }
-  .ms-item.done .ms-week { background: #f1f5f9; color: #cbd5e1; }
-  .ms-content { flex: 1; min-width: 0; }
-  .ms-title { font-weight: 600; font-size: 0.82rem; color: var(--text); line-height: 1.35; }
-  .ms-item.done .ms-title { color: var(--text-muted); text-decoration: line-through; }
-  .ms-sub { font-size: 0.72rem; color: var(--text-muted); margin-top: 2px; line-height: 1.4; }
-  .ms-tag {
-    display: inline-block; font-size: 0.55rem; padding: 1px 7px; border-radius: 99px;
-    font-weight: 700; margin-top: 4px;
-  }
-  .ms-tag.now { background: var(--accent-light); color: var(--accent); }
-  .ms-tag.soon { background: #fff7ed; color: #d97706; }
-  .ms-tag.later { background: #f8fafc; color: var(--text-muted); }
-
-  .timeline { position: relative; padding-left: 1.5rem; }
-  .timeline::before {
-    content: ''; position: absolute; left: 5px; top: 8px; bottom: 8px;
-    width: 2px; background: linear-gradient(180deg, var(--accent), var(--border));
-  }
-  .tl-item { position: relative; margin-bottom: 1.25rem; }
-  .tl-item:last-child { margin-bottom: 0; }
-  .tl-item::before {
-    content: ''; position: absolute; left: -1.19rem; top: 4px;
-    width: 10px; height: 10px; border-radius: 50%;
-    background: white; border: 2px solid var(--border);
-  }
-  .tl-item.next::before { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 0 4px rgba(99,102,241,0.15); }
-  .tl-item.past::before { background: #cbd5e1; border-color: #cbd5e1; }
-  .tl-item.confirmed::before { background: #22c55e; border-color: #22c55e; }
-  .tl-item.next.confirmed::before { background: #22c55e; border-color: #22c55e; box-shadow: 0 0 0 4px rgba(34,197,94,0.15); }
-  .tl-item.not-booked .tl-title { color: var(--text-muted); }
-  .tl-row { display: flex; align-items: baseline; justify-content: space-between; gap: 0.4rem; }
-  .tl-title { font-weight: 600; font-size: 0.85rem; color: var(--text); }
-  .tl-badge {
-    font-size: 0.58rem; padding: 2px 8px; border-radius: 99px; font-weight: 700;
-    white-space: nowrap; flex-shrink: 0;
-  }
-  .tl-badge.next { background: var(--accent-light); color: var(--accent); }
-  .tl-badge.confirmed { background: #dcfce7; color: #16a34a; }
-  .tl-badge.not-booked { background: #f1f5f9; color: var(--text-muted); }
-  .tl-date { font-size: 0.75rem; color: var(--text-muted); margin-top: 2px; }
-  .tl-detail { font-size: 0.72rem; color: var(--text-muted); margin-top: 2px; line-height: 1.4; }
-
-  .task-list { list-style: none; }
-  .task-item {
-    display: flex; align-items: flex-start; gap: 0.6rem;
-    padding: 0.7rem 0; border-bottom: 1px solid #f1f5f9;
-  }
-  .task-item:last-child { border-bottom: none; }
-  .task-check { font-size: 1rem; flex-shrink: 0; line-height: 1.3; }
-  .task-content { flex: 1; min-width: 0; }
-  .task-text { font-size: 0.82rem; font-weight: 500; color: var(--text); line-height: 1.35; }
-  .task-text.done { color: var(--text-muted); text-decoration: line-through; }
-  .task-meta { display: flex; gap: 0.35rem; margin-top: 0.3rem; flex-wrap: wrap; }
-  .task-tag {
-    font-size: 0.58rem; padding: 1px 7px; border-radius: 99px; font-weight: 600;
-  }
-  .task-tag.high { background: #fef2f2; color: #dc2626; }
-  .task-tag.medium { background: #fffbeb; color: #d97706; }
-  .task-tag.low { background: #f0fdf4; color: #16a34a; }
-  .task-tag.week { background: var(--accent-light); color: var(--accent); }
-  .task-tag.owner { background: #f8fafc; color: var(--text-muted); }
-
-  .names-section { margin-bottom: 0.25rem; }
-  .names-label { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); font-weight: 700; margin-bottom: 0.5rem; }
-  .names-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; }
-  .name-card {
-    background: #f8fafc; border-radius: var(--radius-sm);
-    padding: 0.7rem 0.5rem; text-align: center;
-    border: 1px solid var(--border); transition: transform 0.15s;
-  }
-  .name-card:active { transform: scale(0.97); }
-  .name-card.fav { background: linear-gradient(135deg, #eef2ff, #f5f3ff); border-color: #c7d2fe; }
-  .nm { font-size: 0.95rem; font-weight: 700; color: var(--accent-dark); }
-  .name-card.fav .nm { color: var(--accent); }
-  .mn { font-size: 0.6rem; color: var(--text-muted); margin-top: 3px; line-height: 1.3; }
-  .name-card.fav .fav-star { font-size: 0.55rem; color: var(--accent); margin-top: 3px; }
-
-  .footer {
-    text-align: center; color: var(--text-muted); font-size: 0.68rem;
-    margin-top: 2rem; padding: 1rem; line-height: 1.8;
-  }
-  .footer .share-btn {
-    display: inline-block; margin-top: 0.5rem; padding: 0.4rem 1rem;
-    background: var(--surface); border: 1px solid var(--border); border-radius: 99px;
-    color: var(--text-muted); font-size: 0.65rem; font-weight: 600; cursor: pointer;
-    font-family: inherit; transition: all 0.2s;
-  }
-  .footer .share-btn:active { background: #eee; border-color: var(--accent); color: var(--accent); }
-  .share-btn-wrap { display: inline; }
-  .share-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); z-index: 9999; display: none; align-items: center; justify-content: center; }
-  .share-overlay.active { display: flex; }
-  .share-modal { background: #fff; border: 1px solid var(--border); border-radius: 16px; padding: 1.5rem; width: 90%; max-width: 340px; text-align: center; box-shadow: 0 8px 32px rgba(0,0,0,0.15); }
-  .share-modal h3 { margin: 0 0 0.75rem; font-size: 0.9rem; color: var(--accent-dark); font-weight: 700; }
-  .share-modal .share-url { background: #f8fafc; border: 1px solid var(--border); border-radius: 10px; padding: 0.6rem 0.75rem; font-size: 0.72rem; color: var(--accent); word-break: break-all; margin-bottom: 1rem; font-family: monospace; }
-  .share-modal .share-actions { display: flex; gap: 0.5rem; justify-content: center; margin-bottom: 0.75rem; }
-  .share-modal .share-actions button { flex: 1; padding: 0.5rem 0.75rem; border-radius: 10px; font-size: 0.72rem; font-weight: 600; cursor: pointer; border: none; font-family: inherit; transition: all 0.2s; }
-  .share-modal .btn-copy { background: var(--accent); color: #fff; }
-  .share-modal .btn-copy:active { opacity: 0.8; }
-  .share-modal .btn-open { background: #f1f5f9; color: #64748b; border: 1px solid var(--border); }
-  .share-modal .share-expire { font-size: 0.62rem; color: var(--text-muted); margin-bottom: 0.75rem; }
-  .share-modal .btn-close { background: none; border: none; color: var(--text-muted); font-size: 0.68rem; cursor: pointer; font-family: inherit; padding: 0.25rem; }
-
-  @media(max-width:400px) {
-    .hero { padding: 3rem 1rem 1.75rem; }
-    .hero h1 { font-size: 1.5rem; }
-    .countdown-grid { gap: 0.35rem; }
-    .cd-num { font-size: 1.35rem; }
-    .cd-label { font-size: 0.5rem; }
-    .stats-grid { gap: 0.5rem; }
-    .info-grid { grid-template-columns: 1fr; }
-    .names-grid { grid-template-columns: repeat(2, 1fr); }
-  }
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Baby Chikki #2 Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #fce7f3 0%, #f0e7ff 100%);
+            color: #333;
+            line-height: 1.6;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        
+        /* Header */
+        .header {
+            text-align: center;
+            background: linear-gradient(135deg, #ec4899 0%, #a78bfa 100%);
+            color: white;
+            padding: 40px 20px;
+            border-radius: 16px;
+            margin-bottom: 30px;
+            box-shadow: 0 10px 30px rgba(236, 72, 153, 0.2);
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            font-weight: 700;
+        }
+        
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.95;
+        }
+        
+        /* Countdown */
+        .countdown {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 30px;
+            text-align: center;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+        }
+        
+        .countdown-days {
+            font-size: 3.5em;
+            font-weight: 700;
+            color: #ec4899;
+            margin: 10px 0;
+        }
+        
+        .countdown-label {
+            font-size: 1.1em;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        
+        .countdown-date {
+            font-size: 1em;
+            color: #999;
+        }
+        
+        /* Current Week Card */
+        .current-week {
+            background: linear-gradient(135deg, #fef3c7 0%, #fcd34d 100%);
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 30px;
+            text-align: center;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+        }
+        
+        .current-week h2 {
+            font-size: 1.3em;
+            color: #92400e;
+            margin-bottom: 15px;
+        }
+        
+        .size-fact {
+            font-size: 1.8em;
+            margin: 15px 0;
+        }
+        
+        .size-emoji {
+            font-size: 4em;
+            margin: 15px 0;
+            display: inline-block;
+        }
+        
+        /* Stats Cards */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+        
+        @media (max-width: 640px) {
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        .stat-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            text-align: center;
+        }
+        
+        .stat-card h3 {
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .stat-card .value {
+            font-size: 2em;
+            font-weight: 700;
+            color: #ec4899;
+        }
+        
+        /* Development Section */
+        .development {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+        }
+        
+        .development h3 {
+            color: #ec4899;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+        
+        .dev-section {
+            margin-bottom: 20px;
+        }
+        
+        .dev-section:last-child {
+            margin-bottom: 0;
+        }
+        
+        .dev-label {
+            font-weight: 600;
+            color: #666;
+            margin-bottom: 5px;
+            font-size: 0.9em;
+            text-transform: uppercase;
+        }
+        
+        .dev-text {
+            color: #555;
+            font-size: 1em;
+            line-height: 1.6;
+        }
+        
+        /* Appointments */
+        .appointments {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+        }
+        
+        .appointments h3 {
+            color: #ec4899;
+            margin-bottom: 20px;
+            font-size: 1.2em;
+        }
+        
+        .appointment-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .appointment-table th {
+            background: #f3f4f6;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            color: #666;
+            font-size: 0.9em;
+            border-bottom: 2px solid #e5e7eb;
+        }
+        
+        .appointment-table td {
+            padding: 15px 12px;
+            border-bottom: 1px solid #e5e7eb;
+            color: #555;
+        }
+        
+        .appointment-table tr:last-child td {
+            border-bottom: none;
+        }
+        
+        .next-badge {
+            display: inline-block;
+            background: #fca5a5;
+            color: #991b1b;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.75em;
+            font-weight: 600;
+            margin-right: 8px;
+        }
+        
+        /* Hospital Bag Checklist */
+        .checklist {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+        }
+        
+        .checklist h3 {
+            color: #ec4899;
+            margin-bottom: 20px;
+            font-size: 1.2em;
+        }
+        
+        .checklist-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        
+        @media (max-width: 640px) {
+            .checklist-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        .checklist-item {
+            display: flex;
+            align-items: center;
+            padding: 12px;
+            background: #f9fafb;
+            border-radius: 8px;
+            cursor: pointer;
+            user-select: none;
+            transition: all 0.2s;
+        }
+        
+        .checklist-item:hover {
+            background: #f3f4f6;
+        }
+        
+        .checklist-item input[type="checkbox"] {
+            margin-right: 10px;
+            cursor: pointer;
+            width: 18px;
+            height: 18px;
+        }
+        
+        .checklist-item label {
+            cursor: pointer;
+            flex: 1;
+            color: #555;
+        }
+        
+        .checklist-item input[type="checkbox"]:checked + label {
+            color: #999;
+            text-decoration: line-through;
+        }
+        
+        /* Footer */
+        .footer {
+            text-align: center;
+            color: #666;
+            font-size: 0.9em;
+            padding: 20px;
+            border-top: 1px solid #e5e7eb;
+            margin-top: 40px;
+        }
+    </style>
 </head>
 <body>
-<div class="hero">
-  <span class="hero-emoji" id="heroEmoji">👶🏽</span>
-  <h1 id="heroTitle">Baby Chikki #2</h1>
-  <p class="subtitle">Pooja · Due July 7, 2026</p>
-  <div class="countdown-grid">
-    <div class="cd-item"><div class="cd-num" id="days">—</div><div class="cd-label">Days</div></div>
-    <div class="cd-item"><div class="cd-num" id="weeks">—</div><div class="cd-label">Weeks</div></div>
-    <div class="cd-item"><div class="cd-num" id="currentWeek">—</div><div class="cd-label">Week</div></div>
-    <div class="cd-item"><div class="cd-num" id="trimesterVal">—</div><div class="cd-label">Trimester</div></div>
-  </div>
-  <div class="hero-actions">
-    <a class="hero-btn" href="https://docs.google.com/spreadsheets/d/1fhtMkDSTUlRCFqY4hQiSdZg7cOe4FYNkmOIIHWo4KSU/edit" target="_blank">📊 Tracker</a>
-    <span id="sync-badge" style="color:rgba(255,255,255,0.6)" title="Showing cached data">● Cached</span>
-  </div>
-</div>
-
-<div class="container">
-  <div class="stats-grid">
-    <div class="stat-card"><div class="stat-icon">🛒</div><div class="stat-val" id="itemsBought">0/39</div><div class="stat-label">Shopping</div></div>
-    <div class="stat-card"><div class="stat-icon">✅</div><div class="stat-val" id="tasksDone">0/22</div><div class="stat-label">Tasks</div></div>
-    <div class="stat-card"><div class="stat-icon">📏</div><div class="stat-val" id="babyLength">—</div><div class="stat-label">Length</div></div>
-    <div class="stat-card"><div class="stat-icon">⚖️</div><div class="stat-val" id="babyWeight">—</div><div class="stat-label">Weight</div></div>
-  </div>
-
-  <div class="section">
-    <div class="size-card">
-      <div class="size-overline">This week, baby is the size of a</div>
-      <div class="size-emoji-big" id="sizeEmoji">🌽</div>
-      <div class="size-name" id="sizeHeadline">—</div>
-      <div class="size-desc" id="sizeSub">Loading...</div>
-      <div class="size-pills">
-        <span class="size-pill" id="sizeLenStat">📏 —</span>
-        <span class="size-pill" id="sizeWtStat">⚖️ —</span>
-        <span class="size-pill" id="sizeWeekStat">Week —</span>
-      </div>
-    </div>
-  </div>
-
-  <div class="section">
-    <div class="card">
-      <div class="card-header">
-        <div class="card-icon purple">📅</div>
-        <div><div class="card-title" id="weekHeading">Week —</div><div class="card-subtitle">What's happening this week</div></div>
-      </div>
-      <div class="progress-section">
-        <div class="progress-row">
-          <span class="progress-text">Pregnancy Progress</span>
-          <span class="progress-pct" id="pregPct">—</span>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>Baby Chikki #2 🍼</h1>
+            <p>Due July 7, 2026 · Week 24 of 40</p>
         </div>
-        <div class="progress-track"><div class="progress-fill" id="pregBar" style="width:0%"></div></div>
-      </div>
-      <div class="tri-row" id="trimesterBadges"></div>
-      <div class="info-grid">
-        <div class="info-cell"><div class="info-label">👶🏽 Baby</div><div class="info-value" id="devNote">—</div></div>
-        <div class="info-cell"><div class="info-label">👦🏽 Rickin</div><div class="info-value" id="rickinNote">—</div></div>
-        <div class="info-cell"><div class="info-label">👩🏽 Pooja</div><div class="info-value" id="poojaNote">—</div></div>
-        <div class="info-cell"><div class="info-label">👧🏽 Reya</div><div class="info-value" id="reyaNote">—</div></div>
-      </div>
+        
+        <!-- Countdown -->
+        <div class="countdown">
+            <div class="countdown-label">Days Until Baby Arrives</div>
+            <div class="countdown-days" id="countdown">115</div>
+            <div class="countdown-date">July 7, 2026</div>
+        </div>
+        
+        <!-- Current Week -->
+        <div class="current-week">
+            <h2>Week 24</h2>
+            <div class="size-emoji">🌽</div>
+            <div class="size-fact">This week Chikki #2 is the size of an<br><strong>Ear of Corn</strong></div>
+        </div>
+        
+        <!-- Stats -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>Length</h3>
+                <div class="value">~12 in</div>
+            </div>
+            <div class="stat-card">
+                <h3>Weight</h3>
+                <div class="value">~1.3 lb</div>
+            </div>
+        </div>
+        
+        <!-- Development -->
+        <div class="development">
+            <h3>Week 24 — What's Happening</h3>
+            
+            <div class="dev-section">
+                <div class="dev-label">👶 Baby's Development</div>
+                <div class="dev-text">Lungs developing surfactant. Viability milestone!</div>
+            </div>
+            
+            <div class="dev-section">
+                <div class="dev-label">💪 Pooja This Week</div>
+                <div class="dev-text">Braxton Hicks may begin. Appetite growing.</div>
+            </div>
+        </div>
+        
+        <!-- Appointments -->
+        <div class="appointments">
+            <h3>📅 OB Appointments</h3>
+            <table class="appointment-table">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Type</th>
+                        <th>Provider</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="next-badge">NEXT</span>Mar 19, 2026</td>
+                        <td>📹 Video OB Visit</td>
+                        <td>Dr. Boester</td>
+                        <td>Week 24 check-in (video)</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        
+        <!-- Hospital Bag Checklist -->
+        <div class="checklist">
+            <h3>🎒 Hospital Bag Checklist</h3>
+            <div class="checklist-grid" id="checklist-container"></div>
+        </div>
+        
+        <!-- Footer -->
+        <div class="footer">
+            Last updated: January 15, 2025 · Week 24 of 40
+        </div>
     </div>
-  </div>
-
-  <div class="section" id="milestonesCard">
-    <div class="section-title">Upcoming Milestones</div>
-    <div class="card">
-      <div class="card-header">
-        <div class="card-icon purple">🎯</div>
-        <div><div class="card-title">What's Ahead</div><div class="card-subtitle" id="msSummary">Key moments coming up</div></div>
-      </div>
-      <ul class="ms-list" id="msList"></ul>
-    </div>
-  </div>
-
-  <div class="section" id="apptCard" style="display:none">
-    <div class="section-title">Appointments</div>
-    <div class="card">
-      <div class="card-header">
-        <div class="card-icon teal">🩺</div>
-        <div><div class="card-title">OB Schedule</div><div class="card-subtitle">Dr. Boester</div></div>
-      </div>
-      <div class="timeline" id="apptTimeline"></div>
-    </div>
-  </div>
-
-  <div class="section" id="tasksCard" style="display:none">
-    <div class="section-title">To-Do</div>
-    <div class="card">
-      <div class="card-header">
-        <div class="card-icon orange">📋</div>
-        <div><div class="card-title">Upcoming Tasks</div><div class="card-subtitle" id="tasksSummary">Getting ready</div></div>
-      </div>
-      <ul class="task-list" id="tasksList"></ul>
-    </div>
-  </div>
-
-  <div class="section">
-    <div class="section-title">Names</div>
-    <div class="card">
-      <div class="card-header">
-        <div class="card-icon pink">💙</div>
-        <div><div class="card-title">Name Shortlist</div><div class="card-subtitle">Favorites & contenders</div></div>
-      </div>
-      <div class="names-section" id="favSection" style="display:none">
-        <div class="names-label">Favorites</div>
-        <div class="names-grid" id="favGrid"></div>
-      </div>
-      <div class="names-section" id="otherSection" style="margin-top:0.75rem">
-        <div class="names-label" id="otherLabel">Shortlist</div>
-        <div class="names-grid" id="otherGrid"></div>
-      </div>
-    </div>
-  </div>
-
-  <div class="footer">
-    <div>Baby Chikki #2 · Due July 7, 2026</div>
-    <div>Live sync from Google Sheets</div>
-    <div class="share-btn-wrap"><button class="share-btn" id="shareBtn" onclick="shareSnapshot()">Share</button></div>
-  </div>
-</div>
-
-<div class="share-overlay" id="shareModal" onclick="if(event.target===this)closeShareModal()">
-  <div class="share-modal">
-    <h3 id="shareTitle">Generating snapshot…</h3>
-    <div class="share-url" id="shareUrl" style="display:none"></div>
-    <div class="share-actions" id="shareActions" style="display:none">
-      <button class="btn-copy" onclick="copyShareUrl()">Copy Link</button>
-      <button class="btn-open" onclick="window.open(document.getElementById('shareUrl').textContent,'_blank')">Open</button>
-    </div>
-    <div class="share-expire" id="shareExpire" style="display:none">Link expires in 24 hours</div>
-    <button class="btn-close" onclick="closeShareModal()">Close</button>
-  </div>
-</div><!-- /share-overlay -->
-
-<script>
-var DUE = new Date('2026-07-07T00:00:00');
-var CONCEPTION = new Date(DUE);
-CONCEPTION.setDate(CONCEPTION.getDate() - 280);
-
-var W = {
-  24:{e:'🌽',n:'Ear of Corn',l:'~12 in',w:'1.3 lb',dev:'~1.3 lbs, ~12 inches. Lungs developing surfactant. Viability milestone!',p:'Braxton Hicks may begin. Appetite growing. Back pain picking up.',s:'Lungs are developing surfactant — Chikki could breathe on his own if born now. The viability milestone!',k:'Research birthing classes. Talk to baby — he can hear you now!',r:'Good time to start "big sister" books and conversations.'},
-  25:{e:'🥦',n:'Cauliflower',l:'~13 in',w:'1.5 lb',dev:'~1.5 lbs, ~13 inches. Responding to your voice!',p:'Round ligament pain common. Stay hydrated.',s:'Chikki can hear Rickin & Pooja\'s voices now. Keep talking to him!',k:'Sign up for birthing class together. Schedule hospital tour.',r:'Let Reya feel baby kick — she\'ll love it!'},
-  26:{e:'🥬',n:'Bunch of Kale',l:'~14 in',w:'1.7 lb',dev:'~1.7 lbs, ~14 inches. Eyes opening. Practicing breathing.',p:'Leg cramps and heartburn picking up.',s:'Chikki\'s eyes are opening for the first time this week.',k:'Confirm insurance covers delivery. Help Pooja with leg cramps.',r:'Start explaining "when baby comes home" routines.'},
-  27:{e:'🥗',n:'Iceberg Lettuce',l:'~14.4 in',w:'~2 lb',dev:'~2 lbs, ~14 inches. Sleep/wake cycles forming.',p:'3rd trimester begins! More frequent kicks.',s:'Welcome to the 3rd trimester! Chikki now has sleep/wake cycles.',k:'3rd trimester! Start planning parental leave. Feel those kicks!',r:'Get Reya a "Big Sister" gift to open when baby arrives.'},
-  28:{e:'🍆',n:'Large Eggplant',l:'~14.8 in',w:'2.2 lb',dev:'~2.2 lbs. REM sleep begins. Can blink and dream!',p:'Glucose test week. Shortness of breath common.',s:'Chikki is entering REM sleep and may be dreaming!',k:'Go with Pooja to glucose test. Get your Tdap booster.',r:'Practice gentle touch with dolls — "soft hands" for baby.'},
-  29:{e:'🎃',n:'Butternut Squash',l:'~15.2 in',w:'2.5 lb',dev:'~2.5 lbs. Bones hardening. Muscle tone increasing.',p:'Bi-weekly OB visits begin. Back pain intensifying.',s:'Bones hardening throughout — skull stays soft for delivery.',k:'Interview pediatricians. Start drafting your birth plan.',r:'Reya can help pick out baby clothes!'},
-  30:{e:'🥬',n:'Head of Cabbage',l:'~15.7 in',w:'2.9 lb',dev:'~2.9 lbs. Strong kicks! Running out of room.',p:'Sleep getting harder. Pillow between knees helps.',s:'Strong directional kicks now — you might see a little foot!',k:'Pre-register at hospital. File parental leave paperwork.',r:'Read "I\'m a Big Sister" books together at bedtime.'},
-  31:{e:'🥥',n:'Coconut',l:'~16.2 in',w:'3.3 lb',dev:'~3.3 lbs. All five senses active.',p:'Colostrum may start leaking — totally normal!',s:'All five senses active. Absorbing iron and calcium rapidly.',k:'Finish nursery setup. Stock up on diapers and wipes.',r:'Let Reya help decorate the nursery!'},
-  32:{e:'🫙',n:'Jicama',l:'~16.7 in',w:'3.7 lb',dev:'~3.7 lbs. Practicing breathing. Fat accelerating.',p:'OB every 2 weeks. Heartburn peaks.',s:'Practicing breathing for up to 40 minutes at a time.',k:'Start packing the hospital bag. Know the route to the hospital.',r:'Practice being a helper — fetch diapers, blankets.'},
-  33:{e:'🍍',n:'Pineapple',l:'~17.2 in',w:'4.2 lb',dev:'~4.2 lbs. Immune system building. Bones ossifying.',p:'Install car seat this week! Waddling walk starting.',s:'Immune system developing independently now.',k:'Install the car seat and get it inspected. Learn the buckles!',r:'Show Reya the car seat — "baby\'s special seat!"'},
-  34:{e:'🍈',n:'Cantaloupe',l:'~17.7 in',w:'4.7 lb',dev:'~4.7 lbs. Lungs nearly mature. Fingernails at fingertips.',p:'Pack hospital bag. Pelvic pressure increasing.',s:'Lungs are nearly mature — almost ready for the outside world.',k:'Hospital bag packed. Review birth plan with Pooja and Dr. Boester.',r:'Draw a family picture with baby in it.'},
-  35:{e:'🍈',n:'Honeydew Melon',l:'~18.2 in',w:'5.3 lb',dev:'~5.3 lbs. Kidneys fully developed. Liver processing waste.',p:'Hospital bag should be packed and ready!',s:'Kidneys fully developed. Baby gaining weight rapidly now.',k:'Finalize pediatrician. Do a practice drive to the hospital.',r:'Make "welcome home baby" signs together.'},
-  36:{e:'🥬',n:'Head of Romaine',l:'~18.7 in',w:'5.8 lb',dev:'~5.8 lbs. Head may engage in pelvis. Lanugo shedding.',p:'Weekly OB visits begin. GBS test this week.',s:'Baby is getting into position. Weekly visits begin!',k:'Weekly OB visits start. Plan Reya coverage for delivery day.',r:'Explain that mommy might go to hospital soon — exciting!'},
-  37:{e:'🍉',n:'Winter Melon',l:'~19.1 in',w:'6.3 lb',dev:'~6.3 lbs. Full term! Lungs mature. Ready if born now.',p:'Cervical checks begin. Stay close to home.',s:'Full term! Baby is ready if born now.',k:'Full term! Stay within 30 min of hospital. Phone charged!',r:'Pack Reya\'s overnight bag for when baby comes.'},
-  38:{e:'🌿',n:'Leek',l:'~19.6 in',w:'6.8 lb',dev:'~6.8 lbs. Shedding vernix. Brain developing fast.',p:'Could come any day. Rest up!',s:'Organs fully functional. Final brain development.',k:'Could come any day! Keep car gassed up. Snacks in the bag.',r:'Finalize who picks up Reya when it\'s time.'},
-  39:{e:'🍉',n:'Small Watermelon',l:'~19.9 in',w:'7.3 lb',dev:'~7.3 lbs. Everything fully formed. Final fat layer.',p:'Charge all devices. Bag by the door!',s:'Everything fully formed. Just gaining final weight.',k:'All devices charged. Bag by the door. You\'ve got this, Dad!',r:'Reya\'s bag packed. Excitement building!'},
-  40:{e:'🎃',n:'Pumpkin',l:'~20.2 in',w:'7.5 lb',dev:'~7.5 lbs. IT\'S TIME! 🎉',p:'Due date — July 7, 2026 💙',s:'Baby Chikki #2 is ready to meet the world!',k:'Due date! Call Dr. Boester at 5-1-1 contractions. You\'re a dad x2!',r:'🎉 Reya is officially a big sister!'}
-};
-
-var defaultFavNames = [
-  {name:'Kian',meaning:'Ancient / King'},
-  {name:'Neel',meaning:'Sapphire / Blue'},
-  {name:'Nivaan',meaning:'Holy / Pure'}
-];
-var defaultOtherNames = [
-  {name:'Vedan',meaning:'Of the Vedas'},
-  {name:'Rishi',meaning:'Sage, wise one'},
-  {name:'Dev',meaning:'God, divine'},
-  {name:'Shaan',meaning:'Pride, dignity'},
-  {name:'Vivan',meaning:'Full of life'},
-  {name:'Ishaan',meaning:'Sun / Lord Shiva'},
-  {name:'Nirvan',meaning:'Liberation'}
-];
-
-function tick() {
-  var now = new Date();
-  var diff = DUE - now;
-  if (diff > 0) {
-    document.getElementById('days').textContent = Math.ceil(diff / 86400000);
-    document.getElementById('weeks').textContent = Math.floor(diff / (86400000 * 7));
-  } else {
-    document.getElementById('days').textContent = '🎉';
-    document.getElementById('weeks').textContent = '🎉';
-  }
-  var w = Math.min(40, Math.max(4, Math.floor((now - CONCEPTION) / (86400000 * 7))));
-  document.getElementById('currentWeek').textContent = w;
-  var trimester = w <= 12 ? '1st' : w <= 27 ? '2nd' : '3rd';
-  document.getElementById('trimesterVal').textContent = trimester;
-  var pct = Math.round((w / 40) * 100);
-  document.getElementById('pregPct').textContent = pct + '%';
-  document.getElementById('pregBar').style.width = Math.min(100, pct) + '%';
-
-  var badges = document.getElementById('trimesterBadges');
-  badges.innerHTML = '';
-  [{label:'1st Trimester',end:12},{label:'2nd Trimester',end:27},{label:'3rd Trimester',end:40}].forEach(function(t) {
-    var b = document.createElement('span');
-    if (w > t.end) { b.className = 'tri-badge done'; b.textContent = t.label + ' ✓'; }
-    else if ((t.end === 12 && w <= 12) || (t.end === 27 && w > 12 && w <= 27) || (t.end === 40 && w > 27)) { b.className = 'tri-badge active'; b.textContent = t.label; }
-    else { b.className = 'tri-badge upcoming'; b.textContent = t.label; }
-    badges.appendChild(b);
-  });
-
-  var d = W[w] || W[24];
-  document.getElementById('weekHeading').textContent = 'Week ' + w;
-  document.getElementById('sizeEmoji').textContent = d.e;
-  document.getElementById('sizeHeadline').textContent = d.n;
-  document.getElementById('sizeSub').textContent = d.s;
-  document.getElementById('sizeLenStat').textContent = '📏 ' + d.l;
-  document.getElementById('sizeWtStat').textContent = '⚖️ ' + d.w;
-  document.getElementById('sizeWeekStat').textContent = 'Week ' + w;
-  document.getElementById('babyLength').textContent = d.l;
-  document.getElementById('babyWeight').textContent = d.w;
-  document.getElementById('devNote').textContent = d.dev;
-  document.getElementById('poojaNote').textContent = d.p;
-  document.getElementById('rickinNote').textContent = d.k;
-  document.getElementById('reyaNote').textContent = d.r;
-}
-
-function renderNames() {
-  var favGrid = document.getElementById('favGrid');
-  var otherGrid = document.getElementById('otherGrid');
-  var favSection = document.getElementById('favSection');
-  favGrid.innerHTML = '';
-  otherGrid.innerHTML = '';
-
-  if (defaultFavNames.length > 0) {
-    favSection.style.display = '';
-    defaultFavNames.forEach(function(n) {
-      var card = document.createElement('div');
-      card.className = 'name-card fav';
-      card.innerHTML = '<div class="nm">' + escHtml(n.name) + '</div><div class="mn">' + escHtml(n.meaning) + '</div><div class="fav-star">⭐</div>';
-      favGrid.appendChild(card);
-    });
-  } else {
-    favSection.style.display = 'none';
-  }
-
-  defaultOtherNames.forEach(function(n) {
-    var card = document.createElement('div');
-    card.className = 'name-card';
-    card.innerHTML = '<div class="nm">' + escHtml(n.name) + '</div><div class="mn">' + escHtml(n.meaning) + '</div>';
-    otherGrid.appendChild(card);
-  });
-}
-
-function escHtml(s) {
-  var d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
-}
-
-function renderAppointments() {
-  try {
-    var stored = document.getElementById('appt-data');
-    if (!stored) return;
-    var appts = JSON.parse(stored.textContent);
-    if (!appts || !appts.length) return;
-    document.getElementById('apptCard').style.display = '';
-    var timeline = document.getElementById('apptTimeline');
-    timeline.innerHTML = '';
-    var today = new Date();
-    today.setHours(0,0,0,0);
-    var foundNext = false;
-    appts.sort(function(a,b) {
-      function parseD(s) { if (s.indexOf('-')>=0) { var p=s.split('T')[0].split('-'); return new Date(+p[0],+p[1]-1,+p[2]); } return new Date(s); }
-      return parseD(a.date) - parseD(b.date);
-    });
-    appts.forEach(function(a) {
-      var item = document.createElement('div');
-      var d;
-      if (a.date.includes('-') && a.date.split('-')[0].length === 4) {
-        var parts = a.date.split('T')[0].split('-');
-        d = new Date(+parts[0], +parts[1]-1, +parts[2]);
-      } else {
-        d = new Date(a.date);
-      }
-      var isPast = d < today;
-      var isNext = !foundNext && d >= today;
-      if (isNext) foundNext = true;
-      var statusStr = (a.status || '').toLowerCase();
-      var isConfirmed = statusStr.indexOf('confirmed') >= 0 || statusStr.indexOf('✅') >= 0 || statusStr.indexOf('scheduled') >= 0;
-      var isNotBooked = statusStr.indexOf('not yet booked') >= 0 || statusStr.indexOf('📋') >= 0 || statusStr.indexOf('not booked') >= 0;
-      var cls = 'tl-item';
-      if (isNext) cls += ' next';
-      else if (isPast) cls += ' past';
-      if (isConfirmed) cls += ' confirmed';
-      if (isNotBooked) cls += ' not-booked';
-      item.className = cls;
-      var row = document.createElement('div');
-      row.className = 'tl-row';
-      var title = document.createElement('span');
-      title.className = 'tl-title';
-      title.textContent = a.title;
-      row.appendChild(title);
-      if (isNext) {
-        var tag = document.createElement('span');
-        tag.className = 'tl-badge next';
-        var daysUntil = Math.ceil((d - today) / 86400000);
-        tag.textContent = daysUntil === 0 ? 'Today' : daysUntil + 'd';
-        row.appendChild(tag);
-      } else if (isConfirmed && !isPast) {
-        var tag = document.createElement('span');
-        tag.className = 'tl-badge confirmed';
-        tag.textContent = '✅ Confirmed';
-        row.appendChild(tag);
-      } else if (isNotBooked && !isPast) {
-        var tag = document.createElement('span');
-        tag.className = 'tl-badge not-booked';
-        tag.textContent = 'Not Booked';
-        row.appendChild(tag);
-      }
-      item.appendChild(row);
-      var dateDiv = document.createElement('div');
-      dateDiv.className = 'tl-date';
-      dateDiv.textContent = d.toLocaleDateString('en-US', {weekday:'short', month:'short', day:'numeric'}) + (a.time ? ' · ' + a.time : '');
-      item.appendChild(dateDiv);
-      if (a.detail) {
-        var detail = document.createElement('div');
-        detail.className = 'tl-detail';
-        detail.textContent = a.detail;
-        item.appendChild(detail);
-      }
-      timeline.appendChild(item);
-    });
-  } catch(e) {}
-}
-
-function renderTasks() {
-  try {
-    var stored = document.getElementById('tasks-data');
-    if (!stored) return;
-    var tasks = JSON.parse(stored.textContent);
-    if (!tasks || !tasks.length) return;
-    document.getElementById('tasksCard').style.display = '';
-    var list = document.getElementById('tasksList');
-    list.innerHTML = '';
-    var doneCount = tasks.filter(function(t) { return t.done; }).length;
-    document.getElementById('tasksSummary').textContent = doneCount + ' of ' + tasks.length + ' complete';
-    tasks.sort(function(a, b) { return (a.done ? 1 : 0) - (b.done ? 1 : 0) || (a.week || 99) - (b.week || 99); });
-    tasks.forEach(function(t) {
-      var li = document.createElement('li');
-      li.className = 'task-item';
-      var check = document.createElement('span');
-      check.className = 'task-check';
-      check.textContent = t.done ? '✅' : '⬜';
-      li.appendChild(check);
-      var content = document.createElement('div');
-      content.className = 'task-content';
-      var text = document.createElement('div');
-      text.className = 'task-text' + (t.done ? ' done' : '');
-      text.textContent = t.text;
-      content.appendChild(text);
-      var meta = document.createElement('div');
-      meta.className = 'task-meta';
-      if (t.priority && t.priority !== 'medium') {
-        var ptag = document.createElement('span');
-        ptag.className = 'task-tag ' + t.priority;
-        ptag.textContent = t.priority.charAt(0).toUpperCase() + t.priority.slice(1);
-        meta.appendChild(ptag);
-      }
-      if (t.week) {
-        var wtag = document.createElement('span');
-        wtag.className = 'task-tag week';
-        wtag.textContent = 'Wk ' + t.week;
-        meta.appendChild(wtag);
-      }
-      if (t.owner) {
-        var otag = document.createElement('span');
-        otag.className = 'task-tag owner';
-        otag.textContent = t.owner;
-        meta.appendChild(otag);
-      }
-      content.appendChild(meta);
-      li.appendChild(content);
-      list.appendChild(li);
-    });
-  } catch(e) {}
-}
-
-function renderChecklist() {
-  try {
-    var stored = document.getElementById('checklist-data');
-    if (!stored) return;
-    var data = JSON.parse(stored.textContent);
-    if (!data) return;
-    if (data.shoppingDone) document.getElementById('itemsBought').textContent = data.shoppingDone;
-    else if (data.itemsBought) document.getElementById('itemsBought').textContent = data.itemsBought;
-    if (data.tasksDone) document.getElementById('tasksDone').textContent = data.tasksDone;
-  } catch(e) {}
-}
-
-var MILESTONES = [
-  {week:24, title:'Viability milestone', sub:'Baby could survive if born now. Lungs developing surfactant.'},
-  {week:27, title:'3rd trimester begins', sub:'Sleep/wake cycles forming. Welcome to the final stretch!'},
-  {week:28, title:'Glucose test & Tdap', sub:'Glucose screening for Pooja. REM sleep begins for baby.'},
-  {week:30, title:'Pre-register at hospital', sub:'Arrange parental leave. Bi-weekly OB visits start soon.'},
-  {week:32, title:'Growth scan & hospital bag', sub:'Pack the hospital bag. Baby practicing breathing 40 min at a time.'},
-  {week:33, title:'Install car seat', sub:'Get it inspected! Baby\'s immune system developing independently.'},
-  {week:34, title:'Lungs nearly mature', sub:'Fingernails at fingertips. Review birth plan with Dr. Boester.'},
-  {week:36, title:'Weekly visits & GBS test', sub:'Weekly OB visits begin. GBS swab this week.'},
-  {week:37, title:'Full term!', sub:'Baby is ready if born now. Stay within 30 min of hospital.'},
-  {week:39, title:'Final countdown', sub:'Everything fully formed. Bag by the door, devices charged!'},
-  {week:40, title:'Due date — July 7 🎉', sub:'Baby Chikki #2 is ready to meet the world!'}
-];
-
-function renderMilestones() {
-  var now = new Date();
-  var w = Math.min(40, Math.max(4, Math.floor((now - CONCEPTION) / (86400000 * 7))));
-  var list = document.getElementById('msList');
-  if (!list) return;
-  list.innerHTML = '';
-
-  var currentIdx = -1;
-  for (var i = 0; i < MILESTONES.length; i++) {
-    if (MILESTONES[i].week <= w) currentIdx = i;
-  }
-
-  var showStart = Math.max(0, currentIdx);
-  var showEnd = Math.min(MILESTONES.length, showStart + 5);
-  if (showEnd - showStart < 4 && showEnd < MILESTONES.length) showEnd = Math.min(MILESTONES.length, showStart + 4);
-  var shown = MILESTONES.slice(showStart, showEnd);
-
-  var doneCount = 0; var totalShown = shown.length;
-  shown.forEach(function(ms) {
-    var li = document.createElement('li');
-    if (ms.week < w) {
-      li.className = 'ms-item done';
-    } else if (ms.week === w) {
-      li.className = 'ms-item current';
-    } else {
-      li.className = 'ms-item';
-    }
-    if (ms.week < w) doneCount++;
-
-    var weekDiv = document.createElement('div');
-    weekDiv.className = 'ms-week';
-    weekDiv.innerHTML = ms.week + '<small>wk</small>';
-    li.appendChild(weekDiv);
-
-    var content = document.createElement('div');
-    content.className = 'ms-content';
-    var title = document.createElement('div');
-    title.className = 'ms-title';
-    title.textContent = ms.title;
-    content.appendChild(title);
-    var sub = document.createElement('div');
-    sub.className = 'ms-sub';
-    sub.textContent = ms.sub;
-    content.appendChild(sub);
-
-    if (ms.week === w) {
-      var tag = document.createElement('span');
-      tag.className = 'ms-tag now';
-      tag.textContent = 'This Week';
-      content.appendChild(tag);
-    } else if (ms.week === w + 1) {
-      var tag = document.createElement('span');
-      tag.className = 'ms-tag soon';
-      tag.textContent = 'Next Week';
-      content.appendChild(tag);
-    } else if (ms.week > w && ms.week <= w + 4) {
-      var tag = document.createElement('span');
-      tag.className = 'ms-tag later';
-      var weeksAway = ms.week - w;
-      tag.textContent = weeksAway + ' weeks away';
-      content.appendChild(tag);
-    }
-    li.appendChild(content);
-    list.appendChild(li);
-  });
-
-  var summary = document.getElementById('msSummary');
-  if (summary) {
-    var nextMs = MILESTONES.find(function(m) { return m.week > w; });
-    if (nextMs) {
-      summary.textContent = 'Next: Week ' + nextMs.week + ' — ' + nextMs.title;
-    } else {
-      summary.textContent = 'Almost there!';
-    }
-  }
-}
-
-setInterval(function() { tick(); renderMilestones(); }, 60000);
-
-function injectJSON(id, data) {
-  var el = document.getElementById(id);
-  if (el) {
-    el.textContent = JSON.stringify(data);
-  } else {
-    el = document.createElement('script');
-    el.id = id;
-    el.type = 'application/json';
-    el.textContent = JSON.stringify(data);
-    document.body.appendChild(el);
-  }
-}
-
-function applyLiveData(d) {
-  if (d.appointments && d.appointments.length) {
-    var mapped = d.appointments.map(function(a) {
-      return { title: a.type || a.title, date: a.date, time: a.time || '', detail: a.notes || a.detail, status: a.status };
-    });
-    injectJSON('appt-data', mapped);
-    renderAppointments();
-  }
-  if (d.tasks && d.tasks.length) {
-    var mapped = d.tasks.map(function(t) {
-      var p = (t.priority || '').toLowerCase();
-      if (!p || p === 'medium') p = (t.category || '').includes('🏥') ? 'high' : 'medium';
-      return { text: t.text, priority: p, week: parseInt(t.dueWeek) || t.week || 0, done: t.done, owner: t.owner, category: t.category };
-    });
-    injectJSON('tasks-data', mapped);
-    renderTasks();
-  }
-  if (d.counters) {
-    if (d.counters.shoppingDone) document.getElementById('itemsBought').textContent = d.counters.shoppingDone;
-    if (d.counters.tasksDone) document.getElementById('tasksDone').textContent = d.counters.tasksDone;
-  } else if (d.checklist) {
-    if (d.checklist.itemsBought) document.getElementById('itemsBought').textContent = d.checklist.itemsBought;
-    if (d.checklist.tasksDone) document.getElementById('tasksDone').textContent = d.checklist.tasksDone;
-  }
-  if (d.timeline && d.timeline.currentWeek) {
-    var cw = d.timeline.currentWeek;
-    document.getElementById('devNote').textContent = cw.development || document.getElementById('devNote').textContent;
-  }
-  if (d.names) {
-    if (d.names.fav && d.names.fav.length) defaultFavNames = d.names.fav;
-    if (d.names.other && d.names.other.length) defaultOtherNames = d.names.other;
-    renderNames();
-  }
-  var badge = document.getElementById('sync-badge');
-  if (badge) {
-    var sync = d.sync || {};
-    if (sync.source === 'live' && !sync.partial) {
-      badge.textContent = '● Live';
-      badge.style.color = '#86efac';
-      badge.title = 'Synced: ' + new Date(d.updatedAt).toLocaleTimeString();
-    } else if (sync.source === 'live' && sync.partial) {
-      badge.textContent = '● Partial';
-      badge.style.color = '#fbbf24';
-      badge.title = 'Some tabs failed: ' + (sync.errors || []).join(', ');
-    } else {
-      badge.textContent = '● Synced';
-      badge.style.color = '#86efac';
-      badge.title = 'Data from: ' + new Date(d.updatedAt).toLocaleTimeString();
-    }
-  }
-}
-
-function fetchLiveData() {
-  fetch('/api/baby-dashboard/data')
-    .then(function(r) {
-      if (!r.ok) {
-        var badge = document.getElementById('sync-badge');
-        if (badge) {
-          if (r.status === 503) {
-            badge.textContent = '● Offline';
-            badge.style.color = '#f87171';
-            badge.title = 'Google auth disconnected';
-          } else if (r.status === 502) {
-            badge.textContent = '● Error';
-            badge.style.color = '#f87171';
-            badge.title = 'Sheet reads failed';
-          }
+    
+    <script>
+        // Countdown timer
+        function updateCountdown() {
+            const dueDate = new Date('2026-07-07').getTime();
+            const now = new Date().getTime();
+            const days = Math.ceil((dueDate - now) / (1000 * 60 * 60 * 24));
+            document.getElementById('countdown').textContent = Math.max(0, days);
         }
-        return null;
-      }
-      return r.json();
-    })
-    .then(function(d) {
-      if (d) applyLiveData(d);
-    })
-    .catch(function() {});
-}
-</script>
-<script id="appt-data" type="application/json">[{"title":"Video Appointment","date":"2026-03-19","time":"11:00 AM","detail":"Week 25 check-in via video call."},{"title":"Follow-Up + Glucose Test","date":"2026-04-15","time":"9:00 AM","detail":"Glucose drink at 7:45 AM. Check in at 8:45."},{"title":"Follow-Up Appointment","date":"2026-05-12","time":"10:00 AM","detail":"Bi-weekly visits begin. Growth scan likely."},{"title":"Weekly Visits Begin + GBS Test","date":"2026-06-02","detail":"Weekly until delivery. GBS swab at Week 36."},{"title":"🎉 Due Date","date":"2026-07-07","detail":"Baby Chikki #2 arrives! 💙"}]</script>
-<script id="tasks-data" type="application/json">[{"text":"Sign up for birthing class","priority":"high","week":25,"done":false},{"text":"Schedule hospital tour","priority":"high","week":26,"done":false},{"text":"Confirm insurance covers delivery","priority":"high","week":26,"done":false},{"text":"Tdap vaccine for Pooja","priority":"high","week":28,"done":false},{"text":"Interview pediatricians","priority":"high","week":29,"done":false},{"text":"Pre-register at hospital","priority":"high","week":30,"done":false},{"text":"Arrange parental leave","priority":"medium","week":30,"done":false},{"text":"Install car seat","priority":"high","week":33,"done":false},{"text":"Get car seat inspected","priority":"high","week":34,"done":false},{"text":"Pack hospital bag","priority":"high","week":34,"done":false},{"text":"Set up nursery furniture","priority":"medium","week":30,"done":false},{"text":"Wash baby clothes","priority":"medium","week":34,"done":false},{"text":"Stock up on diapers and wipes","priority":"medium","week":34,"done":false},{"text":"Prep freezer meals","priority":"medium","week":36,"done":false},{"text":"Finalize birth plan","priority":"high","week":35,"done":false},{"text":"Tour NICU","priority":"medium","week":25,"done":false},{"text":"Set up nursery","priority":"medium","week":26,"done":false},{"text":"Arrange Reya care plan for labor day","priority":"high","week":36,"done":false},{"text":"Pack Reya overnight bag","priority":"medium","week":37,"done":false},{"text":"Test drive route to hospital","priority":"medium","week":35,"done":false},{"text":"Charge devices and prep go-bag","priority":"medium","week":38,"done":false}]</script>
-<script id="checklist-data" type="application/json">{"shoppingDone":"0/39","tasksDone":"0/22"}</script>
-<script>
-tick();
-renderMilestones();
-renderNames();
-
-(async function loadUser() {
-  try {
-    var r = await fetch('/api/me');
-    if (r.ok) {
-      var u = await r.json();
-      if (u.displayName) {
-        var h = document.getElementById('heroTitle');
-        if (h) {
-          var hour = new Date().getHours();
-          var greet = hour < 12 ? 'Good morning' : hour < 17 ? 'Hey' : 'Good evening';
-          h.textContent = greet + ', ' + u.displayName + ' \uD83D\uDC4B';
-        }
-      }
-    }
-  } catch(e) {}
-})();
-renderAppointments();
-renderTasks();
-renderChecklist();
-fetchLiveData();
-setInterval(fetchLiveData, 300000);
-
-function shareSnapshot() {
-  var btn = document.getElementById('shareBtn');
-  btn.textContent = 'Sharing…';
-  btn.disabled = true;
-  document.getElementById('shareTitle').textContent = 'Generating snapshot…';
-  document.getElementById('shareUrl').style.display = 'none';
-  document.getElementById('shareActions').style.display = 'none';
-  document.getElementById('shareExpire').style.display = 'none';
-  document.getElementById('shareModal').classList.add('active');
-  fetch('/api/pages/baby-dashboard/share', { method: 'POST' })
-    .then(function(r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
-    })
-    .then(function(d) {
-      document.getElementById('shareTitle').textContent = 'Snapshot Ready';
-      document.getElementById('shareUrl').textContent = d.url;
-      document.getElementById('shareUrl').style.display = '';
-      document.getElementById('shareActions').style.display = '';
-      document.getElementById('shareExpire').style.display = '';
-      btn.textContent = 'Share';
-      btn.disabled = false;
-    })
-    .catch(function(err) {
-      document.getElementById('shareTitle').textContent = 'Failed to generate snapshot';
-      btn.textContent = 'Share';
-      btn.disabled = false;
-    });
-}
-function closeShareModal() {
-  document.getElementById('shareModal').classList.remove('active');
-}
-function copyShareUrl() {
-  var url = document.getElementById('shareUrl').textContent;
-  navigator.clipboard.writeText(url).then(function() {
-    var btn = document.querySelector('.btn-copy');
-    btn.textContent = 'Copied!';
-    setTimeout(function() { btn.textContent = 'Copy Link'; }, 2000);
-  }).catch(function() {
-    var ta = document.createElement('textarea');
-    ta.value = url;
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand('copy');
-    document.body.removeChild(ta);
-    var btn = document.querySelector('.btn-copy');
-    btn.textContent = 'Copied!';
-    setTimeout(function() { btn.textContent = 'Copy Link'; }, 2000);
-  });
-}
-</script>
+        updateCountdown();
+        
+        // Hospital Bag Items with localStorage persistence
+        const hospitalBagItems = [
+            'Birth plan copies (3-4)',
+            'Insurance cards & ID',
+            'Phone chargers',
+            'Camera/phone for photos',
+            'Entertainment (music, shows)',
+            'Comfortable going-home outfit (pre-pregnancy size)',
+            'Pajamas (front-buttoning, loose)',
+            'Slippers (non-slip)',
+            'Toiletries & medications',
+            'Going-home outfit for baby (2 sizes)',
+            'Swaddles & blankets',
+            'Pillow with colored pillowcase',
+            'Eye mask & earplugs',
+            'Snacks & electrolyte drinks',
+            'Birth announcements (printed or cards)',
+            'Notebook & pen for observations'
+        ];
+        
+        const checklistContainer = document.getElementById('checklist-container');
+        
+        // Load saved state from localStorage
+        const savedState = JSON.parse(localStorage.getItem('hospital-bag-checklist') || '{}');
+        
+        hospitalBagItems.forEach((item, index) => {
+            const itemId = `item-${index}`;
+            const isChecked = savedState[itemId] || false;
+            
+            const itemDiv = document.createElement('div');
+            itemDiv.className = 'checklist-item';
+            
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.id = itemId;
+            checkbox.checked = isChecked;
+            checkbox.addEventListener('change', (e) => {
+                savedState[itemId] = e.target.checked;
+                localStorage.setItem('hospital-bag-checklist', JSON.stringify(savedState));
+            });
+            
+            const label = document.createElement('label');
+            label.htmlFor = itemId;
+            label.textContent = item;
+            
+            itemDiv.appendChild(checkbox);
+            itemDiv.appendChild(label);
+            checklistContainer.appendChild(itemDiv);
+        });
+    </script>
 </body>
 </html>

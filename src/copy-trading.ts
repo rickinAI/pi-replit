@@ -13,6 +13,24 @@ export async function addWallet(data: any): Promise<polymarket.WhaleWallet> {
     data.source || 'manual'
   );
   if (data.alias) wallet.alias = data.alias;
+
+  const { decodeWallet } = await import("./polymarket-scout.js");
+  const profile = await decodeWallet(data.address);
+  if (!profile.copyEnabled) {
+    const bl = await polymarket.getBlacklist();
+    if (!bl.includes(data.address.toLowerCase())) {
+      bl.push(data.address.toLowerCase());
+      await polymarket.saveBlacklist(bl);
+    }
+    throw new Error(`Wallet rejected by decode: ${profile.reasoning}`);
+  }
+  wallet.strategy = profile.strategy;
+  wallet.maxCopyPrice = profile.maxCopyPrice;
+  wallet.minTradeSize = profile.minTradeSize;
+  wallet.decodeReasoning = profile.reasoning;
+  wallet.decodedAt = Date.now();
+  wallet.niche = profile.dominantCategory;
+
   wallets.push(wallet);
   await polymarket.saveWhaleWatchlist(wallets);
   return wallet;
@@ -611,12 +629,22 @@ export async function runCopyTradeScan(): Promise<{
       continue;
     }
 
+    if (wallet.minTradeSize && entry.amount_usd < wallet.minTradeSize) {
+      console.log(`[copy-trading] ${wallet.alias}: trade $${entry.amount_usd.toFixed(0)} below minTradeSize $${wallet.minTradeSize.toFixed(0)} — skipping`);
+      continue;
+    }
+
     const market = await polymarket.getMarketDetails(entry.market_id);
     if (!market) continue;
 
     const yesPrice = market.tokens.find(t => t.outcome === "Yes")?.price || 0;
     const noPrice = market.tokens.find(t => t.outcome === "No")?.price || 0;
     const currentPrice = entry.direction === "YES" ? yesPrice : noPrice;
+
+    if (wallet.maxCopyPrice && currentPrice > wallet.maxCopyPrice) {
+      console.log(`[copy-trading] ${wallet.alias}: price $${currentPrice.toFixed(3)} exceeds maxCopyPrice $${wallet.maxCopyPrice} — skipping ${entry.market_question.slice(0, 40)}`);
+      continue;
+    }
 
     const signalResult = await runSignalEngine(wallet, market, entry.direction, currentPrice);
     signalResults.push({ signal: entry, result: signalResult });

@@ -75,6 +75,11 @@ export interface WhaleWallet {
   degraded_count: number;
   pending_eviction: boolean;
   status: "active" | "probation" | "removed";
+  strategy?: "sports" | "politics" | "crypto" | "weather" | "general" | "scraper" | "market-maker";
+  maxCopyPrice?: number;
+  minTradeSize?: number;
+  decodeReasoning?: string;
+  decodedAt?: number;
 }
 
 export interface WhaleActivity {

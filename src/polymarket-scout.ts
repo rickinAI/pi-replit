@@ -266,6 +266,112 @@ export async function detectAndBlacklistMarketMakers(): Promise<string[]> {
   return blacklisted;
 }
 
+export interface WalletProfile {
+  strategy: "sports" | "politics" | "crypto" | "weather" | "general" | "scraper" | "market-maker";
+  copyEnabled: boolean;
+  maxCopyPrice: number;
+  minTradeSize: number;
+  dominantCategory: string;
+  avgEntryPrice: number;
+  highPriceRatio: number;
+  reasoning: string;
+}
+
+const MAX_COPY_PRICE_BY_NICHE: Record<string, number> = {
+  sports:   0.80,
+  politics: 0.92,
+  crypto:   0.75,
+  weather:  0.85,
+  general:  0.85,
+};
+
+export async function decodeWallet(address: string): Promise<WalletProfile> {
+  const activities = await polymarket.fetchWalletActivity(address, 50);
+
+  if (!activities || activities.length < 5) {
+    return {
+      strategy: "general",
+      copyEnabled: true,
+      maxCopyPrice: 0.85,
+      minTradeSize: 25,
+      dominantCategory: "general",
+      avgEntryPrice: 0,
+      highPriceRatio: 0,
+      reasoning: "Insufficient trade history — default thresholds applied",
+    };
+  }
+
+  const buyTrades = activities.filter((t: any) => t.type === "TRADE" && t.side === "BUY");
+
+  const categoryScores: Record<string, number> = {};
+  for (const t of buyTrades) {
+    const cat = polymarket.categorizeMarketTitle(t.title || "");
+    categoryScores[cat] = (categoryScores[cat] || 0) + 1;
+  }
+  const total = Object.values(categoryScores).reduce((s, v) => s + v, 0);
+  const normalized: Record<string, number> = {};
+  for (const [k, v] of Object.entries(categoryScores)) {
+    normalized[k] = total > 0 ? v / total : 0;
+  }
+  const dominantCategory = polymarket.determineNiche(normalized);
+
+  const avgEntryPrice = buyTrades.length > 0
+    ? buyTrades.reduce((sum: number, t: any) => sum + (parseFloat(t.price) || 0), 0) / buyTrades.length
+    : 0;
+
+  const highPriceTrades = buyTrades.filter((t: any) => (parseFloat(t.price) || 0) > 0.90).length;
+  const highPriceRatio = buyTrades.length > 0 ? highPriceTrades / buyTrades.length : 0;
+  const isScraper = avgEntryPrice > 0.90 && highPriceRatio > 0.50;
+
+  const byMarket: Record<string, Set<string>> = {};
+  for (const t of activities) {
+    const cid = t.conditionId || t.market;
+    if (!cid || t.type !== "TRADE") continue;
+    if (!byMarket[cid]) byMarket[cid] = new Set();
+    if (t.side) byMarket[cid].add(t.side);
+  }
+  const bothSidesCount = Object.values(byMarket).filter(s => s.has("BUY") && s.has("SELL")).length;
+  const uniqueMarkets = Object.keys(byMarket).length;
+
+  let mmScore = 0;
+  if (uniqueMarkets > 0 && (bothSidesCount / uniqueMarkets) > 0.30) mmScore++;
+  if (activities.length >= 50) mmScore++;
+  if (uniqueMarkets > 20) mmScore++;
+  const tradeSizes = buyTrades.map((t: any) => parseFloat(t.size || "0") * parseFloat(t.price || "0")).filter((v: number) => v > 0);
+  const avgTradeSize = tradeSizes.length > 0 ? tradeSizes.reduce((a: number, b: number) => a + b, 0) / tradeSizes.length : 0;
+  if (avgTradeSize < 500 && avgTradeSize > 0) mmScore++;
+  const isMarketMaker = mmScore >= 3;
+
+  const sortedSizes = tradeSizes.sort((a: number, b: number) => a - b);
+  const medianSize = sortedSizes.length > 0 ? sortedSizes[Math.floor(sortedSizes.length / 2)] : 50;
+  const minTradeSize = Math.max(medianSize * 0.3, 25);
+
+  const strategy: WalletProfile["strategy"] = isScraper
+    ? "scraper"
+    : isMarketMaker
+    ? "market-maker"
+    : (dominantCategory as WalletProfile["strategy"]);
+
+  const copyEnabled = !isScraper && !isMarketMaker;
+
+  const reasoning = isScraper
+    ? `Scraper detected — avg entry $${avgEntryPrice.toFixed(3)}, ${(highPriceRatio * 100).toFixed(0)}% of buys above $0.90`
+    : isMarketMaker
+    ? `Market maker detected — MM score ${mmScore}/4, both sides on ${bothSidesCount}/${uniqueMarkets} markets`
+    : `${dominantCategory} specialist — avg entry $${avgEntryPrice.toFixed(3)}, ${buyTrades.length} buy trades analyzed`;
+
+  return {
+    strategy,
+    copyEnabled,
+    maxCopyPrice: copyEnabled ? (MAX_COPY_PRICE_BY_NICHE[dominantCategory] || 0.85) : 0,
+    minTradeSize,
+    dominantCategory,
+    avgEntryPrice,
+    highPriceRatio,
+    reasoning,
+  };
+}
+
 export async function scoreAndPromoteCandidate(address: string, source: "trade_mining" | "anomaly" = "trade_mining"): Promise<{
   added: boolean;
   wallet?: polymarket.WhaleWallet;
@@ -291,9 +397,38 @@ export async function scoreAndPromoteCandidate(address: string, source: "trade_m
       return { added: false, wallet, reason: `only_${wallet.resolved_markets}_resolved_markets` };
     }
 
+    const profile = await decodeWallet(address);
+    if (!profile.copyEnabled) {
+      console.log(`[scout] Decode rejected ${wallet.alias}: ${profile.reasoning}`);
+      if (profile.strategy === "market-maker" || profile.strategy === "scraper") {
+        const bl = await polymarket.getBlacklist();
+        if (!bl.includes(address.toLowerCase())) {
+          bl.push(address.toLowerCase());
+          await polymarket.saveBlacklist(bl);
+        }
+      }
+      try {
+        const { sendMessage } = await import("./telegram.js");
+        await sendMessage(`⛔ Wallet decode rejected <b>${wallet.alias}</b> (${address.slice(0, 10)}…)\n\nStrategy: ${profile.strategy}\n${profile.reasoning}`, "HTML");
+      } catch {}
+      return { added: false, wallet, reason: `decode_rejected: ${profile.reasoning}` };
+    }
+
+    wallet.strategy = profile.strategy;
+    wallet.maxCopyPrice = profile.maxCopyPrice;
+    wallet.minTradeSize = profile.minTradeSize;
+    wallet.decodeReasoning = profile.reasoning;
+    wallet.decodedAt = Date.now();
+    wallet.niche = profile.dominantCategory;
+
     watchlist.push(wallet);
     await polymarket.saveWhaleWatchlist(watchlist);
-    console.log(`[scout] Added ${wallet.alias} (score: ${wallet.composite_score.toFixed(2)}, niche: ${wallet.niche}, source: ${source})`);
+    console.log(`[scout] Added ${wallet.alias} (score: ${wallet.composite_score.toFixed(2)}, niche: ${wallet.niche}, strategy: ${profile.strategy}, maxCopy: $${profile.maxCopyPrice}, source: ${source})`);
+
+    try {
+      const { sendMessage } = await import("./telegram.js");
+      await sendMessage(`✅ Wallet admitted: <b>${wallet.alias}</b>\n\nStrategy: ${profile.strategy}\nMax copy price: $${profile.maxCopyPrice}\nMin trade size: $${profile.minTradeSize.toFixed(0)}\n${profile.reasoning}`, "HTML");
+    } catch {}
 
     return { added: true, wallet };
   } catch (err) {
