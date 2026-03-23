@@ -1218,7 +1218,6 @@ async function catchUpSession(sid, retryCount = 0, wasReconnecting = false) {
       removeSuggestionChips();
       agentBubble = null;
       agentText = "";
-      const newCount = serverMessages.length - domCount;
       for (let i = domCount; i < serverMessages.length; i++) {
         const msg = serverMessages[i];
         if (msg.role === "user") appendBubble("user", msg.text, msg.timestamp);
