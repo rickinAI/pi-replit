@@ -5877,16 +5877,20 @@ app.put("/api/controls/risk-config", async (req: Request, res: Response) => {
       if (allowed.includes(k)) filtered[k] = updates[k];
     }
     if (Object.keys(filtered).length === 0) { res.status(400).json({ error: `No valid config keys. Allowed: ${allowed.join(", ")}` }); return; }
-    const numericKeys = ["risk_per_trade_pct", "max_positions", "exposure_cap_pct", "correlation_limit", "circuit_breaker_7d_pct", "circuit_breaker_drawdown_pct", "thesis_blacklist_hours"];
-    for (const k of numericKeys) {
+    const positiveNumericKeys = ["risk_per_trade_pct", "max_positions", "exposure_cap_pct", "correlation_limit", "thesis_blacklist_hours"];
+    for (const k of positiveNumericKeys) {
       if (k in filtered && (typeof filtered[k] !== "number" || filtered[k] <= 0)) { res.status(400).json({ error: `${k} must be a positive number` }); return; }
+    }
+    const negativeThresholdKeys = ["circuit_breaker_7d_pct", "circuit_breaker_drawdown_pct"];
+    for (const k of negativeThresholdKeys) {
+      if (k in filtered && (typeof filtered[k] !== "number" || filtered[k] >= 0)) { res.status(400).json({ error: `${k} must be a negative number (e.g. -15)` }); return; }
     }
     const validConfidence = ["SPECULATIVE", "LOW", "MEDIUM", "HIGH"];
     if ("min_confidence_for_execution" in filtered && !validConfidence.includes(filtered.min_confidence_for_execution)) {
       res.status(400).json({ error: `min_confidence_for_execution must be one of: ${validConfidence.join(", ")}` }); return;
     }
-    if ("notification_mode" in filtered && !["all", "important", "critical"].includes(filtered.notification_mode)) {
-      res.status(400).json({ error: "notification_mode must be 'all', 'important', or 'critical'" }); return;
+    if ("notification_mode" in filtered && !["all", "trades-only", "silent"].includes(filtered.notification_mode)) {
+      res.status(400).json({ error: "notification_mode must be 'all', 'trades-only', or 'silent'" }); return;
     }
     const result = await bankr.setRiskConfig(filtered);
     weDashboardCache = null;
