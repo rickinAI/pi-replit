@@ -3590,27 +3590,64 @@ function buildWebPublishTools(): ToolDefinition[] {
     {
       name: "web_list_pages",
       label: "List Saved Pages",
-      description: "List all saved pages on rickin.live/pages. Returns slugs, file sizes, and last modified dates.",
+      description: "List all saved pages on rickin.live/pages. Returns slugs, visibility (public/private), file sizes, and last modified dates.",
       parameters: Type.Object({}),
       async execute() {
         try {
           const pool = db.getPool();
-          const result = await pool.query("SELECT slug, length(html) as size, updated_at FROM pages ORDER BY slug");
+          const result = await pool.query("SELECT slug, is_public, length(html) as size, updated_at FROM pages ORDER BY slug");
           if (result.rows.length === 0) {
             return { content: [{ type: "text" as const, text: "No pages saved yet." }], details: {} };
           }
           const domain = "rickin.live";
+          const publicCount = result.rows.filter((r: any) => r.is_public).length;
+          const privateCount = result.rows.length - publicCount;
           const list = result.rows.map((r: any) => {
             const sizeKB = Math.round(r.size / 1024);
             const date = new Date(r.updated_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-            return `- ${r.slug} (${sizeKB}KB, ${date}) — https://${domain}/pages/${r.slug}`;
+            const badge = r.is_public ? "🌐 PUBLIC" : "🔒 PRIVATE";
+            return `- ${r.slug} [${badge}] (${sizeKB}KB, ${date}) — https://${domain}/pages/${r.slug}`;
           }).join("\n");
           return {
-            content: [{ type: "text" as const, text: `${result.rows.length} saved page(s):\n\n${list}\n\nAll pages: https://${domain}/pages` }],
-            details: {},
+            content: [{ type: "text" as const, text: `${result.rows.length} page(s) — ${publicCount} public, ${privateCount} private:\n\n${list}\n\nAll pages: https://${domain}/pages` }],
+            details: { pages: result.rows.map((r: any) => ({ slug: r.slug, is_public: r.is_public })) },
           };
         } catch (err: any) {
           return { content: [{ type: "text" as const, text: `Error listing pages: ${err.message}` }], details: {} };
+        }
+      },
+    },
+    {
+      name: "web_toggle_page_visibility",
+      label: "Toggle Page Visibility",
+      description: "Make a page on rickin.live/pages/<slug> public (accessible without login) or private (password-protected). Use when the user says: 'make page public', 'make page private', 'toggle visibility', 'show/hide page', or wants to change who can access a page.",
+      parameters: Type.Object({
+        slug: Type.String({ description: "The slug of the page to update." }),
+        public: Type.Boolean({ description: "true = publicly accessible without login, false = private (password-protected)." }),
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const slug = params.slug.toLowerCase().replace(/[^a-z0-9_-]/g, "-").replace(/--+/g, "-").replace(/^-|-$/g, "");
+          if (!slug) {
+            return { content: [{ type: "text" as const, text: "Error: Invalid slug." }], details: {} };
+          }
+          const pool = db.getPool();
+          const exists = await pool.query("SELECT is_public FROM pages WHERE slug = $1", [slug]);
+          if (exists.rows.length === 0) {
+            return { content: [{ type: "text" as const, text: `Page "${slug}" not found. Use web_list_pages to see all pages.` }], details: {} };
+          }
+          const isPublic = params.public === true;
+          await pool.query("UPDATE pages SET is_public = $1, updated_at = NOW() WHERE slug = $2", [isPublic, slug]);
+          if (isPublic) { publicPagesCache.add(slug); } else { publicPagesCache.delete(slug); }
+          rebuildPublicPagesDataPaths();
+          const domain = "rickin.live";
+          const badge = isPublic ? "🌐 PUBLIC — anyone can view without login" : "🔒 PRIVATE — requires login to view";
+          return {
+            content: [{ type: "text" as const, text: `✅ Page "${slug}" is now ${badge}.\n\nhttps://${domain}/pages/${slug}` }],
+            details: { slug, is_public: isPublic },
+          };
+        } catch (err: any) {
+          return { content: [{ type: "text" as const, text: `Failed to toggle visibility: ${err.message}` }], details: {} };
         }
       },
     },
@@ -3632,6 +3669,8 @@ function buildWebPublishTools(): ToolDefinition[] {
           if (result.rowCount === 0) {
             return { content: [{ type: "text" as const, text: `Page "${slug}" not found.` }], details: {} };
           }
+          publicPagesCache.delete(slug);
+          rebuildPublicPagesDataPaths();
           return { content: [{ type: "text" as const, text: `✅ Page "${slug}" deleted.` }], details: {} };
         } catch (err: any) {
           return { content: [{ type: "text" as const, text: `Failed to delete page: ${err.message}` }], details: {} };
@@ -4287,16 +4326,19 @@ app.use(express.static(PUBLIC_DIR));
 app.get("/pages", async (_req: Request, res: Response) => {
   try {
     const pool = db.getPool();
-    const result = await pool.query("SELECT slug, updated_at FROM pages ORDER BY slug");
+    const result = await pool.query("SELECT slug, is_public, updated_at FROM pages ORDER BY slug");
     if (result.rows.length === 0) {
       res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pages — RICKIN</title><style>body{font-family:-apple-system,system-ui,sans-serif;background:#0a0a0a;color:#e0e0e0;padding:2rem;max-width:600px;margin:0 auto}h1{font-size:1.4rem;color:#fff}p{color:#888}</style></head><body><h1>Pages</h1><p>No pages published yet.</p></body></html>`);
       return;
     }
     const items = result.rows.map((r: any) => {
       const date = new Date(r.updated_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-      return `<a href="/pages/${r.slug}">${r.slug}</a><span class="date">${date}</span>`;
+      const badge = r.is_public ? '<span class="badge public">PUBLIC</span>' : '<span class="badge private">PRIVATE</span>';
+      return `<div class="page-row"><a href="/pages/${r.slug}">${r.slug}</a><span class="meta">${badge}<span class="date">${date}</span></span></div>`;
     }).join("");
-    res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pages — RICKIN</title><style>body{font-family:-apple-system,system-ui,sans-serif;background:#0a0a0a;color:#e0e0e0;padding:2rem;max-width:600px;margin:0 auto}h1{font-size:1.4rem;color:#fff;margin-bottom:1.5rem}a{display:block;color:#7cacf8;text-decoration:none;padding:.75rem 0;border-bottom:1px solid #222;font-size:1rem}a:hover{color:#aac8ff}.date{float:right;color:#666;font-size:.85rem}</style></head><body><h1>Pages</h1>${items}</body></html>`);
+    const publicCount = result.rows.filter((r: any) => r.is_public).length;
+    const summary = `<p class="summary">${result.rows.length} pages — ${publicCount} public, ${result.rows.length - publicCount} private</p>`;
+    res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pages — RICKIN</title><style>body{font-family:-apple-system,system-ui,sans-serif;background:#0a0a0a;color:#e0e0e0;padding:2rem;max-width:600px;margin:0 auto}h1{font-size:1.4rem;color:#fff;margin-bottom:.5rem}.summary{color:#888;font-size:.85rem;margin-bottom:1.5rem}.page-row{display:flex;align-items:center;justify-content:space-between;padding:.75rem 0;border-bottom:1px solid #222}.page-row a{color:#7cacf8;text-decoration:none;font-size:1rem}.page-row a:hover{color:#aac8ff}.meta{display:flex;align-items:center;gap:.75rem}.badge{font-size:.65rem;font-weight:600;padding:2px 6px;border-radius:3px;text-transform:uppercase;letter-spacing:.5px}.badge.public{background:#1a3a1a;color:#4ade80;border:1px solid #2d5a2d}.badge.private{background:#3a2a1a;color:#fbbf24;border:1px solid #5a4a2d}.date{color:#666;font-size:.85rem}</style></head><body><h1>Pages</h1>${summary}${items}</body></html>`);
   } catch (err) {
     res.status(500).send("Error loading pages.");
   }
