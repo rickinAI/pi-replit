@@ -283,7 +283,7 @@ export async function openPolymarketPosition(params: {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[bnkr] openPolymarketPosition FAILED: market=${params.market_id} ${params.direction} $${params.amount_usd}`);
     console.error(`[bnkr] Full error: ${msg}`);
-    throw new Error(`BNKR openPosition failed for ${params.market_id} ${params.direction} $${params.amount_usd}: ${msg}`);
+    throw new Error(`BNKR openPosition failed for ${params.market_id} ${params.direction} $${params.amount_usd}: ${msg}`, { cause: err });
   }
 }
 
