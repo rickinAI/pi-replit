@@ -1543,7 +1543,17 @@ function buildPredictionMarketTools(): ToolDefinition[] {
           });
           return { content: [{ type: "text" as const, text: JSON.stringify({ executed: true, tier: riskCheck.tier, position_id: result.position.id, size: result.position.size, bnkr_order_id: result.bnkr_order_id }) }], details: {} };
         } catch (err) {
-          return { content: [{ type: "text" as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }], details: {} };
+          const errMsg = err instanceof Error ? err.message : String(err);
+          console.error(`[bankr_open_position] Tool error: ${errMsg}`);
+          const isAuth = errMsg.includes("401") || errMsg.includes("403") || errMsg.includes("AUTH");
+          const isTimeout = errMsg.includes("timed out") || errMsg.includes("TIMEOUT");
+          const isNetwork = errMsg.includes("network error") || errMsg.includes("NETWORK");
+          const httpMatch = errMsg.match(/HTTP (\d+)/);
+          return { content: [{ type: "text" as const, text: JSON.stringify({
+            error: errMsg,
+            error_type: isAuth ? "auth" : isTimeout ? "timeout" : isNetwork ? "network" : httpMatch ? `http_${httpMatch[1]}` : "unknown",
+            http_status: httpMatch ? parseInt(httpMatch[1]) : null,
+          }) }], details: {} };
         }
       },
     },
@@ -6070,6 +6080,25 @@ app.delete("/api/whale-registry/:address", async (req: Request, res: Response) =
   }
 });
 
+app.get("/api/bnkr/diagnostics", async (req: Request, res: Response) => {
+  if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const conn = await bnkr.testConnectivity();
+    const apiKey = process.env.BNKR_API_KEY || "";
+    const keyPreview = apiKey ? `${apiKey.slice(0, 6)}...${apiKey.slice(-4)}` : "(not set)";
+    res.json({
+      ...conn,
+      key_preview: keyPreview,
+      wallet_configured: !!(process.env.BNKR_WALLET_ADDRESS),
+      base_url: process.env.BNKR_API_URL || "https://api.bnkr.com/v1",
+      prompt_url: process.env.BNKR_PROMPT_API_URL || "https://api.bankr.bot",
+      checked_at: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get("/api/x-intelligence/data", async (_req: Request, res: Response) => {
   try {
     const forceRefresh = _req.query.force === "1";
@@ -9316,6 +9345,26 @@ async function startServer(maxRetries = 5) {
             }
           }, 2 * 60 * 1000);
           console.log("[boot] BANKR position monitor started (2-min interval)");
+
+          (async () => {
+            try {
+              const conn = await bnkr.testConnectivity();
+              if (conn.apiConfigured && conn.apiReachable) {
+                console.log(`[boot] BNKR API: connected (key valid, endpoint reachable)`);
+              } else if (conn.apiConfigured && !conn.apiReachable) {
+                console.error(`[boot] BNKR API: UNREACHABLE — key configured but endpoint failed: ${conn.apiError}`);
+              } else {
+                console.log(`[boot] BNKR API: not configured (shadow mode)`);
+              }
+              if (conn.promptConfigured && conn.promptReachable) {
+                console.log(`[boot] BNKR Prompt API: connected`);
+              } else if (conn.promptConfigured && !conn.promptReachable) {
+                console.error(`[boot] BNKR Prompt API: UNREACHABLE — ${conn.promptError}`);
+              }
+            } catch (err) {
+              console.error(`[boot] BNKR connectivity check failed:`, err instanceof Error ? err.message : err);
+            }
+          })();
 
           runStartupRecovery().catch(err => {
             console.error("[recovery] Startup recovery failed:", err instanceof Error ? err.message : err);

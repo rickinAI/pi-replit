@@ -18,6 +18,7 @@ async function bnkrFetch(path: string, body?: Record<string, any>, retries = 3, 
   for (let attempt = 1; attempt <= retries; attempt++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let res: globalThis.Response | null = null;
     try {
       const opts: RequestInit = {
         method: body ? "POST" : "GET",
@@ -29,39 +30,47 @@ async function bnkrFetch(path: string, body?: Record<string, any>, retries = 3, 
         signal: controller.signal,
       };
       if (body) opts.body = JSON.stringify(body);
-      const res = await fetch(url, opts);
-      if (!res.ok) {
-        const text = await res.text();
-        const statusErr = new Error(`BNKR API ${path} failed (${res.status}): ${text}`);
-        console.error(`[bnkr] ${path} attempt ${attempt}/${retries} HTTP ${res.status}: ${text.slice(0, 500)}`);
-        if (res.status === 401 || res.status === 403) {
-          console.error(`[bnkr] AUTH ERROR — BNKR API key may be invalid or expired`);
-          throw statusErr;
-        }
-        if (res.status >= 400 && res.status < 500) throw statusErr;
-        lastError = statusErr;
-      } else {
-        return res.json();
-      }
+      res = await fetch(url, opts);
     } catch (err) {
       clearTimeout(timer);
       if (err instanceof Error && err.name === "AbortError") {
-        console.error(`[bnkr] ${path} attempt ${attempt}/${retries} timed out after ${timeoutMs}ms`);
+        console.error(`[bnkr] ${path} attempt ${attempt}/${retries} TIMEOUT after ${timeoutMs}ms`);
         lastError = new Error(`BNKR API ${path} timed out after ${timeoutMs}ms`);
-      } else if (err instanceof Error && (err.message.includes("401") || err.message.includes("403"))) {
-        throw err;
       } else {
         const msg = err instanceof Error ? err.message : String(err);
-        console.error(`[bnkr] ${path} attempt ${attempt}/${retries} network error: ${msg}`);
-        lastError = err instanceof Error ? err : new Error(msg);
+        console.error(`[bnkr] ${path} attempt ${attempt}/${retries} NETWORK ERROR: ${msg}`);
+        lastError = new Error(`BNKR API ${path} network error: ${msg}`);
       }
+      if (attempt < retries) {
+        const delay = Math.min(1000 * Math.pow(2, attempt - 1), 8000);
+        console.log(`[bnkr] Retrying ${path} in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+      continue;
     } finally {
       clearTimeout(timer);
     }
 
+    if (res.ok) {
+      return res.json();
+    }
+
+    const text = await res.text().catch(() => "(could not read response body)");
+    const statusErr = new Error(`BNKR API ${path} HTTP ${res.status}: ${text}`);
+    console.error(`[bnkr] ${path} attempt ${attempt}/${retries} HTTP ${res.status}: ${text.slice(0, 500)}`);
+
+    if (res.status === 401 || res.status === 403) {
+      console.error(`[bnkr] AUTH ERROR (${res.status}) — BNKR API key may be invalid or expired. Response: ${text.slice(0, 200)}`);
+      throw statusErr;
+    }
+    if (res.status >= 400 && res.status < 500) {
+      throw statusErr;
+    }
+
+    lastError = statusErr;
     if (attempt < retries) {
       const delay = Math.min(1000 * Math.pow(2, attempt - 1), 8000);
-      console.log(`[bnkr] Retrying ${path} in ${delay}ms...`);
+      console.log(`[bnkr] Retrying ${path} in ${delay}ms (server error ${res.status})...`);
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
@@ -272,8 +281,9 @@ export async function openPolymarketPosition(params: {
     return result;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[bnkr] openPolymarketPosition FAILED: market=${params.market_id} ${params.direction} $${params.amount_usd} — ${msg}`);
-    throw err;
+    console.error(`[bnkr] openPolymarketPosition FAILED: market=${params.market_id} ${params.direction} $${params.amount_usd}`);
+    console.error(`[bnkr] Full error: ${msg}`);
+    throw new Error(`BNKR openPosition failed for ${params.market_id} ${params.direction} $${params.amount_usd}: ${msg}`);
   }
 }
 
