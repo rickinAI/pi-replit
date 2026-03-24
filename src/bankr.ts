@@ -607,6 +607,7 @@ export async function openPosition(params: {
       }
       const order = await bnkr.openPolymarketPosition({
         market_id: params.market_id,
+        market_question: params.asset,
         direction: params.direction as "YES" | "NO",
         amount_usd: size * params.entry_price,
       });
@@ -659,7 +660,7 @@ export async function closePosition(positionId: string, exitPrice: number, close
   if (pos.bnkr_order_id && bnkr.isConfigured()) {
     try {
       if (pos.asset_class === "polymarket") {
-        const result = await bnkr.closePolymarketPosition(pos.bnkr_order_id);
+        const result = await bnkr.closePolymarketPosition(pos.bnkr_order_id, pos.asset);
         if (result.exit_odds > 0) exitPrice = result.exit_odds;
         txHash = txHash || result.tx_hash;
       }

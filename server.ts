@@ -6086,12 +6086,18 @@ app.get("/api/bnkr/diagnostics", async (req: Request, res: Response) => {
     const conn = await bnkr.testConnectivity();
     const apiKey = process.env.BNKR_API_KEY || "";
     const keyPreview = apiKey ? `${apiKey.slice(0, 6)}...${apiKey.slice(-4)}` : "(not set)";
+    let balanceCheck: { response: string; jobId: string } | undefined;
+    if (req.query.balance === "1") {
+      balanceCheck = await bnkr.checkBalance();
+    }
     res.json({
       ...conn,
       key_preview: keyPreview,
       wallet_configured: !!(process.env.BNKR_WALLET_ADDRESS),
-      base_url: process.env.BNKR_API_URL || "https://api.bnkr.com/v1",
-      prompt_url: process.env.BNKR_PROMPT_API_URL || "https://api.bankr.bot",
+      base_url: process.env.BNKR_API_URL || "https://api.bankr.bot",
+      execution_pattern: "prompt-based async (POST /agent/prompt → poll GET /agent/job/{jobId})",
+      auth_header: "X-API-Key",
+      balance_check: balanceCheck,
       checked_at: new Date().toISOString(),
     });
   } catch (err: any) {
@@ -9349,17 +9355,18 @@ async function startServer(maxRetries = 5) {
           (async () => {
             try {
               const conn = await bnkr.testConnectivity();
-              if (conn.apiConfigured && conn.apiReachable) {
-                console.log(`[boot] BNKR API: connected (key valid, endpoint reachable)`);
-              } else if (conn.apiConfigured && !conn.apiReachable) {
-                console.error(`[boot] BNKR API: UNREACHABLE — key configured but endpoint failed: ${conn.apiError}`);
-              } else {
-                console.log(`[boot] BNKR API: not configured (shadow mode)`);
-              }
               if (conn.promptConfigured && conn.promptReachable) {
-                console.log(`[boot] BNKR Prompt API: connected`);
+                console.log(`[boot] BNKR Agent API (api.bankr.bot): connected ✓`);
+                try {
+                  const bal = await bnkr.checkBalance();
+                  console.log(`[boot] BNKR balance dry-run: jobId=${bal.jobId} response="${bal.response.slice(0, 200)}"`);
+                } catch (balErr) {
+                  console.error(`[boot] BNKR balance dry-run failed:`, balErr instanceof Error ? balErr.message : balErr);
+                }
               } else if (conn.promptConfigured && !conn.promptReachable) {
-                console.error(`[boot] BNKR Prompt API: UNREACHABLE — ${conn.promptError}`);
+                console.error(`[boot] BNKR Agent API: UNREACHABLE — ${conn.promptError}`);
+              } else {
+                console.log(`[boot] BNKR Agent API: not configured (shadow mode)`);
               }
             } catch (err) {
               console.error(`[boot] BNKR connectivity check failed:`, err instanceof Error ? err.message : err);
