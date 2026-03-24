@@ -9,6 +9,10 @@ import {
 const BOT_TOKEN = process.env.TG_BOT_TOKEN || "";
 const CHAT_ID = process.env.TG_CHANNEL_DIRECT || process.env.TELEGRAM_CHAT_ID || "";
 const API_BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
+const RICKIN_TELEGRAM_IDS = new Set([
+  process.env.RICKIN_TELEGRAM_ID || "",
+  "rickin",
+].filter(Boolean));
 
 const CHANNEL_MAP: Record<string, string> = {
   "direct": process.env.TG_CHANNEL_DIRECT || "",
@@ -53,6 +57,40 @@ export async function sendToChannel(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[telegram] sendToChannel(${channel}) error:`, msg);
+    return { ok: false, error: msg };
+  }
+}
+
+export async function sendToChannelWithKeyboard(
+  channel: string,
+  text: string,
+  keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>>,
+  parseMode: string = "HTML"
+): Promise<{ ok: boolean; messageId?: number; error?: string }> {
+  if (!BOT_TOKEN) return { ok: false, error: "TG_BOT_TOKEN not configured" };
+  const chatId = CHANNEL_MAP[channel];
+  if (!chatId) return { ok: false, error: `Unknown channel: ${channel}` };
+  try {
+    const resp = await fetch(`${API_BASE}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: parseMode,
+        disable_web_page_preview: true,
+        reply_markup: { inline_keyboard: keyboard },
+      }),
+    });
+    if (!resp.ok) {
+      const body = await resp.text();
+      console.error(`[telegram] sendToChannelWithKeyboard(${channel}) failed (${resp.status}): ${body}`);
+      return { ok: false, error: `API error ${resp.status}` };
+    }
+    const data = await resp.json();
+    return { ok: true, messageId: data.result?.message_id };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, error: msg };
   }
 }
@@ -1230,6 +1268,52 @@ export async function requestTradeApproval(params: {
 }
 
 async function handleCallbackQuery(callbackQueryId: string, data: string): Promise<void> {
+  if (data === "pause_we") {
+    try {
+      const pool = getPool();
+      await pool.query(
+        `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+        ["wealth_engines_paused", true, Date.now()]
+      );
+      await answerCallbackQuery(callbackQueryId, "⏸ Wealth Engines PAUSED");
+      await sendToChannel("trading", "⏸ <b>Wealth Engines PAUSED</b> via inline button", "HTML");
+    } catch (err) {
+      console.error("[telegram] pause_we callback error:", err);
+      await answerCallbackQuery(callbackQueryId, "Failed to pause");
+    }
+    return;
+  }
+
+  if (data.startsWith("retire_thesis:")) {
+    const thesisId = data.replace("retire_thesis:", "");
+    try {
+      const pool = getPool();
+      const res = await pool.query(`SELECT value FROM app_config WHERE key = 'polymarket_scout_active_theses'`);
+      if (res.rows.length > 0 && Array.isArray(res.rows[0].value)) {
+        const theses = res.rows[0].value.filter((t: any) => t.id !== thesisId);
+        await pool.query(
+          `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2, $3)
+           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+          ["polymarket_scout_active_theses", JSON.stringify(theses), Date.now()]
+        );
+        await answerCallbackQuery(callbackQueryId, `🗑 Thesis retired`);
+        await sendToChannel("trading", `🗑 Thesis <b>${escapeHtml(thesisId.slice(0, 30))}</b> retired via inline button`, "HTML");
+      } else {
+        await answerCallbackQuery(callbackQueryId, "No theses found");
+      }
+    } catch (err) {
+      console.error("[telegram] retire_thesis callback error:", err);
+      await answerCallbackQuery(callbackQueryId, "Failed to retire thesis");
+    }
+    return;
+  }
+
+  if (data === "view_pnl" || data === "view_dashboard") {
+    await answerCallbackQuery(callbackQueryId, "Opening dashboard...");
+    return;
+  }
+
   const [action, approvalId] = data.split(":");
 
   if (!action?.startsWith("trade_")) {
@@ -1520,7 +1604,13 @@ export async function sendTradeAlert(params: {
   }
   if (params.reason) lines.push(`Reason: ${fmt.escapeHtml(params.reason)}`);
 
-  await sendToChannel("trading", lines.join("\n"), "HTML");
+  const tradeButtons = [
+    [
+      { text: "📊 Dashboard", url: "https://rickin.live/pages/wealth-engines" },
+      { text: "⏸ Pause WE", callback_data: "pause_we" },
+    ],
+  ];
+  await sendToChannelWithKeyboard("trading", lines.join("\n"), tradeButtons);
 }
 
 export async function sendScoutBrief(brief: string, chartUrls?: string[]): Promise<void> {
@@ -1732,7 +1822,13 @@ export async function sendShadowTradeNotification(params: {
       "",
       `🎲 "Watching from the sidelines... for now."`,
     ];
-    await sendToChannel("trading", fmt.truncateToTelegramLimit(lines.join("\n")), "HTML");
+    const openButtons = [
+      [
+        { text: "📊 Dashboard", url: "https://rickin.live/pages/wealth-engines" },
+        { text: "🗑 Retire Thesis", callback_data: `retire_thesis:${params.asset.slice(0, 40)}` },
+      ],
+    ];
+    await sendToChannelWithKeyboard("trading", fmt.truncateToTelegramLimit(lines.join("\n")), openButtons);
   } else {
     const isWin = (params.pnl ?? 0) > 0;
     const statusIcon = isWin ? "✅" : "❌";
@@ -1795,7 +1891,13 @@ export async function sendShadowTradeNotification(params: {
       lines.push(runningLine);
     }
 
-    await sendToChannel("trading", fmt.truncateToTelegramLimit(lines.join("\n")), "HTML");
+    const closeButtons = [
+      [
+        { text: "📊 Dashboard", url: "https://rickin.live/pages/wealth-engines" },
+        { text: "📈 View P&L", callback_data: "view_pnl" },
+      ],
+    ];
+    await sendToChannelWithKeyboard("trading", fmt.truncateToTelegramLimit(lines.join("\n")), closeButtons);
   }
 }
 
@@ -2109,35 +2211,134 @@ export function getWebhookSecret(): string {
   return WEBHOOK_SECRET;
 }
 
+interface ChatContext {
+  messages: Array<{ role: "user" | "assistant"; text: string; ts: number }>;
+}
+const chatContexts = new Map<string, ChatContext>();
+const MAX_CONTEXT_MESSAGES = 10;
+const CONTEXT_TTL_MS = 2 * 60 * 60 * 1000;
+
+function isAuthorizedUser(userId: number | string, username?: string): boolean {
+  if (RICKIN_TELEGRAM_IDS.has(String(userId))) return true;
+  if (username && RICKIN_TELEGRAM_IDS.has(username.toLowerCase())) return true;
+  return false;
+}
+
+function getChatContext(userId: string): ChatContext {
+  let ctx = chatContexts.get(userId);
+  if (!ctx) {
+    ctx = { messages: [] };
+    chatContexts.set(userId, ctx);
+  }
+  const cutoff = Date.now() - CONTEXT_TTL_MS;
+  ctx.messages = ctx.messages.filter(m => m.ts > cutoff);
+  return ctx;
+}
+
+function addChatMessage(userId: string, role: "user" | "assistant", text: string): void {
+  const ctx = getChatContext(userId);
+  ctx.messages.push({ role, text, ts: Date.now() });
+  if (ctx.messages.length > MAX_CONTEXT_MESSAGES) {
+    ctx.messages = ctx.messages.slice(-MAX_CONTEXT_MESSAGES);
+  }
+}
+
+async function replyToChat(chatId: string, text: string): Promise<void> {
+  try {
+    await tgFetch("sendMessage", {
+      chat_id: chatId,
+      text,
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+    });
+  } catch (err) {
+    console.error("[telegram] replyToChat failed:", err instanceof Error ? err.message : err);
+  }
+}
+
+async function handleTwoWayChat(userId: string, chatId: string, text: string): Promise<void> {
+  try {
+    const { getRunAgent } = await import("./scheduled-jobs.js");
+    const runAgent = getRunAgent();
+    if (!runAgent) {
+      await replyToChat(chatId, "⚠️ Agent system not ready — try again in a moment.");
+      return;
+    }
+
+    addChatMessage(String(userId), "user", text);
+    const ctx = getChatContext(String(userId));
+
+    let contextPrompt = "";
+    if (ctx.messages.length > 1) {
+      const history = ctx.messages.slice(0, -1).map(m =>
+        `${m.role === "user" ? "Rickin" : "DarkNode"}: ${m.text}`
+      ).join("\n");
+      contextPrompt = `Recent conversation:\n${history}\n\n`;
+    }
+
+    const prompt = `${contextPrompt}Rickin says via Telegram: "${text}"\n\nRespond concisely (max 500 chars). You are DarkNode, Rickin's autonomous AI system. Answer questions, run commands, provide status. Keep it conversational and direct.`;
+
+    const result = await runAgent("oversight", prompt);
+    const response = result.response || "I couldn't process that — try again.";
+
+    const cleanResponse = response.slice(0, 4000);
+    addChatMessage(String(userId), "assistant", cleanResponse);
+
+    await replyToChat(chatId, cleanResponse);
+  } catch (err) {
+    console.error("[telegram] Two-way chat error:", err);
+    await replyToChat(chatId, "⚠️ Error processing your message. Try again.");
+  }
+}
+
 export async function handleWebhookUpdate(update: any): Promise<void> {
   if (!isConfigured()) return;
 
   if (update.callback_query) {
     const cbq = update.callback_query;
-    if (String(cbq.message?.chat?.id) === CHAT_ID) {
-      await handleCallbackQuery(cbq.id, cbq.data || "");
+    const cbqUserId = cbq.from?.id;
+    const cbqUsername = cbq.from?.username;
+    if (!isAuthorizedUser(cbqUserId, cbqUsername)) {
+      console.log(`[telegram] Ignoring callback from unauthorized user: ${cbqUserId} (@${cbqUsername || "unknown"})`);
+      await answerCallbackQuery(cbq.id, "Unauthorized");
+      return;
+    }
+    await handleCallbackQuery(cbq.id, cbq.data || "");
+    return;
+  }
+
+  if (!update.message?.text) return;
+
+  const msg = update.message;
+  const userId = msg.from?.id;
+  const username = msg.from?.username;
+  const chatId = String(msg.chat.id);
+  const text = msg.text.trim();
+
+  if (!isAuthorizedUser(userId, username)) {
+    console.log(`[telegram] Ignoring message from unauthorized user: ${userId} (@${username || "unknown"})`);
+    return;
+  }
+
+  if (text.startsWith("/")) {
+    if (chatId !== CHAT_ID) return;
+    const parts = text.split(/\s+/);
+    const cmd = parts[0].toLowerCase().replace(/@\w+/, "").replace("/", "");
+    const args = parts.slice(1).join(" ");
+    const handler = commands[cmd];
+    if (handler) {
+      try {
+        const response = await handler(args);
+        await sendMessage(response);
+      } catch (err) {
+        console.error(`[telegram] Command /${cmd} failed:`, err);
+        await sendMessage(`❌ Command failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
     return;
   }
 
-  if (update.message?.text && String(update.message.chat.id) === CHAT_ID) {
-    const text = update.message.text.trim();
-    if (text.startsWith("/")) {
-      const parts = text.split(/\s+/);
-      const cmd = parts[0].toLowerCase().replace(/@\w+/, "").replace("/", "");
-      const args = parts.slice(1).join(" ");
-      const handler = commands[cmd];
-      if (handler) {
-        try {
-          const response = await handler(args);
-          await sendMessage(response);
-        } catch (err) {
-          console.error(`[telegram] Command /${cmd} failed:`, err);
-          await sendMessage(`❌ Command failed: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-    }
-  }
+  await handleTwoWayChat(String(userId), chatId, text);
 }
 
 async function handleResearchCommand(_args: string): Promise<string> {
@@ -2274,6 +2475,219 @@ function getPriorityTag(alertType: string, content: string): { tag: string; prio
     return { tag: "📧", priority: "FYI" };
   }
   return { tag: "🔔", priority: "FYI" };
+}
+
+export async function sendMorningPack(): Promise<void> {
+  if (!isConfigured()) return;
+  const fmt = await import("./telegram-format.js");
+  const pool = getPool();
+
+  const dateStr = new Date().toLocaleDateString("en-US", {
+    timeZone: "America/New_York",
+    month: "short",
+    day: "numeric",
+  });
+
+  let btcLine = "₿ BTC  Data unavailable";
+  let marketsLine = "📈 Markets  Data unavailable";
+  let aiLine = "🤖 AI  Check #ai-tech";
+  let newsLine = "📰 News  Check #news";
+  let intelLine = "🐦 X  Check #intel";
+
+  try {
+    const fgRes = await pool.query(`SELECT value FROM app_config WHERE key = 'fear_greed_index'`);
+    if (fgRes.rows.length > 0) {
+      const fg = fgRes.rows[0].value;
+      const fgValue = typeof fg === "object" ? fg.value : fg;
+      const fgClass = typeof fg === "object" ? fg.classification : "";
+      btcLine = `₿ BTC  Fear & Greed: ${fgValue}${fgClass ? ` ${fgClass}` : ""}`;
+    }
+  } catch {}
+
+  try {
+    const thesesRes = await pool.query(`SELECT value FROM app_config WHERE key = 'polymarket_scout_active_theses'`);
+    if (thesesRes.rows.length > 0 && Array.isArray(thesesRes.rows[0].value)) {
+      const count = thesesRes.rows[0].value.length;
+      const topThesis = thesesRes.rows[0].value[0];
+      marketsLine = `📈 Markets  ${count} active theses${topThesis ? ` · Latest: ${String(topThesis.question || topThesis.asset || "").slice(0, 40)}` : ""}`;
+    }
+  } catch {}
+
+  try {
+    const jhRes = await pool.query(`SELECT summary FROM job_history WHERE job_id LIKE '%ai-tech%' ORDER BY created_at DESC LIMIT 1`);
+    if (jhRes.rows.length > 0 && jhRes.rows[0].summary) {
+      aiLine = `🤖 AI  ${jhRes.rows[0].summary.slice(0, 60)}`;
+    }
+  } catch {}
+
+  try {
+    const jhRes = await pool.query(`SELECT summary FROM job_history WHERE job_id LIKE '%news%' OR job_id LIKE '%intel%' ORDER BY created_at DESC LIMIT 1`);
+    if (jhRes.rows.length > 0 && jhRes.rows[0].summary) {
+      newsLine = `📰 News  ${jhRes.rows[0].summary.slice(0, 60)}`;
+    }
+  } catch {}
+
+  try {
+    const jhRes = await pool.query(`SELECT summary FROM job_history WHERE job_id LIKE '%intel%' ORDER BY created_at DESC LIMIT 1`);
+    if (jhRes.rows.length > 0 && jhRes.rows[0].summary) {
+      intelLine = `🐦 X  ${jhRes.rows[0].summary.slice(0, 60)}`;
+    }
+  } catch {}
+
+  const lines = [
+    `☀️ <b>MORNING PACK</b> · ${dateStr}`,
+    "",
+    aiLine,
+    btcLine,
+    marketsLine,
+    newsLine,
+    intelLine,
+    "",
+    fmt.SEPARATOR,
+    "Full briefs in each channel ↑",
+  ];
+
+  await sendToChannel("direct", fmt.truncateToTelegramLimit(lines.join("\n")), "HTML");
+  console.log("[telegram] Morning Pack sent");
+}
+
+export async function sendEODRollup(): Promise<void> {
+  if (!isConfigured()) return;
+  const fmt = await import("./telegram-format.js");
+  const pool = getPool();
+
+  const dateStr = new Date().toLocaleDateString("en-US", {
+    timeZone: "America/New_York",
+    month: "short",
+    day: "numeric",
+  });
+
+  let portfolioValue = 10000;
+  let todayPnl = 0;
+  let todayWins = 0;
+  let todayLosses = 0;
+  let scoutCycles = 0;
+  let thesesGenerated = 0;
+  let shadowOpened = 0;
+  let healthStatus = "All clear";
+  let healthAlerts: string[] = [];
+  let topStory = "None";
+  let aiHeadline = "";
+  let btcHeadline = "";
+  let outstandingItems: string[] = [];
+
+  try {
+    const pvRes = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_portfolio_value'`);
+    if (pvRes.rows.length > 0) portfolioValue = Number(pvRes.rows[0].value) || 10000;
+  } catch {}
+
+  try {
+    const stRes = await pool.query(`SELECT value FROM app_config WHERE key = 'oversight_shadow_trades'`);
+    if (stRes.rows.length > 0 && Array.isArray(stRes.rows[0].value)) {
+      const trades = stRes.rows[0].value;
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const todayMs = todayStart.getTime();
+
+      const todayClosed = trades.filter((t: any) =>
+        t.status === "closed" && t.closed_at && new Date(t.closed_at).getTime() > todayMs
+      );
+      const todayOpened = trades.filter((t: any) =>
+        t.opened_at && new Date(t.opened_at).getTime() > todayMs
+      );
+
+      shadowOpened = todayOpened.length;
+      todayWins = todayClosed.filter((t: any) => (t.hypothetical_pnl || 0) > 0).length;
+      todayLosses = todayClosed.filter((t: any) => (t.hypothetical_pnl || 0) <= 0).length;
+      todayPnl = todayClosed.reduce((s: number, t: any) => s + (t.hypothetical_pnl || 0), 0);
+    }
+  } catch {}
+
+  try {
+    const jhRes = await pool.query(
+      `SELECT COUNT(*) as cnt FROM job_history WHERE job_id LIKE '%scout%' AND created_at > NOW() - INTERVAL '24 hours'`
+    );
+    scoutCycles = parseInt(jhRes.rows[0]?.cnt || "0", 10);
+  } catch {}
+
+  try {
+    const tRes = await pool.query(`SELECT value FROM app_config WHERE key = 'polymarket_scout_active_theses'`);
+    if (tRes.rows.length > 0 && Array.isArray(tRes.rows[0].value)) {
+      thesesGenerated = tRes.rows[0].value.length;
+    }
+  } catch {}
+
+  try {
+    const hrRes = await pool.query(`SELECT value FROM app_config WHERE key = 'oversight_health_reports'`);
+    if (hrRes.rows.length > 0 && Array.isArray(hrRes.rows[0].value)) {
+      const reports = hrRes.rows[0].value;
+      const todayAlerts = reports.filter((r: any) => {
+        const ts = r.timestamp || r.created_at;
+        if (!ts) return false;
+        const rDate = new Date(ts);
+        return (Date.now() - rDate.getTime()) < 24 * 60 * 60 * 1000;
+      });
+      if (todayAlerts.length > 0) {
+        healthStatus = `${todayAlerts.length} alert(s) triggered`;
+        healthAlerts = todayAlerts.map((a: any) => a.summary || a.type || "alert").slice(0, 3);
+      }
+    }
+  } catch {}
+
+  try {
+    const pausedRes = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_paused'`);
+    if (pausedRes.rows.length > 0 && pausedRes.rows[0].value === true) {
+      outstandingItems.push("Wealth Engines PAUSED");
+    }
+  } catch {}
+
+  try {
+    const fgRes = await pool.query(`SELECT value FROM app_config WHERE key = 'fear_greed_index'`);
+    if (fgRes.rows.length > 0) {
+      const fg = fgRes.rows[0].value;
+      btcHeadline = `₿ BTC  Fear & Greed: ${typeof fg === "object" ? `${fg.value} ${fg.classification || ""}` : fg}`;
+    }
+  } catch {}
+
+  try {
+    const jhRes = await pool.query(`SELECT summary FROM job_history WHERE job_id LIKE '%ai-tech%' ORDER BY created_at DESC LIMIT 1`);
+    if (jhRes.rows.length > 0 && jhRes.rows[0].summary) {
+      aiHeadline = `🤖 AI  ${jhRes.rows[0].summary.slice(0, 60)}`;
+    }
+  } catch {}
+
+  try {
+    const nhRes = await pool.query(`SELECT summary FROM job_history WHERE job_id LIKE '%news%' ORDER BY created_at DESC LIMIT 1`);
+    if (nhRes.rows.length > 0 && nhRes.rows[0].summary) {
+      topStory = nhRes.rows[0].summary.slice(0, 60);
+    }
+  } catch {}
+
+  const pnlSign = todayPnl >= 0 ? "+" : "";
+  const tradeStr = (todayWins + todayLosses) > 0
+    ? `W:${todayWins} L:${todayLosses}`
+    : "No trades today";
+
+  const lines = [
+    `🌙 <b>EOD ROLLUP</b> · ${dateStr}`,
+    "",
+    `💰 Portfolio  $${portfolioValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · ${pnlSign}$${Math.abs(todayPnl).toFixed(2)} today · ${tradeStr}`,
+    `🔍 Scout  ${scoutCycles} cycles · ${thesesGenerated} active theses · ${shadowOpened} shadow opened`,
+    `🛡️ Health  ${healthStatus}${healthAlerts.length > 0 ? ` · ${healthAlerts.join(", ")}` : ""}`,
+    "",
+    fmt.SEPARATOR,
+    `📰 Top Story  ${topStory}`,
+  ];
+  if (aiHeadline) lines.push(aiHeadline);
+  if (btcHeadline) lines.push(btcHeadline);
+
+  lines.push("");
+  lines.push(fmt.SEPARATOR);
+  lines.push(`⚠️ Outstanding  ${outstandingItems.length > 0 ? outstandingItems.join(" · ") : "None"}`);
+  lines.push("✅ Good night");
+
+  await sendToChannel("direct", fmt.truncateToTelegramLimit(lines.join("\n")), "HTML");
+  console.log("[telegram] EOD Rollup sent");
 }
 
 export async function forwardAlertToTelegram(event: { type: string; briefType?: string; alertType?: string; title?: string; content: string; telegramContent?: string }): Promise<void> {

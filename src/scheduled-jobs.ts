@@ -2,7 +2,7 @@ import { getPool } from "./db.js";
 import { getDarkNodeEmails, markDarkNodeProcessed } from "./gmail.js";
 import * as gws from "./gws.js";
 import { findOrCreateCalendar, createRecurringEvent } from "./calendar.js";
-import { sendJobCompletionNotification, sendScoutBrief } from "./telegram.js";
+import { sendJobCompletionNotification, sendScoutBrief, sendMorningPack, sendEODRollup } from "./telegram.js";
 import * as bnkr from "./bnkr.js";
 import * as copyTrading from "./copy-trading.js";
 import * as pmScout from "./polymarket-scout.js";
@@ -1006,6 +1006,22 @@ Keep it quick — the daily summary is meant to be a 30-second glance at the day
     agentId: "oversight",
     prompt: "Send the DarkNode summary to Telegram.",
     schedule: { type: "daily", hour: 21, minute: 0 },
+    enabled: true,
+  },
+  {
+    id: "morning-pack",
+    name: "Morning Pack (7am)",
+    agentId: "oversight",
+    prompt: "SYSTEM: Send Morning Pack digest. Do NOT run an agent — call sendMorningPack() directly.",
+    schedule: { type: "daily", hour: 7, minute: 0 },
+    enabled: true,
+  },
+  {
+    id: "eod-rollup",
+    name: "EOD Rollup (9pm)",
+    agentId: "oversight",
+    prompt: "SYSTEM: Send EOD Rollup digest. Do NOT run an agent — call sendEODRollup() directly.",
+    schedule: { type: "daily", hour: 21, minute: 5 },
     enabled: true,
   },
 ];
@@ -2206,6 +2222,20 @@ async function checkJobs(): Promise<void> {
         await runCopyTradeScan(job);
       } else if (job.id === "anomaly-scanner") {
         await runAnomalyScanner(job);
+      } else if (job.id === "morning-pack") {
+        await sendMorningPack();
+        job.lastRun = new Date().toISOString();
+        job.lastResult = "Morning Pack sent";
+        job.lastStatus = "success";
+        await saveConfig();
+        await writeJobHistory(job.id, job.name, "success", "Morning Pack sent to #direct", null, Date.now() - new Date(job.lastRun).getTime());
+      } else if (job.id === "eod-rollup") {
+        await sendEODRollup();
+        job.lastRun = new Date().toISOString();
+        job.lastResult = "EOD Rollup sent";
+        job.lastStatus = "success";
+        await saveConfig();
+        await writeJobHistory(job.id, job.name, "success", "EOD Rollup sent to #direct", null, Date.now() - new Date(job.lastRun).getTime());
       } else if (job.id === "seed-wallets") {
         await runSeedWallets(job);
       } else if (job.id === "prediction-markets-daily") {
@@ -2353,6 +2383,10 @@ export function startJobSystem(
   console.log(`[scheduled-jobs] System started — ${jobList} (${config.timezone})`);
 }
 
+export function getRunAgent(): RunAgentFn | null {
+  return runAgentFn;
+}
+
 export function getRunningJob(): { running: boolean; jobId: string | null; jobName: string | null } {
   if (!jobRunning || !currentRunningJobId) return { running: false, jobId: null, jobName: null };
   const job = config.jobs.find(j => j.id === currentRunningJobId);
@@ -2403,6 +2437,24 @@ export async function triggerJob(jobId: string): Promise<string> {
     if (job.id === "birthday-calendar-sync") {
       await runBirthdayCalendarSync(job);
       return job.lastResult || "Birthday sync completed";
+    }
+
+    if (job.id === "morning-pack") {
+      await sendMorningPack();
+      job.lastRun = new Date().toISOString();
+      job.lastResult = "Morning Pack sent";
+      job.lastStatus = "success";
+      await saveConfig();
+      return "Morning Pack sent to #direct";
+    }
+
+    if (job.id === "eod-rollup") {
+      await sendEODRollup();
+      job.lastRun = new Date().toISOString();
+      job.lastResult = "EOD Rollup sent";
+      job.lastStatus = "success";
+      await saveConfig();
+      return "EOD Rollup sent to #direct";
     }
 
     const triggerStartMs = Date.now();
