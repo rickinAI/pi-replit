@@ -1,16 +1,7 @@
 import { ReplitConnectors } from "@replit/connectors-sdk";
 
-let connectors: ReplitConnectors | null = null;
-
-function getConnectors(): ReplitConnectors {
-  if (!connectors) {
-    connectors = new ReplitConnectors();
-  }
-  return connectors;
-}
-
 async function ghFetch(endpoint: string, options: { method?: string; body?: any } = {}): Promise<any> {
-  const c = getConnectors();
+  const c = new ReplitConnectors();
   const fetchOptions: any = { method: options.method || "GET" };
   if (options.body) {
     fetchOptions.body = JSON.stringify(options.body);
