@@ -35,6 +35,7 @@ import * as news from "./src/news.js";
 import * as twitter from "./src/twitter.js";
 import * as polymarket from "./src/polymarket.js";
 import * as polymarketScout from "./src/polymarket-scout.js";
+import * as github from "./src/github.js";
 import * as bankr from "./src/bankr.js";
 import * as bnkr from "./src/bnkr.js";
 import * as maps from "./src/maps.js";
@@ -3151,6 +3152,148 @@ function buildMemoryTools(): ToolDefinition[] {
         }
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }], details: {} };
+      },
+    },
+  ];
+}
+
+function buildGitHubTools(): ToolDefinition[] {
+  return [
+    {
+      name: "github_list_repos",
+      label: "GitHub List Repos",
+      description: "List GitHub repositories the user has access to, sorted by most recently updated.",
+      parameters: Type.Object({
+        perPage: Type.Optional(Type.Number({ description: "Number of repos to return (default 20, max 30)." })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await github.listRepos(params.perPage ?? 20);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "github_list_issues",
+      label: "GitHub List Issues",
+      description: "List issues in a GitHub repository. Use owner and repo name (e.g. owner='retune-app', repo='retune-app'). Can filter by state: open, closed, or all.",
+      parameters: Type.Object({
+        owner: Type.String({ description: "Repository owner (user or org)." }),
+        repo: Type.String({ description: "Repository name." }),
+        state: Type.Optional(Type.String({ description: "Issue state filter: 'open' (default), 'closed', or 'all'." })),
+        perPage: Type.Optional(Type.Number({ description: "Max issues to return (default 20)." })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await github.listIssues(params.owner, params.repo, params.state ?? "open", params.perPage ?? 20);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "github_read_issue",
+      label: "GitHub Read Issue",
+      description: "Read the full details of a specific GitHub issue including comments. Provide owner, repo, and issue number.",
+      parameters: Type.Object({
+        owner: Type.String({ description: "Repository owner." }),
+        repo: Type.String({ description: "Repository name." }),
+        issueNumber: Type.Number({ description: "The issue number." }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await github.readIssue(params.owner, params.repo, params.issueNumber);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "github_create_issue",
+      label: "GitHub Create Issue",
+      description: "Create a new issue in a GitHub repository. IMPORTANT: Always confirm with the user before creating issues — describe the title, body, and labels for review first.",
+      parameters: Type.Object({
+        owner: Type.String({ description: "Repository owner." }),
+        repo: Type.String({ description: "Repository name." }),
+        title: Type.String({ description: "Issue title." }),
+        body: Type.Optional(Type.String({ description: "Issue description/body in markdown." })),
+        labels: Type.Optional(Type.Array(Type.String(), { description: "Labels to apply to the issue." })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await github.createIssue(params.owner, params.repo, params.title, params.body, params.labels);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "github_comment_issue",
+      label: "GitHub Comment on Issue",
+      description: "Add a comment to an existing GitHub issue or pull request.",
+      parameters: Type.Object({
+        owner: Type.String({ description: "Repository owner." }),
+        repo: Type.String({ description: "Repository name." }),
+        issueNumber: Type.Number({ description: "The issue or PR number." }),
+        body: Type.String({ description: "Comment body in markdown." }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await github.commentOnIssue(params.owner, params.repo, params.issueNumber, params.body);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "github_list_prs",
+      label: "GitHub List Pull Requests",
+      description: "List pull requests in a GitHub repository. Can filter by state: open, closed, or all.",
+      parameters: Type.Object({
+        owner: Type.String({ description: "Repository owner." }),
+        repo: Type.String({ description: "Repository name." }),
+        state: Type.Optional(Type.String({ description: "PR state filter: 'open' (default), 'closed', or 'all'." })),
+        perPage: Type.Optional(Type.Number({ description: "Max PRs to return (default 20)." })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await github.listPRs(params.owner, params.repo, params.state ?? "open", params.perPage ?? 20);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "github_read_pr",
+      label: "GitHub Read Pull Request",
+      description: "Read the full details of a specific pull request including diff stats and description.",
+      parameters: Type.Object({
+        owner: Type.String({ description: "Repository owner." }),
+        repo: Type.String({ description: "Repository name." }),
+        prNumber: Type.Number({ description: "The PR number." }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await github.readPR(params.owner, params.repo, params.prNumber);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "github_read_file",
+      label: "GitHub Read File",
+      description: "Read a file or list a directory from a GitHub repository. Provide the file path relative to the repo root. For directories, returns the listing. For files, returns the content.",
+      parameters: Type.Object({
+        owner: Type.String({ description: "Repository owner." }),
+        repo: Type.String({ description: "Repository name." }),
+        path: Type.String({ description: "File or directory path relative to repo root (e.g. 'src/index.ts' or 'src/')." }),
+        ref: Type.Optional(Type.String({ description: "Branch, tag, or commit SHA (default: repo's default branch)." })),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await github.readFile(params.owner, params.repo, params.path, params.ref);
+        return { content: [{ type: "text" as const, text: result }], details: {} };
+      },
+    },
+    {
+      name: "github_search",
+      label: "GitHub Search",
+      description: "Search GitHub for code or issues. Specify type='code' to search code, or type='issues' to search issues. Optionally scope to a specific owner/repo.",
+      parameters: Type.Object({
+        query: Type.String({ description: "Search query string." }),
+        type: Type.String({ description: "Search type: 'code' or 'issues'." }),
+        owner: Type.Optional(Type.String({ description: "Scope search to this owner/org." })),
+        repo: Type.Optional(Type.String({ description: "Scope search to this repo (requires owner)." })),
+        state: Type.Optional(Type.String({ description: "For issue search: 'open', 'closed', or omit for all." })),
+      }),
+      async execute(_toolCallId, params) {
+        if (params.type === "code") {
+          const result = await github.searchCode(params.query, params.owner, params.repo);
+          return { content: [{ type: "text" as const, text: result }], details: {} };
+        } else {
+          const result = await github.searchIssues(params.query, params.owner, params.repo, params.state);
+          return { content: [{ type: "text" as const, text: result }], details: {} };
+        }
       },
     },
   ];
@@ -7470,6 +7613,7 @@ const cachedStaticTools: ToolDefinition[] = [
   ...buildWebPublishTools(),
   ...buildOversightTools(),
   ...buildSemanticVaultTools(),
+  ...buildGitHubTools(),
 ];
 
 {

@@ -22,7 +22,7 @@ INTERVIEW_PORT = "19847"
 
 [agent]
 expertMode = true
-integrations = ["google-mail:1.0.0"]
+integrations = ["google-mail:1.0.0", "github:1.0.0"]
 
 [userenv]
 
