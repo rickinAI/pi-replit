@@ -11,30 +11,62 @@ export function isPromptConfigured(): boolean {
   return BNKR_API_KEY.length > 0;
 }
 
-async function bnkrFetch(path: string, body?: Record<string, any>): Promise<any> {
+async function bnkrFetch(path: string, body?: Record<string, any>, retries = 3, timeoutMs = 30000): Promise<any> {
   const url = `${BNKR_BASE_URL}${path}`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
-  try {
-    const opts: RequestInit = {
-      method: body ? "POST" : "GET",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${BNKR_API_KEY}`,
-        "X-Wallet-Address": BNKR_WALLET,
-      },
-      signal: controller.signal,
-    };
-    if (body) opts.body = JSON.stringify(body);
-    const res = await fetch(url, opts);
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`BNKR API ${path} failed (${res.status}): ${text}`);
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const opts: RequestInit = {
+        method: body ? "POST" : "GET",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${BNKR_API_KEY}`,
+          "X-Wallet-Address": BNKR_WALLET,
+        },
+        signal: controller.signal,
+      };
+      if (body) opts.body = JSON.stringify(body);
+      const res = await fetch(url, opts);
+      if (!res.ok) {
+        const text = await res.text();
+        const statusErr = new Error(`BNKR API ${path} failed (${res.status}): ${text}`);
+        console.error(`[bnkr] ${path} attempt ${attempt}/${retries} HTTP ${res.status}: ${text.slice(0, 500)}`);
+        if (res.status === 401 || res.status === 403) {
+          console.error(`[bnkr] AUTH ERROR — BNKR API key may be invalid or expired`);
+          throw statusErr;
+        }
+        if (res.status >= 400 && res.status < 500) throw statusErr;
+        lastError = statusErr;
+      } else {
+        return res.json();
+      }
+    } catch (err) {
+      clearTimeout(timer);
+      if (err instanceof Error && err.name === "AbortError") {
+        console.error(`[bnkr] ${path} attempt ${attempt}/${retries} timed out after ${timeoutMs}ms`);
+        lastError = new Error(`BNKR API ${path} timed out after ${timeoutMs}ms`);
+      } else if (err instanceof Error && (err.message.includes("401") || err.message.includes("403"))) {
+        throw err;
+      } else {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[bnkr] ${path} attempt ${attempt}/${retries} network error: ${msg}`);
+        lastError = err instanceof Error ? err : new Error(msg);
+      }
+    } finally {
+      clearTimeout(timer);
     }
-    return res.json();
-  } finally {
-    clearTimeout(timeout);
+
+    if (attempt < retries) {
+      const delay = Math.min(1000 * Math.pow(2, attempt - 1), 8000);
+      console.log(`[bnkr] Retrying ${path} in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
   }
+
+  throw lastError || new Error(`BNKR API ${path} failed after ${retries} attempts`);
 }
 
 async function promptFetch(path: string, method: "GET" | "POST" = "GET", body?: Record<string, any>): Promise<any> {
@@ -228,12 +260,21 @@ export async function openPolymarketPosition(params: {
     };
   }
 
-  return bnkrFetch("/polymarket/open", {
-    market_id: params.market_id,
-    direction: params.direction,
-    amount_usd: params.amount_usd,
-    wallet: BNKR_WALLET,
-  });
+  try {
+    console.log(`[bnkr] Opening position: market=${params.market_id} ${params.direction} $${params.amount_usd}`);
+    const result = await bnkrFetch("/polymarket/open", {
+      market_id: params.market_id,
+      direction: params.direction,
+      amount_usd: params.amount_usd,
+      wallet: BNKR_WALLET,
+    });
+    console.log(`[bnkr] Position opened: order_id=${result.order_id} status=${result.status} tx=${result.tx_hash}`);
+    return result;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[bnkr] openPolymarketPosition FAILED: market=${params.market_id} ${params.direction} $${params.amount_usd} — ${msg}`);
+    throw err;
+  }
 }
 
 export async function closePolymarketPosition(orderId: string): Promise<{ tx_hash: string; exit_odds: number }> {
@@ -241,7 +282,16 @@ export async function closePolymarketPosition(orderId: string): Promise<{ tx_has
     console.log(`[bnkr] SHADOW: closePolymarketPosition ${orderId}`);
     return { tx_hash: "", exit_odds: 0 };
   }
-  return bnkrFetch("/polymarket/close", { order_id: orderId, wallet: BNKR_WALLET });
+  try {
+    console.log(`[bnkr] Closing position: ${orderId}`);
+    const result = await bnkrFetch("/polymarket/close", { order_id: orderId, wallet: BNKR_WALLET });
+    console.log(`[bnkr] Position closed: ${orderId} tx=${result.tx_hash}`);
+    return result;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[bnkr] closePolymarketPosition FAILED: ${orderId} — ${msg}`);
+    throw err;
+  }
 }
 
 export async function getPolymarketPositions(): Promise<BnkrPolymarketOrder[]> {
@@ -252,4 +302,41 @@ export async function getPolymarketPositions(): Promise<BnkrPolymarketOrder[]> {
 export async function getPolymarketPositionPnL(orderId: string): Promise<{ pnl: number; pnl_pct: number; current_odds: number }> {
   if (!isConfigured()) return { pnl: 0, pnl_pct: 0, current_odds: 0 };
   return bnkrFetch(`/polymarket/pnl/${orderId}`);
+}
+
+export async function testConnectivity(): Promise<{ ok: boolean; apiConfigured: boolean; promptConfigured: boolean; apiReachable: boolean; promptReachable: boolean; apiError?: string; promptError?: string }> {
+  const result = {
+    ok: false,
+    apiConfigured: isConfigured(),
+    promptConfigured: isPromptConfigured(),
+    apiReachable: false,
+    promptReachable: false,
+    apiError: undefined as string | undefined,
+    promptError: undefined as string | undefined,
+  };
+
+  if (result.apiConfigured) {
+    try {
+      await bnkrFetch("/polymarket/positions", undefined, 1, 10000);
+      result.apiReachable = true;
+    } catch (err) {
+      result.apiError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  if (result.promptConfigured) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10000);
+      const res = await fetch(`${BNKR_PROMPT_BASE_URL}/health`, { signal: controller.signal });
+      clearTimeout(timer);
+      result.promptReachable = res.ok || res.status < 500;
+    } catch (err) {
+      result.promptError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  result.ok = (result.apiConfigured && result.apiReachable) || (!result.apiConfigured && result.promptConfigured && result.promptReachable);
+  console.log(`[bnkr] Connectivity test: api=${result.apiReachable} prompt=${result.promptReachable} ok=${result.ok}${result.apiError ? ` apiErr=${result.apiError}` : ""}${result.promptError ? ` promptErr=${result.promptError}` : ""}`);
+  return result;
 }
