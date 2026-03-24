@@ -474,8 +474,8 @@ export async function scoreAndPromoteCandidate(address: string, source: "trade_m
         }
       }
       try {
-        const { sendMessage } = await import("./telegram.js");
-        await sendMessage(`⛔ Wallet decode rejected <b>${wallet.alias}</b> (${address.slice(0, 10)}…)\n\nStrategy: ${profile.strategy}\n${profile.reasoning}`, "HTML");
+        const { sendToChannel } = await import("./telegram.js");
+        await sendToChannel("trading", `⛔ Wallet decode rejected <b>${wallet.alias}</b> (${address.slice(0, 10)}…)\n\nStrategy: ${profile.strategy}\n${profile.reasoning}`, "HTML");
       } catch {}
       return { added: false, wallet, reason: `decode_rejected: ${profile.reasoning}` };
     }
@@ -492,8 +492,8 @@ export async function scoreAndPromoteCandidate(address: string, source: "trade_m
     console.log(`[scout] Added ${wallet.alias} (score: ${wallet.composite_score.toFixed(2)}, niche: ${wallet.niche}, strategy: ${profile.strategy}, maxCopy: $${profile.maxCopyPrice}, source: ${source})`);
 
     try {
-      const { sendMessage } = await import("./telegram.js");
-      await sendMessage(`✅ Wallet admitted: <b>${wallet.alias}</b>\n\nStrategy: ${profile.strategy}\nMax copy price: $${profile.maxCopyPrice}\nMin trade size: $${profile.minTradeSize.toFixed(0)}\n${profile.reasoning}`, "HTML");
+      const { sendToChannel } = await import("./telegram.js");
+      await sendToChannel("trading", `✅ Wallet admitted: <b>${wallet.alias}</b>\n\nStrategy: ${profile.strategy}\nMax copy price: $${profile.maxCopyPrice}\nMin trade size: $${profile.minTradeSize.toFixed(0)}\n${profile.reasoning}`, "HTML");
     } catch {}
 
     return { added: true, wallet };
@@ -620,14 +620,14 @@ export async function runAnomalyScanner(): Promise<{
 
       if (!shouldSuppressDiscoveryNotification(addedAddresses)) {
         try {
-          const { sendMessage } = await import("./telegram.js");
+          const { sendToChannel } = await import("./telegram.js");
           const fmt = await import("./telegram-format.js");
           const anomalyLines = [
             fmt.buildCategoryHeader(fmt.CATEGORY_BADGES.DISCOVERY, "New Whale Candidate"),
             "",
             ...details.map(d => fmt.escapeHtml(d)),
           ];
-          sendMessage(fmt.truncateToTelegramLimit(anomalyLines.join("\n")), "HTML").catch(() => {});
+          sendToChannel("trading", fmt.truncateToTelegramLimit(anomalyLines.join("\n")), "HTML").catch(() => {});
         } catch {}
         markDiscoveryNotificationSent(addedAddresses);
       } else {

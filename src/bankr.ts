@@ -764,7 +764,7 @@ export async function closePosition(positionId: string, exitPrice: number, close
         try {
           const tg = await import("./telegram.js");
           const blacklistExpiry = new Date(Date.now() + blacklistMs).toISOString().slice(0, 16).replace("T", " ");
-          await tg.sendMessage(
+          await tg.sendToChannel("trading",
             `🚫 <b>BLACKLIST</b> Thesis invalidated after stop-loss\n\n` +
             `<b>Market:</b> ${invalidated.asset.slice(0, 80)}\n` +
             `<b>Thesis:</b> ${pos.thesis_id}\n` +

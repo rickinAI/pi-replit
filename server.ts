@@ -3296,6 +3296,27 @@ function buildGitHubTools(): ToolDefinition[] {
         }
       },
     },
+    {
+      name: "telegram_send",
+      label: "Send Telegram Message",
+      description: "Send a message to one of Rickin's 12 Telegram channels. Channels: direct (default), retuned, moodys, family, real-estate, ai-tech, bitcoin, markets, news, intel, trading, mission-control. Use HTML formatting (<b>bold</b>, <i>italic</i>, <code>code</code>).",
+      parameters: Type.Object({
+        message: Type.String({ description: "The message to send (max 4000 chars). Supports HTML formatting." }),
+        channel: Type.Optional(Type.String({ description: "Target channel key. Default: 'direct'. Options: direct, retuned, moodys, family, real-estate, ai-tech, bitcoin, markets, news, intel, trading, mission-control" })),
+      }),
+      async execute(_toolCallId, params) {
+        const tg = await import("./src/telegram.js");
+        const ch = params.channel || "direct";
+        if (!tg.VALID_CHANNELS.includes(ch)) {
+          return { content: [{ type: "text" as const, text: `Error: Invalid channel '${ch}'. Valid: ${tg.VALID_CHANNELS.join(", ")}` }], details: {} };
+        }
+        const result = await tg.sendToChannel(ch, params.message, "HTML");
+        if (!result.ok) {
+          return { content: [{ type: "text" as const, text: `Failed to send: ${result.error}` }], details: {} };
+        }
+        return { content: [{ type: "text" as const, text: `Message sent to #${ch} (messageId: ${result.messageId})` }], details: {} };
+      },
+    },
   ];
 }
 
@@ -5656,7 +5677,7 @@ app.post("/api/wealth-engine/portfolio", async (req: Request, res: Response) => 
           lines.push(`EOY Target: ${fmtD(eoyRes.rows[0].value)} (${(eoyRes.rows[0].value / value).toFixed(0)}x from here)`);
         }
       } catch {}
-      telegram.sendMessage(lines.join("\n")).catch(() => {});
+      telegram.sendToChannel("trading", lines.join("\n"), "Markdown").catch(() => {});
     }
 
     res.json({ ok: true, portfolio: newPortfolio, peak: newPeak });
@@ -6165,12 +6186,21 @@ app.put("/api/controls/risk-config", async (req: Request, res: Response) => {
 app.post("/api/telegram/send", async (req: Request, res: Response) => {
   if (!WE_CONTROL_USERS.has((req as any).user)) { res.status(403).json({ error: "Forbidden" }); return; }
   try {
-    const { message, parseMode } = req.body;
+    const { message, channel, parse_mode, parseMode } = req.body;
     if (!message || typeof message !== "string") { res.status(400).json({ error: "message (string) is required" }); return; }
     if (message.length > 4000) { res.status(400).json({ error: "message exceeds 4000 char limit" }); return; }
     const tg = await import("./src/telegram.js");
-    const msgId = await tg.sendMessage(message, parseMode || "Markdown");
-    res.json({ ok: true, messageId: msgId });
+    const targetChannel = channel || "direct";
+    if (!tg.VALID_CHANNELS.includes(targetChannel)) {
+      res.status(400).json({ error: `Invalid channel: ${targetChannel}. Valid: ${tg.VALID_CHANNELS.join(", ")}` });
+      return;
+    }
+    const result = await tg.sendToChannel(targetChannel, message, parse_mode || parseMode || "HTML");
+    if (!result.ok) {
+      res.status(500).json({ error: result.error });
+      return;
+    }
+    res.json({ ok: true, messageId: result.messageId, channel: targetChannel });
   } catch (err: any) {
     res.status(500).json({ error: String(err) });
   }
@@ -9254,7 +9284,7 @@ async function runStartupRecovery() {
     }
     if (missedJobs.length > 0) {
       console.warn(`[recovery] Missed job windows detected:\n  - ${missedJobs.join("\n  - ")}`);
-      telegram.sendMessage(`⚠️ *Missed Job Windows*\n\n${missedJobs.map(j => `• ${j}`).join("\n")}`).catch(() => {});
+      telegram.sendToChannel("mission-control", `⚠️ *Missed Job Windows*\n\n${missedJobs.map(j => `• ${j}`).join("\n")}`, "Markdown").catch(() => {});
     } else {
       console.log("[recovery] No missed job windows detected");
     }
@@ -9296,7 +9326,7 @@ async function sendStartupNotification(googleStatus: { connected: boolean; email
     `📧 Google: ${googleLine}`,
   ].join("\n");
 
-  await telegram.sendMessage(msg);
+  await telegram.sendToChannel("mission-control", msg, "Markdown");
 
   try {
     const pool = (await import("./src/db.js")).getPool();
@@ -9318,7 +9348,7 @@ async function startServer(maxRetries = 5) {
   await alerts.init();
   await telegram.init();
   oversight.setTelegramNotifier(async (msg: string) => {
-    await telegram.sendMessage(msg, "HTML");
+    await telegram.sendToChannel("trading", msg, "HTML");
   });
   await scheduledJobs.init();
   try {
@@ -9414,7 +9444,7 @@ async function startServer(maxRetries = 5) {
       console.log(`[boot] Google connected: ${googleStatus.email} (Gmail, Calendar, Drive, Sheets)`);
     } else {
       console.warn(`[boot] Google not connected: ${googleStatus.error}`);
-      telegram.sendMessage(`⚠️ *Google Disconnected*\n\nGmail, Calendar, Drive, Sheets are offline.\nReconnect: /api/gmail/auth`).catch(() => {});
+      telegram.sendToChannel("mission-control", `⚠️ *Google Disconnected*\n\nGmail, Calendar, Drive, Sheets are offline.\nReconnect: /api/gmail/auth`, "Markdown").catch(() => {});
     }
   } catch {}
 
@@ -9430,7 +9460,7 @@ async function startServer(maxRetries = 5) {
         const now = Date.now();
         if (now - lastGoogleAlertSent > 12 * 60 * 60 * 1000) {
           lastGoogleAlertSent = now;
-          telegram.sendMessage(`⚠️ *Google Auth Failed*\n\nToken refresh failed. Gmail jobs are silently failing.\nReconnect: /api/gmail/auth`).catch(() => {});
+          telegram.sendToChannel("mission-control", `⚠️ *Google Auth Failed*\n\nToken refresh failed. Gmail jobs are silently failing.\nReconnect: /api/gmail/auth`, "Markdown").catch(() => {});
         }
       }
     } catch (err: any) {
@@ -9438,7 +9468,7 @@ async function startServer(maxRetries = 5) {
       const now = Date.now();
       if (now - lastGoogleAlertSent > 12 * 60 * 60 * 1000) {
         lastGoogleAlertSent = now;
-        telegram.sendMessage(`⚠️ *Google Auth Error*\n\n${err.message}\nReconnect: /api/gmail/auth`).catch(() => {});
+        telegram.sendToChannel("mission-control", `⚠️ *Google Auth Error*\n\n${err.message}\nReconnect: /api/gmail/auth`, "Markdown").catch(() => {});
       }
     }
   }, 6 * 60 * 60 * 1000);
@@ -9670,14 +9700,14 @@ async function startServer(maxRetries = 5) {
               if (res.ok) {
                 if (uptimeFailCount > 0) {
                   console.log(`[uptime] rickin.live recovered after ${uptimeFailCount} failed checks`);
-                  telegram.sendMessage(`✅ *rickin.live recovered*\n\nSite is back online after ${uptimeFailCount} failed health checks.`).catch(() => {});
+                  telegram.sendToChannel("mission-control", `✅ *rickin.live recovered*\n\nSite is back online after ${uptimeFailCount} failed health checks.`, "Markdown").catch(() => {});
                 }
                 uptimeFailCount = 0;
               } else {
                 uptimeFailCount++;
                 console.error(`[uptime] rickin.live health check failed: HTTP ${res.status} (fail #${uptimeFailCount})`);
                 if (uptimeFailCount >= 2 && Date.now() - lastUptimeAlert > 30 * 60 * 1000) {
-                  telegram.sendMessage(`🔴 *rickin.live DOWN*\n\nHealth check failed ${uptimeFailCount}x in a row.\nHTTP ${res.status}\nCheck deployment immediately.`).catch(() => {});
+                  telegram.sendToChannel("mission-control", `🔴 *rickin.live DOWN*\n\nHealth check failed ${uptimeFailCount}x in a row.\nHTTP ${res.status}\nCheck deployment immediately.`, "Markdown").catch(() => {});
                   lastUptimeAlert = Date.now();
                 }
               }
@@ -9686,7 +9716,7 @@ async function startServer(maxRetries = 5) {
               const msg = err instanceof Error ? err.message : String(err);
               console.error(`[uptime] rickin.live unreachable: ${msg} (fail #${uptimeFailCount})`);
               if (uptimeFailCount >= 2 && Date.now() - lastUptimeAlert > 30 * 60 * 1000) {
-                telegram.sendMessage(`🔴 *rickin.live DOWN*\n\nHealth endpoint unreachable: ${msg}\nFailed ${uptimeFailCount}x in a row.\nCheck deployment immediately.`).catch(() => {});
+                telegram.sendToChannel("mission-control", `🔴 *rickin.live DOWN*\n\nHealth endpoint unreachable: ${msg}\nFailed ${uptimeFailCount}x in a row.\nCheck deployment immediately.`, "Markdown").catch(() => {});
                 lastUptimeAlert = Date.now();
               }
             }

@@ -1900,7 +1900,7 @@ async function runCopyTradeScan(job: ScheduledJob): Promise<void> {
     }
 
     if (result.trades_opened > 0 || result.trades_closed > 0 || exitResult.alerts.length > 0) {
-      const { sendMessage } = await import("./telegram.js");
+      const { sendToChannel } = await import("./telegram.js");
       const fmt = await import("./telegram-format.js");
       const notifyLines = [
         fmt.buildCategoryHeader(fmt.CATEGORY_BADGES.COPY_TRADE, "Scan Complete"),
@@ -1914,7 +1914,7 @@ async function runCopyTradeScan(job: ScheduledJob): Promise<void> {
       if (result.trades_closed > 0) notifyLines.push(`🔴 Closed ${result.trades_closed} (whale exit)`);
       if (exitResult.closed > 0) notifyLines.push(`🏁 Closed ${exitResult.closed} (market resolved)`);
       for (const alert of exitResult.alerts) notifyLines.push(fmt.escapeHtml(alert));
-      sendMessage(fmt.truncateToTelegramLimit(notifyLines.join("\n")), "HTML").catch(() => {});
+      sendToChannel("trading", fmt.truncateToTelegramLimit(notifyLines.join("\n")), "HTML").catch(() => {});
     }
 
     sendJobCompletionNotification({
@@ -1981,7 +1981,7 @@ async function runSeedWallets(job: ScheduledJob): Promise<void> {
       }).filter(Boolean);
 
       if (!pmScout.shouldSuppressDiscoveryNotification(addedWallets)) {
-        const { sendMessage } = await import("./telegram.js");
+        const { sendToChannel } = await import("./telegram.js");
         const fmt = await import("./telegram-format.js");
         const seedLines = [
           fmt.buildCategoryHeader(fmt.CATEGORY_BADGES.DISCOVERY, "Seed Complete"),
@@ -1991,7 +1991,7 @@ async function runSeedWallets(job: ScheduledJob): Promise<void> {
           "",
           `Registry total: ${result.candidates_found} candidates`,
         ];
-        sendMessage(fmt.truncateToTelegramLimit(seedLines.join("\n")), "HTML").catch(() => {});
+        sendToChannel("trading", fmt.truncateToTelegramLimit(seedLines.join("\n")), "HTML").catch(() => {});
         pmScout.markDiscoveryNotificationSent(addedWallets);
       } else {
         console.log(`[seed-wallets] Suppressed duplicate DISCOVERY notification (${addedWallets.length} wallets)`);

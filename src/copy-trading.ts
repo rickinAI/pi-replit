@@ -677,7 +677,7 @@ export async function runCopyTradeScan(): Promise<{
         tradesOpened++;
 
         try {
-          const { sendMessage } = await import("./telegram.js");
+          const { sendToChannel } = await import("./telegram.js");
           const fmt = await import("./telegram-format.js");
           const nicheEmoji = fmt.getNicheEmoji(wallet.niche);
           const marketBadge = fmt.getMarketBadge(wallet.niche);
@@ -702,7 +702,7 @@ export async function runCopyTradeScan(): Promise<{
             fmt.SEPARATOR,
             `Portfolio impact: $${signalResult.positionSize} (${sizeLabel})`,
           ];
-          sendMessage(fmt.truncateToTelegramLimit(lines.join("\n")), "HTML").catch(() => {});
+          sendToChannel("trading", fmt.truncateToTelegramLimit(lines.join("\n")), "HTML").catch(() => {});
         } catch {}
       } else {
         errors.push(`Failed to copy ${entry.market_question.slice(0, 40)}: ${result.error}`);
@@ -715,7 +715,7 @@ export async function runCopyTradeScan(): Promise<{
   const redeemResult = await autoRedeemResolved();
   if (redeemResult.redeemed > 0) {
     try {
-      const { sendMessage } = await import("./telegram.js");
+      const { sendToChannel } = await import("./telegram.js");
       const fmt = await import("./telegram-format.js");
       for (const alert of redeemResult.alerts) {
         const lines = [
@@ -723,7 +723,7 @@ export async function runCopyTradeScan(): Promise<{
           "",
           fmt.escapeHtml(alert),
         ];
-        sendMessage(fmt.truncateToTelegramLimit(lines.join("\n")), "HTML").catch(() => {});
+        sendToChannel("trading", fmt.truncateToTelegramLimit(lines.join("\n")), "HTML").catch(() => {});
       }
     } catch {}
   }

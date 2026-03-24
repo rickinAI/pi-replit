@@ -6,36 +6,60 @@ import {
   escapeAndPreserveHtmlTags,
 } from "./telegram-format.js";
 
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
-const CHAT_ID = process.env.TELEGRAM_CHAT_ID || "";
+const BOT_TOKEN = process.env.TG_BOT_TOKEN || "";
+const CHAT_ID = process.env.TG_CHANNEL_DIRECT || process.env.TELEGRAM_CHAT_ID || "";
 const API_BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
-const ALERTS_BOT_TOKEN = process.env.TELEGRAM_ALERTS_BOT_TOKEN || "";
-const ALERTS_CHAT_ID = process.env.TELEGRAM_ALERTS_CHAT_ID || process.env.TELEGRAM_CHAT_ID || "";
-const ALERTS_API_BASE = `https://api.telegram.org/bot${ALERTS_BOT_TOKEN}`;
+const CHANNEL_MAP: Record<string, string> = {
+  "direct": process.env.TG_CHANNEL_DIRECT || "",
+  "retuned": process.env.TG_CHANNEL_RETUNED || "",
+  "moodys": process.env.TG_CHANNEL_MOODYS || "",
+  "family": process.env.TG_CHANNEL_FAMILY || "",
+  "real-estate": process.env.TG_CHANNEL_REAL_ESTATE || "",
+  "ai-tech": process.env.TG_CHANNEL_AI_TECH || "",
+  "bitcoin": process.env.TG_CHANNEL_BITCOIN || "",
+  "markets": process.env.TG_CHANNEL_MARKETS || "",
+  "news": process.env.TG_CHANNEL_NEWS || "",
+  "intel": process.env.TG_CHANNEL_INTEL || "",
+  "trading": process.env.TG_CHANNEL_TRADING || "",
+  "mission-control": process.env.TG_CHANNEL_MISSION_CONTROL || "",
+};
 
-function isAlertsBotConfigured(): boolean {
-  return ALERTS_BOT_TOKEN.length > 0 && ALERTS_CHAT_ID.length > 0;
-}
+export type TelegramChannel = keyof typeof CHANNEL_MAP;
 
-export async function sendAlertsBotMessage(text: string, parseMode: string = "Markdown"): Promise<boolean> {
-  if (!isAlertsBotConfigured()) return false;
+export const VALID_CHANNELS = Object.keys(CHANNEL_MAP);
+
+export async function sendToChannel(
+  channel: string,
+  text: string,
+  parseMode: string = "HTML"
+): Promise<{ ok: boolean; messageId?: number; error?: string }> {
+  if (!BOT_TOKEN) return { ok: false, error: "TG_BOT_TOKEN not configured" };
+  const chatId = CHANNEL_MAP[channel];
+  if (!chatId) return { ok: false, error: `Unknown channel: ${channel}. Valid: ${VALID_CHANNELS.join(", ")}` };
   try {
-    const resp = await fetch(`${ALERTS_API_BASE}/sendMessage`, {
+    const resp = await fetch(`${API_BASE}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: ALERTS_CHAT_ID, text, parse_mode: parseMode }),
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode: parseMode, disable_web_page_preview: true }),
     });
     if (!resp.ok) {
       const body = await resp.text();
-      console.error(`[telegram-alerts] sendMessage failed (${resp.status}): ${body}`);
-      return false;
+      console.error(`[telegram] sendToChannel(${channel}) failed (${resp.status}): ${body}`);
+      return { ok: false, error: `API error ${resp.status}: ${body.slice(0, 200)}` };
     }
-    return true;
+    const data = await resp.json();
+    return { ok: true, messageId: data.result?.message_id };
   } catch (err) {
-    console.error("[telegram-alerts] sendMessage failed:", err instanceof Error ? err.message : err);
-    return false;
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[telegram] sendToChannel(${channel}) error:`, msg);
+    return { ok: false, error: msg };
   }
+}
+
+export async function sendAlertsBotMessage(text: string, parseMode: string = "Markdown"): Promise<boolean> {
+  const result = await sendToChannel("mission-control", text, parseMode);
+  return result.ok;
 }
 
 import { randomBytes } from "crypto";
@@ -745,17 +769,14 @@ async function handleShadowCommand(): Promise<string> {
 
 async function handleAlertsCommand(): Promise<string> {
   const mode = await getMode();
-  const darkNodeStatus = isConfigured() ? "✅ Connected" : "❌ Disconnected";
-  const alertsStatus = isAlertsBotConfigured() ? "✅ Connected" : "❌ Disconnected";
+  const botStatus = isConfigured() ? "✅ Connected" : "❌ Disconnected";
+  const configuredChannels = VALID_CHANNELS.filter(ch => CHANNEL_MAP[ch]);
   return [
-    `${mode} *Telegram Bots Status*`,
+    `${mode} *Telegram Status*`,
     "",
-    `🤖 *DarkNode* (trading): ${darkNodeStatus}`,
-    "  → Scout signals, BANKR execution, oversight, shadow trades, job failures",
-    "",
-    `📋 *Mission Control* (personal + status): ${alertsStatus}`,
-    "  → Daily briefs, calendar, email, stock watchlist, task alerts",
-    "  → DarkNode summary (9am/12pm/3pm/6pm/9pm ET)",
+    `🤖 Bot: ${botStatus}`,
+    `📡 Channels: ${configuredChannels.length}/12`,
+    `  ${configuredChannels.join(", ")}`,
   ].join("\n");
 }
 
@@ -1368,7 +1389,7 @@ async function checkDeadManSwitches(): Promise<void> {
               "",
               `[/scout to trigger manually]`,
             ];
-            await sendMessage(fmt.truncateToTelegramLimit(dmLines.join("\n")), "HTML");
+            await sendToChannel("mission-control", fmt.truncateToTelegramLimit(dmLines.join("\n")), "HTML");
           }
         } else {
           delete lastDeadManAlert["pm-scout"];
@@ -1399,7 +1420,7 @@ async function checkDeadManSwitches(): Promise<void> {
             `Last tick: ${Math.floor(minsSince)}min ago (threshold: 30min)`,
             `Action: Server may have restarted or crashed`,
           ];
-          await sendMessage(fmtBm.truncateToTelegramLimit(bmLines.join("\n")), "HTML");
+          await sendToChannel("mission-control", fmtBm.truncateToTelegramLimit(bmLines.join("\n")), "HTML");
         }
       } else {
         delete lastDeadManAlert["bankr-monitor"];
@@ -1429,7 +1450,7 @@ async function checkDeadManSwitches(): Promise<void> {
               `Last run: ${Math.floor(hoursSince)}h ago (threshold: 8h)`,
               `Action: Check scheduled-jobs or restart`,
             ];
-            await sendMessage(fmtBa.truncateToTelegramLimit(baLines.join("\n")), "HTML");
+            await sendToChannel("mission-control", fmtBa.truncateToTelegramLimit(baLines.join("\n")), "HTML");
           }
         } else {
           delete lastDeadManAlert["bankr"];
@@ -1499,7 +1520,7 @@ export async function sendTradeAlert(params: {
   }
   if (params.reason) lines.push(`Reason: ${fmt.escapeHtml(params.reason)}`);
 
-  await sendMessage(lines.join("\n"), "HTML");
+  await sendToChannel("trading", lines.join("\n"), "HTML");
 }
 
 export async function sendScoutBrief(brief: string, chartUrls?: string[]): Promise<void> {
@@ -1518,7 +1539,7 @@ export async function sendScoutBrief(brief: string, chartUrls?: string[]): Promi
   const header = fmt.buildCategoryHeader(fmt.CATEGORY_BADGES.SCOUT, "Full Cycle Complete");
   const escaped = fmt.escapeHtml(brief);
   const msg = `${header}\n\n${escaped}`;
-  await sendMessage(fmt.truncateToTelegramLimit(msg), "HTML");
+  await sendToChannel("trading", fmt.truncateToTelegramLimit(msg), "HTML");
 }
 
 let lastPmNotifyHash = "";
@@ -1570,7 +1591,7 @@ async function flushDigestQueue(): Promise<void> {
   lines.push(`${events.length} events over last 4h`);
   lines.push(fmt.formatETTime());
 
-  await sendMessage(fmt.truncateToTelegramLimit(lines.join("\n")), "HTML");
+  await sendToChannel("mission-control", fmt.truncateToTelegramLimit(lines.join("\n")), "HTML");
   console.log(`[telegram] Digest flushed: ${events.length} events`);
 }
 
@@ -1604,7 +1625,7 @@ export async function sendJobCompletionNotification(params: {
       "",
       fmt.formatETTime(),
     ];
-    await sendMessage(fmt.truncateToTelegramLimit(lines.join("\n")), "HTML");
+    await sendToChannel("mission-control", fmt.truncateToTelegramLimit(lines.join("\n")), "HTML");
     return;
   }
 
@@ -1679,7 +1700,7 @@ export async function sendJobCompletionNotification(params: {
     lines.push(...detailLines);
   }
 
-  await sendMessage(fmt.truncateToTelegramLimit(lines.join("\n")), "HTML");
+  await sendToChannel("trading", fmt.truncateToTelegramLimit(lines.join("\n")), "HTML");
 }
 
 export async function sendShadowTradeNotification(params: {
@@ -1711,7 +1732,7 @@ export async function sendShadowTradeNotification(params: {
       "",
       `🎲 "Watching from the sidelines... for now."`,
     ];
-    await sendMessage(fmt.truncateToTelegramLimit(lines.join("\n")), "HTML");
+    await sendToChannel("trading", fmt.truncateToTelegramLimit(lines.join("\n")), "HTML");
   } else {
     const isWin = (params.pnl ?? 0) > 0;
     const statusIcon = isWin ? "✅" : "❌";
@@ -1774,7 +1795,7 @@ export async function sendShadowTradeNotification(params: {
       lines.push(runningLine);
     }
 
-    await sendMessage(fmt.truncateToTelegramLimit(lines.join("\n")), "HTML");
+    await sendToChannel("trading", fmt.truncateToTelegramLimit(lines.join("\n")), "HTML");
   }
 }
 
@@ -2046,7 +2067,7 @@ export async function sendDarkNodeSummary(): Promise<void> {
     `⚠️ Alerts: ${alerts.length > 0 ? alerts.join(" · ") : "None"}`,
   ];
 
-  await sendMessage(fmt.truncateToTelegramLimit(lines.join("\n")), "HTML");
+  await sendToChannel("trading", fmt.truncateToTelegramLimit(lines.join("\n")), "HTML");
   console.log("[telegram] DarkNode summary sent");
 }
 
@@ -2126,11 +2147,11 @@ async function handleResearchCommand(_args: string): Promise<string> {
 
 export async function init(): Promise<void> {
   if (!BOT_TOKEN) {
-    console.warn("[telegram] TELEGRAM_BOT_TOKEN not set — Telegram bot disabled");
+    console.warn("[telegram] TG_BOT_TOKEN not set — Telegram bot disabled");
     return;
   }
   if (!CHAT_ID) {
-    console.warn("[telegram] TELEGRAM_CHAT_ID not set — Telegram bot disabled");
+    console.warn("[telegram] TG_CHANNEL_DIRECT not set — Telegram bot disabled");
     return;
   }
 
@@ -2173,25 +2194,8 @@ export async function init(): Promise<void> {
     return;
   }
 
-  if (isAlertsBotConfigured()) {
-    try {
-      const alertsMe = await fetch(`${ALERTS_API_BASE}/getMe`, { method: "POST", headers: { "Content-Type": "application/json" } });
-      if (!alertsMe.ok) {
-        console.warn(`[telegram-alerts] Alerts bot getMe failed (${alertsMe.status}) — check TELEGRAM_ALERTS_BOT_TOKEN`);
-      } else {
-        const alertsData = await alertsMe.json();
-        if (alertsData.ok && alertsData.result?.username) {
-          console.log(`[telegram-alerts] Alerts bot connected: @${alertsData.result.username}`);
-        } else {
-          console.warn("[telegram-alerts] Alerts bot responded but identity unknown — check token");
-        }
-      }
-    } catch (err) {
-      console.warn("[telegram-alerts] Failed to connect alerts bot:", err instanceof Error ? err.message : err);
-    }
-  } else {
-    console.warn("[telegram-alerts] TELEGRAM_ALERTS_BOT_TOKEN not set — personal alerts bot disabled");
-  }
+  const configuredChannels = VALID_CHANNELS.filter(ch => CHANNEL_MAP[ch]);
+  console.log(`[telegram] ${configuredChannels.length}/12 channels configured: ${configuredChannels.join(", ")}`);
 
   webhookMode = await registerWebhook();
   if (!webhookMode) {
@@ -2279,7 +2283,6 @@ export async function forwardAlertToTelegram(event: { type: string; briefType?: 
   const tradingEventTypes = new Set(["scout", "bankr", "oversight", "circuit_breaker"]);
 
   if (event.type === "brief") {
-    if (!isAlertsBotConfigured()) return;
     const fingerprint = getNotificationFingerprint(event);
     if (isDuplicateNotification(fingerprint)) {
       console.log("[telegram] Suppressed duplicate brief notification");
@@ -2289,12 +2292,11 @@ export async function forwardAlertToTelegram(event: { type: string; briefType?: 
     const rawBody = event.telegramContent || event.content;
     const safeBody = escapeAndPreserveHtmlTags(rawBody);
     const truncated = truncateForTelegram(`${header}\n\n${safeBody}`, 4000);
-    await sendAlertsBotMessage(truncated, "HTML");
+    await sendToChannel("mission-control", truncated, "HTML");
     return;
   }
 
   if (event.type === "alert" && personalAlertTypes.has(event.alertType || "")) {
-    if (!isAlertsBotConfigured()) return;
     const fingerprint = getNotificationFingerprint(event);
     if (isDuplicateNotification(fingerprint)) {
       console.log(`[telegram] Suppressed duplicate ${event.alertType} notification: ${(event.title || "").slice(0, 50)}`);
@@ -2305,7 +2307,7 @@ export async function forwardAlertToTelegram(event: { type: string; briefType?: 
     const escapedTitle = escapeHtml(event.title || "Alert");
     const escapedContent = escapeHtml(event.content);
     const msg = `${mode} ${tag} <b>${escapedTitle}</b>\n${priorityCircle} ${escapeHtml(priority)}\n━━━━━━━━━━━━\n${escapedContent}`;
-    await sendAlertsBotMessage(msg, "HTML");
+    await sendToChannel("direct", msg, "HTML");
     return;
   }
 
@@ -2325,6 +2327,7 @@ export async function forwardAlertToTelegram(event: { type: string; briefType?: 
     const icon = tradingIcons[event.type] || "🔔";
     const escapedTitle = escapeHtml(event.title || "Alert");
     const escapedContent = escapeHtml(event.content);
-    await sendMessage(`${mode} ${icon} <b>${escapedTitle}</b>\n━━━━━━━━━━━━\n${escapedContent}`, "HTML");
+    const channel = event.type === "circuit_breaker" ? "mission-control" : "trading";
+    await sendToChannel(channel, `${mode} ${icon} <b>${escapedTitle}</b>\n━━━━━━━━━━━━\n${escapedContent}`, "HTML");
   }
 }
