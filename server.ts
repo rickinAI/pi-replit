@@ -4024,6 +4024,52 @@ app.use("/open", express.static("data/vault/Open", { fallthrough: false }), (_er
 
 const AUTH_PUBLIC_PATHS = new Set(["/login.html", "/login.css", "/api/login", "/health", "/manifest.json", "/baby-manifest.json", "/icons/icon-180.png", "/icons/icon-192.png", "/icons/icon-512.png", "/icons/baby/icon-180.png", "/icons/baby/icon-192.png", "/icons/baby/icon-512.png", "/api/healthcheck"]);
 
+const PUBLIC_PAGE_DATA_APIS: Record<string, string[]> = {
+  "wealth-engines": ["/api/wealth-engines/data"],
+  "wealth-engines-pnl": ["/api/wealth-engines/pnl-data"],
+};
+
+let publicPagesSet = new Set<string>();
+let publicPagesDataPaths = new Set<string>();
+
+function rebuildPublicPagesDataPaths() {
+  publicPagesDataPaths.clear();
+  for (const slug of publicPagesSet) {
+    const apis = PUBLIC_PAGE_DATA_APIS[slug];
+    if (apis) for (const p of apis) publicPagesDataPaths.add(p);
+  }
+}
+
+async function loadPublicPages(): Promise<void> {
+  try {
+    const dbMod = await import("./src/db.js");
+    const pool = dbMod.getPool();
+    const res = await pool.query(`SELECT value FROM app_config WHERE key = 'public_pages'`);
+    if (res.rows.length > 0) {
+      const val = res.rows[0].value;
+      const arr = Array.isArray(val) ? val : (typeof val === "string" ? JSON.parse(val) : []);
+      publicPagesSet = new Set(arr.filter((s: unknown) => typeof s === "string"));
+    } else {
+      publicPagesSet = new Set();
+    }
+  } catch {
+    publicPagesSet = new Set();
+  }
+  rebuildPublicPagesDataPaths();
+}
+
+async function setPublicPages(slugs: string[]): Promise<void> {
+  const dbMod = await import("./src/db.js");
+  const pool = dbMod.getPool();
+  await pool.query(
+    `INSERT INTO app_config (key, value, updated_at) VALUES ('public_pages', $1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = $2`,
+    [JSON.stringify(slugs), Date.now()]
+  );
+  publicPagesSet = new Set(slugs);
+  rebuildPublicPagesDataPaths();
+}
+
 async function authMiddleware(req: Request, res: Response, next: NextFunction) {
   if (!APP_PASSWORD) { next(); return; }
   if (AUTH_PUBLIC_PATHS.has(req.path)) { next(); return; }
@@ -4033,16 +4079,11 @@ async function authMiddleware(req: Request, res: Response, next: NextFunction) {
   if (req.path === "/api/telegram/webhook") { next(); return; }
   if (req.path === "/api/resend/webhook") { next(); return; }
 
-  if (req.path === "/pages/wealth-engines" || req.path === "/pages/wealth-engines-pnl" || req.path === "/api/wealth-engines/data" || req.path === "/api/wealth-engines/pnl-data") {
-    try {
-      const dbMod = await import("./src/db.js");
-      const pool = dbMod.getPool();
-      const pubRes = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_public'`);
-      if (pubRes.rows.length > 0 && (pubRes.rows[0].value === true || pubRes.rows[0].value === "true")) {
-        next(); return;
-      }
-    } catch {}
+  if (req.path.startsWith("/pages/")) {
+    const slug = req.path.slice(7);
+    if (slug && publicPagesSet.has(slug)) { next(); return; }
   }
+  if (publicPagesDataPaths.has(req.path)) { next(); return; }
 
   const token = req.signedCookies?.auth;
   if (token && USERS[token]) { (req as any).user = token; next(); return; }
@@ -6974,6 +7015,31 @@ app.get("/pages/:slug", async (req: Request, res: Response) => {
   res.sendFile(filePath);
 });
 
+app.post("/api/pages/:slug/public", async (req: Request, res: Response) => {
+  const slug = req.params.slug.toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  if (!slug) { res.status(400).json({ error: "Invalid slug" }); return; }
+
+  const filePath = path.join(PAGES_DIR, `${slug}.html`);
+  if (!fs.existsSync(filePath)) { res.status(404).json({ error: "Page not found" }); return; }
+
+  const makePublic = req.body?.public === true;
+  const current = Array.from(publicPagesSet);
+
+  if (makePublic && !publicPagesSet.has(slug)) {
+    await setPublicPages([...current, slug]);
+    console.log(`[public-pages] Made ${slug} public`);
+  } else if (!makePublic && publicPagesSet.has(slug)) {
+    await setPublicPages(current.filter(s => s !== slug));
+    console.log(`[public-pages] Made ${slug} private`);
+  }
+
+  res.json({ slug, public: publicPagesSet.has(slug) });
+});
+
+app.get("/api/pages/public", (_req: Request, res: Response) => {
+  res.json({ pages: Array.from(publicPagesSet) });
+});
+
 app.post("/api/pages/:slug/share", async (req: Request, res: Response) => {
   const slug = req.params.slug.toLowerCase().replace(/[^a-z0-9_-]/g, "");
   if (!["daily-brief", "baby-dashboard", "x-intelligence", "wealth-engines"].includes(slug)) {
@@ -8980,12 +9046,21 @@ async function startServer(maxRetries = 5) {
   await scheduledJobs.init();
   try {
     const pool = (await import("./src/db.js")).getPool();
-    await pool.query(
-      `INSERT INTO app_config (key, value, updated_at) VALUES ('wealth_engines_public', $1, $2)
-       ON CONFLICT (key) DO NOTHING`,
-      [JSON.stringify(false), Date.now()]
-    );
-  } catch {}
+    const existingPublic = await pool.query(`SELECT value FROM app_config WHERE key = 'public_pages'`);
+    if (existingPublic.rows.length === 0) {
+      const wePublic = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_public'`);
+      const wasPublic = wePublic.rows.length > 0 && (wePublic.rows[0].value === true || wePublic.rows[0].value === "true");
+      const initial = wasPublic ? ["wealth-engines", "wealth-engines-pnl"] : [];
+      await pool.query(
+        `INSERT INTO app_config (key, value, updated_at) VALUES ('public_pages', $1, $2) ON CONFLICT (key) DO NOTHING`,
+        [JSON.stringify(initial), Date.now()]
+      );
+    }
+    await loadPublicPages();
+    console.log(`[boot] Public pages: ${publicPagesSet.size > 0 ? Array.from(publicPagesSet).join(", ") : "none"}`);
+  } catch (err) {
+    console.error("[boot] Failed to load public pages:", err);
+  }
   try {
     const dbPool = db.getPool();
     vaultEmbeddings.init(dbPool, {
