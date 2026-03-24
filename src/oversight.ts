@@ -1085,6 +1085,21 @@ export async function openShadowTrade(params: {
   console.log(`[oversight] Shadow trade opened: ${params.asset} ${params.direction} @ $${params.entry_price}`);
 
   try {
+    const clobStream = await import("./clob-stream.js");
+    if (params.market_id) {
+      const tokens = await clobStream.resolveTokenIds(params.market_id);
+      if (tokens) {
+        const isYes = params.direction === "YES" || params.direction === "LONG";
+        const relevantId = isYes ? tokens.yesTokenId : tokens.noTokenId;
+        clobStream.subscribe([relevantId]);
+        clobStream.registerTradeToken(relevantId, shadow.id);
+      }
+    }
+  } catch (e) {
+    console.warn("[oversight] CLOB subscribe on shadow open failed:", e instanceof Error ? e.message : e);
+  }
+
+  try {
     const { sendShadowTradeNotification } = await import("./telegram.js");
     sendShadowTradeNotification({
       type: "open",
