@@ -9569,20 +9569,6 @@ async function startServer(maxRetries = 5) {
           (async () => {
             try {
               const clobStream = await import("./src/clob-stream.js");
-              let saveTimer: ReturnType<typeof setTimeout> | null = null;
-
-              function scheduleSave() {
-                if (saveTimer) return;
-                saveTimer = setTimeout(async () => {
-                  saveTimer = null;
-                  try {
-                    const oversightMod = await import("./src/oversight.js");
-                    const { setAppConfig } = await import("./src/polymarket.js");
-                    const allTrades = await oversightMod.getShadowTrades();
-                    await setAppConfig("oversight_shadow_trades", allTrades);
-                  } catch {}
-                }, 2000);
-              }
 
               await clobStream.start(async (tokenId: string, price: number) => {
                 try {
@@ -9597,13 +9583,12 @@ async function startServer(maxRetries = 5) {
                     return;
                   }
 
-                  trade.current_price = price;
                   const isYes = trade.direction === "YES" || trade.direction === "LONG";
                   const multiplier = isYes ? 1 : -1;
                   const priceDiff = (price - trade.entry_price) * multiplier;
                   const notional = trade.notional_amount || 500;
-                  trade.pnl_pct = trade.entry_price > 0 ? (priceDiff / trade.entry_price * 100) : 0;
-                  trade.hypothetical_pnl = trade.entry_price > 0 ? (priceDiff / trade.entry_price * notional) : 0;
+                  const pnlPct = trade.entry_price > 0 ? (priceDiff / trade.entry_price * 100) : 0;
+                  const hypotheticalPnl = trade.entry_price > 0 ? (priceDiff / trade.entry_price * notional) : 0;
 
                   if (trade.stop_price != null) {
                     const stopHit = isYes ? price <= trade.stop_price : price >= trade.stop_price;
@@ -9611,7 +9596,6 @@ async function startServer(maxRetries = 5) {
                       await oversightMod.closeShadowTrade(trade.id, price, "stop_hit");
                       clobStream.unregisterTradeToken(tokenId);
                       console.log(`[clob-stream] Stop hit: ${trade.asset} @ ${price}`);
-                      scheduleSave();
                       return;
                     }
                   }
@@ -9621,27 +9605,20 @@ async function startServer(maxRetries = 5) {
                       await oversightMod.closeShadowTrade(trade.id, price, "target_hit");
                       clobStream.unregisterTradeToken(tokenId);
                       console.log(`[clob-stream] Target hit: ${trade.asset} @ ${price}`);
-                      scheduleSave();
                       return;
                     }
                   }
 
-                  scheduleSave();
+                  await oversightMod.updateShadowTradeFields(tradeId, {
+                    current_price: price,
+                    hypothetical_pnl: hypotheticalPnl,
+                    pnl_pct: pnlPct,
+                    last_price_update: Date.now(),
+                  });
                 } catch (err) {
                   console.warn("[clob-stream] Price update handler error:", err instanceof Error ? err.message : err);
                 }
               });
-
-              const oversightMod = await import("./src/oversight.js");
-              const openTrades = await oversightMod.getShadowTrades("open");
-              for (const trade of openTrades) {
-                if (!trade.market_id) continue;
-                const tokens = await clobStream.resolveTokenIds(trade.market_id);
-                if (!tokens) continue;
-                const isYes = trade.direction === "YES" || trade.direction === "LONG";
-                const relevantId = isYes ? tokens.yesTokenId : tokens.noTokenId;
-                clobStream.registerTradeToken(relevantId, trade.id);
-              }
 
               const subCount = clobStream.getSubscribedCount();
               const wsStatus = clobStream.isConnected() ? "connected" : "polling";

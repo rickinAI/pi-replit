@@ -246,19 +246,33 @@ export async function start(callback: PriceCallback) {
 
   const tokenIds: string[] = [];
   let resolved = 0;
+  let fromDb = 0;
   for (const trade of openTrades) {
-    if (trade.market_id) {
+    if (trade.token_id) {
+      tokenIds.push(trade.token_id);
+      tokenToTradeId.set(trade.token_id, trade.id);
+      resolved++;
+      fromDb++;
+    } else if (trade.market_id) {
       const tokens = await resolveTokenIds(trade.market_id);
       if (tokens) {
         const isYes = trade.direction === "YES" || trade.direction === "LONG";
         const relevantId = isYes ? tokens.yesTokenId : tokens.noTokenId;
         tokenIds.push(relevantId);
+        tokenToTradeId.set(relevantId, trade.id);
         resolved++;
+        try {
+          const oversightMod = await import("./oversight.js");
+          await oversightMod.updateShadowTradeFields(trade.id, { token_id: relevantId });
+          console.log(`[clob-stream] Backfilled token_id for ${trade.asset}: ${relevantId.slice(0, 20)}...`);
+        } catch (e) {
+          console.warn(`[clob-stream] Failed to backfill token_id for ${trade.asset}:`, e instanceof Error ? e.message : e);
+        }
       }
     }
   }
 
-  console.log(`[clob-stream] Resolved ${resolved}/${openTrades.length} shadow trades to CLOB token IDs`);
+  console.log(`[clob-stream] Resolved ${resolved}/${openTrades.length} shadow trades to CLOB token IDs (${fromDb} from DB, ${resolved - fromDb} from API)`);
 
   if (tokenIds.length > 0) {
     subscribe(tokenIds);

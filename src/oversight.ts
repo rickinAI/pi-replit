@@ -153,6 +153,8 @@ export interface ShadowTrade {
   stop_price?: number;
   target_price?: number;
   end_date?: string;
+  token_id?: string;
+  last_price_update?: number;
 }
 
 export interface CrossDomainExposure {
@@ -172,6 +174,14 @@ const MAX_REPORTS = 200;
 const MAX_IMPROVEMENTS = 100;
 const MAX_SHADOW_TRADES = 200;
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+let shadowMutexQueue: Promise<void> = Promise.resolve();
+function withShadowLock<T>(fn: () => Promise<T>): Promise<T> {
+  const prev = shadowMutexQueue;
+  let resolve: () => void;
+  shadowMutexQueue = new Promise<void>(r => { resolve = r; });
+  return prev.then(fn).finally(() => resolve!());
+}
 
 async function getConfigValue<T>(key: string, fallback: T): Promise<T> {
   const pool = getPool();
@@ -1091,8 +1101,18 @@ export async function openShadowTrade(params: {
       if (tokens) {
         const isYes = params.direction === "YES" || params.direction === "LONG";
         const relevantId = isYes ? tokens.yesTokenId : tokens.noTokenId;
+        shadow.token_id = relevantId;
+        await withShadowLock(async () => {
+          const allTrades = await getConfigValue<ShadowTrade[]>(SHADOW_TRADES_KEY, []);
+          const sIdx = allTrades.findIndex(t => t.id === shadow.id);
+          if (sIdx !== -1) {
+            allTrades[sIdx].token_id = relevantId;
+            await setConfigValue(SHADOW_TRADES_KEY, allTrades);
+          }
+        });
         clobStream.subscribe([relevantId]);
         clobStream.registerTradeToken(relevantId, shadow.id);
+        console.log(`[oversight] Persisted token_id for ${shadow.asset}: ${relevantId.slice(0, 20)}...`);
       }
     }
   } catch (e) {
@@ -1113,84 +1133,88 @@ export async function openShadowTrade(params: {
   return shadow;
 }
 
-export async function closeShadowTrade(
+export function closeShadowTrade(
   id: string, exitPrice: number, reason: string
 ): Promise<ShadowTrade | null> {
-  const trades = await getConfigValue<ShadowTrade[]>(SHADOW_TRADES_KEY, []);
-  const idx = trades.findIndex(t => t.id === id);
-  if (idx === -1) return null;
+  return withShadowLock(async () => {
+    const trades = await getConfigValue<ShadowTrade[]>(SHADOW_TRADES_KEY, []);
+    const idx = trades.findIndex(t => t.id === id);
+    if (idx === -1) return null;
 
-  const trade = trades[idx];
-  trade.status = "closed";
-  trade.exit_price = exitPrice;
-  trade.closed_at = Date.now();
-  trade.close_reason = reason;
+    const trade = trades[idx];
+    trade.status = "closed";
+    trade.exit_price = exitPrice;
+    trade.closed_at = Date.now();
+    trade.close_reason = reason;
 
-  const multiplier = trade.direction === "LONG" || trade.direction === "YES" ? 1 : -1;
-  const priceDiff = (exitPrice - trade.entry_price) * multiplier;
-  const notional = trade.notional_amount || 500;
-  trade.pnl_pct = trade.entry_price > 0 ? (priceDiff / trade.entry_price * 100) : 0;
-  trade.hypothetical_pnl = trade.entry_price > 0 ? (priceDiff / trade.entry_price * notional) : 0;
+    const multiplier = trade.direction === "LONG" || trade.direction === "YES" ? 1 : -1;
+    const priceDiff = (exitPrice - trade.entry_price) * multiplier;
+    const notional = trade.notional_amount || 500;
+    trade.pnl_pct = trade.entry_price > 0 ? (priceDiff / trade.entry_price * 100) : 0;
+    trade.hypothetical_pnl = trade.entry_price > 0 ? (priceDiff / trade.entry_price * notional) : 0;
 
-  await setConfigValue(SHADOW_TRADES_KEY, trades);
-  console.log(`[oversight] Shadow trade closed: ${trade.asset} P&L: $${trade.hypothetical_pnl.toFixed(2)} (${trade.pnl_pct.toFixed(1)}%) notional=$${notional} reason: ${reason}`);
+    await setConfigValue(SHADOW_TRADES_KEY, trades);
+    console.log(`[oversight] Shadow trade closed: ${trade.asset} P&L: $${trade.hypothetical_pnl.toFixed(2)} (${trade.pnl_pct.toFixed(1)}%) notional=$${notional} reason: ${reason}`);
 
-  const LEARNING_REASONS = ["stop_hit", "target_hit", "expired", "rsi_exit", "time_exit", "manual"];
-  if (LEARNING_REASONS.includes(reason)) {
-    try {
-      const { updateSignalQuality } = await import("./bankr.js");
-      await updateSignalQuality({
-        source: (trade.source as "polymarket_scout") || "polymarket_scout",
-        asset_class: trade.asset_class,
-        pnl: trade.hypothetical_pnl,
-        asset: trade.asset,
-        trade_id: trade.id,
-      });
-    } catch (e) {
-      console.warn("[oversight] Signal quality update on shadow close:", e instanceof Error ? e.message : e);
+    const LEARNING_REASONS = ["stop_hit", "target_hit", "expired", "rsi_exit", "time_exit", "manual"];
+    if (LEARNING_REASONS.includes(reason)) {
+      try {
+        const { updateSignalQuality } = await import("./bankr.js");
+        await updateSignalQuality({
+          source: (trade.source as "polymarket_scout") || "polymarket_scout",
+          asset_class: trade.asset_class,
+          pnl: trade.hypothetical_pnl,
+          asset: trade.asset,
+          trade_id: trade.id,
+        });
+      } catch (e) {
+        console.warn("[oversight] Signal quality update on shadow close:", e instanceof Error ? e.message : e);
+      }
+    } else {
+      console.log(`[oversight] Skipping signal quality update for non-terminal close reason: ${reason}`);
     }
-  } else {
-    console.log(`[oversight] Skipping signal quality update for non-terminal close reason: ${reason}`);
-  }
 
-  try {
-    const { sendShadowTradeNotification } = await import("./telegram.js");
-    sendShadowTradeNotification({
-      type: "close",
-      asset: trade.asset,
-      direction: trade.direction,
-      entryPrice: trade.entry_price,
-      exitPrice,
-      pnl: trade.hypothetical_pnl,
-      reason,
-      openedAt: trade.opened_at,
-      closedAt: trade.closed_at,
-    }).catch(e => console.warn("[oversight] Shadow close notification failed:", e));
-  } catch {}
+    try {
+      const { sendShadowTradeNotification } = await import("./telegram.js");
+      sendShadowTradeNotification({
+        type: "close",
+        asset: trade.asset,
+        direction: trade.direction,
+        entryPrice: trade.entry_price,
+        exitPrice,
+        pnl: trade.hypothetical_pnl,
+        reason,
+        openedAt: trade.opened_at,
+        closedAt: trade.closed_at,
+      }).catch(e => console.warn("[oversight] Shadow close notification failed:", e));
+    } catch {}
 
-  return trade;
+    return trade;
+  });
 }
 
-export async function updateShadowPrices(
+export function updateShadowPrices(
   priceUpdates: Record<string, number>
 ): Promise<ShadowTrade[]> {
-  const trades = await getConfigValue<ShadowTrade[]>(SHADOW_TRADES_KEY, []);
-  const openTrades = trades.filter(t => t.status === "open");
+  return withShadowLock(async () => {
+    const trades = await getConfigValue<ShadowTrade[]>(SHADOW_TRADES_KEY, []);
+    const openTrades = trades.filter(t => t.status === "open");
 
-  for (const trade of openTrades) {
-    const newPrice = priceUpdates[trade.asset];
-    if (newPrice != null) {
-      trade.current_price = newPrice;
-      const multiplier = trade.direction === "LONG" || trade.direction === "YES" ? 1 : -1;
-      const priceDiff = (newPrice - trade.entry_price) * multiplier;
-      const notional = trade.notional_amount || 500;
-      trade.pnl_pct = trade.entry_price > 0 ? (priceDiff / trade.entry_price * 100) : 0;
-      trade.hypothetical_pnl = trade.entry_price > 0 ? (priceDiff / trade.entry_price * notional) : 0;
+    for (const trade of openTrades) {
+      const newPrice = priceUpdates[trade.asset];
+      if (newPrice != null) {
+        trade.current_price = newPrice;
+        const multiplier = trade.direction === "LONG" || trade.direction === "YES" ? 1 : -1;
+        const priceDiff = (newPrice - trade.entry_price) * multiplier;
+        const notional = trade.notional_amount || 500;
+        trade.pnl_pct = trade.entry_price > 0 ? (priceDiff / trade.entry_price * 100) : 0;
+        trade.hypothetical_pnl = trade.entry_price > 0 ? (priceDiff / trade.entry_price * notional) : 0;
+      }
     }
-  }
 
-  await setConfigValue(SHADOW_TRADES_KEY, trades);
-  return openTrades;
+    await setConfigValue(SHADOW_TRADES_KEY, trades);
+    return openTrades;
+  });
 }
 
 const SHADOW_MAX_AGE_HOURS = 168;
@@ -1325,6 +1349,20 @@ export async function getShadowTrades(statusFilter?: "open" | "closed"): Promise
   const trades = await getConfigValue<ShadowTrade[]>(SHADOW_TRADES_KEY, []);
   if (statusFilter) return trades.filter(t => t.status === statusFilter);
   return trades;
+}
+
+export function updateShadowTradeFields(
+  tradeId: string,
+  updates: Partial<Pick<ShadowTrade, "current_price" | "hypothetical_pnl" | "pnl_pct" | "token_id" | "last_price_update">>
+): Promise<ShadowTrade | null> {
+  return withShadowLock(async () => {
+    const trades = await getConfigValue<ShadowTrade[]>(SHADOW_TRADES_KEY, []);
+    const idx = trades.findIndex(t => t.id === tradeId);
+    if (idx === -1) return null;
+    Object.assign(trades[idx], updates);
+    await setConfigValue(SHADOW_TRADES_KEY, trades);
+    return trades[idx];
+  });
 }
 
 export async function getShadowPerformance(): Promise<{
