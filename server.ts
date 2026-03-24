@@ -9141,34 +9141,46 @@ async function startServer(maxRetries = 5) {
     if (fs.existsSync(pagesDir)) {
       const htmlFiles = fs.readdirSync(pagesDir).filter(f => f.endsWith(".html"));
       if (htmlFiles.length > 0) {
-        let migrated = 0;
+        let synced = 0;
         let errors = 0;
         for (const f of htmlFiles) {
           try {
             const slug = f.replace(/\.html$/, "").toLowerCase().replace(/[^a-z0-9_-]/g, "");
             if (!slug) continue;
-            const existing = await pool.query("SELECT 1 FROM pages WHERE slug = $1", [slug]);
+            const filePath = path.join(pagesDir, f);
+            const html = fs.readFileSync(filePath, "utf-8");
+            const stat = fs.statSync(filePath);
+            const fileMtime = stat.mtime;
+
+            const existing = await pool.query("SELECT updated_at FROM pages WHERE slug = $1", [slug]);
             if (existing.rows.length === 0) {
-              const html = fs.readFileSync(path.join(pagesDir, f), "utf-8");
-              const stat = fs.statSync(path.join(pagesDir, f));
               await pool.query(
-                "INSERT INTO pages (slug, html, created_at, updated_at) VALUES ($1, $2, $3, $4) ON CONFLICT (slug) DO NOTHING",
-                [slug, html, stat.birthtime || stat.ctime, stat.mtime]
+                "INSERT INTO pages (slug, html, created_at, updated_at) VALUES ($1, $2, $3, $4)",
+                [slug, html, stat.birthtime || stat.ctime, fileMtime]
               );
-              migrated++;
+              synced++;
+            } else {
+              const dbUpdated = new Date(existing.rows[0].updated_at);
+              if (fileMtime > dbUpdated) {
+                await pool.query(
+                  "UPDATE pages SET html = $1, updated_at = $2 WHERE slug = $3",
+                  [html, fileMtime, slug]
+                );
+                synced++;
+              }
             }
           } catch (err) {
             errors++;
-            console.error(`[boot] Failed to migrate page ${f}:`, err instanceof Error ? err.message : err);
+            console.error(`[boot] Failed to sync page ${f}:`, err instanceof Error ? err.message : err);
           }
         }
-        if (migrated > 0 || errors > 0) {
-          console.log(`[boot] Migrated ${migrated}/${htmlFiles.length} pages from filesystem to PostgreSQL${errors > 0 ? ` (${errors} errors)` : ""}`);
+        if (synced > 0 || errors > 0) {
+          console.log(`[boot] Pages sync: ${synced} updated from disk, ${htmlFiles.length} total${errors > 0 ? ` (${errors} errors)` : ""}`);
         }
       }
     }
   } catch (err) {
-    console.error("[boot] Pages filesystem migration failed:", err);
+    console.error("[boot] Pages filesystem sync failed:", err);
   }
   try {
     const pool = (await import("./src/db.js")).getPool();
