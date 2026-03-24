@@ -3533,6 +3533,9 @@ function buildWebPublishTools(): ToolDefinition[] {
         html: Type.String({
           description: "The full HTML content to save. Should be a complete HTML document with <!DOCTYPE html>, <head>, and <body>.",
         }),
+        public: Type.Optional(Type.Boolean({
+          description: "If true, the page will be publicly accessible without login. Default false (password-protected).",
+        })),
       }),
       async execute(_toolCallId, params) {
         try {
@@ -3541,25 +3544,30 @@ function buildWebPublishTools(): ToolDefinition[] {
             return { content: [{ type: "text" as const, text: "Error: Invalid slug — must contain at least one alphanumeric character." }], details: {} };
           }
 
+          const isPublic = params.public === true;
           const pool = db.getPool();
           const existing = await pool.query("SELECT slug FROM pages WHERE slug = $1", [slug]);
           const existed = existing.rows.length > 0;
 
           await pool.query(
-            `INSERT INTO pages (slug, html, created_at, updated_at) VALUES ($1, $2, NOW(), NOW())
-             ON CONFLICT (slug) DO UPDATE SET html = $2, updated_at = NOW()`,
-            [slug, params.html]
+            `INSERT INTO pages (slug, html, is_public, created_at, updated_at) VALUES ($1, $2, $3, NOW(), NOW())
+             ON CONFLICT (slug) DO UPDATE SET html = $2, is_public = $3, updated_at = NOW()`,
+            [slug, params.html, isPublic]
           );
+
+          if (isPublic) { publicPagesCache.add(slug); } else { publicPagesCache.delete(slug); }
+          rebuildPublicPagesDataPaths();
 
           const domain = "rickin.live";
           const pageUrl = `https://${domain}/pages/${slug}`;
+          const visibility = isPublic ? "publicly accessible (no login required)" : "password-protected behind your login";
 
           return {
             content: [{
               type: "text" as const,
-              text: `✅ Page ${existed ? "updated" : "saved"}!\n\nURL: ${pageUrl}\n\nThis page is password-protected behind your login. Visit rickin.live/pages to see all saved pages.`,
+              text: `✅ Page ${existed ? "updated" : "saved"}!\n\nURL: ${pageUrl}\n\nThis page is ${visibility}. Visit rickin.live/pages to see all saved pages.`,
             }],
-            details: { pageUrl, slug },
+            details: { pageUrl, slug, is_public: isPublic },
           };
         } catch (err: any) {
           return {
@@ -4027,12 +4035,12 @@ const PUBLIC_PAGE_DATA_APIS: Record<string, string[]> = {
   "wealth-engines-pnl": ["/api/wealth-engines/pnl-data"],
 };
 
-let publicPagesSet = new Set<string>();
+let publicPagesCache = new Set<string>();
 let publicPagesDataPaths = new Set<string>();
 
 function rebuildPublicPagesDataPaths() {
   publicPagesDataPaths.clear();
-  for (const slug of publicPagesSet) {
+  for (const slug of publicPagesCache) {
     const apis = PUBLIC_PAGE_DATA_APIS[slug];
     if (apis) for (const p of apis) publicPagesDataPaths.add(p);
   }
@@ -4040,31 +4048,19 @@ function rebuildPublicPagesDataPaths() {
 
 async function loadPublicPages(): Promise<void> {
   try {
-    const dbMod = await import("./src/db.js");
-    const pool = dbMod.getPool();
-    const res = await pool.query(`SELECT value FROM app_config WHERE key = 'public_pages'`);
-    if (res.rows.length > 0) {
-      const val = res.rows[0].value;
-      const arr = Array.isArray(val) ? val : (typeof val === "string" ? JSON.parse(val) : []);
-      publicPagesSet = new Set(arr.filter((s: unknown) => typeof s === "string"));
-    } else {
-      publicPagesSet = new Set();
-    }
+    const pool = db.getPool();
+    const res = await pool.query("SELECT slug FROM pages WHERE is_public = true");
+    publicPagesCache = new Set(res.rows.map((r: any) => r.slug));
   } catch {
-    publicPagesSet = new Set();
+    publicPagesCache = new Set();
   }
   rebuildPublicPagesDataPaths();
 }
 
-async function setPublicPages(slugs: string[]): Promise<void> {
-  const dbMod = await import("./src/db.js");
-  const pool = dbMod.getPool();
-  await pool.query(
-    `INSERT INTO app_config (key, value, updated_at) VALUES ('public_pages', $1, $2)
-     ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = $2`,
-    [JSON.stringify(slugs), Date.now()]
-  );
-  publicPagesSet = new Set(slugs);
+async function setPagePublic(slug: string, isPublic: boolean): Promise<void> {
+  const pool = db.getPool();
+  await pool.query("UPDATE pages SET is_public = $1, updated_at = NOW() WHERE slug = $2", [isPublic, slug]);
+  if (isPublic) publicPagesCache.add(slug); else publicPagesCache.delete(slug);
   rebuildPublicPagesDataPaths();
 }
 
@@ -4079,7 +4075,7 @@ async function authMiddleware(req: Request, res: Response, next: NextFunction) {
 
   if (req.path.startsWith("/pages/")) {
     const slug = req.path.slice(7);
-    if (slug && publicPagesSet.has(slug)) { next(); return; }
+    if (slug && publicPagesCache.has(slug)) { next(); return; }
   }
   if (publicPagesDataPaths.has(req.path)) { next(); return; }
 
@@ -7030,21 +7026,43 @@ app.post("/api/pages/:slug/public", async (req: Request, res: Response) => {
   }
 
   const makePublic = req.body?.public === true;
-  const current = Array.from(publicPagesSet);
-
-  if (makePublic && !publicPagesSet.has(slug)) {
-    await setPublicPages([...current, slug]);
-    console.log(`[public-pages] Made ${slug} public`);
-  } else if (!makePublic && publicPagesSet.has(slug)) {
-    await setPublicPages(current.filter(s => s !== slug));
-    console.log(`[public-pages] Made ${slug} private`);
-  }
-
-  res.json({ slug, public: publicPagesSet.has(slug) });
+  await setPagePublic(slug, makePublic);
+  console.log(`[public-pages] Made ${slug} ${makePublic ? "public" : "private"}`);
+  res.json({ slug, public: makePublic, is_public: makePublic });
 });
 
-app.get("/api/pages/public", (_req: Request, res: Response) => {
-  res.json({ pages: Array.from(publicPagesSet) });
+app.patch("/api/pages/:slug/visibility", async (req: Request, res: Response) => {
+  const slug = req.params.slug.toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  if (!slug) { res.status(400).json({ error: "Invalid slug" }); return; }
+
+  try {
+    const pool = db.getPool();
+    const exists = await pool.query("SELECT 1 FROM pages WHERE slug = $1", [slug]);
+    if (exists.rows.length === 0) { res.status(404).json({ error: "Page not found" }); return; }
+  } catch (err) {
+    console.error("[pages] DB error:", err);
+    res.status(500).json({ error: "Database error" });
+    return;
+  }
+
+  if (typeof req.body?.public !== "boolean") {
+    res.status(400).json({ error: "Body must include { public: true | false }" });
+    return;
+  }
+  const isPublic = req.body.public;
+  await setPagePublic(slug, isPublic);
+  console.log(`[public-pages] Set ${slug} visibility: ${isPublic ? "public" : "private"}`);
+  res.json({ slug, is_public: isPublic });
+});
+
+app.get("/api/pages/public", async (_req: Request, res: Response) => {
+  try {
+    const pool = db.getPool();
+    const result = await pool.query("SELECT slug, is_public FROM pages WHERE is_public = true ORDER BY slug");
+    res.json({ pages: result.rows.map((r: any) => r.slug) });
+  } catch {
+    res.json({ pages: Array.from(publicPagesCache) });
+  }
 });
 
 app.post("/api/pages/:slug/share", async (req: Request, res: Response) => {
@@ -9103,18 +9121,19 @@ async function startServer(maxRetries = 5) {
   }
   try {
     const pool = (await import("./src/db.js")).getPool();
-    const existingPublic = await pool.query(`SELECT value FROM app_config WHERE key = 'public_pages'`);
-    if (existingPublic.rows.length === 0) {
-      const wePublic = await pool.query(`SELECT value FROM app_config WHERE key = 'wealth_engines_public'`);
-      const wasPublic = wePublic.rows.length > 0 && (wePublic.rows[0].value === true || wePublic.rows[0].value === "true");
-      const initial = wasPublic ? ["wealth-engines", "wealth-engines-pnl"] : [];
-      await pool.query(
-        `INSERT INTO app_config (key, value, updated_at) VALUES ('public_pages', $1, $2) ON CONFLICT (key) DO NOTHING`,
-        [JSON.stringify(initial), Date.now()]
-      );
+    const oldPublic = await pool.query(`SELECT value FROM app_config WHERE key = 'public_pages'`);
+    if (oldPublic.rows.length > 0) {
+      const val = oldPublic.rows[0].value;
+      const arr = Array.isArray(val) ? val : (typeof val === "string" ? JSON.parse(val) : []);
+      const slugs = arr.filter((s: unknown) => typeof s === "string");
+      for (const slug of slugs) {
+        await pool.query("UPDATE pages SET is_public = true WHERE slug = $1 AND is_public = false", [slug]);
+      }
+      if (slugs.length > 0) console.log(`[boot] Migrated ${slugs.length} public page flags from app_config to pages table`);
+      await pool.query("DELETE FROM app_config WHERE key = 'public_pages'");
     }
     await loadPublicPages();
-    console.log(`[boot] Public pages: ${publicPagesSet.size > 0 ? Array.from(publicPagesSet).join(", ") : "none"}`);
+    console.log(`[boot] Public pages: ${publicPagesCache.size > 0 ? Array.from(publicPagesCache).join(", ") : "none"}`);
   } catch (err) {
     console.error("[boot] Failed to load public pages:", err);
   }

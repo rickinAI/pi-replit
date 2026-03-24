@@ -125,10 +125,12 @@ export async function init(): Promise<pg.Pool> {
     CREATE TABLE IF NOT EXISTS pages (
       slug VARCHAR(255) PRIMARY KEY,
       html TEXT NOT NULL,
+      is_public BOOLEAN NOT NULL DEFAULT false,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query(`ALTER TABLE pages ADD COLUMN IF NOT EXISTS is_public BOOLEAN NOT NULL DEFAULT false`);
 
   try {
     await pool.query(`CREATE EXTENSION IF NOT EXISTS vector`);
