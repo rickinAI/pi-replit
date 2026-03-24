@@ -3541,12 +3541,15 @@ function buildWebPublishTools(): ToolDefinition[] {
             return { content: [{ type: "text" as const, text: "Error: Invalid slug — must contain at least one alphanumeric character." }], details: {} };
           }
 
-          const pagesDir = path.join(PROJECT_ROOT, "data", "pages");
-          if (!fs.existsSync(pagesDir)) fs.mkdirSync(pagesDir, { recursive: true });
+          const pool = db.getPool();
+          const existing = await pool.query("SELECT slug FROM pages WHERE slug = $1", [slug]);
+          const existed = existing.rows.length > 0;
 
-          const filePath = path.join(pagesDir, `${slug}.html`);
-          const existed = fs.existsSync(filePath);
-          fs.writeFileSync(filePath, params.html, "utf-8");
+          await pool.query(
+            `INSERT INTO pages (slug, html, created_at, updated_at) VALUES ($1, $2, NOW(), NOW())
+             ON CONFLICT (slug) DO UPDATE SET html = $2, updated_at = NOW()`,
+            [slug, params.html]
+          );
 
           const domain = "rickin.live";
           const pageUrl = `https://${domain}/pages/${slug}`;
@@ -3573,24 +3576,19 @@ function buildWebPublishTools(): ToolDefinition[] {
       parameters: Type.Object({}),
       async execute() {
         try {
-          const pagesDir = path.join(PROJECT_ROOT, "data", "pages");
-          if (!fs.existsSync(pagesDir)) {
-            return { content: [{ type: "text" as const, text: "No pages saved yet." }], details: {} };
-          }
-          const files = fs.readdirSync(pagesDir).filter(f => f.endsWith(".html")).sort();
-          if (files.length === 0) {
+          const pool = db.getPool();
+          const result = await pool.query("SELECT slug, length(html) as size, updated_at FROM pages ORDER BY slug");
+          if (result.rows.length === 0) {
             return { content: [{ type: "text" as const, text: "No pages saved yet." }], details: {} };
           }
           const domain = "rickin.live";
-          const list = files.map(f => {
-            const slug = f.replace(/\.html$/, "");
-            const stat = fs.statSync(path.join(pagesDir, f));
-            const sizeKB = Math.round(stat.size / 1024);
-            const date = stat.mtime.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-            return `- ${slug} (${sizeKB}KB, ${date}) — https://${domain}/pages/${slug}`;
+          const list = result.rows.map((r: any) => {
+            const sizeKB = Math.round(r.size / 1024);
+            const date = new Date(r.updated_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+            return `- ${r.slug} (${sizeKB}KB, ${date}) — https://${domain}/pages/${r.slug}`;
           }).join("\n");
           return {
-            content: [{ type: "text" as const, text: `${files.length} saved page(s):\n\n${list}\n\nAll pages: https://${domain}/pages` }],
+            content: [{ type: "text" as const, text: `${result.rows.length} saved page(s):\n\n${list}\n\nAll pages: https://${domain}/pages` }],
             details: {},
           };
         } catch (err: any) {
@@ -3611,11 +3609,11 @@ function buildWebPublishTools(): ToolDefinition[] {
           if (!slug) {
             return { content: [{ type: "text" as const, text: "Error: Invalid slug." }], details: {} };
           }
-          const filePath = path.join(PROJECT_ROOT, "data", "pages", `${slug}.html`);
-          if (!fs.existsSync(filePath)) {
+          const pool = db.getPool();
+          const result = await pool.query("DELETE FROM pages WHERE slug = $1", [slug]);
+          if (result.rowCount === 0) {
             return { content: [{ type: "text" as const, text: `Page "${slug}" not found.` }], details: {} };
           }
-          fs.unlinkSync(filePath);
           return { content: [{ type: "text" as const, text: `✅ Page "${slug}" deleted.` }], details: {} };
         } catch (err: any) {
           return { content: [{ type: "text" as const, text: `Failed to delete page: ${err.message}` }], details: {} };
@@ -4280,21 +4278,17 @@ app.get("/api/sitemap", (_req: Request, res: Response) => {
 
 app.use(express.static(PUBLIC_DIR));
 
-const PAGES_DIR = path.join(PROJECT_ROOT, "data", "pages");
-if (!fs.existsSync(PAGES_DIR)) fs.mkdirSync(PAGES_DIR, { recursive: true });
-
-app.get("/pages", (_req: Request, res: Response) => {
+app.get("/pages", async (_req: Request, res: Response) => {
   try {
-    const files = fs.readdirSync(PAGES_DIR).filter(f => f.endsWith(".html")).sort();
-    if (files.length === 0) {
+    const pool = db.getPool();
+    const result = await pool.query("SELECT slug, updated_at FROM pages ORDER BY slug");
+    if (result.rows.length === 0) {
       res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pages — RICKIN</title><style>body{font-family:-apple-system,system-ui,sans-serif;background:#0a0a0a;color:#e0e0e0;padding:2rem;max-width:600px;margin:0 auto}h1{font-size:1.4rem;color:#fff}p{color:#888}</style></head><body><h1>Pages</h1><p>No pages published yet.</p></body></html>`);
       return;
     }
-    const items = files.map(f => {
-      const slug = f.replace(/\.html$/, "");
-      const stat = fs.statSync(path.join(PAGES_DIR, f));
-      const date = stat.mtime.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-      return `<a href="/pages/${slug}">${slug}</a><span class="date">${date}</span>`;
+    const items = result.rows.map((r: any) => {
+      const date = new Date(r.updated_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+      return `<a href="/pages/${r.slug}">${r.slug}</a><span class="date">${date}</span>`;
     }).join("");
     res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pages — RICKIN</title><style>body{font-family:-apple-system,system-ui,sans-serif;background:#0a0a0a;color:#e0e0e0;padding:2rem;max-width:600px;margin:0 auto}h1{font-size:1.4rem;color:#fff;margin-bottom:1.5rem}a{display:block;color:#7cacf8;text-decoration:none;padding:.75rem 0;border-bottom:1px solid #222;font-size:1rem}a:hover{color:#aac8ff}.date{float:right;color:#666;font-size:.85rem}</style></head><body><h1>Pages</h1>${items}</body></html>`);
   } catch (err) {
@@ -6867,17 +6861,26 @@ app.get("/api/baby-dashboard/status", async (_req: Request, res: Response) => {
 app.get("/pages/:slug", async (req: Request, res: Response) => {
   const slug = req.params.slug.toLowerCase().replace(/[^a-z0-9_-]/g, "");
   if (!slug) { res.status(400).send("Invalid page slug."); return; }
-  const filePath = path.join(PAGES_DIR, `${slug}.html`);
-  if (!fs.existsSync(filePath)) {
+
+  let pageResult;
+  try {
+    const pool = db.getPool();
+    pageResult = await pool.query("SELECT html FROM pages WHERE slug = $1", [slug]);
+  } catch (err) {
+    console.error("[pages] DB error loading page:", err);
+    res.status(500).send("Error loading page.");
+    return;
+  }
+  if (pageResult.rows.length === 0) {
     res.status(404).send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Not Found</title><style>body{font-family:-apple-system,sans-serif;background:#0a0a0a;color:#e0e0e0;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}h1{font-size:1.2rem;color:#888}</style></head><body><h1>Page not found.</h1></body></html>`);
     return;
   }
 
+  let html = pageResult.rows[0].html;
   const isTokenAuth = !!(req.query.user && req.query.token) || !!req.headers.authorization?.startsWith("Bearer ");
 
   if (slug === "wealth-engines") {
     try {
-      let html = fs.readFileSync(filePath, "utf-8");
       const data = await buildWealthEnginesDashboardData();
       const safeJson = JSON.stringify(data).replace(/<\//g, "<\\/");
       html = html.replace(
@@ -6893,7 +6896,6 @@ app.get("/pages/:slug", async (req: Request, res: Response) => {
 
   if (slug === "wealth-engines-pnl") {
     try {
-      let html = fs.readFileSync(filePath, "utf-8");
       const data = await buildPnlDashboardData();
       const safeJson = JSON.stringify(data).replace(/<\//g, "<\\/");
       html = html.replace(
@@ -6909,8 +6911,6 @@ app.get("/pages/:slug", async (req: Request, res: Response) => {
 
   if (slug === "baby-dashboard" && isTokenAuth && gmail.isConnected()) {
     try {
-      let html = fs.readFileSync(filePath, "utf-8");
-
       let data: any = babyDashboardCache?.data;
       if (!data || Date.now() - (babyDashboardCache?.timestamp || 0) > BABY_CACHE_TTL) {
         const readTab = async (range: string): Promise<string> => {
@@ -7012,15 +7012,22 @@ app.get("/pages/:slug", async (req: Request, res: Response) => {
     }
   }
 
-  res.sendFile(filePath);
+  res.type("html").send(html);
 });
 
 app.post("/api/pages/:slug/public", async (req: Request, res: Response) => {
   const slug = req.params.slug.toLowerCase().replace(/[^a-z0-9_-]/g, "");
   if (!slug) { res.status(400).json({ error: "Invalid slug" }); return; }
 
-  const filePath = path.join(PAGES_DIR, `${slug}.html`);
-  if (!fs.existsSync(filePath)) { res.status(404).json({ error: "Page not found" }); return; }
+  try {
+    const pool = db.getPool();
+    const exists = await pool.query("SELECT 1 FROM pages WHERE slug = $1", [slug]);
+    if (exists.rows.length === 0) { res.status(404).json({ error: "Page not found" }); return; }
+  } catch (err) {
+    console.error("[pages] DB error checking page existence:", err);
+    res.status(500).json({ error: "Database error" });
+    return;
+  }
 
   const makePublic = req.body?.public === true;
   const current = Array.from(publicPagesSet);
@@ -7048,13 +7055,14 @@ app.post("/api/pages/:slug/share", async (req: Request, res: Response) => {
   }
 
   try {
-    const filePath = path.join(PAGES_DIR, `${slug}.html`);
-    if (!fs.existsSync(filePath)) {
+    const pool = db.getPool();
+    const pageResult = await pool.query("SELECT html FROM pages WHERE slug = $1", [slug]);
+    if (pageResult.rows.length === 0) {
       res.status(404).json({ error: "Page not found" });
       return;
     }
 
-    let html = fs.readFileSync(filePath, "utf-8");
+    let html = pageResult.rows[0].html;
     const now = new Date();
     const cfg = alerts.getConfig();
     const tz = cfg.timezone || "America/New_York";
@@ -7246,16 +7254,30 @@ app.post("/api/publish-temp", async (req: Request, res: Response) => {
     return;
   }
 
-  const filePath = path.join(PAGES_DIR, `${safeSlug}.html`);
-  if (!fs.existsSync(filePath)) { res.status(404).json({ error: "Page not found" }); return; }
+  let pageHtml: string;
+  try {
+    const pool = db.getPool();
+    const pageResult = await pool.query("SELECT html FROM pages WHERE slug = $1", [safeSlug]);
+    if (pageResult.rows.length === 0) { res.status(404).json({ error: "Page not found" }); return; }
+    pageHtml = pageResult.rows[0].html;
+  } catch (err) {
+    console.error("[publish-temp] DB error:", err);
+    res.status(500).json({ error: "Database error" });
+    return;
+  }
 
   try {
+    const tmpDir = path.join(PROJECT_ROOT, "data", "tmp");
+    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+    const tmpFile = path.join(tmpDir, `${safeSlug}.html`);
+    fs.writeFileSync(tmpFile, pageHtml, "utf-8");
+
     const publishScript = path.join(PROJECT_ROOT, "scripts", "herenow-publish.sh");
     const { execFile } = await import("child_process");
     const { promisify } = await import("util");
     const execFileAsync = promisify(execFile);
 
-    const args = [publishScript, filePath, "--title", safeSlug, "--ttl", String(ttl), "--client", "darknode"];
+    const args = [publishScript, tmpFile, "--title", safeSlug, "--ttl", String(ttl), "--client", "darknode"];
     const { stdout } = await execFileAsync("bash", args, { encoding: "utf-8", timeout: 60_000, cwd: PROJECT_ROOT });
     const url = stdout.trim().split("\n")[0]?.trim();
 
@@ -9044,6 +9066,41 @@ async function startServer(maxRetries = 5) {
     await telegram.sendMessage(msg, "HTML");
   });
   await scheduledJobs.init();
+  try {
+    const pool = (await import("./src/db.js")).getPool();
+    const pagesDir = path.join(PROJECT_ROOT, "data", "pages");
+    if (fs.existsSync(pagesDir)) {
+      const htmlFiles = fs.readdirSync(pagesDir).filter(f => f.endsWith(".html"));
+      if (htmlFiles.length > 0) {
+        let migrated = 0;
+        let errors = 0;
+        for (const f of htmlFiles) {
+          try {
+            const slug = f.replace(/\.html$/, "").toLowerCase().replace(/[^a-z0-9_-]/g, "");
+            if (!slug) continue;
+            const existing = await pool.query("SELECT 1 FROM pages WHERE slug = $1", [slug]);
+            if (existing.rows.length === 0) {
+              const html = fs.readFileSync(path.join(pagesDir, f), "utf-8");
+              const stat = fs.statSync(path.join(pagesDir, f));
+              await pool.query(
+                "INSERT INTO pages (slug, html, created_at, updated_at) VALUES ($1, $2, $3, $4) ON CONFLICT (slug) DO NOTHING",
+                [slug, html, stat.birthtime || stat.ctime, stat.mtime]
+              );
+              migrated++;
+            }
+          } catch (err) {
+            errors++;
+            console.error(`[boot] Failed to migrate page ${f}:`, err instanceof Error ? err.message : err);
+          }
+        }
+        if (migrated > 0 || errors > 0) {
+          console.log(`[boot] Migrated ${migrated}/${htmlFiles.length} pages from filesystem to PostgreSQL${errors > 0 ? ` (${errors} errors)` : ""}`);
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[boot] Pages filesystem migration failed:", err);
+  }
   try {
     const pool = (await import("./src/db.js")).getPool();
     const existingPublic = await pool.query(`SELECT value FROM app_config WHERE key = 'public_pages'`);

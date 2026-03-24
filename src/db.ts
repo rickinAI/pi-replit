@@ -121,13 +121,22 @@ export async function init(): Promise<pg.Pool> {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_email_pipeline_inbox ON email_pipeline(inbox)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_email_pipeline_created ON email_pipeline(created_at DESC)`);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pages (
+      slug VARCHAR(255) PRIMARY KEY,
+      html TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
   try {
     await pool.query(`CREATE EXTENSION IF NOT EXISTS vector`);
   } catch (err) {
     console.warn("[db] pgvector extension not available (semantic features will be disabled):", err);
   }
 
-  console.log("[db] PostgreSQL initialized (shared pool, 8 tables + pgvector)");
+  console.log("[db] PostgreSQL initialized (shared pool, 9 tables + pgvector)");
   return pool;
 }
 
