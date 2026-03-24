@@ -7157,6 +7157,58 @@ app.post("/api/pages/:slug/share", async (req: Request, res: Response) => {
   }
 });
 
+const publishTempCache = new Map<string, { url: string; expiresAt: string; expiresAtMs: number }>();
+
+app.post("/api/publish-temp", async (req: Request, res: Response) => {
+  const user = (req as any).user;
+  if (!user) { res.status(401).json({ error: "Unauthorized" }); return; }
+
+  const { slug } = req.body || {};
+  if (!slug || typeof slug !== "string") { res.status(400).json({ error: "Missing slug" }); return; }
+
+  const rawTtl = req.body.ttl;
+  const ttl = typeof rawTtl === "number" && Number.isFinite(rawTtl) ? Math.floor(rawTtl) : 86400;
+  if (ttl < 60 || ttl > 604800) { res.status(400).json({ error: "ttl must be between 60 and 604800 seconds" }); return; }
+
+  const safeSlug = slug.toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  if (!safeSlug) { res.status(400).json({ error: "Invalid slug" }); return; }
+
+  const cached = publishTempCache.get(safeSlug);
+  if (cached && Date.now() < cached.expiresAtMs - 300_000) {
+    console.log(`[publish-temp] Cache hit for ${safeSlug}: ${cached.url}`);
+    res.json({ url: cached.url, expiresAt: cached.expiresAt });
+    return;
+  }
+
+  const filePath = path.join(PAGES_DIR, `${safeSlug}.html`);
+  if (!fs.existsSync(filePath)) { res.status(404).json({ error: "Page not found" }); return; }
+
+  try {
+    const publishScript = path.join(PROJECT_ROOT, "scripts", "herenow-publish.sh");
+    const { execFile } = await import("child_process");
+    const { promisify } = await import("util");
+    const execFileAsync = promisify(execFile);
+
+    const args = [publishScript, filePath, "--title", safeSlug, "--ttl", String(ttl), "--client", "darknode"];
+    const { stdout } = await execFileAsync("bash", args, { encoding: "utf-8", timeout: 60_000, cwd: PROJECT_ROOT });
+    const url = stdout.trim().split("\n")[0]?.trim();
+
+    if (!url || !url.startsWith("http")) {
+      res.status(500).json({ error: "Failed to publish" });
+      return;
+    }
+
+    const expiresAtMs = Date.now() + ttl * 1000;
+    const expiresAt = new Date(expiresAtMs).toISOString();
+    publishTempCache.set(safeSlug, { url, expiresAt, expiresAtMs });
+    console.log(`[publish-temp] Published ${safeSlug}: ${url} (expires ${expiresAt})`);
+    res.json({ url, expiresAt });
+  } catch (err: unknown) {
+    console.error("[publish-temp] Error:", err);
+    res.status(500).json({ error: "Failed to publish" });
+  }
+});
+
 app.get("/api/gmail/auth", (_req: Request, res: Response) => {
   if (!gmail.isConfigured()) {
     res.status(500).json({ error: "Gmail not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET." });
