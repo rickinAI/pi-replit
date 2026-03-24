@@ -142,6 +142,8 @@ export interface ShadowTrade {
   entry_price: number;
   current_price: number;
   hypothetical_pnl: number;
+  notional_amount: number;
+  pnl_pct: number;
   opened_at: number;
   closed_at?: number;
   exit_price?: number;
@@ -150,6 +152,7 @@ export interface ShadowTrade {
   status: "open" | "closed";
   stop_price?: number;
   target_price?: number;
+  end_date?: string;
 }
 
 export interface CrossDomainExposure {
@@ -1041,7 +1044,20 @@ export async function openShadowTrade(params: {
   market_id?: string;
   stop_price?: number;
   target_price?: number;
+  notional_amount?: number;
+  end_date?: string;
 }): Promise<ShadowTrade> {
+  let notional = params.notional_amount;
+  if (!notional || notional <= 0) {
+    try {
+      const bankrMod = await import("./bankr.js");
+      const portfolio = await bankrMod.getPortfolioValue();
+      notional = portfolio * 0.05;
+    } catch {
+      notional = 500;
+    }
+  }
+
   const shadow: ShadowTrade = {
     id: `shadow_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
     thesis_id: params.thesis_id,
@@ -1052,11 +1068,14 @@ export async function openShadowTrade(params: {
     entry_price: params.entry_price,
     current_price: params.entry_price,
     hypothetical_pnl: 0,
+    notional_amount: notional,
+    pnl_pct: 0,
     opened_at: Date.now(),
     market_id: params.market_id,
     status: "open",
     stop_price: params.stop_price,
     target_price: params.target_price,
+    end_date: params.end_date,
   };
 
   const trades = await getConfigValue<ShadowTrade[]>(SHADOW_TRADES_KEY, []);
@@ -1093,10 +1112,13 @@ export async function closeShadowTrade(
   trade.close_reason = reason;
 
   const multiplier = trade.direction === "LONG" || trade.direction === "YES" ? 1 : -1;
-  trade.hypothetical_pnl = (exitPrice - trade.entry_price) * multiplier;
+  const priceDiff = (exitPrice - trade.entry_price) * multiplier;
+  const notional = trade.notional_amount || 500;
+  trade.pnl_pct = trade.entry_price > 0 ? (priceDiff / trade.entry_price * 100) : 0;
+  trade.hypothetical_pnl = trade.entry_price > 0 ? (priceDiff / trade.entry_price * notional) : 0;
 
   await setConfigValue(SHADOW_TRADES_KEY, trades);
-  console.log(`[oversight] Shadow trade closed: ${trade.asset} P&L: $${trade.hypothetical_pnl.toFixed(2)} reason: ${reason}`);
+  console.log(`[oversight] Shadow trade closed: ${trade.asset} P&L: $${trade.hypothetical_pnl.toFixed(2)} (${trade.pnl_pct.toFixed(1)}%) notional=$${notional} reason: ${reason}`);
 
   const LEARNING_REASONS = ["stop_hit", "target_hit", "expired", "rsi_exit", "time_exit", "manual"];
   if (LEARNING_REASONS.includes(reason)) {
@@ -1145,7 +1167,10 @@ export async function updateShadowPrices(
     if (newPrice != null) {
       trade.current_price = newPrice;
       const multiplier = trade.direction === "LONG" || trade.direction === "YES" ? 1 : -1;
-      trade.hypothetical_pnl = (newPrice - trade.entry_price) * multiplier;
+      const priceDiff = (newPrice - trade.entry_price) * multiplier;
+      const notional = trade.notional_amount || 500;
+      trade.pnl_pct = trade.entry_price > 0 ? (priceDiff / trade.entry_price * 100) : 0;
+      trade.hypothetical_pnl = trade.entry_price > 0 ? (priceDiff / trade.entry_price * notional) : 0;
     }
   }
 
@@ -1179,7 +1204,10 @@ export async function refreshShadowTradesFromMarket(): Promise<{
       trade.close_reason = "expired";
       trade.exit_price = trade.current_price;
       const multiplier = trade.direction === "LONG" || trade.direction === "YES" ? 1 : -1;
-      trade.hypothetical_pnl = (trade.current_price - trade.entry_price) * multiplier;
+      const priceDiff = (trade.current_price - trade.entry_price) * multiplier;
+      const notional = trade.notional_amount || 500;
+      trade.pnl_pct = trade.entry_price > 0 ? (priceDiff / trade.entry_price * 100) : 0;
+      trade.hypothetical_pnl = trade.entry_price > 0 ? (priceDiff / trade.entry_price * notional) : 0;
       closed++;
       pendingCloseNotifications.push({ trade, reason: "expired (168h max age)" });
     } else {
@@ -1214,7 +1242,10 @@ export async function refreshShadowTradesFromMarket(): Promise<{
     trade.current_price = latestPrice;
     const isLong = trade.direction === "LONG" || trade.direction === "YES";
     const multiplier = isLong ? 1 : -1;
-    trade.hypothetical_pnl = (latestPrice - trade.entry_price) * multiplier;
+    const priceDiff = (latestPrice - trade.entry_price) * multiplier;
+    const notional = trade.notional_amount || 500;
+    trade.pnl_pct = trade.entry_price > 0 ? (priceDiff / trade.entry_price * 100) : 0;
+    trade.hypothetical_pnl = trade.entry_price > 0 ? (priceDiff / trade.entry_price * notional) : 0;
     updated++;
 
     if (trade.stop_price != null) {
@@ -1586,6 +1617,7 @@ export async function autoTrackShadowTrade(params: {
   market_id?: string;
   stop_price?: number;
   target_price?: number;
+  end_date?: string;
 }): Promise<ShadowTrade | null> {
   const existing = await getShadowTrades("open");
   const match = existing.find(t => t.asset === params.asset && t.direction === params.direction);
@@ -1597,14 +1629,16 @@ export async function autoTrackShadowTrade(params: {
 
   let stopPrice = params.stop_price;
   let targetPrice = params.target_price;
-  if (!stopPrice || !targetPrice) {
+  let endDate = params.end_date;
+  if (!stopPrice || !targetPrice || !endDate) {
     try {
       const { getActiveTheses: getPmTheses } = await import("./polymarket-scout.js");
-      const theses: Array<{ id: string; asset: string; direction: string; stop_price?: number; exit_price?: number; exit_odds?: number; entry_odds?: number }> = await getPmTheses();
+      const theses: Array<{ id: string; asset: string; direction: string; stop_price?: number; exit_price?: number; exit_odds?: number; entry_odds?: number; expires_at?: string; end_date?: string }> = await getPmTheses();
       const thesis = theses.find(t => t.id === params.thesis_id || (t.asset === params.asset && t.direction === params.direction));
       if (thesis) {
         if (!stopPrice && thesis.stop_price) stopPrice = thesis.stop_price;
         if (!targetPrice && (thesis.exit_price || thesis.exit_odds)) targetPrice = thesis.exit_price || thesis.exit_odds;
+        if (!endDate && (thesis.expires_at || thesis.end_date)) endDate = thesis.expires_at || thesis.end_date;
       }
     } catch (e) {
       console.warn(`[oversight] Thesis lookup for shadow levels failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -1621,6 +1655,7 @@ export async function autoTrackShadowTrade(params: {
     market_id: params.market_id,
     stop_price: stopPrice,
     target_price: targetPrice,
+    end_date: endDate,
   });
   console.log(`[oversight] Auto-shadow: ${params.asset} ${params.direction} @ $${params.entry_price} | stop=$${stopPrice ?? "none"} target=$${targetPrice ?? "none"} — ${params.reason}`);
   return shadow;

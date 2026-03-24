@@ -143,17 +143,20 @@
 
   .empty { text-align:center; padding:1rem 0; color:var(--text-muted); font-size:0.72rem; }
 
-  .pos-item { padding:0.5rem 0.75rem; border-bottom:1px solid var(--border); }
+  .pos-item { padding:0.6rem 0.75rem; border-bottom:1px solid var(--border); }
   .pos-item:last-child { border-bottom:none; }
-  .pos-top { display:flex; align-items:center; justify-content:space-between; margin-bottom:0.2rem; }
-  .pos-asset { font-size:0.78rem; font-weight:700; color:#fff; display:flex; align-items:center; gap:0.3rem; }
-  .pill { font-size:0.48rem; font-weight:700; padding:1px 5px; border-radius:4px; letter-spacing:0.3px; }
+  .pos-top { display:flex; align-items:center; justify-content:space-between; margin-bottom:0.25rem; }
+  .pos-asset { font-size:0.78rem; font-weight:700; color:#fff; display:flex; align-items:center; gap:0.3rem; flex:1; min-width:0; }
+  .pos-asset-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pill { font-size:0.48rem; font-weight:700; padding:1px 5px; border-radius:4px; letter-spacing:0.3px; flex-shrink:0; }
   .pill.long { background:var(--green-dim); color:var(--green); }
   .pill.short { background:var(--red-dim); color:var(--red); }
   .pill.yes { background:var(--green-dim); color:var(--green); }
   .pill.no { background:var(--red-dim); color:var(--red); }
-  .pill.source { background:var(--accent-dim); color:var(--accent); }
-  .pos-pnl { font-size:0.72rem; font-weight:700; }
+  .pill.copy { background:var(--cyan-dim); color:var(--cyan); }
+  .pos-pnl { font-size:0.72rem; font-weight:700; white-space:nowrap; margin-left:0.4rem; }
+  .pos-levels { display:flex; gap:0.6rem; flex-wrap:wrap; font-size:0.58rem; color:var(--text-secondary); margin-bottom:0.15rem; }
+  .pos-levels strong { color:var(--text); font-weight:600; }
   .pos-meta { display:flex; gap:0.5rem; flex-wrap:wrap; font-size:0.55rem; color:var(--text-secondary); }
   .pos-meta strong { color:var(--text); font-weight:600; }
 
@@ -788,6 +791,8 @@ function renderMarketContext(mc){
   el.innerHTML=h;
 }
 
+function fmtDate(d){if(!d)return '';try{var dt=new Date(d);return dt.toLocaleDateString('en-US',{month:'short',day:'numeric'});}catch(e){return '';}}
+
 function renderPositions(pos){
   var el=document.getElementById('positionsCard');
   document.getElementById('posCount').textContent=pos.length;
@@ -798,19 +803,30 @@ function renderPositions(pos){
     var dc=dir==='YES'?'yes':dir==='NO'?'no':dir==='LONG'?'long':'short';
     var il=dir==='LONG'||dir==='YES';
     var pd=il?(p.current_price-p.entry_price):(p.entry_price-p.current_price);
-    var pnl=pd*(p.size||0);var pp=p.entry_price>0?(pd/p.entry_price*100):0;
+    var pnl=p.pnl!=null?p.pnl:(pd*(p.size||0));
+    var pp=p.pnl_pct!=null?p.pnl_pct:(p.entry_price>0?(pd/p.entry_price*100):0);
     var pc=pnl>=0?'green':'red';
     var label=esc((p.asset||'').length>55?p.asset.slice(0,55)+'…':p.asset);
-    h+='<div class="pos-item"><div class="pos-top"><span class="pos-asset">'+label+' <span class="pill '+dc+'">'+dir+'</span>';
-    if(p.is_shadow)h+='<span class="pill" style="background:var(--purple-dim);color:var(--purple);font-size:0.4rem">SHADOW</span>';
-    if(p.is_copy_trade)h+='<span class="pill" style="background:var(--cyan-dim);color:var(--cyan);font-size:0.4rem">COPY</span>';
-    if(p.source)h+='<span class="pill source">'+esc(p.source)+'</span>';
+    h+='<div class="pos-item">';
+    h+='<div class="pos-top"><span class="pos-asset"><span class="pos-asset-name">'+label+'</span> <span class="pill '+dc+'">'+dir+'</span>';
+    if(p.is_copy_trade)h+=' <span class="pill copy">COPY</span>';
     h+='</span><span class="pos-pnl '+pc+'">'+(pnl>=0?'+':'')+fmt$(pnl)+' ('+fmtPct(pp)+')</span></div>';
-    h+='<div class="pos-meta"><span>Entry: <strong>'+fmtOdds(p.entry_price)+'</strong></span><span>Now: <strong>'+fmtOdds(p.current_price)+'</strong></span>';
+    h+='<div class="pos-levels">';
+    h+='<span>Entry: <strong>'+fmtOdds(p.entry_price)+'</strong></span>';
+    h+='<span>Now: <strong>'+fmtOdds(p.current_price)+'</strong></span>';
+    if(p.stop_price&&p.stop_price>0)h+='<span>Stop: <strong>'+fmtOdds(p.stop_price)+'</strong></span>';
+    if(p.target_price&&p.target_price>0)h+='<span>Target: <strong>'+fmtOdds(p.target_price)+'</strong></span>';
+    h+='</div>';
+    h+='<div class="pos-meta">';
+    if(p.notional_amount)h+='<span>'+fmt$(p.notional_amount)+' notional</span>';
     if(p.source_wallet)h+='<span>Whale: <strong>'+esc(p.source_wallet)+'</strong></span>';
     var ttr=timeUntil(p.expires_at);
-    if(ttr)h+='<span style="color:var(--amber)">'+ttr+'</span>';
-    else h+='<span>'+timeAgo(p.opened_at)+'</span>';
+    if(ttr){
+      var rd=fmtDate(p.expires_at);
+      h+='<span style="color:var(--amber)">Resolves '+(rd?rd+' · ':'')+ttr+'</span>';
+    } else {
+      h+='<span>'+timeAgo(p.opened_at)+'</span>';
+    }
     h+='</div></div>';
   });
   el.innerHTML=h;

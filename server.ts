@@ -4852,18 +4852,21 @@ function buildClosedShadowTrades(shadowPerf: any): any[] {
   return dedupedClosed.map((t: any) => {
     const isLong = (t.direction || "").toUpperCase() === "LONG" || (t.direction || "").toUpperCase() === "YES";
     const priceDiff = isLong ? ((t.current_price || t.exit_price || t.entry_price) - t.entry_price) : (t.entry_price - (t.current_price || t.exit_price || t.entry_price));
+    const notional = t.notional_amount || 500;
+    const pnlPct = t.pnl_pct != null ? t.pnl_pct : (t.entry_price > 0 ? (priceDiff / t.entry_price * 100) : 0);
+    const dollarPnl = t.hypothetical_pnl != null ? t.hypothetical_pnl : (t.entry_price > 0 ? (priceDiff / t.entry_price * notional) : 0);
     return {
       id: t.id || t.thesis_id,
       asset: t.asset,
       asset_class: t.asset_class || "polymarket",
       source: t.source || "shadow",
       direction: t.direction,
-      leverage: "1x",
       entry_price: t.entry_price,
       exit_price: t.current_price || t.exit_price || t.entry_price,
-      size: t.size || 1,
-      pnl: t.hypothetical_pnl || priceDiff,
-      pnl_pct: t.entry_price > 0 ? (priceDiff / t.entry_price * 100) : 0,
+      notional_amount: notional,
+      size: notional / (t.entry_price > 0 ? t.entry_price : 1),
+      pnl: dollarPnl,
+      pnl_pct: pnlPct,
       fees: 0,
       opened_at: t.opened_at || t.created_at,
       closed_at: t.closed_at || new Date().toISOString(),
@@ -4973,7 +4976,8 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
       const enrichPosition = (p: any) => {
         const q = (p.asset || "").toLowerCase().trim();
         const thesis = thesesByQuestion.get(q);
-        if (thesis && thesis.expires_at) p.expires_at = thesis.expires_at;
+        if (thesis && thesis.expires_at && !p.expires_at) p.expires_at = thesis.expires_at;
+        if (p.end_date && !p.expires_at) p.expires_at = p.end_date;
         return p;
       };
       const bankrPositions = (summary.positions || []).filter((p: any) => (p.size || 0) > 0.0001).map((p: any) => { if (!p.asset_class) p.asset_class = "polymarket"; return p; }).filter((p: any) => p.asset_class === "polymarket").map(enrichPosition);
@@ -4986,21 +4990,33 @@ async function buildWealthEnginesDashboardData(): Promise<any> {
         const key = `${t.asset}_${t.direction}`;
         if (!shadowSeen.has(key)) { shadowSeen.add(key); dedupedShadows.push(t); }
       }
-      const shadowAsPositions = dedupedShadows.map((t: any) => enrichPosition({
-        id: t.id || t.thesis_id,
-        thesis_id: t.thesis_id,
-        asset: t.asset,
-        asset_class: t.asset_class || "polymarket",
-        direction: t.direction,
-        leverage: "1x",
-        entry_price: t.entry_price,
-        current_price: t.current_price || t.entry_price,
-        atr_stop_price: t.stop_price || 0,
-        size: t.size || 1,
-        source: t.source || "shadow",
-        opened_at: t.opened_at || t.created_at,
-        is_shadow: true,
-      }));
+      const shadowAsPositions = dedupedShadows.map((t: any) => {
+        const notional = t.notional_amount || 500;
+        const isLong = (t.direction || "").toUpperCase() === "LONG" || (t.direction || "").toUpperCase() === "YES";
+        const mult = isLong ? 1 : -1;
+        const priceDiff = ((t.current_price || t.entry_price) - t.entry_price) * mult;
+        const pnlPct = t.pnl_pct != null ? t.pnl_pct : (t.entry_price > 0 ? (priceDiff / t.entry_price * 100) : 0);
+        const dollarPnl = t.hypothetical_pnl != null ? t.hypothetical_pnl : (t.entry_price > 0 ? (priceDiff / t.entry_price * notional) : 0);
+        return enrichPosition({
+          id: t.id || t.thesis_id,
+          thesis_id: t.thesis_id,
+          asset: t.asset,
+          asset_class: t.asset_class || "polymarket",
+          direction: t.direction,
+          entry_price: t.entry_price,
+          current_price: t.current_price || t.entry_price,
+          stop_price: t.stop_price || 0,
+          target_price: t.target_price || 0,
+          notional_amount: notional,
+          size: notional / (t.entry_price > 0 ? t.entry_price : 1),
+          pnl: dollarPnl,
+          pnl_pct: pnlPct,
+          source: "shadow",
+          opened_at: t.opened_at || t.created_at,
+          is_shadow: true,
+          end_date: t.end_date,
+        });
+      });
       return [...bankrPositions, ...shadowAsPositions];
     })(),
     recent_trades: recentTrades,
