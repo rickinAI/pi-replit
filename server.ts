@@ -9249,6 +9249,42 @@ async function startServer(maxRetries = 5) {
             console.error("[boot] Startup notification failed:", err instanceof Error ? err.message : err);
           });
 
+          const PROD_HEALTH_URL = "https://rickin.live/health";
+          const UPTIME_CHECK_INTERVAL = 5 * 60 * 1000;
+          let uptimeFailCount = 0;
+          let lastUptimeAlert = 0;
+          setInterval(async () => {
+            try {
+              const controller = new AbortController();
+              const timer = setTimeout(() => controller.abort(), 15000);
+              const res = await fetch(PROD_HEALTH_URL, { signal: controller.signal });
+              clearTimeout(timer);
+              if (res.ok) {
+                if (uptimeFailCount > 0) {
+                  console.log(`[uptime] rickin.live recovered after ${uptimeFailCount} failed checks`);
+                  telegram.sendMessage(`✅ *rickin.live recovered*\n\nSite is back online after ${uptimeFailCount} failed health checks.`).catch(() => {});
+                }
+                uptimeFailCount = 0;
+              } else {
+                uptimeFailCount++;
+                console.error(`[uptime] rickin.live health check failed: HTTP ${res.status} (fail #${uptimeFailCount})`);
+                if (uptimeFailCount >= 2 && Date.now() - lastUptimeAlert > 30 * 60 * 1000) {
+                  telegram.sendMessage(`🔴 *rickin.live DOWN*\n\nHealth check failed ${uptimeFailCount}x in a row.\nHTTP ${res.status}\nCheck deployment immediately.`).catch(() => {});
+                  lastUptimeAlert = Date.now();
+                }
+              }
+            } catch (err) {
+              uptimeFailCount++;
+              const msg = err instanceof Error ? err.message : String(err);
+              console.error(`[uptime] rickin.live unreachable: ${msg} (fail #${uptimeFailCount})`);
+              if (uptimeFailCount >= 2 && Date.now() - lastUptimeAlert > 30 * 60 * 1000) {
+                telegram.sendMessage(`🔴 *rickin.live DOWN*\n\nHealth endpoint unreachable: ${msg}\nFailed ${uptimeFailCount}x in a row.\nCheck deployment immediately.`).catch(() => {});
+                lastUptimeAlert = Date.now();
+              }
+            }
+          }, UPTIME_CHECK_INTERVAL);
+          console.log("[boot] Uptime monitor started (5-min interval, alerts after 2 consecutive failures)");
+
           resolve();
         });
       });
