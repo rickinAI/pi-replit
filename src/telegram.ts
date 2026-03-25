@@ -2307,11 +2307,27 @@ async function addConversationMessage(chatId: string, role: string, content: str
   }
 }
 
+function markdownToTelegramHtml(text: string): string {
+  let out = text;
+  out = out.replace(/\*\*\*(.+?)\*\*\*/g, "<b><i>$1</i></b>");
+  out = out.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+  out = out.replace(/(?<![*])\*([^*\n]+?)\*(?![*])/g, "<i>$1</i>");
+  out = out.replace(/```[\s\S]*?```/g, (m) => {
+    const inner = m.replace(/^```\w*\n?/, "").replace(/\n?```$/, "");
+    return `<pre>${escapeHtml(inner)}</pre>`;
+  });
+  out = out.replace(/`([^`\n]+?)`/g, "<code>$1</code>");
+  out = out.replace(/^#{1,6}\s+(.+)$/gm, "<b>$1</b>");
+  out = out.replace(/^[-•]\s+/gm, "• ");
+  return out;
+}
+
 function cleanAgentResponse(text: string): string {
   let cleaned = text;
   cleaned = cleaned.replace(/^\*\*DARKNODE RESPONSE\*\*\s*/i, "");
   cleaned = cleaned.replace(/\n*System status unchanged\.?\s*$/i, "");
   cleaned = cleaned.replace(/^\*\*DarkNode:\*\*\s*/i, "");
+  cleaned = markdownToTelegramHtml(cleaned);
   return cleaned.trim();
 }
 
