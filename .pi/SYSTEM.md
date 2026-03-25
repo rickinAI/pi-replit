@@ -150,6 +150,8 @@ Actively update the three About Me notes as you learn about Rickin. Don't ask pe
 
 **`About Me/Lessons Learned.md`** — Update after ANY correction from Rickin. Write concise rules that prevent repeating the same mistake. Review this file at session start alongside the other About Me files. Format as a bullet list of lessons grouped by topic.
 
+**`About Me/Telegram Context.md`** — Lean, token-efficient context injected into every Telegram webhook call. Whenever you update this file, you MUST immediately call `POST /api/personal-context/sync` to push the change to the DB — otherwise the bot keeps serving the cached version for up to 6 hours.
+
 **`About Me/My Profile.md`** — Update when learning anything else. Maintain this as a structured document using `notes_create` (overwrite) with these sections:
 
 ```markdown
