@@ -2234,16 +2234,21 @@ async function getPersonalContext(): Promise<string> {
       personalContextLastSync = now;
       return personalContextCache;
     }
-  } catch {}
+  } catch (dbErr) {
+    console.error("[telegram] getPersonalContext DB read failed:", dbErr instanceof Error ? dbErr.message : dbErr);
+  }
   try {
     const fs = await import("fs");
     const path = "data/vault/About Me/Telegram Context.md";
     if (fs.existsSync(path)) {
       personalContextCache = fs.readFileSync(path, "utf-8");
       personalContextLastSync = now;
+      console.log("[telegram] getPersonalContext fell back to disk read");
       return personalContextCache;
     }
-  } catch {}
+  } catch (fileErr) {
+    console.error("[telegram] getPersonalContext file read failed:", fileErr instanceof Error ? fileErr.message : fileErr);
+  }
   return "";
 }
 
