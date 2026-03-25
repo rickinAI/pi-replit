@@ -2252,7 +2252,16 @@ async function replyToChat(chatId: string, text: string): Promise<void> {
       disable_web_page_preview: true,
     });
   } catch (err) {
-    console.error("[telegram] replyToChat failed:", err instanceof Error ? err.message : err);
+    console.warn("[telegram] replyToChat HTML failed, retrying plain text:", err instanceof Error ? err.message : err);
+    try {
+      await tgFetch("sendMessage", {
+        chat_id: chatId,
+        text: text.replace(/<[^>]*>/g, ""),
+        disable_web_page_preview: true,
+      });
+    } catch (err2) {
+      console.error("[telegram] replyToChat plain text also failed:", err2 instanceof Error ? err2.message : err2);
+    }
   }
 }
 
@@ -2276,14 +2285,16 @@ async function handleTwoWayChat(userId: string, chatId: string, text: string): P
       contextPrompt = `Recent conversation:\n${history}\n\n`;
     }
 
-    const prompt = `${contextPrompt}Rickin says via Telegram: "${text}"\n\nRespond concisely (max 500 chars). You are DarkNode, Rickin's autonomous AI system. Answer questions, run commands, provide status. Keep it conversational and direct.`;
+    const prompt = `${contextPrompt}Rickin says via Telegram: "${text}"\n\nRespond concisely (max 500 chars). You are DarkNode, Rickin's autonomous AI system. Answer questions, run commands, provide status. Keep it conversational and direct. IMPORTANT: Do NOT use the telegram_send tool — just return your response as text. The reply will be routed back to Rickin's chat automatically.`;
 
+    console.log(`[telegram] Two-way chat: userId=${userId} chatId=${chatId} text="${text.slice(0, 50)}"`);
     const result = await runAgent("oversight", prompt);
     const response = result.response || "I couldn't process that — try again.";
 
     const cleanResponse = response.slice(0, 4000);
     addChatMessage(String(userId), "assistant", cleanResponse);
 
+    console.log(`[telegram] Replying to chatId=${chatId} (${cleanResponse.length} chars)`);
     await replyToChat(chatId, cleanResponse);
   } catch (err) {
     console.error("[telegram] Two-way chat error:", err);
