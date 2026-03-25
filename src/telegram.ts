@@ -41,11 +41,12 @@ export async function sendToChannel(
   if (!BOT_TOKEN) return { ok: false, error: "TG_BOT_TOKEN not configured" };
   const chatId = CHANNEL_MAP[channel];
   if (!chatId) return { ok: false, error: `Unknown channel: ${channel}. Valid: ${VALID_CHANNELS.join(", ")}` };
+  const converted = markdownToTelegramHtml(text);
   try {
     const resp = await fetch(`${API_BASE}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text, parse_mode: parseMode, disable_web_page_preview: true }),
+      body: JSON.stringify({ chat_id: chatId, text: converted, parse_mode: parseMode, disable_web_page_preview: true }),
     });
     if (!resp.ok) {
       const body = await resp.text();
@@ -70,13 +71,14 @@ export async function sendToChannelWithKeyboard(
   if (!BOT_TOKEN) return { ok: false, error: "TG_BOT_TOKEN not configured" };
   const chatId = CHANNEL_MAP[channel];
   if (!chatId) return { ok: false, error: `Unknown channel: ${channel}` };
+  const converted = markdownToTelegramHtml(text);
   try {
     const resp = await fetch(`${API_BASE}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chat_id: chatId,
-        text,
+        text: converted,
         parse_mode: parseMode,
         disable_web_page_preview: true,
         reply_markup: { inline_keyboard: keyboard },
@@ -155,10 +157,11 @@ async function tgFetch(method: string, body?: Record<string, any>): Promise<any>
 
 export async function sendMessage(text: string, parseMode: string = "Markdown"): Promise<number | null> {
   if (!isConfigured()) return null;
+  const converted = markdownToTelegramHtml(text);
   try {
     const result = await tgFetch("sendMessage", {
       chat_id: CHAT_ID,
-      text,
+      text: converted,
       parse_mode: parseMode,
       disable_web_page_preview: true,
     });
@@ -177,7 +180,8 @@ export async function sendPhoto(photoUrl: string, caption?: string, parseMode: s
       photo: photoUrl,
     };
     if (caption) {
-      body.caption = caption.length > 1024 ? caption.slice(0, 1020) + "..." : caption;
+      const convertedCaption = markdownToTelegramHtml(caption);
+      body.caption = convertedCaption.length > 1024 ? convertedCaption.slice(0, 1020) + "..." : convertedCaption;
       body.parse_mode = parseMode;
     }
     const result = await tgFetch("sendPhoto", body);
@@ -194,10 +198,11 @@ export async function sendMessageWithKeyboard(
   parseMode: string = "Markdown"
 ): Promise<number | null> {
   if (!isConfigured()) return null;
+  const converted = markdownToTelegramHtml(text);
   try {
     const result = await tgFetch("sendMessage", {
       chat_id: CHAT_ID,
-      text,
+      text: converted,
       parse_mode: parseMode,
       disable_web_page_preview: true,
       reply_markup: { inline_keyboard: keyboard },
@@ -221,11 +226,12 @@ async function answerCallbackQuery(callbackQueryId: string, text?: string): Prom
 }
 
 async function editMessage(messageId: number, text: string, parseMode: string = "Markdown"): Promise<void> {
+  const converted = markdownToTelegramHtml(text);
   try {
     await tgFetch("editMessageText", {
       chat_id: CHAT_ID,
       message_id: messageId,
-      text,
+      text: converted,
       parse_mode: parseMode,
     });
   } catch (err) {
