@@ -9057,16 +9057,20 @@ app.get("/api/pipeline/stats", async (req, res) => {
 });
 
 app.post("/api/telegram/webhook", express.json(), async (req, res) => {
+  console.log("[WEBHOOK] Step 1 — Incoming request received", JSON.stringify(req.body).slice(0, 300));
   const secretHeader = req.headers["x-telegram-bot-api-secret-token"];
   if (secretHeader !== telegram.getWebhookSecret()) {
+    console.log("[WEBHOOK] BLOCKED — secret token mismatch");
     res.sendStatus(403);
     return;
   }
+  console.log("[WEBHOOK] Step 2 — Secret token validated");
   try {
     await telegram.handleWebhookUpdate(req.body);
+    console.log("[WEBHOOK] Step 6 — handleWebhookUpdate completed successfully");
     res.sendStatus(200);
   } catch (err) {
-    console.error("[telegram] Webhook handler error:", err);
+    console.error("[WEBHOOK] handleWebhookUpdate THREW:", err);
     res.sendStatus(200);
   }
 });

@@ -100,8 +100,8 @@ export async function sendAlertsBotMessage(text: string, parseMode: string = "Ma
   return result.ok;
 }
 
-import { randomBytes } from "crypto";
-const WEBHOOK_SECRET = randomBytes(32).toString("hex");
+import { createHash } from "crypto";
+const WEBHOOK_SECRET = createHash("sha256").update(`webhook-secret-${BOT_TOKEN}`).digest("hex");
 
 let pollingActive = false;
 let pollingTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -2287,15 +2287,17 @@ async function handleTwoWayChat(userId: string, chatId: string, text: string): P
 
     const prompt = `${contextPrompt}Rickin says via Telegram: "${text}"\n\nRespond concisely (max 500 chars). You are DarkNode, Rickin's autonomous AI system. Answer questions, run commands, provide status. Keep it conversational and direct. IMPORTANT: Do NOT use the telegram_send tool — just return your response as text. The reply will be routed back to Rickin's chat automatically.`;
 
-    console.log(`[telegram] Two-way chat: userId=${userId} chatId=${chatId} text="${text.slice(0, 50)}"`);
+    console.log(`[WEBHOOK] Step 4 — Calling oversight agent for userId=${userId} chatId=${chatId} text="${text.slice(0, 50)}"`);
     const result = await runAgent("oversight", prompt);
     const response = result.response || "I couldn't process that — try again.";
+    console.log(`[WEBHOOK] Step 4 — Agent returned ${response.length} chars`);
 
     const cleanResponse = response.slice(0, 4000);
     addChatMessage(String(userId), "assistant", cleanResponse);
 
-    console.log(`[telegram] Replying to chatId=${chatId} (${cleanResponse.length} chars)`);
+    console.log(`[WEBHOOK] Step 5 — Sending reply to chatId=${chatId} (${cleanResponse.length} chars)`);
     await replyToChat(chatId, cleanResponse);
+    console.log(`[WEBHOOK] Step 5 — replyToChat completed`);
   } catch (err) {
     console.error("[telegram] Two-way chat error:", err);
     await replyToChat(chatId, "⚠️ Error processing your message. Try again.");
@@ -2303,7 +2305,10 @@ async function handleTwoWayChat(userId: string, chatId: string, text: string): P
 }
 
 export async function handleWebhookUpdate(update: any): Promise<void> {
-  if (!isConfigured()) return;
+  if (!isConfigured()) {
+    console.log("[WEBHOOK] Step 3 — BLOCKED: bot not configured (no token/chat_id)");
+    return;
+  }
 
   if (update.callback_query) {
     const cbq = update.callback_query;
@@ -2318,7 +2323,10 @@ export async function handleWebhookUpdate(update: any): Promise<void> {
     return;
   }
 
-  if (!update.message?.text) return;
+  if (!update.message?.text) {
+    console.log("[WEBHOOK] Step 3 — No message.text in update, ignoring. Keys:", Object.keys(update));
+    return;
+  }
 
   const msg = update.message;
   const userId = msg.from?.id;
@@ -2326,10 +2334,14 @@ export async function handleWebhookUpdate(update: any): Promise<void> {
   const chatId = String(msg.chat.id);
   const text = msg.text.trim();
 
+  console.log(`[WEBHOOK] Step 3 — Parsed: userId=${userId} username=${username} chatId=${chatId} text="${text.slice(0, 80)}"`);
+  console.log(`[WEBHOOK] Step 3 — Auth check: RICKIN_TELEGRAM_ID env="${process.env.RICKIN_TELEGRAM_ID}" allowlist=[${[...RICKIN_TELEGRAM_IDS].join(",")}]`);
+
   if (!isAuthorizedUser(userId, username)) {
-    console.log(`[telegram] Ignoring message from unauthorized user: ${userId} (@${username || "unknown"})`);
+    console.log(`[WEBHOOK] Step 3 — BLOCKED: unauthorized user ${userId} (@${username || "unknown"}) not in [${[...RICKIN_TELEGRAM_IDS].join(",")}]`);
     return;
   }
+  console.log(`[WEBHOOK] Step 3 — Auth PASSED for userId=${userId}`);
 
   if (text.startsWith("/")) {
     if (chatId !== CHAT_ID) return;
