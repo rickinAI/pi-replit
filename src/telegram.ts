@@ -41,7 +41,7 @@ export async function sendToChannel(
   if (!BOT_TOKEN) return { ok: false, error: "TG_BOT_TOKEN not configured" };
   const chatId = CHANNEL_MAP[channel];
   if (!chatId) return { ok: false, error: `Unknown channel: ${channel}. Valid: ${VALID_CHANNELS.join(", ")}` };
-  const converted = markdownToTelegramHtml(text);
+  const converted = parseMode === "HTML" ? markdownToTelegramHtml(text) : text;
   try {
     const resp = await fetch(`${API_BASE}/sendMessage`, {
       method: "POST",
@@ -71,7 +71,7 @@ export async function sendToChannelWithKeyboard(
   if (!BOT_TOKEN) return { ok: false, error: "TG_BOT_TOKEN not configured" };
   const chatId = CHANNEL_MAP[channel];
   if (!chatId) return { ok: false, error: `Unknown channel: ${channel}` };
-  const converted = markdownToTelegramHtml(text);
+  const converted = parseMode === "HTML" ? markdownToTelegramHtml(text) : text;
   try {
     const resp = await fetch(`${API_BASE}/sendMessage`, {
       method: "POST",
@@ -157,7 +157,7 @@ async function tgFetch(method: string, body?: Record<string, any>): Promise<any>
 
 export async function sendMessage(text: string, parseMode: string = "Markdown"): Promise<number | null> {
   if (!isConfigured()) return null;
-  const converted = markdownToTelegramHtml(text);
+  const converted = parseMode === "HTML" ? markdownToTelegramHtml(text) : text;
   try {
     const result = await tgFetch("sendMessage", {
       chat_id: CHAT_ID,
@@ -180,7 +180,7 @@ export async function sendPhoto(photoUrl: string, caption?: string, parseMode: s
       photo: photoUrl,
     };
     if (caption) {
-      const convertedCaption = markdownToTelegramHtml(caption);
+      const convertedCaption = parseMode === "HTML" ? markdownToTelegramHtml(caption) : caption;
       body.caption = convertedCaption.length > 1024 ? convertedCaption.slice(0, 1020) + "..." : convertedCaption;
       body.parse_mode = parseMode;
     }
@@ -198,7 +198,7 @@ export async function sendMessageWithKeyboard(
   parseMode: string = "Markdown"
 ): Promise<number | null> {
   if (!isConfigured()) return null;
-  const converted = markdownToTelegramHtml(text);
+  const converted = parseMode === "HTML" ? markdownToTelegramHtml(text) : text;
   try {
     const result = await tgFetch("sendMessage", {
       chat_id: CHAT_ID,
@@ -226,7 +226,7 @@ async function answerCallbackQuery(callbackQueryId: string, text?: string): Prom
 }
 
 async function editMessage(messageId: number, text: string, parseMode: string = "Markdown"): Promise<void> {
-  const converted = markdownToTelegramHtml(text);
+  const converted = parseMode === "HTML" ? markdownToTelegramHtml(text) : text;
   try {
     await tgFetch("editMessageText", {
       chat_id: CHAT_ID,
