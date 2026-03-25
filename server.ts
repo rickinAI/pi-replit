@@ -9056,6 +9056,15 @@ app.get("/api/pipeline/stats", async (req, res) => {
   }
 });
 
+app.post("/api/personal-context/sync", async (req: Request, res: Response) => {
+  try {
+    const result = await telegram.syncPersonalContext();
+    res.json({ ok: result });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post("/api/telegram/webhook", express.json(), async (req, res) => {
   console.log("[WEBHOOK] Step 1 — Incoming request received", JSON.stringify(req.body).slice(0, 300));
   const secretHeader = req.headers["x-telegram-bot-api-secret-token"];
@@ -9351,6 +9360,7 @@ async function startServer(maxRetries = 5) {
   await tasks.init();
   await alerts.init();
   await telegram.init();
+  await telegram.syncPersonalContext();
   oversight.setTelegramNotifier(async (msg: string) => {
     await telegram.sendToChannel("trading", msg, "HTML");
   });

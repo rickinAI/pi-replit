@@ -132,6 +132,25 @@ export async function init(): Promise<pg.Pool> {
   `);
   await pool.query(`ALTER TABLE pages ADD COLUMN IF NOT EXISTS is_public BOOLEAN NOT NULL DEFAULT false`);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS personal_context (
+      id SERIAL PRIMARY KEY,
+      content TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS telegram_conversation_history (
+      id SERIAL PRIMARY KEY,
+      chat_id BIGINT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_tg_conv_chat_created ON telegram_conversation_history(chat_id, created_at DESC)`);
+
   try {
     await pool.query(`CREATE EXTENSION IF NOT EXISTS vector`);
   } catch (err) {

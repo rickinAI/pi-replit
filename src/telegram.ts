@@ -2211,12 +2211,9 @@ export function getWebhookSecret(): string {
   return WEBHOOK_SECRET;
 }
 
-interface ChatContext {
-  messages: Array<{ role: "user" | "assistant"; text: string; ts: number }>;
-}
-const chatContexts = new Map<string, ChatContext>();
-const MAX_CONTEXT_MESSAGES = 10;
-const CONTEXT_TTL_MS = 2 * 60 * 60 * 1000;
+let personalContextCache: string | null = null;
+let personalContextLastSync = 0;
+const PERSONAL_CONTEXT_SYNC_INTERVAL = 6 * 60 * 60 * 1000;
 
 function isAuthorizedUser(userId: number | string, username?: string): boolean {
   if (RICKIN_TELEGRAM_IDS.has(String(userId))) return true;
@@ -2224,23 +2221,93 @@ function isAuthorizedUser(userId: number | string, username?: string): boolean {
   return false;
 }
 
-function getChatContext(userId: string): ChatContext {
-  let ctx = chatContexts.get(userId);
-  if (!ctx) {
-    ctx = { messages: [] };
-    chatContexts.set(userId, ctx);
+async function getPersonalContext(): Promise<string> {
+  const now = Date.now();
+  if (personalContextCache && (now - personalContextLastSync) < PERSONAL_CONTEXT_SYNC_INTERVAL) {
+    return personalContextCache;
   }
-  const cutoff = Date.now() - CONTEXT_TTL_MS;
-  ctx.messages = ctx.messages.filter(m => m.ts > cutoff);
-  return ctx;
+  try {
+    const pool = getPool();
+    const result = await pool.query("SELECT content FROM personal_context WHERE id = 1");
+    if (result.rows.length > 0) {
+      personalContextCache = result.rows[0].content;
+      personalContextLastSync = now;
+      return personalContextCache;
+    }
+  } catch {}
+  try {
+    const fs = await import("fs");
+    const path = "data/vault/About Me/Telegram Context.md";
+    if (fs.existsSync(path)) {
+      personalContextCache = fs.readFileSync(path, "utf-8");
+      personalContextLastSync = now;
+      return personalContextCache;
+    }
+  } catch {}
+  return "";
 }
 
-function addChatMessage(userId: string, role: "user" | "assistant", text: string): void {
-  const ctx = getChatContext(userId);
-  ctx.messages.push({ role, text, ts: Date.now() });
-  if (ctx.messages.length > MAX_CONTEXT_MESSAGES) {
-    ctx.messages = ctx.messages.slice(-MAX_CONTEXT_MESSAGES);
+export async function syncPersonalContext(): Promise<boolean> {
+  try {
+    const fs = await import("fs");
+    const path = "data/vault/About Me/Telegram Context.md";
+    if (!fs.existsSync(path)) return false;
+    const content = fs.readFileSync(path, "utf-8");
+    const pool = getPool();
+    await pool.query(
+      `INSERT INTO personal_context (id, content, updated_at) VALUES (1, $1, NOW())
+       ON CONFLICT (id) DO UPDATE SET content = $1, updated_at = NOW()`,
+      [content]
+    );
+    personalContextCache = content;
+    personalContextLastSync = Date.now();
+    console.log(`[telegram] Personal context synced (${content.length} chars)`);
+    return true;
+  } catch (err) {
+    console.error("[telegram] Personal context sync failed:", err);
+    return false;
   }
+}
+
+async function getConversationHistory(chatId: string): Promise<Array<{ role: string; content: string }>> {
+  try {
+    const pool = getPool();
+    const result = await pool.query(
+      `SELECT role, content FROM telegram_conversation_history
+       WHERE chat_id = $1 ORDER BY created_at DESC LIMIT 20`,
+      [chatId]
+    );
+    return result.rows.reverse();
+  } catch {
+    return [];
+  }
+}
+
+async function addConversationMessage(chatId: string, role: string, content: string): Promise<void> {
+  try {
+    const pool = getPool();
+    await pool.query(
+      `INSERT INTO telegram_conversation_history (chat_id, role, content) VALUES ($1, $2, $3)`,
+      [chatId, role, content]
+    );
+    await pool.query(
+      `DELETE FROM telegram_conversation_history
+       WHERE chat_id = $1 AND id NOT IN (
+         SELECT id FROM telegram_conversation_history WHERE chat_id = $1 ORDER BY created_at DESC LIMIT 100
+       )`,
+      [chatId]
+    );
+  } catch (err) {
+    console.error("[telegram] Failed to save conversation message:", err);
+  }
+}
+
+function cleanAgentResponse(text: string): string {
+  let cleaned = text;
+  cleaned = cleaned.replace(/^\*\*DARKNODE RESPONSE\*\*\s*/i, "");
+  cleaned = cleaned.replace(/\n*System status unchanged\.?\s*$/i, "");
+  cleaned = cleaned.replace(/^\*\*DarkNode:\*\*\s*/i, "");
+  return cleaned.trim();
 }
 
 async function replyToChat(chatId: string, text: string): Promise<void> {
@@ -2274,26 +2341,32 @@ async function handleTwoWayChat(userId: string, chatId: string, text: string): P
       return;
     }
 
-    addChatMessage(String(userId), "user", text);
-    const ctx = getChatContext(String(userId));
+    await addConversationMessage(chatId, "user", text);
+    const history = await getConversationHistory(chatId);
+    const personalContext = await getPersonalContext();
 
-    let contextPrompt = "";
-    if (ctx.messages.length > 1) {
-      const history = ctx.messages.slice(0, -1).map(m =>
-        `${m.role === "user" ? "Rickin" : "DarkNode"}: ${m.text}`
+    let historyPrompt = "";
+    if (history.length > 1) {
+      const pastMessages = history.slice(0, -1).map(m =>
+        `${m.role === "user" ? "Rickin" : "DarkNode"}: ${m.content}`
       ).join("\n");
-      contextPrompt = `Recent conversation:\n${history}\n\n`;
+      historyPrompt = `Recent conversation:\n${pastMessages}\n\n`;
     }
 
-    const prompt = `${contextPrompt}Rickin says via Telegram: "${text}"\n\nRespond concisely (max 500 chars). You are DarkNode, Rickin's autonomous AI system. Answer questions, run commands, provide status. Keep it conversational and direct. IMPORTANT: Do NOT use the telegram_send tool — just return your response as text. The reply will be routed back to Rickin's chat automatically.`;
+    let contextBlock = "";
+    if (personalContext) {
+      contextBlock = `---\nPERSONAL CONTEXT:\n${personalContext}\n---\n\n`;
+    }
 
-    console.log(`[WEBHOOK] Step 4 — Calling oversight agent for userId=${userId} chatId=${chatId} text="${text.slice(0, 50)}"`);
+    const prompt = `${contextBlock}${historyPrompt}Rickin says via Telegram: "${text}"\n\nRespond concisely (max 500 chars). You are DarkNode, Rickin's autonomous AI system. Answer questions, run commands, provide status. Keep it conversational and direct. Do NOT prefix with "DARKNODE RESPONSE" or add "System status unchanged" footers. IMPORTANT: Do NOT use the telegram_send tool — just return your response as text. The reply will be routed back to Rickin's chat automatically.`;
+
+    console.log(`[WEBHOOK] Step 4 — Calling oversight agent for userId=${userId} chatId=${chatId} text="${text.slice(0, 50)}" history=${history.length} contextLen=${personalContext.length}`);
     const result = await runAgent("oversight", prompt);
     const response = result.response || "I couldn't process that — try again.";
     console.log(`[WEBHOOK] Step 4 — Agent returned ${response.length} chars`);
 
-    const cleanResponse = response.slice(0, 4000);
-    addChatMessage(String(userId), "assistant", cleanResponse);
+    const cleanResponse = cleanAgentResponse(response).slice(0, 4000);
+    await addConversationMessage(chatId, "assistant", cleanResponse);
 
     console.log(`[WEBHOOK] Step 5 — Sending reply to chatId=${chatId} (${cleanResponse.length} chars)`);
     await replyToChat(chatId, cleanResponse);
