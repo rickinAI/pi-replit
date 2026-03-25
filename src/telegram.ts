@@ -2387,8 +2387,8 @@ async function handleTwoWayChat(userId: string, chatId: string, text: string): P
 
     const prompt = `${contextBlock}${historyPrompt}Rickin says via Telegram: "${text}"\n\nRespond concisely (max 500 chars). You are DarkNode, Rickin's autonomous AI system. Answer questions, run commands, provide status. Keep it conversational and direct. Do NOT prefix with "DARKNODE RESPONSE" or add "System status unchanged" footers. IMPORTANT: Do NOT use the telegram_send tool — just return your response as text. The reply will be routed back to Rickin's chat automatically.`;
 
-    console.log(`[WEBHOOK] Step 4 — Calling oversight agent for userId=${userId} chatId=${chatId} text="${text.slice(0, 50)}" history=${history.length} contextLen=${personalContext.length}`);
-    const result = await runAgent("oversight", prompt);
+    console.log(`[WEBHOOK] Step 4 — Calling darknode agent for userId=${userId} chatId=${chatId} text="${text.slice(0, 50)}" history=${history.length} contextLen=${personalContext.length}`);
+    const result = await runAgent("darknode", prompt);
     const response = result.response || "I couldn't process that — try again.";
     console.log(`[WEBHOOK] Step 4 — Agent returned ${response.length} chars`);
 
