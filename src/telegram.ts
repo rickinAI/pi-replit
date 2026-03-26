@@ -2506,7 +2506,7 @@ function isResumeRequest(text: string): boolean {
 
 function isPauseRequest(text: string): boolean {
   const lower = text.toLowerCase().trim();
-  return lower === "pause" || lower === "pause interview";
+  return lower === "pause" || lower === "pause interview" || lower === "/pause";
 }
 
 function isStopRequest(text: string): boolean {
@@ -2637,6 +2637,15 @@ async function searchVaultForContext(topic: string, runAgent: Function): Promise
 
 async function handleInterviewMessage(chatId: string, text: string, runAgent: Function): Promise<boolean> {
   const existingState = await loadInterviewState(chatId);
+
+  if (text.trim().toLowerCase() === "/interview") {
+    if (existingState) {
+      await replyToChat(chatId, `You already have an interview about "${existingState.topic}" (${existingState.status}). Say "${existingState.status === "paused" ? "resume interview" : "done"}" to ${existingState.status === "paused" ? "continue" : "finish"} it.`);
+    } else {
+      await replyToChat(chatId, "What topic would you like to explore? Say:\n• \"interview me about [topic]\"\n• \"/interview [topic]\"\n\nTopics can be anything personal — health, family, spirituality, goals, ideas.");
+    }
+    return true;
+  }
 
   const triggerTopic = parseInterviewTrigger(text);
   if (triggerTopic) {
@@ -2799,7 +2808,8 @@ async function completeInterview(chatId: string, state: InterviewState, runAgent
 
     let relatedNotes = "";
     try {
-      const relatedResult = await runAgent("darknode", `Use vault_semantic_search to find notes related to this interview topic: "${state.topic}". Return ONLY a bulleted list of [[wikilink]] paths for the top 3-5 most relevant notes. Format: "- [[path/to/note]]". If nothing relevant, return "None found." Do NOT use telegram_send.`);
+      const searchContext = `${state.topic}. ${synthesizedNote.slice(0, 300)}`;
+      const relatedResult = await runAgent("darknode", `Use vault_semantic_search to find notes related to this interview content: "${searchContext}". Return ONLY a bulleted list of [[wikilink]] paths for the top 3-5 most relevant notes. Format: "- [[path/to/note]]". If nothing relevant, return "None found." Do NOT use telegram_send.`);
       const relatedResponse = (relatedResult.response || "").replace(/DARKNODE RESPONSE:?\s*/gi, "").trim();
       if (relatedResponse && !relatedResponse.toLowerCase().includes("none found")) {
         relatedNotes = `\n\n## Related Notes\n${relatedResponse}`;
