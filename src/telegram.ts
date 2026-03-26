@@ -2359,6 +2359,455 @@ async function replyToChat(chatId: string, text: string): Promise<void> {
   }
 }
 
+interface InterviewState {
+  id: number;
+  chat_id: string;
+  topic: string;
+  status: "active" | "paused" | "completed";
+  questions: string[];
+  answers: string[];
+  vault_context_summary: string | null;
+  started_at: string;
+  paused_at: string | null;
+  completed_at: string | null;
+}
+
+const WORK_TOPIC_KEYWORDS = ["moody", "regnology", "bank", "client", "deal", "strategy", "project", "meeting", "pipeline", "revenue", "quarter", "stakeholder", "compliance", "regulatory"];
+
+const FOLDER_ROUTES: Array<{ keywords: string[]; folder: string }> = [
+  { keywords: ["health", "fitness", "exercise", "diet", "sleep", "wellness", "weight", "fasting", "meditation"], folder: "Health/" },
+  { keywords: ["family", "baby", "reya", "pooja", "parenting", "pregnancy", "kids", "marriage"], folder: "Family/" },
+  { keywords: ["spirituality", "consciousness", "pineal", "alkaloids", "ayahuasca", "meditation", "soul", "faith", "god", "prayer"], folder: "Areas/Spirituality/" },
+  { keywords: ["goal", "goals", "reflection", "yearly", "journal", "life", "purpose", "meaning", "values"], folder: "Journal/" },
+  { keywords: ["idea", "brainstorm", "concept", "invention", "startup"], folder: "Ideas/" },
+];
+
+function routeToFolder(topic: string): string {
+  const lower = topic.toLowerCase();
+  for (const route of FOLDER_ROUTES) {
+    if (route.keywords.some(kw => lower.includes(kw))) return route.folder;
+  }
+  return "Notes/";
+}
+
+function isWorkTopic(topic: string): boolean {
+  const lower = topic.toLowerCase();
+  return WORK_TOPIC_KEYWORDS.some(kw => lower.includes(kw));
+}
+
+async function loadInterviewState(chatId: string): Promise<InterviewState | null> {
+  try {
+    const pool = getPool();
+    const result = await pool.query(
+      `SELECT * FROM interview_sessions WHERE chat_id = $1 AND status IN ('active', 'paused') ORDER BY updated_at DESC LIMIT 1`,
+      [chatId]
+    );
+    if (result.rows.length === 0) return null;
+    const row = result.rows[0];
+    return {
+      id: row.id,
+      chat_id: row.chat_id,
+      topic: row.topic,
+      status: row.status,
+      questions: row.questions || [],
+      answers: row.answers || [],
+      vault_context_summary: row.vault_context_summary,
+      started_at: row.started_at,
+      paused_at: row.paused_at,
+      completed_at: row.completed_at,
+    };
+  } catch (err) {
+    console.error("[interview] Failed to load state:", err);
+    return null;
+  }
+}
+
+async function saveInterviewState(state: InterviewState): Promise<void> {
+  try {
+    const pool = getPool();
+    await pool.query(
+      `UPDATE interview_sessions SET topic = $1, status = $2, questions = $3, answers = $4, vault_context_summary = $5, paused_at = $6, completed_at = $7, updated_at = NOW() WHERE id = $8`,
+      [state.topic, state.status, JSON.stringify(state.questions), JSON.stringify(state.answers), state.vault_context_summary, state.paused_at, state.completed_at, state.id]
+    );
+  } catch (err) {
+    console.error("[interview] Failed to save state:", err);
+  }
+}
+
+async function createInterviewSession(chatId: string, topic: string, vaultContext: string | null): Promise<InterviewState> {
+  const pool = getPool();
+  const result = await pool.query(
+    `INSERT INTO interview_sessions (chat_id, topic, status, questions, answers, vault_context_summary) VALUES ($1, $2, 'active', '[]', '[]', $3) RETURNING *`,
+    [chatId, topic, vaultContext]
+  );
+  const row = result.rows[0];
+  return {
+    id: row.id,
+    chat_id: row.chat_id,
+    topic: row.topic,
+    status: "active",
+    questions: [],
+    answers: [],
+    vault_context_summary: vaultContext,
+    started_at: row.started_at,
+    paused_at: null,
+    completed_at: null,
+  };
+}
+
+async function clearStaleInterviews(): Promise<void> {
+  try {
+    const pool = getPool();
+    const result = await pool.query(
+      `UPDATE interview_sessions SET status = 'completed', completed_at = NOW() WHERE status = 'paused' AND paused_at < NOW() - INTERVAL '7 days' RETURNING chat_id, topic`
+    );
+    if (result.rows.length > 0) {
+      console.log(`[interview] Cleared ${result.rows.length} stale paused sessions`);
+    }
+  } catch (err) {
+    console.error("[interview] Failed to clear stale sessions:", err);
+  }
+}
+
+function parseInterviewTrigger(text: string): string | null {
+  const lower = text.toLowerCase().trim();
+  const patterns = [
+    /^interview\s+me\s+(?:about|on)\s+(.+)$/i,
+    /^\/interview\s+(.+)$/i,
+  ];
+  for (const pat of patterns) {
+    const match = text.trim().match(pat);
+    if (match) return match[1].trim();
+  }
+  return null;
+}
+
+function isResumeRequest(text: string): boolean {
+  const lower = text.toLowerCase().trim();
+  return lower === "resume interview" || lower === "resume" || lower === "/resume";
+}
+
+function isPauseRequest(text: string): boolean {
+  const lower = text.toLowerCase().trim();
+  return lower === "pause" || lower === "pause interview";
+}
+
+function isStopRequest(text: string): boolean {
+  const lower = text.toLowerCase().trim();
+  return lower === "done" || lower === "stop" || lower === "end interview" || lower === "finish";
+}
+
+function isEscapeCommand(text: string): boolean {
+  return text.trim().startsWith("/");
+}
+
+function buildInterviewPrompt(state: InterviewState, newAnswer: string | null): string {
+  const qaPairs: string[] = [];
+  for (let i = 0; i < state.questions.length; i++) {
+    qaPairs.push(`Q${i + 1}: ${state.questions[i]}`);
+    if (i < state.answers.length) {
+      qaPairs.push(`A${i + 1}: ${state.answers[i]}`);
+    }
+  }
+
+  const lastThree = qaPairs.slice(-6);
+  const earlier = qaPairs.slice(0, -6);
+  let earlierSummary = "";
+  if (earlier.length > 0) {
+    earlierSummary = `[Earlier in the interview — ${earlier.length / 2} previous Q&A pairs covered related ground]\n`;
+  }
+
+  const questionCount = state.questions.length;
+  const maxQuestions = 10;
+  const isNearEnd = questionCount >= 8;
+
+  return `You are DarkNode in INTERVIEW MODE — a warm, personal interviewer helping Rickin explore and capture his thoughts on a personal topic.
+
+TOPIC: "${state.topic}"
+
+${state.vault_context_summary ? `EXISTING VAULT CONTEXT (what you already know about this topic):\n${state.vault_context_summary}\n` : "No existing vault notes found on this topic.\n"}
+
+INTERVIEW PROGRESS: Question ${questionCount + 1} of ~${maxQuestions}
+${earlierSummary}${lastThree.length > 0 ? `Recent conversation:\n${lastThree.join("\n")}\n` : ""}
+${newAnswer ? `Rickin just answered: "${newAnswer}"\n` : "This is the opening question — start warm and open-ended.\n"}
+
+INTERVIEWING STYLE — adapt to the topic:
+- Health/wellness topics → Exploratory: "Tell me more about that", "What does that look like day to day?"
+- Life goals/reflection → Socratic: "Why does that matter to you?", "What would change if you achieved that?"
+- Family/relationships → Conversational: "What does that look like in your ideal scenario?"
+- Spirituality → Reflective: "How has this changed your perspective?", "What resonates most?"
+
+RULES:
+- Ask exactly ONE question. Never ask two questions in the same response.
+- Keep your response under 300 chars — this is Telegram, not an essay.
+- Be warm and reflective, not analytical or consultant-like.
+- Build on what Rickin just said — don't repeat questions or ask things the vault context already answers.
+- If Rickin gives short answers, keep going but be ready to wrap up.
+- ${isNearEnd ? "You're near the end — if the next answer feels like a natural stopping point, you can signal wrapping up: 'One last question...' or 'To wrap up...'" : "You're still in the middle — keep exploring."}
+- Do NOT use the telegram_send tool — just return your question as text.
+- Never end with a meta-question like "Want to continue?" — just ask your next interview question.`;
+}
+
+function buildSynthesisPrompt(state: InterviewState): string {
+  const qaPairs: string[] = [];
+  for (let i = 0; i < state.questions.length; i++) {
+    qaPairs.push(`**Q${i + 1}:** ${state.questions[i]}`);
+    if (i < state.answers.length) {
+      qaPairs.push(`**A${i + 1}:** ${state.answers[i]}`);
+    }
+  }
+
+  const today = new Date().toLocaleDateString("en-US", { timeZone: "America/New_York", year: "numeric", month: "long", day: "numeric" });
+  const startTime = new Date(state.started_at);
+  const durationMin = Math.round((Date.now() - startTime.getTime()) / 60000);
+
+  return `Synthesize the following interview into a structured vault note. Do NOT include any preamble or explanation — output ONLY the markdown note content.
+
+TOPIC: "${state.topic}"
+DATE: ${today}
+QUESTIONS ASKED: ${state.questions.length}
+DURATION: ~${durationMin} minutes
+
+FULL TRANSCRIPT:
+${qaPairs.join("\n")}
+
+OUTPUT FORMAT (use this exact structure):
+> [!tip] 📝 Interview: ${state.topic}
+> - **Date:** ${today}
+> - **Questions asked:** ${state.questions.length}
+> - **Duration:** ~${durationMin} minutes
+> - **Tags:** #interview
+
+## Key Themes
+{3-5 bullet points of major themes that emerged}
+
+## Personal Insights
+{What Rickin discovered or realized about himself — write in third person}
+
+## Decisions Made
+{Any concrete decisions made during the interview — or "None yet" if none}
+
+## Open Questions
+{Unresolved or follow-up questions to explore later}
+
+## Action Items
+{Concrete next steps, if any — each as a bullet starting with a verb}
+
+RULES:
+- Be concise and specific — no filler.
+- Use Rickin's own words where impactful.
+- Action items should be concrete and actionable (start with a verb).
+- If there are no decisions or action items, say "None identified."
+- Do NOT add a Related Notes section — that will be added separately.`;
+}
+
+async function searchVaultForContext(topic: string, runAgent: Function): Promise<string | null> {
+  try {
+    const result = await runAgent("darknode", `Use vault_semantic_search to search for "${topic}". Also use notes_search for "${topic}". Return a brief summary (under 500 chars) of what you found — just the key points from existing notes. If nothing relevant was found, say "No existing notes found." Do NOT use telegram_send. Return ONLY the summary text.`);
+    const response = result.response || "";
+    if (response.length > 0 && !response.toLowerCase().includes("no existing notes") && !response.toLowerCase().includes("no relevant notes")) {
+      return response.slice(0, 1000);
+    }
+    return null;
+  } catch (err) {
+    console.error("[interview] Vault search failed:", err);
+    return null;
+  }
+}
+
+async function handleInterviewMessage(chatId: string, text: string, runAgent: Function): Promise<boolean> {
+  const existingState = await loadInterviewState(chatId);
+
+  const triggerTopic = parseInterviewTrigger(text);
+  if (triggerTopic) {
+    if (existingState && existingState.status === "active") {
+      await replyToChat(chatId, `You already have an active interview about "${existingState.topic}". Say "done" to finish it first, or "pause" to save it for later.`);
+      return true;
+    }
+    if (existingState && existingState.status === "paused") {
+      await replyToChat(chatId, `You have a paused interview about "${existingState.topic}". Say "resume interview" to continue it, or "stop" to end it before starting a new one.`);
+      return true;
+    }
+
+    if (isWorkTopic(triggerTopic)) {
+      await replyToChat(chatId, "Interview mode is for personal reflection — health, family, spirituality, goals, ideas. For work topics, just chat normally or use the Moodys agent.");
+      return true;
+    }
+
+    await replyToChat(chatId, `🎤 Starting interview about "${triggerTopic}"...\n\nSearching your vault for context...`);
+    const vaultContext = await searchVaultForContext(triggerTopic, runAgent);
+    const state = await createInterviewSession(chatId, triggerTopic, vaultContext);
+
+    const prompt = buildInterviewPrompt(state, null);
+    console.log(`[interview] Starting session ${state.id} on "${triggerTopic}" for chatId=${chatId}`);
+    const result = await runAgent("darknode", prompt);
+    const question = cleanAgentResponse(result.response || "What draws you to this topic right now?").slice(0, 1000);
+
+    state.questions.push(question);
+    await saveInterviewState(state);
+    await addConversationMessage(chatId, "assistant", `[Interview: ${triggerTopic}] ${question}`);
+    await replyToChat(chatId, question);
+    return true;
+  }
+
+  if (isResumeRequest(text)) {
+    if (!existingState || existingState.status !== "paused") {
+      await replyToChat(chatId, "No paused interview to resume. Say \"interview me about [topic]\" to start one.");
+      return true;
+    }
+
+    await replyToChat(chatId, `🎤 Resuming interview about "${existingState.topic}"...\n\nRe-checking vault for new context...`);
+    const freshContext = await searchVaultForContext(existingState.topic, runAgent);
+    if (freshContext && freshContext !== existingState.vault_context_summary) {
+      existingState.vault_context_summary = freshContext;
+    }
+    existingState.status = "active";
+    existingState.paused_at = null;
+
+    const prompt = buildInterviewPrompt(existingState, null);
+    console.log(`[interview] Resuming session ${existingState.id} on "${existingState.topic}" (${existingState.questions.length} Qs so far)`);
+    const result = await runAgent("darknode", prompt);
+    const question = cleanAgentResponse(result.response || "Where were we? What's on your mind about this now?").slice(0, 1000);
+
+    existingState.questions.push(question);
+    await saveInterviewState(existingState);
+    await addConversationMessage(chatId, "assistant", `[Interview resumed: ${existingState.topic}] ${question}`);
+    await replyToChat(chatId, question);
+    return true;
+  }
+
+  if (!existingState || existingState.status !== "active") {
+    return false;
+  }
+
+  if (isPauseRequest(text)) {
+    existingState.status = "paused";
+    existingState.paused_at = new Date().toISOString();
+    await saveInterviewState(existingState);
+    console.log(`[interview] Paused session ${existingState.id} on "${existingState.topic}" (${existingState.questions.length} Qs)`);
+    await replyToChat(chatId, `⏸️ Interview about "${existingState.topic}" paused. Say "resume interview" anytime to continue. (Auto-expires in 7 days.)`);
+    return true;
+  }
+
+  if (isStopRequest(text)) {
+    await completeInterview(chatId, existingState, runAgent);
+    return true;
+  }
+
+  if (isEscapeCommand(text)) {
+    return false;
+  }
+
+  existingState.answers.push(text);
+  await addConversationMessage(chatId, "user", text);
+
+  const questionCount = existingState.questions.length;
+  if (questionCount >= 10) {
+    await replyToChat(chatId, "Thanks — that's a good place to wrap up. Let me synthesize what we covered...");
+    await completeInterview(chatId, existingState, runAgent);
+    return true;
+  }
+
+  const prompt = buildInterviewPrompt(existingState, text);
+  console.log(`[interview] Session ${existingState.id} Q${questionCount + 1} for "${existingState.topic}"`);
+  const result = await runAgent("darknode", prompt);
+  const question = cleanAgentResponse(result.response || "Tell me more about that.").slice(0, 1000);
+
+  existingState.questions.push(question);
+  await saveInterviewState(existingState);
+  await addConversationMessage(chatId, "assistant", question);
+  await replyToChat(chatId, question);
+  return true;
+}
+
+async function completeInterview(chatId: string, state: InterviewState, runAgent: Function): Promise<void> {
+  try {
+    console.log(`[interview] Completing session ${state.id} on "${state.topic}" (${state.questions.length} Qs, ${state.answers.length} As)`);
+    await replyToChat(chatId, "🎤 Interview complete. Synthesizing your thoughts...");
+
+    state.status = "completed";
+    state.completed_at = new Date().toISOString();
+    await saveInterviewState(state);
+
+    const synthesisPrompt = buildSynthesisPrompt(state);
+    const synthResult = await runAgent("darknode", synthesisPrompt);
+    const synthesizedNote = cleanAgentResponse(synthResult.response || "Synthesis failed — see raw transcript.");
+
+    const folder = routeToFolder(state.topic);
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+    const safeTopic = state.topic.replace(/[^a-zA-Z0-9\s-]/g, "").replace(/\s+/g, " ").trim();
+    const notePath = `${folder}Interview - ${safeTopic}.md`;
+    const transcriptPath = `Conversations/${today} - Interview - ${safeTopic}.md`;
+
+    const transcriptLines: string[] = [`# Interview Transcript: ${state.topic}\n`, `**Date:** ${today}`, `**Questions:** ${state.questions.length}\n`, "---\n"];
+    for (let i = 0; i < state.questions.length; i++) {
+      transcriptLines.push(`**Q${i + 1}:** ${state.questions[i]}`);
+      if (i < state.answers.length) {
+        transcriptLines.push(`**A${i + 1}:** ${state.answers[i]}\n`);
+      }
+    }
+    const transcriptContent = transcriptLines.join("\n");
+
+    let relatedNotes = "";
+    try {
+      const relatedResult = await runAgent("darknode", `Use vault_semantic_search to find notes related to this interview topic: "${state.topic}". Return ONLY a bulleted list of [[wikilink]] paths for the top 3-5 most relevant notes. Format: "- [[path/to/note]]". If nothing relevant, return "None found." Do NOT use telegram_send.`);
+      const relatedResponse = cleanAgentResponse(relatedResult.response || "");
+      if (relatedResponse && !relatedResponse.toLowerCase().includes("none found")) {
+        relatedNotes = `\n\n## Related Notes\n${relatedResponse}`;
+      }
+    } catch {
+      console.warn("[interview] Related notes search failed, skipping");
+    }
+
+    const finalNote = synthesizedNote + relatedNotes;
+
+    try {
+      await runAgent("darknode", `Use notes_create to save a note at path "${notePath}" with this content:\n\n${finalNote}\n\nDo NOT use telegram_send. Just confirm the save.`);
+      console.log(`[interview] Synthesized note saved to ${notePath}`);
+    } catch (err) {
+      console.error(`[interview] Failed to save synthesized note:`, err);
+    }
+
+    try {
+      await runAgent("darknode", `Use notes_create to save a note at path "${transcriptPath}" with this content:\n\n${transcriptContent}\n\nDo NOT use telegram_send. Just confirm the save.`);
+      console.log(`[interview] Transcript saved to ${transcriptPath}`);
+    } catch (err) {
+      console.error(`[interview] Failed to save transcript:`, err);
+    }
+
+    const actionItems: string[] = [];
+    const actionMatch = synthesizedNote.match(/## Action Items\n([\s\S]*?)(?=\n##|$)/);
+    if (actionMatch) {
+      const items = actionMatch[1].split("\n").filter(line => line.trim().startsWith("-") || line.trim().startsWith("•"));
+      for (const item of items) {
+        const cleaned = item.replace(/^[-•]\s*/, "").trim();
+        if (cleaned && !cleaned.toLowerCase().includes("none")) {
+          actionItems.push(cleaned);
+        }
+      }
+    }
+
+    let confirmMsg = `✅ Interview about "${state.topic}" saved!\n\n📝 Note: ${notePath}\n📋 Transcript: ${transcriptPath}`;
+    if (actionItems.length > 0) {
+      confirmMsg += `\n\n📌 ${actionItems.length} action item${actionItems.length > 1 ? "s" : ""} found. Say "yes" to add them as tasks.`;
+    }
+
+    await addConversationMessage(chatId, "assistant", confirmMsg);
+    await replyToChat(chatId, confirmMsg);
+
+    if (actionItems.length > 0) {
+      const pool = getPool();
+      await pool.query(
+        `UPDATE interview_sessions SET vault_context_summary = $1 WHERE id = $2`,
+        [JSON.stringify({ pending_tasks: actionItems, note_path: notePath }), state.id]
+      );
+    }
+  } catch (err) {
+    console.error("[interview] Completion failed:", err);
+    await replyToChat(chatId, "⚠️ Interview synthesis failed — your answers are saved and I'll retry later.");
+  }
+}
+
 async function handleTwoWayChat(userId: string, chatId: string, text: string): Promise<void> {
   try {
     const { getRunAgent } = await import("./scheduled-jobs.js");
@@ -2367,6 +2816,37 @@ async function handleTwoWayChat(userId: string, chatId: string, text: string): P
       await replyToChat(chatId, "⚠️ Agent system not ready — try again in a moment.");
       return;
     }
+
+    if (text.toLowerCase().trim() === "yes") {
+      const activeInterview = await loadInterviewState(chatId);
+      if (!activeInterview) {
+        const pool = getPool();
+        const recent = await pool.query(
+          `SELECT vault_context_summary FROM interview_sessions WHERE chat_id = $1 AND status = 'completed' ORDER BY completed_at DESC LIMIT 1`,
+          [chatId]
+        );
+        if (recent.rows.length > 0 && recent.rows[0].vault_context_summary) {
+          try {
+            const meta = JSON.parse(recent.rows[0].vault_context_summary);
+            if (meta.pending_tasks && Array.isArray(meta.pending_tasks) && meta.pending_tasks.length > 0) {
+              const tasks = meta.pending_tasks as string[];
+              for (const task of tasks) {
+                await runAgent("darknode", `Use task_add to create a task with title: "${task}". Do NOT use telegram_send.`);
+              }
+              await pool.query(
+                `UPDATE interview_sessions SET vault_context_summary = NULL WHERE id = (SELECT id FROM interview_sessions WHERE chat_id = $1 AND status = 'completed' ORDER BY completed_at DESC LIMIT 1)`,
+                [chatId]
+              );
+              await replyToChat(chatId, `✅ Added ${tasks.length} task${tasks.length > 1 ? "s" : ""} from your interview.`);
+              return;
+            }
+          } catch {}
+        }
+      }
+    }
+
+    const handled = await handleInterviewMessage(chatId, text, runAgent);
+    if (handled) return;
 
     await addConversationMessage(chatId, "user", text);
     const history = await getConversationHistory(chatId);
@@ -2444,9 +2924,29 @@ export async function handleWebhookUpdate(update: any): Promise<void> {
   console.log(`[WEBHOOK] Step 3 — Auth PASSED for userId=${userId}`);
 
   if (text.startsWith("/")) {
-    if (chatId !== CHAT_ID) return;
     const parts = text.split(/\s+/);
     const cmd = parts[0].toLowerCase().replace(/@\w+/, "").replace("/", "");
+
+    if (cmd === "interview") {
+      await handleTwoWayChat(String(userId), chatId, text);
+      return;
+    }
+
+    if (cmd === "resume") {
+      const pausedInterview = await loadInterviewState(chatId);
+      if (pausedInterview && pausedInterview.status === "paused") {
+        await handleTwoWayChat(String(userId), chatId, text);
+        return;
+      }
+    }
+
+    const interviewState = await loadInterviewState(chatId);
+    if (interviewState && interviewState.status === "active") {
+      await handleTwoWayChat(String(userId), chatId, text);
+      return;
+    }
+
+    if (chatId !== CHAT_ID) return;
     const args = parts.slice(1).join(" ");
     const handler = commands[cmd];
     if (handler) {
@@ -2509,6 +3009,8 @@ export async function init(): Promise<void> {
   registerCommand("blacklist-wallet", async (args) => handleBlacklistWalletCommand(args));
   registerCommand("goal", async (args) => handleGoalCommand(args));
   registerCommand("help", async () => handleHelpCommand());
+
+  await clearStaleInterviews();
 
   try {
     const me = await tgFetch("getMe");

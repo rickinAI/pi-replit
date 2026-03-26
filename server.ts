@@ -9449,7 +9449,7 @@ async function startServer(maxRetries = 5) {
   } catch (err) {
     console.error("[boot] Vault semantic layer init failed:", err);
   }
-  console.log("[boot] PostgreSQL ready (shared pool, 9 tables + pgvector)");
+  console.log("[boot] PostgreSQL ready (shared pool, 10 tables + pgvector)");
 
   let googleStatus: { connected: boolean; email?: string; error?: string } = { connected: false };
   try {

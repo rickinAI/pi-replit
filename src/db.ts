@@ -151,13 +151,31 @@ export async function init(): Promise<pg.Pool> {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_tg_conv_chat_created ON telegram_conversation_history(chat_id, created_at DESC)`);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS interview_sessions (
+      id SERIAL PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      topic TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      questions JSONB NOT NULL DEFAULT '[]',
+      answers JSONB NOT NULL DEFAULT '[]',
+      vault_context_summary TEXT,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      paused_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_interview_chat_status ON interview_sessions(chat_id, status)`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_interview_one_active_per_chat ON interview_sessions(chat_id) WHERE status IN ('active', 'paused')`);
+
   try {
     await pool.query(`CREATE EXTENSION IF NOT EXISTS vector`);
   } catch (err) {
     console.warn("[db] pgvector extension not available (semantic features will be disabled):", err);
   }
 
-  console.log("[db] PostgreSQL initialized (shared pool, 9 tables + pgvector)");
+  console.log("[db] PostgreSQL initialized (shared pool, 10 tables + pgvector)");
   return pool;
 }
 
