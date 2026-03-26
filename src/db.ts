@@ -160,12 +160,14 @@ export async function init(): Promise<pg.Pool> {
       questions JSONB NOT NULL DEFAULT '[]',
       answers JSONB NOT NULL DEFAULT '[]',
       vault_context_summary TEXT,
+      metadata JSONB,
       started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       paused_at TIMESTAMPTZ,
       completed_at TIMESTAMPTZ,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query(`ALTER TABLE interview_sessions ADD COLUMN IF NOT EXISTS metadata JSONB`).catch(() => {});
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_interview_chat_status ON interview_sessions(chat_id, status)`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_interview_one_active_per_chat ON interview_sessions(chat_id) WHERE status IN ('active', 'paused')`);
 

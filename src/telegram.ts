@@ -2382,12 +2382,29 @@ const FOLDER_ROUTES: Array<{ keywords: string[]; folder: string }> = [
   { keywords: ["idea", "brainstorm", "concept", "invention", "startup"], folder: "Ideas/" },
 ];
 
-function routeToFolder(topic: string): string {
+function routeToFolderStatic(topic: string): string {
   const lower = topic.toLowerCase();
   for (const route of FOLDER_ROUTES) {
     if (route.keywords.some(kw => lower.includes(kw))) return route.folder;
   }
   return "Notes/";
+}
+
+async function routeToFolder(topic: string, synthesis: string, runAgent: Function): Promise<string> {
+  const staticResult = routeToFolderStatic(topic);
+  try {
+    const candidateFolders = FOLDER_ROUTES.map(r => r.folder).concat(["Notes/", "Areas/", "Library/"]);
+    const prompt = `Given this interview topic "${topic}" and synthesis summary (first 500 chars): "${synthesis.slice(0, 500)}", which vault folder is the BEST fit? Candidates: ${candidateFolders.join(", ")}. Reply with ONLY the folder path (e.g. "Health/") — nothing else. No explanation.`;
+    const result = await runAgent("darknode", prompt);
+    const agentFolder = (result.response || "").replace(/DARKNODE RESPONSE:?\s*/gi, "").trim().replace(/['"]/g, "");
+    if (agentFolder && candidateFolders.some(f => f.toLowerCase() === agentFolder.toLowerCase())) {
+      return agentFolder;
+    }
+    if (agentFolder && agentFolder.endsWith("/")) return agentFolder;
+  } catch {
+    console.warn("[interview] Semantic folder routing failed, using static fallback");
+  }
+  return staticResult;
 }
 
 function isWorkTopic(topic: string): boolean {
@@ -2698,7 +2715,27 @@ async function handleInterviewMessage(chatId: string, text: string, runAgent: Fu
   }
 
   if (isEscapeCommand(text)) {
-    return false;
+    const parts = text.split(/\s+/);
+    const cmd = parts[0].toLowerCase().replace(/@\w+/, "").replace("/", "");
+    const args = parts.slice(1).join(" ");
+    const handler = commands[cmd];
+    if (handler) {
+      try {
+        const response = await handler(args);
+        await replyToChat(chatId, response);
+      } catch (err) {
+        await replyToChat(chatId, `❌ Command failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    } else {
+      const escapeResult = await runAgent("darknode", `Quick answer only (interview in progress): ${text}`);
+      const escapeAnswer = cleanAgentResponse(escapeResult.response || "I couldn't process that command.");
+      await replyToChat(chatId, escapeAnswer);
+    }
+    const lastQ = existingState.questions[existingState.questions.length - 1];
+    if (lastQ) {
+      await replyToChat(chatId, `↩️ Back to interview — ${lastQ}`);
+    }
+    return true;
   }
 
   existingState.answers.push(text);
@@ -2745,7 +2782,7 @@ async function completeInterview(chatId: string, state: InterviewState, runAgent
       .replace(/System status unchanged\.?\s*$/gi, "")
       .trim() || rawSynthesis.trim();
 
-    const folder = routeToFolder(state.topic);
+    const folder = await routeToFolder(state.topic, synthesizedNote, runAgent);
     const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
     const safeTopic = state.topic.replace(/[^a-zA-Z0-9\s-]/g, "").replace(/\s+/g, " ").trim();
     const notePath = `${folder}Interview - ${safeTopic}.md`;
@@ -2810,7 +2847,7 @@ async function completeInterview(chatId: string, state: InterviewState, runAgent
     if (actionItems.length > 0) {
       const pool = getPool();
       await pool.query(
-        `UPDATE interview_sessions SET vault_context_summary = $1 WHERE id = $2`,
+        `UPDATE interview_sessions SET metadata = $1 WHERE id = $2`,
         [JSON.stringify({ pending_tasks: actionItems, note_path: notePath }), state.id]
       );
     }
@@ -2834,20 +2871,20 @@ async function handleTwoWayChat(userId: string, chatId: string, text: string): P
       if (!activeInterview) {
         const pool = getPool();
         const recent = await pool.query(
-          `SELECT vault_context_summary FROM interview_sessions WHERE chat_id = $1 AND status = 'completed' ORDER BY completed_at DESC LIMIT 1`,
+          `SELECT id, metadata FROM interview_sessions WHERE chat_id = $1 AND status = 'completed' AND metadata IS NOT NULL ORDER BY completed_at DESC LIMIT 1`,
           [chatId]
         );
-        if (recent.rows.length > 0 && recent.rows[0].vault_context_summary) {
+        if (recent.rows.length > 0 && recent.rows[0].metadata) {
           try {
-            const meta = JSON.parse(recent.rows[0].vault_context_summary);
+            const meta = typeof recent.rows[0].metadata === "string" ? JSON.parse(recent.rows[0].metadata) : recent.rows[0].metadata;
             if (meta.pending_tasks && Array.isArray(meta.pending_tasks) && meta.pending_tasks.length > 0) {
               const tasks = meta.pending_tasks as string[];
               for (const task of tasks) {
                 await runAgent("darknode", `Use task_add to create a task with title: "${task}". Do NOT use telegram_send.`);
               }
               await pool.query(
-                `UPDATE interview_sessions SET vault_context_summary = NULL WHERE id = (SELECT id FROM interview_sessions WHERE chat_id = $1 AND status = 'completed' ORDER BY completed_at DESC LIMIT 1)`,
-                [chatId]
+                `UPDATE interview_sessions SET metadata = NULL WHERE id = $1`,
+                [recent.rows[0].id]
               );
               await replyToChat(chatId, `✅ Added ${tasks.length} task${tasks.length > 1 ? "s" : ""} from your interview.`);
               return;
