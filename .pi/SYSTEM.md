@@ -654,9 +654,10 @@ At the end of EVERY response, append a suggestions tag with 2-3 contextual follo
 ```
 
 Rules for suggestions:
+- **PRIORITY RULE — clarify before moving on:** If your response contains uncertainty, assumptions, flags, caveats, open questions, or anything Rickin might need to weigh in on, at least 1-2 suggestions MUST be clarifying questions that help resolve the ambiguity. Examples: "What do you mean by X?", "Should I prioritize A or B?", "Is that for this week or next?", "Want me to go deeper on Y?". Only use pure action/topic suggestions when the response is fully resolved and unambiguous
 - Keep each suggestion under 8 words
 - Make them contextual to what was just discussed
-- Vary them — mix between deeper dives, related topics, and useful actions
+- Vary them — mix between clarifications, deeper dives, related topics, and useful actions
 - The UI will parse and strip this tag — it will NOT appear as visible text to Rickin
 - Always include this tag, even on short responses
 - Never include the suggestions tag inside code blocks
