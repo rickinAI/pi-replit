@@ -2518,8 +2518,11 @@ function buildInterviewPrompt(state: InterviewState, newAnswer: string | null): 
   }
 
   const questionCount = state.questions.length;
-  const maxQuestions = 10;
-  const isNearEnd = questionCount >= 8;
+  const avgAnswerLength = state.answers.length > 0
+    ? state.answers.reduce((sum, a) => sum + a.length, 0) / state.answers.length
+    : 0;
+  const maxQuestions = avgAnswerLength > 200 ? 12 : avgAnswerLength < 60 ? 6 : 10;
+  const isNearEnd = questionCount >= maxQuestions - 2;
 
   return `You are DarkNode in INTERVIEW MODE — a warm, personal interviewer helping Rickin explore and capture his thoughts on a personal topic.
 
@@ -2702,7 +2705,11 @@ async function handleInterviewMessage(chatId: string, text: string, runAgent: Fu
   await addConversationMessage(chatId, "user", text);
 
   const questionCount = existingState.questions.length;
-  if (questionCount >= 10) {
+  const avgLen = existingState.answers.length > 0
+    ? existingState.answers.reduce((s, a) => s + a.length, 0) / existingState.answers.length
+    : 0;
+  const adaptiveMax = avgLen > 200 ? 12 : avgLen < 60 ? 6 : 10;
+  if (questionCount >= adaptiveMax) {
     await replyToChat(chatId, "Thanks — that's a good place to wrap up. Let me synthesize what we covered...");
     await completeInterview(chatId, existingState, runAgent);
     return true;
@@ -2731,7 +2738,12 @@ async function completeInterview(chatId: string, state: InterviewState, runAgent
 
     const synthesisPrompt = buildSynthesisPrompt(state);
     const synthResult = await runAgent("darknode", synthesisPrompt);
-    const synthesizedNote = cleanAgentResponse(synthResult.response || "Synthesis failed — see raw transcript.");
+    const rawSynthesis = synthResult.response || "Synthesis failed — see raw transcript.";
+    const synthesizedNote = rawSynthesis
+      .replace(/^[\s\S]*?(?=# )/m, "")
+      .replace(/DARKNODE RESPONSE:?\s*/gi, "")
+      .replace(/System status unchanged\.?\s*$/gi, "")
+      .trim() || rawSynthesis.trim();
 
     const folder = routeToFolder(state.topic);
     const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
@@ -2751,7 +2763,7 @@ async function completeInterview(chatId: string, state: InterviewState, runAgent
     let relatedNotes = "";
     try {
       const relatedResult = await runAgent("darknode", `Use vault_semantic_search to find notes related to this interview topic: "${state.topic}". Return ONLY a bulleted list of [[wikilink]] paths for the top 3-5 most relevant notes. Format: "- [[path/to/note]]". If nothing relevant, return "None found." Do NOT use telegram_send.`);
-      const relatedResponse = cleanAgentResponse(relatedResult.response || "");
+      const relatedResponse = (relatedResult.response || "").replace(/DARKNODE RESPONSE:?\s*/gi, "").trim();
       if (relatedResponse && !relatedResponse.toLowerCase().includes("none found")) {
         relatedNotes = `\n\n## Related Notes\n${relatedResponse}`;
       }
