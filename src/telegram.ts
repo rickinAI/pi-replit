@@ -2531,7 +2531,13 @@ function buildInterviewPrompt(state: InterviewState, newAnswer: string | null): 
   const earlier = qaPairs.slice(0, -6);
   let earlierSummary = "";
   if (earlier.length > 0) {
-    earlierSummary = `[Earlier in the interview — ${earlier.length / 2} previous Q&A pairs covered related ground]\n`;
+    const earlierPairs: string[] = [];
+    for (let i = 0; i < earlier.length; i += 2) {
+      const q = earlier[i]?.replace(/^Q: /, "") || "";
+      const a = (earlier[i + 1] || "").replace(/^A: /, "");
+      if (q && a) earlierPairs.push(`${q} → ${a.slice(0, 80)}${a.length > 80 ? "..." : ""}`);
+    }
+    earlierSummary = `EARLIER TOPICS COVERED (${earlierPairs.length} Q&A):\n${earlierPairs.map(p => `• ${p}`).join("\n")}\n`;
   }
 
   const questionCount = state.questions.length;
@@ -2635,7 +2641,13 @@ async function searchVaultForContext(topic: string, runAgent: Function): Promise
   }
 }
 
+let lastStaleCleanup = 0;
 async function handleInterviewMessage(chatId: string, text: string, runAgent: Function): Promise<boolean> {
+  const now = Date.now();
+  if (now - lastStaleCleanup > 24 * 60 * 60 * 1000) {
+    lastStaleCleanup = now;
+    clearStaleInterviews().catch(() => {});
+  }
   const existingState = await loadInterviewState(chatId);
 
   if (text.trim().toLowerCase() === "/interview") {
@@ -2786,8 +2798,8 @@ async function completeInterview(chatId: string, state: InterviewState, runAgent
     const synthResult = await runAgent("darknode", synthesisPrompt);
     const rawSynthesis = synthResult.response || "Synthesis failed — see raw transcript.";
     const synthesizedNote = rawSynthesis
-      .replace(/^[\s\S]*?(?=# )/m, "")
-      .replace(/DARKNODE RESPONSE:?\s*/gi, "")
+      .replace(/^DARKNODE RESPONSE:?\s*/i, "")
+      .replace(/^(?:Here(?:'s| is) (?:the |your )?synthesized (?:note|summary|interview).*?\n+)/i, "")
       .replace(/System status unchanged\.?\s*$/gi, "")
       .trim() || rawSynthesis.trim();
 
