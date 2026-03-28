@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Spec Tracker</title>
+  <style>
+    :root {
+      --bg: #141414;
+      --surface: #1e1e1e;
+      --surface-2: #242424;
+      --border: #2a2a2a;
+      --border-2: #333;
+      --text: #e0e0e0;
+      --text-2: #888;
+      --text-3: #555;
+      --accent: #f97316;
+      --accent-dim: rgba(249,115,22,0.12);
+      --green: #2ecc71;
+      --green-dim: rgba(46,204,113,0.12);
+      --red: #e74c3c;
+      --red-dim: rgba(231,76,60,0.12);
+      --amber: #f39c12;
+      --amber-dim: rgba(243,156,18,0.12);
+      --blue: #3498db;
+      --blue-dim: rgba(52,152,219,0.12);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif; background: var(--bg); min-height: 100vh; color: var(--text); -webkit-font-smoothing: antialiased; }
+    .header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 100; }
+    .title { font-size: 16px; font-weight: 700; color: var(--text); letter-spacing: -0.3px; display: flex; align-items: center; gap: 8px; }
+    .title-dot { width: 7px; height: 7px; background: var(--green); border-radius: 50%; box-shadow: 0 0 6px var(--green); }
+    .stats { display: flex; gap: 20px; }
+    .stat { text-align: right; }
+    .stat-num { font-size: 22px; font-weight: 700; color: var(--accent); line-height: 1; font-variant-numeric: tabular-nums; }
+    .stat-lbl { font-size: 10px; color: var(--text-3); margin-top: 3px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 500; }
+    .filter-bar { background: var(--surface); padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; gap: 6px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .filter-bar::-webkit-scrollbar { display: none; }
+    .pill { padding: 5px 12px; border: 1px solid var(--border-2); border-radius: 4px; background: transparent; color: var(--text-2); font-size: 11px; font-weight: 600; cursor: pointer; white-space: nowrap; flex-shrink: 0; transition: all 0.15s; -webkit-text-fill-color: var(--text-2); }
+    .pill:hover { border-color: var(--accent); color: var(--accent); -webkit-text-fill-color: var(--accent); }
+    .pill.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); -webkit-text-fill-color: var(--accent) !important; }
+    .tab-bar { background: var(--surface); border-bottom: 1px solid var(--border); display: flex; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .tab-bar::-webkit-scrollbar { display: none; }
+    .tab { display: inline-flex; align-items: center; gap: 6px; padding: 11px 14px; border: none; background: transparent; color: var(--text-3); font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; flex-shrink: 0; border-bottom: 2px solid transparent; transition: all 0.15s; -webkit-text-fill-color: var(--text-3); }
+    .tab:hover { color: var(--text-2); -webkit-text-fill-color: var(--text-2); }
+    .tab.active { color: var(--accent); border-bottom-color: var(--accent); -webkit-text-fill-color: var(--accent) !important; }
+    .tab.active .tab-label { -webkit-text-fill-color: var(--accent) !important; }
+    .tab-count { background: var(--border-2); color: var(--text-3); font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 3px; min-width: 18px; text-align: center; -webkit-text-fill-color: var(--text-3); transition: all 0.15s; }
+    .tab.active .tab-count { background: var(--accent-dim); color: var(--accent); -webkit-text-fill-color: var(--accent) !important; }
+    .mobile-view { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+    .desktop-grid { display: none; }
+    @media (min-width: 900px) {
+      .tab-bar, .mobile-view { display: none !important; }
+      .desktop-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; padding: 20px; }
+      .col-header { font-size: 11px; font-weight: 700; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.8px; padding: 0 0 10px; border-bottom: 1px solid var(--border); margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+      .col-count { background: var(--border-2); color: var(--text-3); font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 3px; }
+      .col-cards { display: flex; flex-direction: column; gap: 8px; }
+    }
+    .card { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid; border-radius: 6px; padding: 12px 14px; cursor: pointer; transition: background 0.15s; position: relative; }
+    .card:hover { background: var(--surface-2); }
+    .card:active { opacity: 0.85; }
+    .card.high   { border-left-color: var(--red); }
+    .card.medium { border-left-color: var(--amber); }
+    .card.low    { border-left-color: #666; }
+    .card-top { display: flex; gap: 8px; align-items: flex-start; }
+    .card-body { flex: 1; min-width: 0; }
+    .card-title { font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.3; margin-bottom: 4px; }
+    .card-sub { font-size: 11px; color: var(--text-2); line-height: 1.4; }
+    .card-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
+    .card-date { font-size: 10px; color: var(--text-3); }
+    .badge { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 3px; }
+    .badge.closed { background: var(--green-dim); color: var(--green); }
+    .badge.open   { background: var(--amber-dim); color: var(--amber); }
+    .dots-btn { background: none; border: none; color: var(--text-3); font-size: 14px; cursor: pointer; padding: 2px 6px; border-radius: 4px; flex-shrink: 0; line-height: 1; transition: all 0.15s; }
+    .dots-btn:hover { background: var(--border-2); color: var(--text-2); }
+    .card-details { display: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-2); animation: fadeIn 0.15s ease; }
+    .card-details.open { display: block; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+    .detail-row { margin-bottom: 6px; }
+    .detail-row strong { color: var(--text-3); font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; }
+    .obsidian-btn { display: inline-flex; align-items: center; gap: 4px; margin-top: 6px; padding: 5px 10px; background: var(--accent-dim); border: 1px solid var(--accent); color: var(--accent); border-radius: 4px; font-size: 11px; font-weight: 600; text-decoration: none; transition: background 0.15s; }
+    .obsidian-btn:hover { background: rgba(249,115,22,0.2); }
+    .tag-row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+    .tag { background: var(--border-2); color: var(--text-3); font-size: 9px; font-weight: 600; padding: 2px 5px; border-radius: 3px; }
+    .type-chip { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; margin-bottom: 5px; display: inline-block; }
+    .type-chip.bug        { background: var(--red-dim); color: var(--red); }
+    .type-chip.feature    { background: var(--blue-dim); color: var(--blue); }
+    .type-chip.spec       { background: var(--accent-dim); color: var(--accent); }
+    .type-chip.enhancement { background: var(--green-dim); color: var(--green); }
+    .empty { text-align: center; color: var(--text-3); font-size: 12px; padding: 36px 20px; }
+    .overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 200; backdrop-filter: blur(4px); }
+    .overlay.open { display: flex; align-items: flex-end; }
+    .sheet { background: var(--surface); border: 1px solid var(--border-2); border-bottom: none; border-radius: 14px 14px 0 0; padding: 20px 20px 36px; width: 100%; animation: slideUp 0.25s cubic-bezier(0.4,0,0.2,1); }
+    @keyframes slideUp { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    .sheet-handle { width: 32px; height: 3px; background: var(--border-2); border-radius: 2px; margin: 0 auto 18px; }
+    .sheet-title { font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+    .sheet-sub { font-size: 12px; color: var(--text-2); margin-bottom: 20px; }
+    .sheet-btns { display: flex; flex-direction: column; gap: 8px; }
+    .sheet-btn { width: 100%; padding: 13px; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; transition: opacity 0.15s, transform 0.1s; }
+    .sheet-btn:active { transform: scale(0.99); opacity: 0.85; }
+    .btn-keep   { background: var(--accent); color: #fff; }
+    .btn-remove { background: var(--red-dim); color: var(--red); border: 1px solid var(--red); }
+  </style>
+</head>
+<body>
+<div class="header">
+  <div class="title"><div class="title-dot"></div>Spec Tracker</div>
+  <div class="stats">
+    <div class="stat"><div class="stat-num" id="n-drafted">0</div><div class="stat-lbl">Drafted</div></div>
+    <div class="stat"><div class="stat-num" id="n-ready">0</div><div class="stat-lbl">Ready</div></div>
+    <div class="stat"><div class="stat-num" id="n-progress">0</div><div class="stat-lbl">Active</div></div>
+    <div class="stat"><div class="stat-num" id="n-done">0</div><div class="stat-lbl">Done</div></div>
+  </div>
+</div>
+<div class="filter-bar">
+  <div class="pill active" data-f="all">All</div>
+  <div class="pill" data-f="bug">Bug</div>
+  <div class="pill" data-f="feature">Feature</div>
+  <div class="pill" data-f="spec">Spec</div>
+  <div class="pill" data-f="enhancement">Enhancement</div>
+</div>
+<div class="tab-bar">
+  <button class="tab" data-col="drafted"><span class="tab-label">Drafted</span><span class="tab-count" id="tc-drafted">0</span></button>
+  <button class="tab active" data-col="ready"><span class="tab-label">Ready</span><span class="tab-count" id="tc-ready">0</span></button>
+  <button class="tab" data-col="in-progress"><span class="tab-label">Active</span><span class="tab-count" id="tc-progress">0</span></button>
+  <button class="tab" data-col="done"><span class="tab-label">Done</span><span class="tab-count" id="tc-done">0</span></button>
+  <button class="tab" data-col="removed"><span class="tab-label">Removed</span><span class="tab-count" id="tc-removed">0</span></button>
+</div>
+<div class="mobile-view" id="mobileView"></div>
+<div class="desktop-grid">
+  <div><div class="col-header"><span>Drafted</span><span class="col-count" id="cc-drafted">0</span></div><div class="col-cards" id="dc-drafted"></div></div>
+  <div><div class="col-header"><span>Ready</span><span class="col-count" id="cc-ready">0</span></div><div class="col-cards" id="dc-ready"></div></div>
+  <div><div class="col-header"><span>Active</span><span class="col-count" id="cc-progress">0</span></div><div class="col-cards" id="dc-in-progress"></div></div>
+  <div><div class="col-header"><span>Done</span><span class="col-count" id="cc-done">0</span></div><div class="col-cards" id="dc-done"></div></div>
+  <div><div class="col-header"><span>Removed</span><span class="col-count" id="cc-removed">0</span></div><div class="col-cards" id="dc-removed"></div></div>
+</div>
+<div class="overlay" id="overlay">
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">Remove spec?</div>
+    <div class="sheet-sub" id="sheetSub"></div>
+    <div class="sheet-btns">
+      <button class="sheet-btn btn-keep" id="btnKeep">Keep it</button>
+      <button class="sheet-btn btn-remove" id="btnRemove">Remove</button>
+    </div>
+  </div>
+</div>
+<script>
+const specs = [
+  { id:'task-manager', title:'Task Manager Agent', sub:'Agentic task management with Telegram integration and natural language parsing', date:'Mar 27', type:'feature', priority:'high', status:'ready', github:null, tags:['agent','tasks'], path:'System/Fix%20Requests/2026-03-27-Task-Manager-Agent.md' },
+  { id:'telegram-v3', title:'Telegram v3 Channel Redesign', sub:'Split channels, improved routing across 12 topic channels', date:'Mar 27', type:'feature', priority:'high', status:'done', github:30, githubStatus:'closed', tags:['telegram','channels'], path:'System/Fix%20Requests/2026-03-27-Telegram-Channel-Redesign-v3.md' },
+  { id:'spec-tracker-reconcile', title:'Spec Tracker Reconcile Job', sub:'Daily vault + GitHub + dashboard sync + Telegram rebuild command', date:'Mar 27', type:'spec', priority:'medium', status:'done', github:32, githubStatus:'closed', tags:['scheduled-job','github'], path:'System/Fix%20Requests/2026-03-27-Spec-Tracker-Reconcile-Job.md' },
+  { id:'voice-feedback', title:'Voice Feedback Loop', sub:'Voice corrections injected into all 13 content jobs and Telegram bot', date:'Mar 27', type:'feature', priority:'medium', status:'done', github:31, githubStatus:'closed', tags:['voice','feedback'], path:'System/Fix%20Requests/2026-03-27-Voice-Feedback-Loop.md' },
+  { id:'mindguide-separate', title:'MindGuide Separate Messages', sub:'MindGuide as standalone Telegram message, not bundled in Morning Pack', date:'Mar 27', type:'enhancement', priority:'medium', status:'done', github:26, githubStatus:'closed', tags:['mindguide','telegram'], path:'System/Fix%20Requests/2026-03-27-MindGuide-Separate-From-Morning-Pack.md' },
+  { id:'oversight-tools', title:'Oversight Agent No Tool Access', sub:'Telegram oversight agent now has full tool access in webhook context', date:'Mar 27', type:'bug', priority:'high', status:'done', github:19, githubStatus:'closed', tags:['oversight','telegram'], path:'System/Fix%20Requests/2026-03-27-Telegram-Oversight-Agent-No-Tool-Access.md' },
+  { id:'health-channel', title:'Health Check Wrong Channel', sub:'Health checks now routing correctly to mission-control', date:'Mar 27', type:'bug', priority:'high', status:'done', github:24, githubStatus:'closed', tags:['health','telegram'], path:'System/Fix%20Requests/2026-03-27-Health-Check-Wrong-Telegram-Channel.md' },
+  { id:'beta-spam', title:'Beta Event Watcher Spam', sub:'Duplicate calendar/email alerts deduplicated', date:'Mar 27', type:'bug', priority:'high', status:'done', github:23, githubStatus:'closed', tags:['events','spam'], path:'System/Fix%20Requests/2026-03-27-Beta-Event-Watcher-Spam-Notifications.md' },
+  { id:'agent-errors', title:'Agent Error Vault Write Passthrough', sub:'Agents now write partial output to vault on failure', date:'Mar 27', type:'bug', priority:'medium', status:'done', github:22, githubStatus:'closed', tags:['agents','errors'], path:'System/Fix%20Requests/2026-03-27-Agent-Error-Vault-Write-Passthrough.md' },
+  { id:'freshness-paused', title:'Freshness Alerts Fire When Paused', sub:'Freshness alerts suppressed when system is paused', date:'Mar 27', type:'bug', priority:'medium', status:'done', github:25, githubStatus:'closed', tags:['alerts','pause'], path:'System/Fix%20Requests/2026-03-27-Freshness-Alerts-Fire-When-Paused.md' },
+  { id:'json-unicode', title:'JSON Lone Surrogate Error', sub:'Unicode lone surrogate no longer crashes agent mid-run', date:'Mar 27', type:'bug', priority:'medium', status:'done', github:20, githubStatus:'closed', tags:['json','vault'], path:'System/Fix%20Requests/2026-03-27-JSON-Lone-Surrogate-Unicode-Error.md' },
+  { id:'innovation-memory', title:'Innovation Engine No Memory Config', sub:'Innovation Engine now has proper memory and markdown output', date:'Mar 27', type:'bug', priority:'medium', status:'done', github:21, githubStatus:'closed', tags:['innovation-engine'], path:'System/Fix%20Requests/2026-03-27-Innovation-Engine-No-Memory-Config.md' },
+  { id:'unified-store', title:'Unified Conversation Store', sub:'Single conversation DB backing both web app and Telegram bot', date:'Mar 26', type:'spec', priority:'medium', status:'done', github:13, githubStatus:'closed', tags:['conversations','db'], path:'System/Fix%20Requests/2026-03-26-Unified-Conversation-Store.md' },
+  { id:'intel-output', title:'Intel Output Path Consolidation', sub:'All intelligence outputs consolidated under Ops/Intelligence/', date:'Mar 26', type:'enhancement', priority:'medium', status:'done', github:14, githubStatus:'closed', tags:['intelligence'], path:'System/Fix%20Requests/2026-03-26-Intel-Output-Path-Consolidation.md' },
+  { id:'youtube-detect', title:'Vault Inbox YouTube Detection', sub:'YouTube links in vault inbox now detected and processed differently', date:'Mar 26', type:'enhancement', priority:'low', status:'done', github:17, githubStatus:'closed', tags:['vault-inbox'], path:'System/Fix%20Requests/2026-03-26-Vault-Inbox-YouTube-Detection.md' },
+  { id:'telegram-html', title:'Telegram Callout HTML Entity Bug', sub:'HTML entities no longer rendering as raw text in Telegram', date:'Mar 27', type:'bug', priority:'medium', status:'done', github:29, githubStatus:'closed', tags:['telegram','html'], path:'System/Fix%20Requests/2026-03-27-Telegram-Callout-HTML-Entity-Bug.md' },
+  { id:'telegram-links', title:'Telegram Vault Link Formatting', sub:'Obsidian vault links now formatted correctly in Telegram', date:'Mar 26', type:'bug', priority:'high', status:'done', github:30, githubStatus:'closed', tags:['telegram','vault'], path:'System/Fix%20Requests/2026-03-26-Telegram-Bot-Vault-Link-Formatting.md' },
+];
+const removed = JSON.parse(localStorage.getItem('removedSpecs') || '[]');
+removed.forEach(id => { const s = specs.find(s => s.id === id); if (s) s.status = 'removed'; });
+let activeFilter = 'all', activeTab = 'ready', pendingId = null;
+function filtered(col) { return specs.filter(s => s.status === col && (activeFilter === 'all' || s.type === activeFilter)); }
+function cardHTML(s) {
+  const badge = s.github ? '<span class="badge ' + s.githubStatus + '">' + (s.githubStatus === 'closed' ? 'closed' : 'open') + ' #' + s.github + '</span>' : '';
+  const dots = (s.status === 'drafted' || s.status === 'ready') ? '<button class="dots-btn" onclick="openSheet(event,\'' + s.id + '\')">...</button>' : '';
+  const link = 'obsidian://open?vault=Rickins%20Brain&file=' + s.path;
+  const tags = s.tags.map(t => '<span class="tag">#' + t + '</span>').join('');
+  return '<div class="card ' + s.priority + '" onclick="toggleCard(event,this)"><div class="card-top"><div class="card-body"><span class="type-chip ' + s.type + '">' + s.type + '</span><div class="card-title">' + s.title + '</div><div class="card-sub">' + s.sub + '</div></div>' + dots + '</div><div class="card-footer"><span class="card-date">' + s.date + '</span>' + badge + '</div><div class="card-details"><div class="detail-row"><strong>Priority</strong>  ' + s.priority + '</div><a class="obsidian-btn" href="' + link + '">Open in Obsidian</a>' + (tags ? '<div class="tag-row">' + tags + '</div>' : '') + '</div></div>';
+}
+function render() {
+  const cols = ['drafted','ready','in-progress','done','removed'];
+  const c = {};
+  cols.forEach(col => c[col] = specs.filter(s => s.status === col).length);
+  ['drafted','ready','progress','done'].forEach((k,i) => { document.getElementById('n-' + (i===2?'progress':k)).textContent = c[cols[i]]; });
+  document.getElementById('n-done').textContent = c.done;
+  cols.forEach(col => {
+    const key = col === 'in-progress' ? 'progress' : col;
+    const tc = document.getElementById('tc-' + key);
+    const cc = document.getElementById('cc-' + key);
+    if (tc) tc.textContent = c[col];
+    if (cc) cc.textContent = c[col];
+    const el = document.getElementById('dc-' + col);
+    if (el) { const items = filtered(col); el.innerHTML = items.length ? items.map(cardHTML).join('') : '<div class="empty">-</div>'; }
+  });
+  renderMobile();
+}
+function renderMobile() { const items = filtered(activeTab); document.getElementById('mobileView').innerHTML = items.length ? items.map(cardHTML).join('') : '<div class="empty">-</div>'; }
+function toggleCard(e, card) { if (e.target.closest('.dots-btn')) return; card.querySelector('.card-details').classList.toggle('open'); }
+document.querySelectorAll('.tab').forEach(btn => { btn.addEventListener('click', () => { document.querySelectorAll('.tab').forEach(b => b.classList.remove('active')); btn.classList.add('active'); activeTab = btn.dataset.col; renderMobile(); }); });
+document.querySelectorAll('.pill').forEach(pill => { pill.addEventListener('click', () => { document.querySelectorAll('.pill').forEach(p => p.classList.remove('active')); pill.classList.add('active'); activeFilter = pill.dataset.f; render(); }); });
+function openSheet(e, id) { e.stopPropagation(); pendingId = id; document.getElementById('sheetSub').textContent = specs.find(s => s.id === id)?.title; document.getElementById('overlay').classList.add('open'); }
+document.getElementById('btnKeep').addEventListener('click', () => { document.getElementById('overlay').classList.remove('open'); });
+document.getElementById('btnRemove').addEventListener('click', () => { if (!pendingId) return; specs.find(s => s.id === pendingId).status = 'removed'; const list = JSON.parse(localStorage.getItem('removedSpecs') || '[]'); if (!list.includes(pendingId)) list.push(pendingId); localStorage.setItem('removedSpecs', JSON.stringify(list)); document.getElementById('overlay').classList.remove('open'); pendingId = null; render(); });
+document.getElementById('overlay').addEventListener('click', e => { if (e.target === document.getElementById('overlay')) document.getElementById('overlay').classList.remove('open'); });
+render();
+</script>
+</body>
+</html>
